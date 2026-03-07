@@ -1,6 +1,9 @@
 #!/usr/bin/env sh
 set -e
 
+mkdir -p logs || true
+touch logs/app.log || true
+
 python manage.py migrate --noinput
 python manage.py collectstatic --noinput
 

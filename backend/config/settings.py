@@ -167,6 +167,37 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 
+ENABLE_FILE_LOGGING = config("ENABLE_FILE_LOGGING", cast=bool, default=True)
+LOG_DIR = BASE_DIR / "logs"
+LOG_FILE_PATH = LOG_DIR / "app.log"
+
+_file_logging_enabled = ENABLE_FILE_LOGGING
+if _file_logging_enabled:
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        _file_logging_enabled = False
+
+_log_handlers = {
+    "console": {
+        "class": "logging.StreamHandler",
+        "formatter": "verbose",
+    },
+}
+
+_django_logger_handlers = ["console"]
+_apps_logger_handlers = ["console"]
+
+if _file_logging_enabled:
+    _log_handlers["file"] = {
+        "level": "INFO",
+        "class": "logging.FileHandler",
+        "filename": LOG_FILE_PATH,
+        "formatter": "verbose",
+    }
+    _django_logger_handlers.append("file")
+    _apps_logger_handlers.append("file")
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -175,26 +206,15 @@ LOGGING = {
             "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         },
     },
-    "handlers": {
-        "file": {
-            "level": "INFO",
-            "class": "logging.FileHandler",
-            "filename": BASE_DIR / "logs/app.log",
-            "formatter": "verbose",
-        },
-        "console": {
-            "class": "logging.StreamHandler",
-            "formatter": "verbose",
-        },
-    },
+    "handlers": _log_handlers,
     "loggers": {
         "django": {
-            "handlers": ["console", "file"],
+            "handlers": _django_logger_handlers,
             "level": "INFO",
             "propagate": True,
         },
         "apps": {
-            "handlers": ["console", "file"],
+            "handlers": _apps_logger_handlers,
             "level": "INFO",
             "propagate": False,
         },
