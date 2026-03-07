@@ -56,9 +56,10 @@ Si tu déploies un service Render en mode **Python** (et non Docker):
 
 - Root Directory: `backend`
 - Build Command: `pip install -r requirements.render.txt`
-- Start Command: `python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --timeout 120`
+- Start Command: `sh start_render.sh`
 
 Le fichier `requirements.render.txt` exclut `mysqlclient` (inutile en Supabase/PostgreSQL) pour éviter les erreurs de build cloud.
+Le script `start_render.sh` exécute migration + collectstatic + gunicorn.
 
 ## 4) Build clients cloud
 
