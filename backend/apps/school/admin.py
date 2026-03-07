@@ -1,0 +1,72 @@
+from django.contrib import admin
+from .models import (
+    AcademicYear,
+    Announcement,
+    Attendance,
+    Book,
+    Borrow,
+    CanteenMenu,
+    CanteenService,
+    CanteenSubscription,
+    ClassRoom,
+    DisciplineIncident,
+    ExamPlanning,
+    ExamInvigilation,
+    ExamResult,
+    ExamSession,
+    Expense,
+    Grade,
+    GradeValidation,
+    Level,
+    Notification,
+    ParentProfile,
+    Payment,
+    Section,
+    StockItem,
+    StockMovement,
+    Student,
+    StudentAcademicHistory,
+    StudentFee,
+    Subject,
+    Supplier,
+    SmsProviderConfig,
+    Teacher,
+    TeacherAttendance,
+    TeacherAssignment,
+    TeacherPayroll,
+)
+
+admin.site.register(AcademicYear)
+admin.site.register(Level)
+admin.site.register(Section)
+admin.site.register(ClassRoom)
+admin.site.register(Subject)
+admin.site.register(Teacher)
+admin.site.register(TeacherAssignment)
+admin.site.register(ParentProfile)
+admin.site.register(Student)
+admin.site.register(StudentAcademicHistory)
+admin.site.register(Grade)
+admin.site.register(GradeValidation)
+admin.site.register(Attendance)
+admin.site.register(TeacherAttendance)
+admin.site.register(DisciplineIncident)
+admin.site.register(StudentFee)
+admin.site.register(Payment)
+admin.site.register(Expense)
+admin.site.register(TeacherPayroll)
+admin.site.register(Announcement)
+admin.site.register(Notification)
+admin.site.register(SmsProviderConfig)
+admin.site.register(Book)
+admin.site.register(Borrow)
+admin.site.register(CanteenMenu)
+admin.site.register(CanteenSubscription)
+admin.site.register(CanteenService)
+admin.site.register(ExamSession)
+admin.site.register(ExamPlanning)
+admin.site.register(ExamInvigilation)
+admin.site.register(ExamResult)
+admin.site.register(Supplier)
+admin.site.register(StockItem)
+admin.site.register(StockMovement)

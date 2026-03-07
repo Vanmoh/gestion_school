@@ -1,0 +1,475 @@
+from decimal import Decimal
+from rest_framework import serializers
+from .models import (
+    AcademicYear,
+    Announcement,
+    Attendance,
+    Book,
+    Borrow,
+    CanteenMenu,
+    CanteenService,
+    CanteenSubscription,
+    ClassRoom,
+    DisciplineIncident,
+    ExamPlanning,
+    ExamInvigilation,
+    ExamResult,
+    ExamSession,
+    Expense,
+    Grade,
+    GradeValidation,
+    Level,
+    Notification,
+    ParentProfile,
+    Payment,
+    Section,
+    StockItem,
+    StockMovement,
+    Student,
+    StudentAcademicHistory,
+    StudentFee,
+    Subject,
+    Supplier,
+    SmsProviderConfig,
+    Teacher,
+    TeacherAttendance,
+    TeacherAssignment,
+    TeacherPayroll,
+)
+
+
+class AcademicYearSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AcademicYear
+        fields = "__all__"
+
+
+class LevelSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Level
+        fields = "__all__"
+
+
+class SectionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Section
+        fields = "__all__"
+
+
+class ClassRoomSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClassRoom
+        fields = "__all__"
+
+
+class SubjectSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Subject
+        fields = "__all__"
+
+
+class TeacherSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Teacher
+        fields = "__all__"
+
+
+class TeacherAssignmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TeacherAssignment
+        fields = "__all__"
+
+
+class ParentProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ParentProfile
+        fields = "__all__"
+
+
+class StudentSerializer(serializers.ModelSerializer):
+    user_full_name = serializers.SerializerMethodField(read_only=True)
+    user_username = serializers.SerializerMethodField(read_only=True)
+    user_first_name = serializers.SerializerMethodField(read_only=True)
+    user_last_name = serializers.SerializerMethodField(read_only=True)
+    user_email = serializers.SerializerMethodField(read_only=True)
+    user_phone = serializers.SerializerMethodField(read_only=True)
+    classroom_name = serializers.SerializerMethodField(read_only=True)
+    parent_name = serializers.SerializerMethodField(read_only=True)
+    parent_phone = serializers.SerializerMethodField(read_only=True)
+
+    def get_user_full_name(self, obj):
+        full_name = obj.user.get_full_name().strip() if obj.user else ""
+        return full_name or obj.user.username
+
+    def get_user_username(self, obj):
+        return obj.user.username if obj.user else ""
+
+    def get_user_first_name(self, obj):
+        return obj.user.first_name if obj.user else ""
+
+    def get_user_last_name(self, obj):
+        return obj.user.last_name if obj.user else ""
+
+    def get_user_email(self, obj):
+        return obj.user.email if obj.user else ""
+
+    def get_user_phone(self, obj):
+        return obj.user.phone if obj.user else ""
+
+    def get_classroom_name(self, obj):
+        return obj.classroom.name if obj.classroom else ""
+
+    def get_parent_name(self, obj):
+        parent = obj.parent
+        user = parent.user if parent else None
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    def get_parent_phone(self, obj):
+        parent = obj.parent
+        user = parent.user if parent else None
+        return user.phone if user else ""
+
+    class Meta:
+        model = Student
+        fields = "__all__"
+
+
+class StudentAcademicHistorySerializer(serializers.ModelSerializer):
+    def validate(self, attrs):
+        student = attrs.get("student") or getattr(self.instance, "student", None)
+        academic_year = attrs.get("academic_year") or getattr(self.instance, "academic_year", None)
+        classroom = attrs.get("classroom") or getattr(self.instance, "classroom", None)
+
+        if student and academic_year and classroom:
+            queryset = StudentAcademicHistory.objects.filter(
+                student=student,
+                academic_year=academic_year,
+                classroom=classroom,
+            )
+            if self.instance:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            if queryset.exists():
+                raise serializers.ValidationError(
+                    "Un historique existe déjà pour cet élève, cette année et cette classe."
+                )
+        return attrs
+
+    class Meta:
+        model = StudentAcademicHistory
+        fields = "__all__"
+
+
+class GradeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Grade
+        fields = "__all__"
+
+
+class GradeValidationSerializer(serializers.ModelSerializer):
+    validated_by_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_validated_by_name(self, obj):
+        user = obj.validated_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    class Meta:
+        model = GradeValidation
+        fields = "__all__"
+
+
+class AttendanceSerializer(serializers.ModelSerializer):
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.SerializerMethodField(read_only=True)
+
+    def get_student_full_name(self, obj):
+        student = obj.student
+        user = student.user if student else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_student_matricule(self, obj):
+        return obj.student.matricule if obj.student else ""
+
+    def validate(self, attrs):
+        student = attrs.get("student") or getattr(self.instance, "student", None)
+        attendance_date = attrs.get("date") or getattr(self.instance, "date", None)
+
+        if student and attendance_date:
+            queryset = Attendance.objects.filter(student=student, date=attendance_date)
+            if self.instance:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            if queryset.exists():
+                raise serializers.ValidationError(
+                    "Une présence existe déjà pour cet élève à cette date."
+                )
+
+        return attrs
+
+    class Meta:
+        model = Attendance
+        fields = "__all__"
+
+
+class TeacherAttendanceSerializer(serializers.ModelSerializer):
+    teacher_full_name = serializers.SerializerMethodField(read_only=True)
+    teacher_employee_code = serializers.SerializerMethodField(read_only=True)
+
+    def get_teacher_full_name(self, obj):
+        teacher = obj.teacher
+        user = teacher.user if teacher else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_teacher_employee_code(self, obj):
+        return obj.teacher.employee_code if obj.teacher else ""
+
+    class Meta:
+        model = TeacherAttendance
+        fields = "__all__"
+
+
+class DisciplineIncidentSerializer(serializers.ModelSerializer):
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.SerializerMethodField(read_only=True)
+
+    def get_student_full_name(self, obj):
+        student = obj.student
+        user = student.user if student else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_student_matricule(self, obj):
+        return obj.student.matricule if obj.student else ""
+
+    class Meta:
+        model = DisciplineIncident
+        fields = "__all__"
+
+
+class StudentFeeSerializer(serializers.ModelSerializer):
+    amount_paid = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    balance = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.SerializerMethodField(read_only=True)
+
+    def get_student_full_name(self, obj):
+        full_name = obj.student.user.get_full_name().strip() if obj.student and obj.student.user else ""
+        if full_name:
+            return full_name
+        return obj.student.user.username if obj.student and obj.student.user else ""
+
+    def get_student_matricule(self, obj):
+        return obj.student.matricule if obj.student else ""
+
+    def validate_amount_due(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Le montant dû doit être supérieur à 0.")
+        return value
+
+    class Meta:
+        model = StudentFee
+        fields = "__all__"
+
+
+class PaymentSerializer(serializers.ModelSerializer):
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.SerializerMethodField(read_only=True)
+    fee_type = serializers.SerializerMethodField(read_only=True)
+
+    def get_student_full_name(self, obj):
+        student = obj.fee.student if obj.fee else None
+        user = student.user if student else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_student_matricule(self, obj):
+        student = obj.fee.student if obj.fee else None
+        return student.matricule if student else ""
+
+    def get_fee_type(self, obj):
+        return obj.fee.get_fee_type_display() if obj.fee else ""
+
+    def validate(self, attrs):
+        fee = attrs.get("fee") or getattr(self.instance, "fee", None)
+        amount = attrs.get("amount")
+
+        if amount is None and self.instance is not None:
+            amount = self.instance.amount
+
+        if fee is None or amount is None:
+            return attrs
+
+        if amount <= 0:
+            raise serializers.ValidationError("Le montant du paiement doit être supérieur à 0.")
+
+        existing_amount = Decimal("0")
+        if self.instance is not None and self.instance.fee_id == fee.id:
+            existing_amount = self.instance.amount or Decimal("0")
+
+        if amount > (fee.balance + existing_amount):
+            raise serializers.ValidationError("Le montant dépasse le solde restant du frais.")
+
+        return attrs
+
+    class Meta:
+        model = Payment
+        fields = "__all__"
+
+
+class ExpenseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Expense
+        fields = "__all__"
+
+
+class TeacherPayrollSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TeacherPayroll
+        fields = "__all__"
+
+
+class AnnouncementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Announcement
+        fields = "__all__"
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = "__all__"
+
+
+class SmsProviderConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SmsProviderConfig
+        fields = "__all__"
+
+
+class BookSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Book
+        fields = "__all__"
+
+
+class BorrowSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Borrow
+        fields = "__all__"
+
+
+class CanteenMenuSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CanteenMenu
+        fields = "__all__"
+
+
+class CanteenSubscriptionSerializer(serializers.ModelSerializer):
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.SerializerMethodField(read_only=True)
+
+    def get_student_full_name(self, obj):
+        student = obj.student
+        user = student.user if student else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_student_matricule(self, obj):
+        return obj.student.matricule if obj.student else ""
+
+    class Meta:
+        model = CanteenSubscription
+        fields = "__all__"
+
+
+class CanteenServiceSerializer(serializers.ModelSerializer):
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.SerializerMethodField(read_only=True)
+
+    def get_student_full_name(self, obj):
+        student = obj.student
+        user = student.user if student else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_student_matricule(self, obj):
+        return obj.student.matricule if obj.student else ""
+
+    class Meta:
+        model = CanteenService
+        fields = "__all__"
+
+
+class ExamSessionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExamSession
+        fields = "__all__"
+
+
+class ExamPlanningSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExamPlanning
+        fields = "__all__"
+
+
+class ExamInvigilationSerializer(serializers.ModelSerializer):
+    supervisor_full_name = serializers.SerializerMethodField(read_only=True)
+    supervisor_username = serializers.SerializerMethodField(read_only=True)
+
+    def get_supervisor_full_name(self, obj):
+        user = obj.supervisor
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_supervisor_username(self, obj):
+        return obj.supervisor.username if obj.supervisor else ""
+
+    class Meta:
+        model = ExamInvigilation
+        fields = "__all__"
+
+
+class ExamResultSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExamResult
+        fields = "__all__"
+
+
+class SupplierSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Supplier
+        fields = "__all__"
+
+
+class StockItemSerializer(serializers.ModelSerializer):
+    is_low_stock = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = StockItem
+        fields = "__all__"
+
+
+class StockMovementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StockMovement
+        fields = "__all__"

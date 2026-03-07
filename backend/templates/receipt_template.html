@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: Helvetica, Arial, sans-serif; font-size: 12px; }
+    .box { border: 1px solid #ddd; padding: 16px; }
+  </style>
+</head>
+<body>
+  <h2>Reçu de paiement</h2>
+  <div class="box">
+    <p>Reçu N° : {{ payment.id }}</p>
+    <p>Élève : {{ payment.fee.student.user.get_full_name }}</p>
+    <p>Matricule : {{ payment.fee.student.matricule }}</p>
+    <p>Type de frais : {{ payment.fee.get_fee_type_display }}</p>
+    <p>Montant payé : {{ payment.amount }}</p>
+    <p>Méthode : {{ payment.method }}</p>
+    <p>Référence : {{ payment.reference }}</p>
+    <p>Date : {{ payment.created_at|date:"d/m/Y H:i" }}</p>
+  </div>
+</body>
+</html>

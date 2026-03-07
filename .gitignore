@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.sqlite3
+.env
+.venv/
+backend/.env.supabase.local
+backend/.env.render.local
+backend/.env.supabase.runtime
+backend/.venv_supabase/
+venv/
+
+# Django
+backend/staticfiles/
+backend/media/
+backend/logs/*.log
+backend/backups/*.sql
+backend/celerybeat-schedule
+
+# Flutter
+**/.dart_tool/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/pubspec.lock
+
+# IDE
+.vscode/
+.idea/
+*.iml

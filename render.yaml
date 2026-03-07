@@ -1,0 +1,125 @@
+services:
+  - type: redis
+    name: gestion-school-redis
+    plan: free
+    maxmemoryPolicy: noeviction
+
+  - type: web
+    name: gestion-school-api
+    env: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /api/docs/
+    envVars:
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_HOSTS
+        value: "*"
+      - key: CORS_ALLOW_ALL_ORIGINS
+        value: "True"
+      - key: CSRF_TRUSTED_ORIGINS
+        value: "https://*.onrender.com"
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_SSL_REQUIRE
+        value: "True"
+      - key: DB_CONN_MAX_AGE
+        value: "600"
+      - key: USE_X_FORWARDED_HOST
+        value: "True"
+      - key: SESSION_COOKIE_SECURE
+        value: "True"
+      - key: CSRF_COOKIE_SECURE
+        value: "True"
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: gestion-school-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: gestion-school-redis
+          property: connectionString
+
+  - type: web
+    name: gestion-school-web
+    env: docker
+    plan: free
+    rootDir: frontend/gestion_school_app
+    dockerfilePath: ./Dockerfile.web
+    autoDeploy: true
+    healthCheckPath: /
+
+  - type: web
+    name: gestion-school-downloads
+    env: docker
+    plan: free
+    rootDir: downloads_site
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /
+
+  - type: worker
+    name: gestion-school-worker
+    env: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerCommand: celery -A config worker -l info
+    autoDeploy: true
+    envVars:
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_SSL_REQUIRE
+        value: "True"
+      - key: DB_CONN_MAX_AGE
+        value: "600"
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: gestion-school-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: gestion-school-redis
+          property: connectionString
+
+  - type: worker
+    name: gestion-school-beat
+    env: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerCommand: celery -A config beat -l info
+    autoDeploy: true
+    envVars:
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_SSL_REQUIRE
+        value: "True"
+      - key: DB_CONN_MAX_AGE
+        value: "600"
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: gestion-school-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: gestion-school-redis
+          property: connectionString

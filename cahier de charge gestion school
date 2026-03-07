@@ -1,0 +1,270 @@
+📘 CAHIER DE CHARGES
+
+Application de Gestion d’Établissement Scolaire
+Multi-plateforme : Application Web – Application Mobile – Application Desktop (Bureautique) 
+
+Technologie principale utilisé : Flutter
+
+1️⃣ Présentation du projet
+
+Le projet consiste à développer une application Web, Mobile et bureautique permettant de digitaliser la gestion
+administrative et pédagogique d’un établissement scolaire.
+
+1.1 Nom du projet
+GESTION SCHOOL
+
+1.2 Contexte
+Les établissements scolaires au Mali rencontrent plusieurs difficultés :
+
+Gestion manuelle des élèves
+Difficulté de suivi des paiements
+Absence de tableau de bord financier
+Mauvaise communication parents-école
+Gestion non centralisée des notes et absences
+L’objectif est de développer une application moderne, sécurisée et multi-plateforme permettant une gestion complète d’un établissement scolaire.
+
+2️⃣ Plateformes cibles (IMPORTANT)
+
+L’application sera développée avec Flutter pour :
+
+✅ 1. Version Web (OBLIGATOIRE)
+
+Utilisateurs :
+Administration
+Comptabilité
+Direction
+Surveillants
+👉 Utilisée principalement dans les bureaux.
+
+✅ 2. Version Mobile Android (OBLIGATOIRE)
+
+Utilisateurs :
+Parents
+Enseignants
+Élèves
+👉 Pour consultation rapide, notifications, suivi des paiements.
+
+✅ 3. Version Desktop Windows (RECOMMANDÉE)
+
+Utilisateurs :
+
+Comptable
+Directeur
+Secrétariat
+👉 Utile pour impression, gestion massive, export Excel/PDF.
+
+3️⃣ Architecture technique
+
+3.1 Frontend
+Flutter (Web + Android + Windows)
+
+3.2 Backend
+Deux options possible :
+
+🔵 Option 1 (Professionnelle recommandée)
+Django + Django REST API
+Base de données : MySQL ou PostgreSQL
+
+🟢 Option 2
+Firebase (plus simple mais moins puissant pour gestion comptable avancée)
+👉 Pour un projet sérieux d’établissement : Django + MySQL recommandé
+
+4️⃣ Modules Fonctionnels
+
+🔹 MODULE 1 : Gestion des utilisateurs
+
+Rôles :
+Super Admin
+Directeur
+Comptable
+Enseignant
+Surveillant
+Parent
+Élève
+
+Fonctionnalités :
+Création de comptes
+Attribution de rôles
+Gestion des permissions
+Authentification sécurisée
+Double authentification (optionnelle)
+
+🔹 MODULE 2 : Gestion des élèves
+
+Fonctionnalités :
+Inscription élève
+Attribution classe
+Numéro matricule automatique
+Photo élève
+Historique académique
+Dossier disciplinaire
+Archivage ancien élève
+
+🔹 MODULE 3 : Gestion des enseignants
+
+Fiche enseignant
+Matières attribuées
+Classes assignées
+Salaire
+Historique de paiement
+Emploi du temps
+
+🔹 MODULE 4 : Gestion académique
+
+Création des classes
+Niveaux
+Sections
+Matières
+Coefficients
+Années scolaires
+
+🔹 MODULE 5 : Gestion des notes
+
+Saisie des notes
+Calcul automatique moyenne
+Classement automatique
+Génération bulletin PDF
+Impression bulletin
+Validation par direction
+
+🔹 MODULE 6 : Gestion des absences
+
+Absences élèves
+Retards
+Absences enseignants
+Justificatifs upload
+Statistiques mensuelles
+
+🔹 MODULE 7 : Gestion commerciale & comptable (TRÈS IMPORTANT)
+
+1. Frais scolaires
+
+Frais d’inscription
+Frais mensuels
+Frais examen
+Autres frais personnalisés
+
+2. Paiements
+
+Paiement partiel
+Paiement total
+Reçu automatique PDF
+Historique des paiements
+
+3. Gestion des dépenses
+
+Salaire enseignants
+Charges eau/électricité
+Fournitures
+Maintenance
+
+4. Tableau de bord financier
+
+Recettes totales
+Dépenses totales
+Bénéfice net
+Rapport mensuel
+Rapport annuel
+Graphiques statistiques
+
+🔹 MODULE 8 : Communication
+
+Notification push
+SMS (intégration API)
+Email automatique
+Annonce générale
+Chat interne (optionnel)
+
+🔹 MODULE 9 : Bibliothèque
+
+Gestion des livres
+Emprunt
+Retour
+Pénalités retard
+
+🔹 MODULE 10 : Gestion des examens
+
+Création session examen
+Attribution surveillants
+Planning examen
+Publication résultats
+
+🔹 MODULE 11 : Emploi du temps
+
+Génération automatique
+Planning par classe
+Planning enseignant
+Export PDF
+
+🔹 MODULE 12 : Gestion stock (cantine/fournitures)
+
+Produits
+Entrées / sorties
+Alerte stock bas
+Fournisseurs
+
+5️⃣ Sécurité
+
+Authentification JWT
+Cryptage mot de passe
+Backup automatique
+Logs d’activités
+Gestion des permissions par rôle
+
+6️⃣ Performances
+
+Temps de chargement < 3 secondes
+Support 1000+ élèves
+Base optimisée
+
+7️⃣ Design UI/UX
+
+Interface moderne
+Dashboard dynamique
+Thème clair/sombre
+Responsive design
+
+8️⃣ Export & Impression
+
+Export Excel
+Export PDF
+Impression reçus
+Impression bulletins
+
+9️⃣ Technologies recommandées
+
+Partie Technologie 
+Frontend 👉 Flutter
+Backend 👉 Django REST
+Base de données 👉 MySQL
+Hébergement 👉 VPS Linux
+Notifications 👉Firebase Cloud Messaging
+
+🔟 Planning de développement
+
+Phase 1 : Auth + Gestion élèves
+Phase 2 : Notes + Bulletins
+Phase 3 : Paiements + Comptabilité
+Phase 4 : Communication + Statistiques
+Phase 5 : Version mobile + optimisation
+
+Durée estimée : dépendra de temps qu'on consacré 
+
+🎯 Pourquoi Flutter est idéal ?
+
+Flutter permet :
+
+Une seule base de code pour Application Web + Application Android + Application Bureautique Windows
+Interface professionnelle
+Performance élevée
+Maintenance facile
+
+Conclusion
+
+Cette application sera :
+✅ Multi-plateforme
+✅ Sécurisée
+✅ Complète (Académique + Comptable)
+✅ Moderne
+✅ Adaptée aux écoles Malienne
+"
