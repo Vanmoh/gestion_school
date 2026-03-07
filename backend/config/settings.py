@@ -2,6 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 from decouple import config
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -75,6 +76,12 @@ if DATABASE_URL:
         ),
     }
 else:
+    if not DEBUG:
+        raise ImproperlyConfigured(
+            "DATABASE_URL is required when DEBUG=False. "
+            "Set DATABASE_URL in Render environment variables to your Supabase PostgreSQL URL."
+        )
+
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.mysql",
