@@ -175,6 +175,8 @@ _file_logging_enabled = ENABLE_FILE_LOGGING
 if _file_logging_enabled:
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with LOG_FILE_PATH.open("a", encoding="utf-8"):
+            pass
     except OSError:
         _file_logging_enabled = False
 
