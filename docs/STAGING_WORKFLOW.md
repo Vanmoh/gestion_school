@@ -26,6 +26,12 @@ Push one-click vers staging:
 ./push_to_staging.sh
 ```
 
+Simulation sans push:
+
+```bash
+./push_to_staging.sh --dry-run
+```
+
 ## 2) Service Render staging
 
 Le fichier blueprint staging est:

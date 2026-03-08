@@ -8,6 +8,15 @@ REMOTE="origin"
 TARGET_BRANCH="staging"
 SOURCE_BRANCH=""
 AUTO_YES=0
+DRY_RUN=0
+
+run_cmd() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[dry-run] $*"
+  else
+    "$@"
+  fi
+}
 
 usage() {
   cat <<'EOF'
@@ -18,11 +27,13 @@ Options:
   --remote=<name>      Remote Git (default: origin)
   --source=<branch>    Branche source à envoyer vers staging (default: branche courante)
   --target=<branch>    Branche cible (default: staging)
+  -n, --dry-run        Simulation sans modifier ni pousser
   -y, --yes            Ne pas demander de confirmation
   -h, --help           Afficher cette aide
 
 Exemples:
   ./push_to_staging.sh
+  ./push_to_staging.sh --dry-run
   ./push_to_staging.sh --source=feature/students -y
 EOF
 }
@@ -37,6 +48,9 @@ for arg in "$@"; do
       ;;
     --target=*)
       TARGET_BRANCH="${arg#*=}"
+      ;;
+    -n|--dry-run)
+      DRY_RUN=1
       ;;
     -y|--yes)
       AUTO_YES=1
@@ -80,14 +94,27 @@ if ! git show-ref --verify --quiet "refs/heads/$SOURCE_BRANCH"; then
   exit 1
 fi
 
-echo "[1/6] Récupération des branches distantes..."
-git fetch "$REMOTE" "$TARGET_BRANCH"
-
-if ! git show-ref --verify --quiet "refs/remotes/$REMOTE/$TARGET_BRANCH"; then
-  echo "Erreur: branche distante introuvable: $REMOTE/$TARGET_BRANCH"
-  echo "Astuce: crée d'abord la branche distante avec: git push -u $REMOTE $TARGET_BRANCH"
-  exit 1
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "[mode] dry-run activé: aucune commande modifiante ne sera exécutée."
 fi
+
+echo "[1/6] Vérification de la branche distante cible..."
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  if ! git ls-remote --exit-code --heads "$REMOTE" "$TARGET_BRANCH" >/dev/null 2>&1; then
+    echo "Erreur: branche distante introuvable: $REMOTE/$TARGET_BRANCH"
+    echo "Astuce: crée d'abord la branche distante avec: git push -u $REMOTE $TARGET_BRANCH"
+    exit 1
+  fi
+else
+  git fetch "$REMOTE" "$TARGET_BRANCH"
+
+  if ! git show-ref --verify --quiet "refs/remotes/$REMOTE/$TARGET_BRANCH"; then
+    echo "Erreur: branche distante introuvable: $REMOTE/$TARGET_BRANCH"
+    echo "Astuce: crée d'abord la branche distante avec: git push -u $REMOTE $TARGET_BRANCH"
+    exit 1
+  fi
+fi
+
 
 if [[ "$AUTO_YES" -ne 1 ]]; then
   echo
@@ -109,25 +136,29 @@ if [[ "$AUTO_YES" -ne 1 ]]; then
 fi
 
 echo "[2/6] Checkout $TARGET_BRANCH..."
-git checkout "$TARGET_BRANCH"
+run_cmd git checkout "$TARGET_BRANCH"
 
 echo "[3/6] Mise à jour locale de $TARGET_BRANCH..."
-git pull --rebase "$REMOTE" "$TARGET_BRANCH"
+run_cmd git pull --rebase "$REMOTE" "$TARGET_BRANCH"
 
 if [[ "$SOURCE_BRANCH" != "$TARGET_BRANCH" ]]; then
   echo "[4/6] Merge de $SOURCE_BRANCH vers $TARGET_BRANCH..."
-  git merge --no-ff "$SOURCE_BRANCH" -m "Push $SOURCE_BRANCH to $TARGET_BRANCH"
+  run_cmd git merge --no-ff "$SOURCE_BRANCH" -m "Push $SOURCE_BRANCH to $TARGET_BRANCH"
 else
   echo "[4/6] Merge ignoré (source = cible)."
 fi
 
 echo "[5/6] Push vers $REMOTE/$TARGET_BRANCH..."
-git push "$REMOTE" "$TARGET_BRANCH"
+run_cmd git push "$REMOTE" "$TARGET_BRANCH"
 
-echo "[6/6] Envoi vers $TARGET_BRANCH terminé ✅"
-echo "Dernier commit sur $TARGET_BRANCH: $(git rev-parse --short HEAD)"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "[6/6] Simulation terminée ✅"
+else
+  echo "[6/6] Envoi vers $TARGET_BRANCH terminé ✅"
+  echo "Dernier commit sur $TARGET_BRANCH: $(git rev-parse --short HEAD)"
+fi
 
-if [[ -n "$CURRENT_BRANCH" && "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]]; then
+if [[ "$DRY_RUN" -eq 0 && -n "$CURRENT_BRANCH" && "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]]; then
   echo "Retour sur la branche initiale: $CURRENT_BRANCH"
   git checkout "$CURRENT_BRANCH"
 fi
