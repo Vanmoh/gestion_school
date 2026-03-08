@@ -73,16 +73,20 @@ if [[ "$MODE" == "debug" ]]; then
   echo "[3/3] Build APK debug..."
   flutter build apk --debug "${BUILD_ARGS[@]}"
   APK_PATH="$APP_DIR/build/app/outputs/flutter-apk/app-debug.apk"
+  NAMED_APK_PATH="$APP_DIR/build/app/outputs/flutter-apk/Gestion School-debug.apk"
 else
   echo "[3/3] Build APK release..."
   flutter build apk "${BUILD_ARGS[@]}"
   APK_PATH="$APP_DIR/build/app/outputs/flutter-apk/app-release.apk"
+  NAMED_APK_PATH="$APP_DIR/build/app/outputs/flutter-apk/Gestion School.apk"
 fi
 
 echo
 if [[ -f "$APK_PATH" ]]; then
+  cp "$APK_PATH" "$NAMED_APK_PATH"
   SIZE="$(du -h "$APK_PATH" | awk '{print $1}')"
-  echo "✅ APK généré: $APK_PATH"
+  echo "✅ APK généré: $NAMED_APK_PATH"
+  echo "ℹ️ APK original Flutter: $APK_PATH"
   echo "📦 Taille: $SIZE"
 else
   echo "⚠️ Build terminé, mais APK non trouvé au chemin attendu: $APK_PATH"

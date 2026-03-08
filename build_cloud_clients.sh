@@ -73,7 +73,11 @@ IFS=',' read -r -a target_list <<< "$TARGETS"
 build_apk() {
   echo "[2/4] Build APK release..."
   flutter build apk --release --dart-define=API_BASE_URL="$API_URL"
-  echo "APK: $APP_DIR/build/app/outputs/flutter-apk/app-release.apk"
+  local apk_original="$APP_DIR/build/app/outputs/flutter-apk/app-release.apk"
+  local apk_named="$APP_DIR/build/app/outputs/flutter-apk/Gestion School.apk"
+  cp "$apk_original" "$apk_named"
+  echo "APK: $apk_named"
+  echo "APK original Flutter: $apk_original"
 }
 
 build_web() {

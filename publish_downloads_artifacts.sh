@@ -4,12 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$ROOT_DIR/frontend/gestion_school_app"
 DOWNLOADS_DIR="$ROOT_DIR/downloads_site"
+APK_PUBLISHED_NAME="Gestion School.apk"
 
 APK_SRC="$APP_DIR/build/app/outputs/flutter-apk/app-release.apk"
 LINUX_SRC="$APP_DIR/build/linux/x64/release/bundle"
 LINUX_ARCHIVE="$DOWNLOADS_DIR/gestion_school_desktop_linux.tar.gz"
 WINDOWS_SRC="$APP_DIR/build/windows/x64/runner/Release"
 WINDOWS_ARCHIVE="$DOWNLOADS_DIR/gestion_school_desktop_windows.zip"
+APK_DST="$DOWNLOADS_DIR/$APK_PUBLISHED_NAME"
 
 if [[ ! -f "$APK_SRC" ]]; then
   echo "APK introuvable: $APK_SRC"
@@ -18,7 +20,7 @@ if [[ ! -f "$APK_SRC" ]]; then
 fi
 
 mkdir -p "$DOWNLOADS_DIR"
-cp "$APK_SRC" "$DOWNLOADS_DIR/app-release.apk"
+cp "$APK_SRC" "$APK_DST"
 
 if [[ -d "$LINUX_SRC" ]]; then
   tar -czf "$LINUX_ARCHIVE" -C "$LINUX_SRC" .
@@ -43,4 +45,4 @@ else
 fi
 
 echo "Artifacts publiés dans: $DOWNLOADS_DIR"
-ls -lh "$DOWNLOADS_DIR"/app-release.apk "$DOWNLOADS_DIR"/gestion_school_desktop_*.{tar.gz,zip} 2>/dev/null || ls -lh "$DOWNLOADS_DIR"/app-release.apk
+ls -lh "$APK_DST" "$DOWNLOADS_DIR"/gestion_school_desktop_*.{tar.gz,zip} 2>/dev/null || ls -lh "$APK_DST"
