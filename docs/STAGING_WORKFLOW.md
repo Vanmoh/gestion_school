@@ -70,3 +70,9 @@ git push origin main
 ```
 
 Ensuite Render prod déploie automatiquement depuis `main`.
+
+Alternative one-click:
+
+```bash
+./promote_staging_to_main.sh
+```
