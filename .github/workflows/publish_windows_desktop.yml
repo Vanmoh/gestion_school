@@ -1,0 +1,57 @@
+name: Publish Windows Desktop to downloads_site
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Build Windows desktop release
+        working-directory: frontend/gestion_school_app
+        run: |
+          flutter pub get
+          flutter build windows --release --dart-define=API_BASE_URL=https://gestion-school-jkzf.onrender.com/api
+
+      - name: Archive Windows build
+        shell: pwsh
+        run: |
+          $src = "frontend/gestion_school_app/build/windows/x64/runner/Release"
+          $dst = "downloads_site/gestion_school_desktop_windows.zip"
+          if (!(Test-Path $src)) {
+            throw "Windows release folder not found: $src"
+          }
+          if (Test-Path $dst) {
+            Remove-Item $dst -Force
+          }
+          Compress-Archive -Path "$src/*" -DestinationPath $dst -Force
+
+      - name: Commit and push artifact
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add downloads_site/gestion_school_desktop_windows.zip
+          if git diff --cached --quiet; then
+            echo "No artifact changes to commit"
+            exit 0
+          fi
+          git commit -m "Publish Windows desktop artifact"
+          git push
