@@ -154,6 +154,7 @@ Exemple:
 
 ## Workflow staging (test avant prod)
 - Guide étape par étape: `docs/STAGING_WORKFLOW.md`
+- Script one-click pour envoyer vers staging: `./push_to_staging.sh`
 - Script one-click de promotion staging -> prod: `./promote_staging_to_main.sh`
 
 ## Dépannage rapide (Docker)

@@ -20,6 +20,12 @@ Cycle standard:
 - quand tout est validé, tu merges `staging` -> `main`
 - la prod déploie depuis `main`
 
+Push one-click vers staging:
+
+```bash
+./push_to_staging.sh
+```
+
 ## 2) Service Render staging
 
 Le fichier blueprint staging est:
