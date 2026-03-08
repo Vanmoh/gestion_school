@@ -149,7 +149,11 @@ Exemple:
 
 ## Blueprint Render
 - Déploiement backend+worker+beat+redis: `render.yaml`
+- Déploiement staging (API de test en ligne): `render.staging.yaml`
 - Variables Supabase prêtes à remplir: `backend/.env.supabase.example`
+
+## Workflow staging (test avant prod)
+- Guide étape par étape: `docs/STAGING_WORKFLOW.md`
 
 ## Dépannage rapide (Docker)
 - Vérifier l'état global: `./status.sh`
