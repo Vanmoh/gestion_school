@@ -130,7 +130,9 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             ),
             pw.SizedBox(height: 4),
             pw.Text(
-              _viewMode == 'classroom' ? 'Vue par classe' : 'Vue par enseignant',
+              _viewMode == 'classroom'
+                  ? 'Vue par classe'
+                  : 'Vue par enseignant',
               style: const pw.TextStyle(fontSize: 11),
             ),
             pw.Text(

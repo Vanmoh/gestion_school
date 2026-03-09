@@ -158,10 +158,14 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             ? _asInt(_classrooms.first['id'])
             : null;
         _cardsClassroomId ??= _classrooms.isNotEmpty
-          ? _asInt(_classrooms.first['id'])
-          : null;
-        _historyYearId ??= _years.isNotEmpty ? _asInt(_years.first['id']) : null;
-        _feeAcademicYearId ??= _years.isNotEmpty ? _asInt(_years.first['id']) : null;
+            ? _asInt(_classrooms.first['id'])
+            : null;
+        _historyYearId ??= _years.isNotEmpty
+            ? _asInt(_years.first['id'])
+            : null;
+        _feeAcademicYearId ??= _years.isNotEmpty
+            ? _asInt(_years.first['id'])
+            : null;
       });
 
       _applyFilters(preferredStudentId: keepSelectedId ?? _selectedStudent?.id);
@@ -172,7 +176,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     }
   }
 
-  void _applyFilters({int? preferredStudentId, bool resetVisibleCount = false}) {
+  void _applyFilters({
+    int? preferredStudentId,
+    bool resetVisibleCount = false,
+  }) {
     final search = _searchController.text.trim().toLowerCase();
     final filtered = _students.where((student) {
       if (_statusFilter == 'active' && student.isArchived) return false;
@@ -201,7 +208,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       }
     }
 
-    if (nextSelected != null && !filtered.any((s) => s.id == nextSelected!.id)) {
+    if (nextSelected != null &&
+        !filtered.any((s) => s.id == nextSelected!.id)) {
       nextSelected = filtered.isNotEmpty ? filtered.first : null;
     }
     if (nextSelected == null && filtered.isNotEmpty) {
@@ -215,7 +223,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       nextVisibleCount = _studentsPageSize;
     }
     if (nextSelected != null) {
-      final selectedIndex = filtered.indexWhere((s) => s.id == nextSelected!.id);
+      final selectedIndex = filtered.indexWhere(
+        (s) => s.id == nextSelected!.id,
+      );
       if (selectedIndex >= 0 && selectedIndex >= nextVisibleCount) {
         nextVisibleCount = selectedIndex + 1;
       }
@@ -327,7 +337,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
       if (result == null || result.files.isEmpty) return;
       final file = result.files.first;
-      _attendanceProofPath = file.path?.trim().isEmpty ?? true ? null : file.path;
+      _attendanceProofPath = file.path?.trim().isEmpty ?? true
+          ? null
+          : file.path;
       _attendanceProofBytes = file.bytes;
       _attendanceProofFileName = file.name.trim().isEmpty ? null : file.name;
       if (mounted) {
@@ -380,7 +392,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           (row) => _toDouble(row['balance']) > 0,
           orElse: () => _fees.isNotEmpty ? _fees.first : <String, dynamic>{},
         );
-        _paymentFeeId = remainingFee.isNotEmpty ? _asInt(remainingFee['id']) : null;
+        _paymentFeeId = remainingFee.isNotEmpty
+            ? _asInt(remainingFee['id'])
+            : null;
       });
     } catch (error) {
       _showMessage('Erreur chargement dossier élève: $error');
@@ -521,7 +535,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         lastName != student.lastName.trim() ||
         email != student.email.trim() ||
         phone != student.phone.trim();
-    final hasClassroomChanges = _selectedClassroomUpdateId != student.classroomId;
+    final hasClassroomChanges =
+        _selectedClassroomUpdateId != student.classroomId;
     final hasParentChanges = _selectedParentUpdateId != student.parentId;
     final hasBirthDateChanges =
         _apiDateOrEmpty(_updateBirthDate) != _apiDateOrEmpty(student.birthDate);
@@ -613,7 +628,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).createStudentHistory(
+      await ref
+          .read(studentsRepositoryProvider)
+          .createStudentHistory(
             studentId: student.id,
             academicYearId: yearId,
             classroomId: classroomId,
@@ -645,7 +662,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).createDisciplineIncident(
+      await ref
+          .read(studentsRepositoryProvider)
+          .createDisciplineIncident(
             studentId: student.id,
             incidentDate: _incidentDate,
             category: category,
@@ -686,7 +705,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).updateDisciplineIncidentStatus(
+      await ref
+          .read(studentsRepositoryProvider)
+          .updateDisciplineIncidentStatus(
             incidentId: incidentId,
             status: targetStatus,
           );
@@ -715,7 +736,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).createAttendance(
+      await ref
+          .read(studentsRepositoryProvider)
+          .createAttendance(
             studentId: student.id,
             date: _attendanceDate,
             isAbsent: _attendanceAbsent,
@@ -759,7 +782,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).createStudentFee(
+      await ref
+          .read(studentsRepositoryProvider)
+          .createStudentFee(
             studentId: student.id,
             academicYearId: academicYearId,
             feeType: _feeType,
@@ -801,7 +826,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).createPayment(
+      await ref
+          .read(studentsRepositoryProvider)
+          .createPayment(
             feeId: feeId,
             amount: amount,
             method: method,
@@ -959,10 +986,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     try {
       final bytes = await ref
           .read(studentsRepositoryProvider)
-          .fetchClassStudentCardsPdf(
-            classroomId,
-            layoutMode: _cardsLayoutMode,
-          );
+          .fetchClassStudentCardsPdf(classroomId, layoutMode: _cardsLayoutMode);
       await Printing.layoutPdf(onLayout: (_) async => bytes);
       return true;
     } catch (error) {
@@ -981,10 +1005,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     try {
       final bytes = await ref
           .read(studentsRepositoryProvider)
-          .fetchClassStudentCardsPdf(
-            classroomId,
-            layoutMode: _cardsLayoutMode,
-          );
+          .fetchClassStudentCardsPdf(classroomId, layoutMode: _cardsLayoutMode);
       await Printing.sharePdf(
         bytes: bytes,
         filename: _classCardsExportFileName(classroomId),
@@ -1014,10 +1035,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     try {
       final bytes = await ref
           .read(studentsRepositoryProvider)
-          .fetchClassStudentCardsPdf(
-            classroomId,
-            layoutMode: _cardsLayoutMode,
-          );
+          .fetchClassStudentCardsPdf(classroomId, layoutMode: _cardsLayoutMode);
       if (!mounted) return false;
 
       await showDialog<void>(
@@ -1069,7 +1087,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   Future<void> _openClassCardsPanel() {
     _cardsClassroomId ??= _classFilterId;
-    _cardsClassroomId ??= _classrooms.isNotEmpty ? _asInt(_classrooms.first['id']) : null;
+    _cardsClassroomId ??= _classrooms.isNotEmpty
+        ? _asInt(_classrooms.first['id'])
+        : null;
 
     return _openFloatingPanel(
       title: 'Imprimer / Exporter cartes d’élèves',
@@ -1134,12 +1154,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _printClassStudentCards,
-                        successMessage: _cardsLayoutMode == 'a4_6up'
-                            ? 'Cartes élèves prêtes à l’impression (A4 - 6 cartes/page).'
-                            : 'Cartes élèves générées.',
-                      ),
+                      panelContext: panelContext,
+                      action: _printClassStudentCards,
+                      successMessage: _cardsLayoutMode == 'a4_6up'
+                          ? 'Cartes élèves prêtes à l’impression (A4 - 6 cartes/page).'
+                          : 'Cartes élèves générées.',
+                    ),
               icon: const Icon(Icons.badge_outlined),
               label: const Text('Imprimer cartes'),
             ),
@@ -1147,12 +1167,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _exportClassStudentCardsPdf,
-                        successMessage: _cardsLayoutMode == 'a4_6up'
-                            ? 'PDF exporté (A4 - 6 cartes/page).'
-                            : 'PDF exporté.',
-                      ),
+                      panelContext: panelContext,
+                      action: _exportClassStudentCardsPdf,
+                      successMessage: _cardsLayoutMode == 'a4_6up'
+                          ? 'PDF exporté (A4 - 6 cartes/page).'
+                          : 'PDF exporté.',
+                    ),
               icon: const Icon(Icons.picture_as_pdf_outlined),
               label: const Text('Exporter PDF'),
             ),
@@ -1164,7 +1184,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   Future<void> _openFloatingPanel({
     required String title,
-    required Widget Function(BuildContext panelContext, VoidCallback refreshPanel)
+    required Widget Function(
+      BuildContext panelContext,
+      VoidCallback refreshPanel,
+    )
     contentBuilder,
   }) async {
     final compact = MediaQuery.of(context).size.width < 920;
@@ -1316,7 +1339,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 260,
               child: DropdownButtonFormField<int?>(
                 initialValue: _historyClassroomId,
-                decoration: const InputDecoration(labelText: 'Classe concernée'),
+                decoration: const InputDecoration(
+                  labelText: 'Classe concernée',
+                ),
                 items: _classrooms
                     .map(
                       (row) => DropdownMenuItem<int?>(
@@ -1335,7 +1360,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 180,
               child: TextField(
                 controller: _historyAverageController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(labelText: 'Moyenne'),
               ),
             ),
@@ -1351,10 +1378,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _createHistoryEntry,
-                        successMessage: 'Historique académique ajouté.',
-                      ),
+                      panelContext: panelContext,
+                      action: _createHistoryEntry,
+                      successMessage: 'Historique académique ajouté.',
+                    ),
               icon: const Icon(Icons.history_edu_outlined),
               label: const Text('Enregistrer'),
             ),
@@ -1445,7 +1472,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 300,
               child: DropdownButtonFormField<int?>(
                 initialValue: _registrationParentId,
-                decoration: const InputDecoration(labelText: 'Parent (optionnel)'),
+                decoration: const InputDecoration(
+                  labelText: 'Parent (optionnel)',
+                ),
                 items: [
                   const DropdownMenuItem<int?>(
                     value: null,
@@ -1553,7 +1582,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           child: Image.memory(
                             _registrationPhotoBytes!,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) {
+                            errorBuilder: (context, error, stackTrace) {
                               return const Padding(
                                 padding: EdgeInsets.all(10),
                                 child: Text('Aperçu indisponible.'),
@@ -1570,10 +1599,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _registerStudent,
-                        successMessage: 'Élève inscrit avec succès.',
-                      ),
+                      panelContext: panelContext,
+                      action: _registerStudent,
+                      successMessage: 'Élève inscrit avec succès.',
+                    ),
               icon: const Icon(Icons.person_add_alt_1),
               label: const Text('Inscrire élève'),
             ),
@@ -1636,7 +1665,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 final picked = await showDatePicker(
                   context: panelContext,
                   initialDate:
-                      _updateBirthDate ?? student.birthDate ?? DateTime(2010, 1, 1),
+                      _updateBirthDate ??
+                      student.birthDate ??
+                      DateTime(2010, 1, 1),
                   firstDate: DateTime(1980),
                   lastDate: DateTime.now(),
                 );
@@ -1656,7 +1687,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 280,
               child: DropdownButtonFormField<int?>(
                 initialValue: _selectedClassroomUpdateId,
-                decoration: const InputDecoration(labelText: 'Réattribuer classe'),
+                decoration: const InputDecoration(
+                  labelText: 'Réattribuer classe',
+                ),
                 items: _classrooms
                     .map(
                       (row) => DropdownMenuItem<int?>(
@@ -1698,10 +1731,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _saveStudentAssignments,
-                        successMessage: 'Dossier élève mis à jour.',
-                      ),
+                      panelContext: panelContext,
+                      action: _saveStudentAssignments,
+                      successMessage: 'Dossier élève mis à jour.',
+                    ),
               icon: const Icon(Icons.save_outlined),
               label: const Text('Enregistrer dossier'),
             ),
@@ -1784,7 +1817,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           child: Image.memory(
                             _updatePhotoBytes!,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) {
+                            errorBuilder: (context, error, stackTrace) {
                               return const Padding(
                                 padding: EdgeInsets.all(10),
                                 child: Text('Aperçu indisponible.'),
@@ -1801,10 +1834,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _updateStudentPhoto,
-                        successMessage: 'Photo élève mise à jour.',
-                      ),
+                      panelContext: panelContext,
+                      action: _updateStudentPhoto,
+                      successMessage: 'Photo élève mise à jour.',
+                    ),
               icon: const Icon(Icons.cloud_upload_outlined),
               label: const Text('Uploader photo'),
             ),
@@ -1897,10 +1930,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _createDisciplineIncident,
-                        successMessage: 'Incident disciplinaire enregistré.',
-                      ),
+                      panelContext: panelContext,
+                      action: _createDisciplineIncident,
+                      successMessage: 'Incident disciplinaire enregistré.',
+                    ),
               icon: const Icon(Icons.gavel_outlined),
               label: const Text('Enregistrer'),
             ),
@@ -1973,7 +2006,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 320,
               child: TextField(
                 controller: _attendanceReasonController,
-                decoration: const InputDecoration(labelText: 'Motif (optionnel)'),
+                decoration: const InputDecoration(
+                  labelText: 'Motif (optionnel)',
+                ),
               ),
             ),
             SizedBox(
@@ -2017,7 +2052,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 ],
               ),
             ),
-            if (_attendanceProofBytes != null && _attendanceProofBytes!.isNotEmpty)
+            if (_attendanceProofBytes != null &&
+                _attendanceProofBytes!.isNotEmpty)
               SizedBox(
                 width: 560,
                 child: Column(
@@ -2040,15 +2076,18 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             maxHeight: proofPreviewHeight,
                             maxWidth: proofPreviewWidth,
                           ),
-                          color:
-                              Theme.of(context).colorScheme.surfaceContainerHighest,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.surfaceContainerHighest,
                           child: Image.memory(
                             _attendanceProofBytes!,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) {
+                            errorBuilder: (context, error, stackTrace) {
                               return const Padding(
                                 padding: EdgeInsets.all(10),
-                                child: Text('Aperçu indisponible pour ce fichier.'),
+                                child: Text(
+                                  'Aperçu indisponible pour ce fichier.',
+                                ),
                               );
                             },
                           ),
@@ -2062,10 +2101,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _createAttendanceEntry,
-                        successMessage: 'Absence/retard enregistré.',
-                      ),
+                      panelContext: panelContext,
+                      action: _createAttendanceEntry,
+                      successMessage: 'Absence/retard enregistré.',
+                    ),
               icon: const Icon(Icons.fact_check_outlined),
               label: const Text('Enregistrer'),
             ),
@@ -2108,7 +2147,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 initialValue: _feeType,
                 decoration: const InputDecoration(labelText: 'Type de frais'),
                 items: const [
-                  DropdownMenuItem(value: 'registration', child: Text('Inscription')),
+                  DropdownMenuItem(
+                    value: 'registration',
+                    child: Text('Inscription'),
+                  ),
                   DropdownMenuItem(value: 'monthly', child: Text('Mensuel')),
                   DropdownMenuItem(value: 'exam', child: Text('Examen')),
                 ],
@@ -2138,7 +2180,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 220,
               child: TextField(
                 controller: _feeAmountDueController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(labelText: 'Montant dû'),
               ),
             ),
@@ -2146,10 +2190,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _createStudentFeeEntry,
-                        successMessage: 'Frais scolaire ajouté.',
-                      ),
+                      panelContext: panelContext,
+                      action: _createStudentFeeEntry,
+                      successMessage: 'Frais scolaire ajouté.',
+                    ),
               icon: const Icon(Icons.add_card_outlined),
               label: const Text('Enregistrer'),
             ),
@@ -2203,7 +2247,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 180,
               child: TextField(
                 controller: _paymentAmountController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(labelText: 'Montant'),
               ),
             ),
@@ -2227,10 +2273,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _createPaymentEntry,
-                        successMessage: 'Paiement enregistré.',
-                      ),
+                      panelContext: panelContext,
+                      action: _createPaymentEntry,
+                      successMessage: 'Paiement enregistré.',
+                    ),
               icon: const Icon(Icons.payments_outlined),
               label: const Text('Enregistrer'),
             ),
@@ -2267,10 +2313,14 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       orderedClassNames.add(name);
     }
 
-    final otherClassNames = studentsByClass.keys
-        .where((name) => name != 'Sans classe' && !knownClassNames.contains(name))
-        .toList()
-      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final otherClassNames =
+        studentsByClass.keys
+            .where(
+              (name) =>
+                  name != 'Sans classe' && !knownClassNames.contains(name),
+            )
+            .toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
     final classNames = <String>[
       ...orderedClassNames,
@@ -2357,52 +2407,53 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 )
               else
                 ...filteredStudentsByClass.entries.map((entry) {
-                final className = entry.key;
-                final group = entry.value;
-                final totalInClass = (studentsByClass[className] ?? const <Student>[])
-                    .length;
-                return Card(
-                  child: ExpansionTile(
-                    title: Text(
-                      normalizedQuery.isEmpty
-                          ? '$className (${group.length})'
-                          : '$className (${group.length}/$totalInClass)',
-                    ),
-                    children: group
-                        .map(
-                          (student) => ListTile(
-                            dense: true,
-                            onTap: () {
-                              if (panelContext.mounted) {
-                                final navigator = Navigator.of(panelContext);
-                                if (navigator.canPop()) {
-                                  navigator.pop();
+                  final className = entry.key;
+                  final group = entry.value;
+                  final totalInClass =
+                      (studentsByClass[className] ?? const <Student>[]).length;
+                  return Card(
+                    child: ExpansionTile(
+                      title: Text(
+                        normalizedQuery.isEmpty
+                            ? '$className (${group.length})'
+                            : '$className (${group.length}/$totalInClass)',
+                      ),
+                      children: group
+                          .map(
+                            (student) => ListTile(
+                              dense: true,
+                              onTap: () {
+                                if (panelContext.mounted) {
+                                  final navigator = Navigator.of(panelContext);
+                                  if (navigator.canPop()) {
+                                    navigator.pop();
+                                  }
                                 }
-                              }
 
-                              if (!mounted) return;
-                              setState(() {
-                                _selectedStudent = student;
-                                _selectedClassroomUpdateId = student.classroomId;
-                                _selectedParentUpdateId = student.parentId;
-                              });
-                              _loadStudentLinkedData(student.id);
-                            },
-                            leading: Icon(
-                              student.isArchived
-                                  ? Icons.archive_outlined
-                                  : Icons.school_outlined,
+                                if (!mounted) return;
+                                setState(() {
+                                  _selectedStudent = student;
+                                  _selectedClassroomUpdateId =
+                                      student.classroomId;
+                                  _selectedParentUpdateId = student.parentId;
+                                });
+                                _loadStudentLinkedData(student.id);
+                              },
+                              leading: Icon(
+                                student.isArchived
+                                    ? Icons.archive_outlined
+                                    : Icons.school_outlined,
+                              ),
+                              title: Text(student.fullName),
+                              subtitle: Text(
+                                'Matricule: ${student.matricule} • ${student.isArchived ? 'Archivé' : 'Actif'}',
+                              ),
                             ),
-                            title: Text(student.fullName),
-                            subtitle: Text(
-                              'Matricule: ${student.matricule} • ${student.isArchived ? 'Archivé' : 'Actif'}',
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                );
-              }),
+                          )
+                          .toList(),
+                    ),
+                  );
+                }),
             ],
           ),
         );
@@ -2420,11 +2471,13 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final active = _students.where((s) => !s.isArchived).length;
     final archived = total - active;
     final isCompactStudentList = MediaQuery.of(context).size.width < 720;
-    final visibleStudents = _filteredStudents.take(_visibleStudentsCount).toList();
+    final visibleStudents = _filteredStudents
+        .take(_visibleStudentsCount)
+        .toList();
     final remainingStudents = _filteredStudents.length - visibleStudents.length;
     final nextBatch = remainingStudents > _studentsPageSize
-      ? _studentsPageSize
-      : remainingStudents;
+        ? _studentsPageSize
+        : remainingStudents;
 
     return ListView(
       padding: const EdgeInsets.all(18),
@@ -2535,7 +2588,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     items: const [
                       DropdownMenuItem(value: 'all', child: Text('Tous')),
                       DropdownMenuItem(value: 'active', child: Text('Actifs')),
-                      DropdownMenuItem(value: 'archived', child: Text('Archivés')),
+                      DropdownMenuItem(
+                        value: 'archived',
+                        child: Text('Archivés'),
+                      ),
                     ],
                     onChanged: (value) {
                       setState(() => _statusFilter = value ?? 'active');
@@ -2554,7 +2610,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         value: 'matricule',
                         child: Text('Matricule'),
                       ),
-                      DropdownMenuItem(value: 'classroom', child: Text('Classe')),
+                      DropdownMenuItem(
+                        value: 'classroom',
+                        child: Text('Classe'),
+                      ),
                       DropdownMenuItem(value: 'status', child: Text('Statut')),
                     ],
                     onChanged: (value) {
@@ -2586,9 +2645,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 FilledButton.tonalIcon(
                   onPressed: _saving
                       ? null
-                      : () => _loadBaseData(
-                            keepSelectedId: _selectedStudent?.id,
-                          ),
+                      : () =>
+                            _loadBaseData(keepSelectedId: _selectedStudent?.id),
                   icon: const Icon(Icons.sync),
                   label: const Text('Actualiser'),
                 ),
@@ -2628,7 +2686,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             ? const VisualDensity(vertical: -2)
                             : null,
                         contentPadding: isCompactStudentList
-                            ? const EdgeInsets.symmetric(horizontal: 12, vertical: 2)
+                            ? const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 2,
+                              )
                             : null,
                         onTap: () {
                           setState(() {
@@ -2692,10 +2753,13 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           TextButton(
                             onPressed: () {
                               setState(() {
-                                _visibleStudentsCount = _filteredStudents.length;
+                                _visibleStudentsCount =
+                                    _filteredStudents.length;
                               });
                             },
-                            child: Text('Tout afficher ($remainingStudents restants)'),
+                            child: Text(
+                              'Tout afficher ($remainingStudents restants)',
+                            ),
                           ),
                         ],
                       ),
@@ -2710,7 +2774,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
             child: _selectedStudent == null
-                ? const Text('Sélectionne un élève pour voir son dossier complet.')
+                ? const Text(
+                    'Sélectionne un élève pour voir son dossier complet.',
+                  )
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -2763,8 +2829,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                               onPressed: _saving
                                   ? null
                                   : () => _viewProfilePhoto(
-                                        _selectedStudent!.photo,
-                                      ),
+                                      _selectedStudent!.photo,
+                                    ),
                               icon: const Icon(Icons.account_box_outlined),
                               label: const Text('Voir photo'),
                             ),
@@ -2787,7 +2853,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             onPressed: _saving
                                 ? null
                                 : () async {
-                                    final success = await _quickPreviewStudentCard();
+                                    final success =
+                                        await _quickPreviewStudentCard();
                                     if (success) {
                                       _showMessage(
                                         'Aperçu rapide affiché.',
@@ -2802,7 +2869,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             onPressed: _saving
                                 ? null
                                 : () async {
-                                    final success = await _exportStudentCardPdf();
+                                    final success =
+                                        await _exportStudentCardPdf();
                                     if (success) {
                                       _showMessage(
                                         'Carte élève exportée en PDF.',
@@ -2826,7 +2894,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           spacing: 10,
                           runSpacing: 10,
                           children: [
-                            _metricChip('Historique académique', '${_history.length}'),
+                            _metricChip(
+                              'Historique académique',
+                              '${_history.length}',
+                            ),
                             _metricChip(
                               'Incidents ouverts',
                               '${_incidents.where((i) => (i['status']?.toString() ?? '') != 'resolved').length}',
@@ -2889,7 +2960,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         ),
                         const SizedBox(height: 8),
                         ExpansionTile(
-                          title: Text('Historique académique (${_history.length})'),
+                          title: Text(
+                            'Historique académique (${_history.length})',
+                          ),
                           children: _history.isEmpty
                               ? const [
                                   Padding(
@@ -2912,50 +2985,51 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                     .toList(),
                         ),
                         ExpansionTile(
-                          title: Text('Dossier disciplinaire (${_incidents.length})'),
+                          title: Text(
+                            'Dossier disciplinaire (${_incidents.length})',
+                          ),
                           children: _incidents.isEmpty
                               ? const [
                                   Padding(
                                     padding: EdgeInsets.fromLTRB(16, 0, 16, 14),
-                                    child: Text('Aucun incident disciplinaire.'),
+                                    child: Text(
+                                      'Aucun incident disciplinaire.',
+                                    ),
                                   ),
                                 ]
-                              : _incidents
-                                    .take(20)
-                                    .map(
-                                      (row) {
-                                        final isResolved =
-                                            (row['status'] ?? '').toString() ==
-                                            'resolved';
-                                        return ListTile(
-                                          dense: true,
-                                          title: Text(
-                                            '${row['category'] ?? 'Incident'} • ${row['incident_date'] ?? ''}',
-                                          ),
-                                          subtitle: Text(
-                                            '${row['description'] ?? ''}\nStatut: ${isResolved ? 'Traité' : 'Ouvert'} • Gravité: ${_severityLabel((row['severity'] ?? '').toString())}',
-                                          ),
-                                          isThreeLine: true,
-                                          trailing: IconButton(
-                                            tooltip: isResolved
-                                                ? 'Rouvrir incident'
-                                                : 'Marquer traité',
-                                            icon: Icon(
-                                              isResolved
-                                                  ? Icons.undo_outlined
-                                                  : Icons.check_circle_outline,
-                                            ),
-                                            onPressed: _saving
-                                                ? null
-                                                : () => _toggleIncidentStatus(row),
-                                          ),
-                                        );
-                                      },
-                                    )
-                                    .toList(),
+                              : _incidents.take(20).map((row) {
+                                  final isResolved =
+                                      (row['status'] ?? '').toString() ==
+                                      'resolved';
+                                  return ListTile(
+                                    dense: true,
+                                    title: Text(
+                                      '${row['category'] ?? 'Incident'} • ${row['incident_date'] ?? ''}',
+                                    ),
+                                    subtitle: Text(
+                                      '${row['description'] ?? ''}\nStatut: ${isResolved ? 'Traité' : 'Ouvert'} • Gravité: ${_severityLabel((row['severity'] ?? '').toString())}',
+                                    ),
+                                    isThreeLine: true,
+                                    trailing: IconButton(
+                                      tooltip: isResolved
+                                          ? 'Rouvrir incident'
+                                          : 'Marquer traité',
+                                      icon: Icon(
+                                        isResolved
+                                            ? Icons.undo_outlined
+                                            : Icons.check_circle_outline,
+                                      ),
+                                      onPressed: _saving
+                                          ? null
+                                          : () => _toggleIncidentStatus(row),
+                                    ),
+                                  );
+                                }).toList(),
                         ),
                         ExpansionTile(
-                          title: Text('Absences & retards (${_attendances.length})'),
+                          title: Text(
+                            'Absences & retards (${_attendances.length})',
+                          ),
                           children: _attendances.isEmpty
                               ? const [
                                   Padding(
@@ -2963,65 +3037,64 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                     child: Text('Aucune donnée de présence.'),
                                   ),
                                 ]
-                              : _attendances
-                                    .take(25)
-                                    .map(
-                                      (row) {
-                                        final proofPath =
-                                            (row['proof'] ?? '').toString().trim();
-                                        final hasProof = proofPath.isNotEmpty;
-                                        final proofThumbSize =
-                                          MediaQuery.of(context).size.width < 720
-                                          ? 36.0
-                                          : 44.0;
-                                        final proofIconSize =
-                                          proofThumbSize < 40 ? 16.0 : 18.0;
-                                        final proofUrl = hasProof
-                                            ? _resolveMediaUrl(proofPath)
-                                            : '';
-                                        return ListTile(
-                                          dense: true,
-                                          leading: hasProof
-                                              ? GestureDetector(
-                                                  onTap: () =>
-                                                      _viewAttendanceProof(
-                                                        proofPath,
-                                                      ),
-                                                  child: ClipRRect(
-                                                    borderRadius:
-                                                        BorderRadius.circular(6),
-                                                    child: Container(
-                                                      width: proofThumbSize,
-                                                      height: proofThumbSize,
-                                                      color: Theme.of(context)
-                                                          .colorScheme
-                                                          .surfaceContainerHighest,
-                                                      child: Image.network(
-                                                        proofUrl,
-                                                        fit: BoxFit.cover,
-                                                        errorBuilder:
-                                                            (_, __, ___) {
-                                                          return Icon(
-                                                            Icons
-                                                                .image_not_supported_outlined,
-                                                            size: proofIconSize,
-                                                          );
-                                                        },
-                                                      ),
-                                                    ),
-                                                  ),
-                                                )
-                                              : null,
-                                          title: Text('${row['date'] ?? ''}'),
-                                          subtitle: Text(
-                                            'Absent: ${row['is_absent'] == true ? 'Oui' : 'Non'} • Retard: ${row['is_late'] == true ? 'Oui' : 'Non'} • Justificatif: ${hasProof ? 'Oui' : 'Non'}'
-                                            '${hasProof ? '\nFichier: ${_fileNameFromPath(proofPath)}' : ''}',
-                                          ),
-                                          isThreeLine: hasProof,
-                                        );
-                                      },
-                                    )
-                                    .toList(),
+                              : _attendances.take(25).map((row) {
+                                  final proofPath = (row['proof'] ?? '')
+                                      .toString()
+                                      .trim();
+                                  final hasProof = proofPath.isNotEmpty;
+                                  final proofThumbSize =
+                                      MediaQuery.of(context).size.width < 720
+                                      ? 36.0
+                                      : 44.0;
+                                  final proofIconSize = proofThumbSize < 40
+                                      ? 16.0
+                                      : 18.0;
+                                  final proofUrl = hasProof
+                                      ? _resolveMediaUrl(proofPath)
+                                      : '';
+                                  return ListTile(
+                                    dense: true,
+                                    leading: hasProof
+                                        ? GestureDetector(
+                                            onTap: () =>
+                                                _viewAttendanceProof(proofPath),
+                                            child: ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                              child: Container(
+                                                width: proofThumbSize,
+                                                height: proofThumbSize,
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .surfaceContainerHighest,
+                                                child: Image.network(
+                                                  proofUrl,
+                                                  fit: BoxFit.cover,
+                                                  errorBuilder:
+                                                      (
+                                                        context,
+                                                        error,
+                                                        stackTrace,
+                                                      ) {
+                                                        return Icon(
+                                                          Icons
+                                                              .image_not_supported_outlined,
+                                                          size: proofIconSize,
+                                                        );
+                                                      },
+                                                ),
+                                              ),
+                                            ),
+                                          )
+                                        : null,
+                                    title: Text('${row['date'] ?? ''}'),
+                                    subtitle: Text(
+                                      'Absent: ${row['is_absent'] == true ? 'Oui' : 'Non'} • Retard: ${row['is_late'] == true ? 'Oui' : 'Non'} • Justificatif: ${hasProof ? 'Oui' : 'Non'}'
+                                      '${hasProof ? '\nFichier: ${_fileNameFromPath(proofPath)}' : ''}',
+                                    ),
+                                    isThreeLine: hasProof,
+                                  );
+                                }).toList(),
                         ),
                         ExpansionTile(
                           title: Text(
@@ -3035,7 +3108,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 children: [
                                   Text(
                                     'Actions financières',
-                                    style: Theme.of(context).textTheme.titleSmall,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleSmall,
                                   ),
                                   const SizedBox(height: 8),
                                   Wrap(
@@ -3043,13 +3118,21 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                     runSpacing: 10,
                                     children: [
                                       FilledButton.tonalIcon(
-                                        onPressed: _saving ? null : _openFeeForm,
-                                        icon: const Icon(Icons.add_card_outlined),
+                                        onPressed: _saving
+                                            ? null
+                                            : _openFeeForm,
+                                        icon: const Icon(
+                                          Icons.add_card_outlined,
+                                        ),
                                         label: const Text('Nouveau frais'),
                                       ),
                                       FilledButton.tonalIcon(
-                                        onPressed: _saving ? null : _openPaymentForm,
-                                        icon: const Icon(Icons.payments_outlined),
+                                        onPressed: _saving
+                                            ? null
+                                            : _openPaymentForm,
+                                        icon: const Icon(
+                                          Icons.payments_outlined,
+                                        ),
                                         label: const Text('Nouveau paiement'),
                                       ),
                                     ],
@@ -3069,46 +3152,54 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 child: Text('Aucun frais scolaire enregistré.'),
                               )
                             else
-                              ..._fees.take(20).map(
-                                (row) => ListTile(
-                                  dense: true,
-                                  title: Text(
-                                    '${_feeTypeLabel((row['fee_type'] ?? '').toString())} • Échéance ${row['due_date'] ?? ''}',
+                              ..._fees
+                                  .take(20)
+                                  .map(
+                                    (row) => ListTile(
+                                      dense: true,
+                                      title: Text(
+                                        '${_feeTypeLabel((row['fee_type'] ?? '').toString())} • Échéance ${row['due_date'] ?? ''}',
+                                      ),
+                                      subtitle: Text(
+                                        'Dû: ${_money(_toDouble(row['amount_due']))} • Payé: ${_money(_toDouble(row['amount_paid']))} • Solde: ${_money(_toDouble(row['balance']))}',
+                                      ),
+                                    ),
                                   ),
-                                  subtitle: Text(
-                                    'Dû: ${_money(_toDouble(row['amount_due']))} • Payé: ${_money(_toDouble(row['amount_paid']))} • Solde: ${_money(_toDouble(row['balance']))}',
-                                  ),
-                                ),
-                              ),
                             if (_payments.isEmpty)
                               const Padding(
                                 padding: EdgeInsets.fromLTRB(16, 0, 16, 14),
                                 child: Text('Aucun paiement enregistré.'),
                               )
                             else
-                              ..._payments.take(15).map(
-                                (row) => ListTile(
-                                  dense: true,
-                                  title: Text(
-                                    '${_money(_toDouble(row['amount']))} • ${row['method'] ?? 'N/A'}',
+                              ..._payments
+                                  .take(15)
+                                  .map(
+                                    (row) => ListTile(
+                                      dense: true,
+                                      title: Text(
+                                        '${_money(_toDouble(row['amount']))} • ${row['method'] ?? 'N/A'}',
+                                      ),
+                                      subtitle: Text(
+                                        'Référence: ${row['reference'] ?? '-'} • Date: ${row['created_at'] ?? ''}',
+                                      ),
+                                      trailing: IconButton(
+                                        tooltip: 'Imprimer reçu',
+                                        icon: const Icon(
+                                          Icons.receipt_long_outlined,
+                                        ),
+                                        onPressed: () {
+                                          final paymentId = _asInt(row['id']);
+                                          if (paymentId <= 0) {
+                                            _showMessage(
+                                              'Paiement invalide pour impression.',
+                                            );
+                                            return;
+                                          }
+                                          _printPaymentReceipt(paymentId);
+                                        },
+                                      ),
+                                    ),
                                   ),
-                                  subtitle: Text(
-                                    'Référence: ${row['reference'] ?? '-'} • Date: ${row['created_at'] ?? ''}',
-                                  ),
-                                  trailing: IconButton(
-                                    tooltip: 'Imprimer reçu',
-                                    icon: const Icon(Icons.receipt_long_outlined),
-                                    onPressed: () {
-                                      final paymentId = _asInt(row['id']);
-                                      if (paymentId <= 0) {
-                                        _showMessage('Paiement invalide pour impression.');
-                                        return;
-                                      }
-                                      _printPaymentReceipt(paymentId);
-                                    },
-                                  ),
-                                ),
-                              ),
                           ],
                         ),
                       ],
@@ -3125,16 +3216,15 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outlineVariant,
-        ),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Text('$label: $value'),
     );
   }
 
   String _parentLabel(Map<String, dynamic> row) {
-    final first = (row['user_first_name'] ?? row['first_name'] ?? '').toString();
+    final first = (row['user_first_name'] ?? row['first_name'] ?? '')
+        .toString();
     final last = (row['user_last_name'] ?? row['last_name'] ?? '').toString();
     final name = '$first $last'.trim();
     final user = (row['user'] ?? '').toString();
@@ -3149,8 +3239,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required String query,
   }) {
     if (query.isEmpty) return true;
-    final haystack =
-        '${student.fullName} ${student.matricule} $className'.toLowerCase();
+    final haystack = '${student.fullName} ${student.matricule} $className'
+        .toLowerCase();
     return haystack.contains(query);
   }
 
@@ -3158,13 +3248,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     int result;
     switch (_sortBy) {
       case 'matricule':
-        result =
-            a.matricule.toLowerCase().compareTo(b.matricule.toLowerCase());
+        result = a.matricule.toLowerCase().compareTo(b.matricule.toLowerCase());
         break;
       case 'classroom':
-        result = a.classroomName
-            .toLowerCase()
-            .compareTo(b.classroomName.toLowerCase());
+        result = a.classroomName.toLowerCase().compareTo(
+          b.classroomName.toLowerCase(),
+        );
         if (result == 0) {
           result = a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase());
         }
@@ -3256,8 +3345,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   String _resolveMediaUrl(String value) {
     final normalized = value.trim();
-    if (normalized.startsWith('http://') ||
-        normalized.startsWith('https://')) {
+    if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
       return normalized;
     }
 
@@ -3300,7 +3388,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       child: Image.memory(
                         bytes,
                         fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) {
+                        errorBuilder: (context, error, stackTrace) {
                           return const Center(
                             child: Text('Impossible d’afficher cette image.'),
                           );
@@ -3357,7 +3445,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       child: Image.network(
                         imageUrl,
                         fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) {
+                        errorBuilder: (context, error, stackTrace) {
                           return Center(
                             child: Text(
                               'Impossible d’afficher l’image.\nURL: $imageUrl',
@@ -3454,7 +3542,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       }
 
       final fallback = error.message?.trim() ?? '';
-      return fallback.isEmpty ? 'Erreur réseau pendant l’inscription.' : fallback;
+      return fallback.isEmpty
+          ? 'Erreur réseau pendant l’inscription.'
+          : fallback;
     }
 
     final raw = error.toString().trim();
