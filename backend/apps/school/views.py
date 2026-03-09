@@ -4,7 +4,8 @@ from django.shortcuts import get_object_or_404
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from apps.accounts.permissions import IsAdminOrDirector
+from apps.accounts.models import UserRole
+from apps.accounts.permissions import IsAdminOrDirector, IsReadOnlyForParentStudent
 from .models import (
     AcademicYear,
     Announcement,
@@ -81,7 +82,7 @@ from .serializers import (
 
 
 class BaseModelViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsReadOnlyForParentStudent]
 
 
 class AcademicYearViewSet(BaseModelViewSet):
@@ -132,11 +133,31 @@ class StudentViewSet(BaseModelViewSet):
     ordering_fields = ["created_at", "matricule"]
     ordering = ["-created_at"]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        role = getattr(self.request.user, "role", "")
+
+        if role == UserRole.STUDENT:
+            return queryset.filter(user_id=self.request.user.id)
+        if role == UserRole.PARENT:
+            return queryset.filter(parent__user_id=self.request.user.id)
+        return queryset
+
 
 class StudentAcademicHistoryViewSet(BaseModelViewSet):
     queryset = StudentAcademicHistory.objects.select_related("student", "academic_year", "classroom").all().order_by("-academic_year_id", "rank")
     serializer_class = StudentAcademicHistorySerializer
     filterset_fields = ["student", "academic_year", "classroom"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        role = getattr(self.request.user, "role", "")
+
+        if role == UserRole.STUDENT:
+            return queryset.filter(student__user_id=self.request.user.id)
+        if role == UserRole.PARENT:
+            return queryset.filter(student__parent__user_id=self.request.user.id)
+        return queryset
 
 
 class GradeViewSet(BaseModelViewSet):
@@ -285,6 +306,16 @@ class AttendanceViewSet(BaseModelViewSet):
     serializer_class = AttendanceSerializer
     filterset_fields = ["date", "student", "is_absent", "is_late"]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        role = getattr(self.request.user, "role", "")
+
+        if role == UserRole.STUDENT:
+            return queryset.filter(student__user_id=self.request.user.id)
+        if role == UserRole.PARENT:
+            return queryset.filter(student__parent__user_id=self.request.user.id)
+        return queryset
+
     @action(detail=False, methods=["get"])
     def monthly_stats(self, request):
         month_value = request.query_params.get("month")
@@ -385,17 +416,47 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
     serializer_class = DisciplineIncidentSerializer
     filterset_fields = ["student", "severity", "status", "incident_date", "parent_notified"]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        role = getattr(self.request.user, "role", "")
+
+        if role == UserRole.STUDENT:
+            return queryset.filter(student__user_id=self.request.user.id)
+        if role == UserRole.PARENT:
+            return queryset.filter(student__parent__user_id=self.request.user.id)
+        return queryset
+
 
 class StudentFeeViewSet(BaseModelViewSet):
     queryset = StudentFee.objects.select_related("student", "student__user", "academic_year").all().order_by("-due_date", "-id")
     serializer_class = StudentFeeSerializer
     filterset_fields = ["student", "academic_year", "fee_type"]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        role = getattr(self.request.user, "role", "")
+
+        if role == UserRole.STUDENT:
+            return queryset.filter(student__user_id=self.request.user.id)
+        if role == UserRole.PARENT:
+            return queryset.filter(student__parent__user_id=self.request.user.id)
+        return queryset
+
 
 class PaymentViewSet(BaseModelViewSet):
     queryset = Payment.objects.select_related("fee", "fee__student", "fee__student__user", "received_by").all().order_by("-created_at")
     serializer_class = PaymentSerializer
     filterset_fields = ["fee", "fee__student", "method", "received_by"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        role = getattr(self.request.user, "role", "")
+
+        if role == UserRole.STUDENT:
+            return queryset.filter(fee__student__user_id=self.request.user.id)
+        if role == UserRole.PARENT:
+            return queryset.filter(fee__student__parent__user_id=self.request.user.id)
+        return queryset
 
 
 class ExpenseViewSet(BaseModelViewSet):

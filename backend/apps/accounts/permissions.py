@@ -1,4 +1,4 @@
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 
 class IsRole(BasePermission):
@@ -10,3 +10,17 @@ class IsRole(BasePermission):
 
 class IsAdminOrDirector(IsRole):
     allowed_roles = ["super_admin", "director"]
+
+
+class IsReadOnlyForParentStudent(BasePermission):
+    message = "Les profils parent/élève sont en lecture seule sur cette ressource."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            return True
+
+        return user.role not in {"parent", "student"}
