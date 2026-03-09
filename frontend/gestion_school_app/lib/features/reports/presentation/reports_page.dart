@@ -38,14 +38,35 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
     setState(() => _loading = true);
     final dio = ref.read(dioProvider);
     try {
-      final response = await dio.get('/reports/context/');
-      final payload = response.data is Map<String, dynamic>
-          ? Map<String, dynamic>.from(response.data as Map)
-          : <String, dynamic>{};
+      List<Map<String, dynamic>> students;
+      List<Map<String, dynamic>> years;
+      List<Map<String, dynamic>> payments;
 
-      final students = _extractRows(payload['students']);
-      final years = _extractRows(payload['academic_years']);
-      final payments = _extractRows(payload['payments']);
+      try {
+        final response = await dio.get('/reports/context/');
+        final payload = response.data is Map<String, dynamic>
+            ? Map<String, dynamic>.from(response.data as Map)
+            : <String, dynamic>{};
+
+        students = _extractRows(payload['students']);
+        years = _extractRows(payload['academic_years']);
+        payments = _extractRows(payload['payments']);
+      } on DioException catch (error) {
+        final statusCode = error.response?.statusCode;
+        if (statusCode != 404) {
+          rethrow;
+        }
+
+        final responses = await Future.wait([
+          dio.get('/students/'),
+          dio.get('/academic-years/'),
+          dio.get('/payments/'),
+        ]);
+
+        students = _extractRows(responses[0].data);
+        years = _extractRows(responses[1].data);
+        payments = _extractRows(responses[2].data);
+      }
 
       if (!mounted) return;
       setState(() {
