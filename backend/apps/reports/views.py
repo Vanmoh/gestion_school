@@ -8,10 +8,13 @@ from fpdf import FPDF
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from apps.accounts.models import UserRole
 from apps.school.models import AcademicYear, ClassRoom, Grade, Payment, Student
+from apps.school.serializers import AcademicYearSerializer, PaymentSerializer, StudentSerializer
 
 
 def _pdf_text(value) -> str:
@@ -291,11 +294,98 @@ def _build_student_cards_pdf(
     return pdf
 
 
+def _allowed_students_queryset(user):
+    queryset = Student.objects.select_related(
+        "user",
+        "classroom",
+        "parent",
+        "parent__user",
+    ).all()
+    role = getattr(user, "role", "")
+
+    if role == UserRole.STUDENT:
+        return queryset.filter(user_id=user.id)
+    if role == UserRole.PARENT:
+        return queryset.filter(parent__user_id=user.id)
+    return queryset
+
+
+def _allowed_payments_queryset(user):
+    queryset = Payment.objects.select_related(
+        "fee",
+        "fee__student",
+        "fee__student__user",
+        "fee__student__parent",
+        "fee__student__parent__user",
+        "fee__academic_year",
+        "received_by",
+    ).all()
+    role = getattr(user, "role", "")
+
+    if role == UserRole.STUDENT:
+        return queryset.filter(fee__student__user_id=user.id)
+    if role == UserRole.PARENT:
+        return queryset.filter(fee__student__parent__user_id=user.id)
+    return queryset
+
+
+def _ensure_student_access(user, student: Student) -> None:
+    role = getattr(user, "role", "")
+    if role == UserRole.STUDENT and student.user_id != user.id:
+        raise PermissionDenied("Accès refusé à ce bulletin.")
+
+    if role == UserRole.PARENT:
+        parent_user_id = student.parent.user_id if student.parent else None
+        if parent_user_id != user.id:
+            raise PermissionDenied("Accès refusé à ce bulletin.")
+
+
+def _ensure_payment_access(user, payment: Payment) -> None:
+    role = getattr(user, "role", "")
+    student = payment.fee.student if payment.fee else None
+
+    if role == UserRole.STUDENT:
+        if not student or student.user_id != user.id:
+            raise PermissionDenied("Accès refusé à ce reçu de paiement.")
+
+    if role == UserRole.PARENT:
+        parent_user_id = student.parent.user_id if student and student.parent else None
+        if parent_user_id != user.id:
+            raise PermissionDenied("Accès refusé à ce reçu de paiement.")
+
+
+class ReportsContextView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        students = _allowed_students_queryset(request.user).order_by(
+            "user__last_name",
+            "user__first_name",
+            "matricule",
+        )
+        payments = _allowed_payments_queryset(request.user).order_by("-created_at")
+        years = AcademicYear.objects.all().order_by("-start_date", "-id")
+
+        return Response(
+            {
+                "students": StudentSerializer(students, many=True).data,
+                "academic_years": AcademicYearSerializer(years, many=True).data,
+                "payments": PaymentSerializer(payments, many=True).data,
+            }
+        )
+
+
 class BulletinPdfView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, student_id: int, academic_year_id: int, term: str):
-        student = Student.objects.select_related("user", "classroom").get(id=student_id)
+        student = Student.objects.select_related(
+            "user",
+            "classroom",
+            "parent",
+            "parent__user",
+        ).get(id=student_id)
+        _ensure_student_access(request.user, student)
         grades = Grade.objects.filter(student_id=student_id, academic_year_id=academic_year_id, term=term).select_related("subject")
         school_name = getattr(settings, "SCHOOL_NAME", "LYCEE TECHNIQUE OUMAR BAH")
         school_short = getattr(settings, "SCHOOL_SHORT", "LTOB")
@@ -426,10 +516,13 @@ class PaymentReceiptPdfView(APIView):
     def get(self, request, payment_id: int):
         payment = Payment.objects.select_related(
             "fee__student__user",
+            "fee__student__parent",
+            "fee__student__parent__user",
             "fee__student__classroom",
             "fee__academic_year",
             "received_by",
         ).get(id=payment_id)
+        _ensure_payment_access(request.user, payment)
 
         school_name = getattr(settings, "SCHOOL_NAME", "LYCEE TECHNIQUE OUMAR BAH")
         school_short = getattr(settings, "SCHOOL_SHORT", "LTOB")
@@ -599,12 +692,7 @@ class PaymentExcelExportView(APIView):
             cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border = thin_border
 
-        payments = Payment.objects.select_related(
-            "fee",
-            "fee__student__user",
-            "fee__student__classroom",
-            "received_by",
-        ).all().order_by("-created_at")
+        payments = _allowed_payments_queryset(request.user).order_by("-created_at")
 
         row_index = header_row + 1
         total_amount = 0.0
@@ -710,6 +798,7 @@ class StudentCardPdfView(APIView):
             Student.objects.select_related("user", "classroom", "parent", "parent__user"),
             id=student_id,
         )
+        _ensure_student_access(request.user, student)
 
         school = _school_identity()
         logo_path = _school_logo_path()
@@ -724,6 +813,9 @@ class ClassStudentCardsPdfView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, classroom_id: int):
+        if getattr(request.user, "role", "") in {UserRole.PARENT, UserRole.STUDENT}:
+            raise PermissionDenied("Accès refusé aux cartes de classe.")
+
         classroom = get_object_or_404(ClassRoom, id=classroom_id)
         include_archived = (
             str(request.query_params.get("include_archived", "false")).strip().lower()

@@ -38,15 +38,14 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
     setState(() => _loading = true);
     final dio = ref.read(dioProvider);
     try {
-      final responses = await Future.wait([
-        dio.get('/students/'),
-        dio.get('/academic-years/'),
-        dio.get('/payments/'),
-      ]);
+      final response = await dio.get('/reports/context/');
+      final payload = response.data is Map<String, dynamic>
+          ? Map<String, dynamic>.from(response.data as Map)
+          : <String, dynamic>{};
 
-      final students = _extractRows(responses[0].data);
-      final years = _extractRows(responses[1].data);
-      final payments = _extractRows(responses[2].data);
+      final students = _extractRows(payload['students']);
+      final years = _extractRows(payload['academic_years']);
+      final payments = _extractRows(payload['payments']);
 
       if (!mounted) return;
       setState(() {
@@ -304,15 +303,17 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
   }
 
   String _studentLabel(Map<String, dynamic> row) {
-    final registration = row['registration_number']?.toString() ?? 'N/A';
-    final person = row['person'] is Map<String, dynamic>
-        ? Map<String, dynamic>.from(row['person'] as Map)
-        : const <String, dynamic>{};
-    final first = person['first_name']?.toString() ?? '';
-    final last = person['last_name']?.toString() ?? '';
-    final name = '$first $last'.trim().isEmpty
-        ? 'Élève ${row['id']}'
-        : '$first $last'.trim();
+    final registration =
+        row['matricule']?.toString() ??
+        row['registration_number']?.toString() ??
+        'N/A';
+    final fullName = row['user_full_name']?.toString().trim() ?? '';
+    final first = row['user_first_name']?.toString() ?? '';
+    final last = row['user_last_name']?.toString() ?? '';
+    final fromParts = '$first $last'.trim();
+    final name = fullName.isNotEmpty
+        ? fullName
+        : (fromParts.isNotEmpty ? fromParts : 'Élève ${row['id']}');
     return '$registration — $name';
   }
 
