@@ -2470,7 +2470,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final total = _students.length;
     final active = _students.where((s) => !s.isArchived).length;
     final archived = total - active;
+    final newEnrolled = _newlyEnrolledCount();
+    final activeYearLabel = _activeAcademicYearLabel();
     final isCompactStudentList = MediaQuery.of(context).size.width < 720;
+    final useTableLayout = MediaQuery.of(context).size.width >= 1050;
+    final compactHeader = MediaQuery.of(context).size.width < 980;
     final visibleStudents = _filteredStudents
         .take(_visibleStudentsCount)
         .toList();
@@ -2482,53 +2486,134 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        Text(
-          'Gestion des élèves',
-          style: Theme.of(context).textTheme.headlineSmall,
-        ),
-        const SizedBox(height: 6),
-        Text(
-          'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
+        if (compactHeader) ...[
+          Text(
+            'Gestion des élèves',
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Année scolaire : $activeYearLabel',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: _saving ? null : _openRegistrationForm,
+                icon: const Icon(Icons.person_add_alt_1),
+                label: const Text('Ajouter un élève'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _saving ? null : _openStudentsByClassPanel,
+                icon: const Icon(Icons.view_list_outlined),
+                label: const Text('Liste par classe'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _saving ? null : _openClassCardsPanel,
+                icon: const Icon(Icons.badge_outlined),
+                label: const Text('Cartes classe'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving
+                    ? null
+                    : () => _loadBaseData(keepSelectedId: _selectedStudent?.id),
+                icon: const Icon(Icons.sync),
+                label: const Text('Actualiser'),
+              ),
+            ],
+          ),
+        ] else
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Gestion des élèves',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Année scolaire : $activeYearLabel',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 14),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  FilledButton.icon(
+                    onPressed: _saving ? null : _openRegistrationForm,
+                    icon: const Icon(Icons.person_add_alt_1),
+                    label: const Text('Ajouter un élève'),
+                  ),
+                  FilledButton.tonalIcon(
+                    onPressed: _saving ? null : _openStudentsByClassPanel,
+                    icon: const Icon(Icons.view_list_outlined),
+                    label: const Text('Liste par classe'),
+                  ),
+                  FilledButton.tonalIcon(
+                    onPressed: _saving ? null : _openClassCardsPanel,
+                    icon: const Icon(Icons.badge_outlined),
+                    label: const Text('Cartes classe'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _saving
+                        ? null
+                        : () => _loadBaseData(
+                            keepSelectedId: _selectedStudent?.id,
+                          ),
+                    icon: const Icon(Icons.sync),
+                    label: const Text('Actualiser'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         const SizedBox(height: 14),
         Wrap(
           spacing: 10,
           runSpacing: 10,
           children: [
-            _metricChip('Total', '$total'),
-            _metricChip('Actifs', '$active'),
-            _metricChip('Archivés', '$archived'),
-          ],
-        ),
-        const SizedBox(height: 14),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Inscription d\'un élève',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Utilise la fenêtre flottante pour inscrire un élève sans surcharger la page.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: FilledButton.icon(
-                    onPressed: _saving ? null : _openRegistrationForm,
-                    icon: const Icon(Icons.person_add_alt_1),
-                    label: const Text('Inscrire élève (fenêtre flottante)'),
-                  ),
-                ),
-              ],
+            _overviewMetricCard(
+              title: 'Nombre total d’élèves',
+              value: '$total',
+              icon: Icons.groups_2_outlined,
             ),
-          ),
+            _overviewMetricCard(
+              title: 'Actifs',
+              value: '$active',
+              icon: Icons.verified_user_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Archivés',
+              value: '$archived',
+              icon: Icons.archive_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Nouveaux inscrits',
+              value: '$newEnrolled',
+              icon: Icons.person_add_alt_1_outlined,
+            ),
+          ],
         ),
         const SizedBox(height: 14),
         Card(
@@ -2539,12 +2624,13 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               runSpacing: 10,
               children: [
                 SizedBox(
-                  width: 260,
+                  width: 320,
                   child: TextField(
                     controller: _searchController,
                     textInputAction: TextInputAction.search,
                     decoration: InputDecoration(
-                      labelText: 'Recherche (nom, matricule, classe)',
+                      hintText: 'Rechercher un élève...',
+                      prefixIcon: const Icon(Icons.search),
                       suffixIcon: _searchController.text.isEmpty
                           ? null
                           : IconButton(
@@ -2558,7 +2644,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   ),
                 ),
                 SizedBox(
-                  width: 230,
+                  width: 220,
                   child: DropdownButtonFormField<int?>(
                     initialValue: _classFilterId,
                     decoration: const InputDecoration(labelText: 'Classe'),
@@ -2581,7 +2667,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   ),
                 ),
                 SizedBox(
-                  width: 230,
+                  width: 200,
                   child: DropdownButtonFormField<String>(
                     initialValue: _statusFilter,
                     decoration: const InputDecoration(labelText: 'Statut'),
@@ -2600,7 +2686,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   ),
                 ),
                 SizedBox(
-                  width: 230,
+                  width: 200,
                   child: DropdownButtonFormField<String>(
                     initialValue: _sortBy,
                     decoration: const InputDecoration(labelText: 'Trier par'),
@@ -2632,23 +2718,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   ),
                   label: Text(_sortAscending ? 'Ascendant' : 'Descendant'),
                 ),
-                FilledButton.tonalIcon(
-                  onPressed: _saving ? null : _openStudentsByClassPanel,
-                  icon: const Icon(Icons.view_list_outlined),
-                  label: const Text('Liste par classe'),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: _saving ? null : _openClassCardsPanel,
-                  icon: const Icon(Icons.badge_outlined),
-                  label: const Text('Cartes classe'),
-                ),
-                FilledButton.tonalIcon(
+                FilledButton.icon(
                   onPressed: _saving
                       ? null
-                      : () =>
-                            _loadBaseData(keepSelectedId: _selectedStudent?.id),
-                  icon: const Icon(Icons.sync),
-                  label: const Text('Actualiser'),
+                      : () => _applyFilters(resetVisibleCount: true),
+                  icon: const Icon(Icons.filter_alt_outlined),
+                  label: const Text('Filtrer'),
                 ),
               ],
             ),
@@ -2669,75 +2744,177 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 if (_filteredStudents.isEmpty)
                   const Text('Aucun élève trouvé avec ces critères.')
                 else ...[
-                  ...visibleStudents.map((student) {
-                    final selected = _selectedStudent?.id == student.id;
-                    return Card(
-                      margin: isCompactStudentList
-                          ? const EdgeInsets.symmetric(vertical: 3)
-                          : null,
-                      color: selected
-                          ? Theme.of(
-                              context,
-                            ).colorScheme.primary.withValues(alpha: 0.08)
-                          : null,
-                      child: ListTile(
-                        dense: isCompactStudentList,
-                        visualDensity: isCompactStudentList
-                            ? const VisualDensity(vertical: -2)
-                            : null,
-                        contentPadding: isCompactStudentList
-                            ? const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 2,
-                              )
-                            : null,
-                        onTap: () {
-                          setState(() {
-                            _selectedStudent = student;
-                            _selectedClassroomUpdateId = student.classroomId;
-                            _selectedParentUpdateId = student.parentId;
-                          });
-                          _loadStudentLinkedData(student.id);
-                        },
-                        leading: CircleAvatar(
-                          radius: isCompactStudentList ? 18 : 20,
-                          child: student.isArchived
-                              ? const Icon(Icons.archive)
-                              : const Icon(Icons.school_outlined),
-                        ),
-                        title: Text(
-                          student.fullName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          isCompactStudentList
-                              ? 'Matricule: ${student.matricule} • Classe: ${student.classroomName.isEmpty ? 'Non attribuée' : student.classroomName}'
-                              : 'Matricule: ${student.matricule}\nClasse: ${student.classroomName.isEmpty ? 'Non attribuée' : student.classroomName}',
-                          maxLines: isCompactStudentList ? 2 : 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        isThreeLine: !isCompactStudentList,
-                        trailing: PopupMenuButton<String>(
-                          onSelected: (value) {
-                            if (value == 'toggle_archive') {
-                              _toggleArchive(student);
-                            }
-                          },
-                          itemBuilder: (context) => [
-                            PopupMenuItem<String>(
-                              value: 'toggle_archive',
-                              child: Text(
-                                student.isArchived
-                                    ? 'Réactiver élève'
-                                    : 'Archiver élève',
+                  if (useTableLayout)
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: DataTable(
+                        headingRowHeight: 46,
+                        dataRowMinHeight: 52,
+                        dataRowMaxHeight: 62,
+                        columns: const [
+                          DataColumn(label: Text('Matricule')),
+                          DataColumn(label: Text('Nom complet')),
+                          DataColumn(label: Text('Classe')),
+                          DataColumn(label: Text('Date de naissance')),
+                          DataColumn(label: Text('Téléphone')),
+                          DataColumn(label: Text('Statut')),
+                          DataColumn(label: Text('Actions')),
+                        ],
+                        rows: visibleStudents.map((student) {
+                          final selected = _selectedStudent?.id == student.id;
+                          return DataRow(
+                            selected: selected,
+                            onSelectChanged: (_) => _activateStudent(student),
+                            cells: [
+                              DataCell(Text(student.matricule)),
+                              DataCell(
+                                Text(
+                                  student.fullName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
+                              DataCell(
+                                Text(
+                                  student.classroomName.isEmpty
+                                      ? 'Non attribuée'
+                                      : student.classroomName,
+                                ),
+                              ),
+                              DataCell(
+                                Text(
+                                  student.birthDate == null
+                                      ? '-'
+                                      : _apiDate(student.birthDate!),
+                                ),
+                              ),
+                              DataCell(
+                                Text(
+                                  student.phone.trim().isEmpty
+                                      ? '-'
+                                      : student.phone,
+                                ),
+                              ),
+                              DataCell(
+                                _statusBadge(
+                                  student.isArchived ? 'Archivé' : 'Actif',
+                                  student.isArchived,
+                                ),
+                              ),
+                              DataCell(
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      tooltip: 'Voir dossier',
+                                      icon: const Icon(
+                                        Icons.visibility_outlined,
+                                      ),
+                                      onPressed: () =>
+                                          _activateStudent(student),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Modifier',
+                                      icon: const Icon(Icons.edit_outlined),
+                                      onPressed: _saving
+                                          ? null
+                                          : () {
+                                              _activateStudent(student);
+                                              _openProfileForm();
+                                            },
+                                    ),
+                                    IconButton(
+                                      tooltip: student.isArchived
+                                          ? 'Réactiver'
+                                          : 'Archiver',
+                                      icon: Icon(
+                                        student.isArchived
+                                            ? Icons.unarchive_outlined
+                                            : Icons.delete_outline,
+                                      ),
+                                      onPressed: _saving
+                                          ? null
+                                          : () => _toggleArchive(student),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        }).toList(),
                       ),
-                    );
-                  }),
+                    )
+                  else
+                    ...visibleStudents.map((student) {
+                      final selected = _selectedStudent?.id == student.id;
+                      return Card(
+                        margin: isCompactStudentList
+                            ? const EdgeInsets.symmetric(vertical: 3)
+                            : null,
+                        color: selected
+                            ? Theme.of(
+                                context,
+                              ).colorScheme.primary.withValues(alpha: 0.08)
+                            : null,
+                        child: ListTile(
+                          dense: isCompactStudentList,
+                          visualDensity: isCompactStudentList
+                              ? const VisualDensity(vertical: -2)
+                              : null,
+                          contentPadding: isCompactStudentList
+                              ? const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 2,
+                                )
+                              : null,
+                          onTap: () => _activateStudent(student),
+                          leading: CircleAvatar(
+                            radius: isCompactStudentList ? 18 : 20,
+                            child: student.isArchived
+                                ? const Icon(Icons.archive)
+                                : const Icon(Icons.school_outlined),
+                          ),
+                          title: Text(
+                            student.fullName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            isCompactStudentList
+                                ? 'Matricule: ${student.matricule} • Classe: ${student.classroomName.isEmpty ? 'Non attribuée' : student.classroomName}'
+                                : 'Matricule: ${student.matricule}\nClasse: ${student.classroomName.isEmpty ? 'Non attribuée' : student.classroomName}',
+                            maxLines: isCompactStudentList ? 2 : 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          isThreeLine: !isCompactStudentList,
+                          trailing: PopupMenuButton<String>(
+                            onSelected: (value) {
+                              if (value == 'open_profile') {
+                                _activateStudent(student);
+                                _openProfileForm();
+                              }
+                              if (value == 'toggle_archive') {
+                                _toggleArchive(student);
+                              }
+                            },
+                            itemBuilder: (context) => [
+                              const PopupMenuItem<String>(
+                                value: 'open_profile',
+                                child: Text('Modifier dossier'),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'toggle_archive',
+                                child: Text(
+                                  student.isArchived
+                                      ? 'Réactiver élève'
+                                      : 'Archiver élève',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
                   if (remainingStudents > 0)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(0, 6, 0, 2),
@@ -3208,6 +3385,141 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           ),
         ),
       ],
+    );
+  }
+
+  void _activateStudent(Student student) {
+    setState(() {
+      _selectedStudent = student;
+      _selectedClassroomUpdateId = student.classroomId;
+      _selectedParentUpdateId = student.parentId;
+    });
+    _loadStudentLinkedData(student.id);
+  }
+
+  int _newlyEnrolledCount() {
+    DateTime? start;
+    DateTime? end;
+
+    for (final row in _years) {
+      if (row['is_active'] == true) {
+        start = _parseDate(row['start_date']);
+        end = _parseDate(row['end_date']);
+        break;
+      }
+    }
+
+    if (start == null || end == null) {
+      final now = DateTime.now();
+      start = DateTime(now.year, 1, 1);
+      end = DateTime(now.year, 12, 31, 23, 59, 59);
+    }
+
+    return _students.where((student) {
+      final enrolledAt = student.enrollmentDate;
+      if (enrolledAt == null) return false;
+      return !enrolledAt.isBefore(start!) && !enrolledAt.isAfter(end!);
+    }).length;
+  }
+
+  String _activeAcademicYearLabel() {
+    Map<String, dynamic>? activeYear;
+    for (final row in _years) {
+      if (row['is_active'] == true) {
+        activeYear = row;
+        break;
+      }
+    }
+
+    if (activeYear == null && _feeAcademicYearId != null) {
+      for (final row in _years) {
+        if (_asInt(row['id']) == _feeAcademicYearId) {
+          activeYear = row;
+          break;
+        }
+      }
+    }
+
+    activeYear ??= _years.isNotEmpty ? _years.first : null;
+    if (activeYear == null) return 'Non définie';
+    return _academicYearLabel(activeYear);
+  }
+
+  String _academicYearLabel(Map<String, dynamic> row) {
+    final name = row['name']?.toString().trim() ?? '';
+    if (name.isNotEmpty) return name;
+
+    final start = row['start_date']?.toString().trim() ?? '';
+    final end = row['end_date']?.toString().trim() ?? '';
+    if (start.isNotEmpty || end.isNotEmpty) {
+      return '$start - $end';
+    }
+
+    return 'Année ${row['id'] ?? ''}'.trim();
+  }
+
+  DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+    return DateTime.tryParse(value.toString());
+  }
+
+  Widget _overviewMetricCard({
+    required String title,
+    required String value,
+    required IconData icon,
+  }) {
+    return Container(
+      width: 260,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(radius: 16, child: Icon(icon, size: 18)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                Text(value, style: Theme.of(context).textTheme.headlineSmall),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusBadge(String label, bool archived) {
+    final scheme = Theme.of(context).colorScheme;
+    final background = archived
+        ? scheme.surfaceContainerHighest
+        : scheme.primary.withValues(alpha: 0.14);
+    final foreground = archived ? scheme.onSurfaceVariant : scheme.primary;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: foreground,
+          fontWeight: FontWeight.w600,
+          fontSize: 12,
+        ),
+      ),
     );
   }
 
