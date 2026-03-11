@@ -1,0 +1,13 @@
+FROM ghcr.io/cirruslabs/flutter:stable AS build
+
+WORKDIR /app/frontend/gestion_school_app
+COPY frontend/gestion_school_app/ .
+RUN flutter pub get
+RUN flutter build web --release --dart-define=API_BASE_URL=https://gestion-school-staging-api.onrender.com/api
+
+FROM nginx:1.27-alpine
+COPY frontend/gestion_school_app/nginx.web.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/frontend/gestion_school_app/build/web /usr/share/nginx/html
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

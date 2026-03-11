@@ -52,6 +52,13 @@ Les services créés sont:
 
 Ils suivent la branche `staging`.
 
+Si Render affiche l'erreur `./Dockerfile.web.staging : no such file or directory`,
+utilise la configuration suivante dans le service `gestion-school-staging-web`:
+
+- Root Directory: *(vide / repo root)*
+- Dockerfile Path: `./Dockerfile.web.staging`
+- Branch: `staging`
+
 ## 3) Variables à renseigner dans staging
 
 Obligatoire:
