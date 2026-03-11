@@ -2508,6 +2508,20 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final newEnrolled = _newlyEnrolledCount();
     final activeYearLabel = _activeAcademicYearLabel();
     final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final classCount = _classrooms.length;
+    final activeRate = total == 0 ? 0 : ((active / total) * 100).round();
+    final archivedRate = total == 0 ? 0 : ((archived / total) * 100).round();
+    final activeShare = total == 0 ? 0.0 : active / total;
+    final appliedFilters =
+        (_searchController.text.trim().isNotEmpty ? 1 : 0) +
+        (_classFilterId != null ? 1 : 0) +
+        (_statusFilter != 'active' ? 1 : 0) +
+        (_sortBy != 'name' ? 1 : 0) +
+        (!_sortAscending ? 1 : 0);
+    final selectedClassLabel = _classFilterId == null
+        ? 'Toutes classes'
+        : _classroomName(_classFilterId!);
     final totalFiltered = _filteredStudents.length;
     final totalPages = totalFiltered == 0
         ? 1
@@ -2525,66 +2539,183 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       padding: const EdgeInsets.all(18),
       children: [
         Card(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-            child: Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              runSpacing: 12,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 560),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Gestion des élèves',
-                        style: Theme.of(context).textTheme.headlineSmall,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Année scolaire : $activeYearLabel',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ],
-                  ),
-                ),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: _saving ? null : _openRegistrationForm,
-                      icon: const Icon(Icons.person_add_alt_1),
-                      label: const Text('Ajouter un élève'),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: _saving ? null : _openStudentsByClassPanel,
-                      icon: const Icon(Icons.view_list_outlined),
-                      label: const Text('Liste par classe'),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: _saving ? null : _openClassCardsPanel,
-                      icon: const Icon(Icons.badge_outlined),
-                      label: const Text('Cartes classe'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _saving
-                          ? null
-                          : () => _loadBaseData(
-                              keepSelectedId: _selectedStudent?.id,
+          clipBehavior: Clip.antiAlias,
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  colorScheme.primaryContainer.withValues(alpha: 0.75),
+                  colorScheme.surfaceContainerLowest,
+                ],
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              child: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                runSpacing: 12,
+                crossAxisAlignment: WrapCrossAlignment.start,
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 620),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Tableau de bord élèves',
+                          style: textTheme.labelLarge?.copyWith(
+                            color: colorScheme.primary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Gestion des élèves',
+                          style: textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
+                          style: textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _dashboardInfoChip(
+                              icon: Icons.calendar_month_outlined,
+                              label: 'Année: $activeYearLabel',
                             ),
-                      icon: const Icon(Icons.sync),
-                      label: const Text('Actualiser'),
+                            _dashboardInfoChip(
+                              icon: Icons.class_outlined,
+                              label: '$classCount classes',
+                            ),
+                            _dashboardInfoChip(
+                              icon: Icons.groups_2_outlined,
+                              label: '$totalFiltered élèves visibles',
+                            ),
+                            if (_selectedStudent != null)
+                              _dashboardInfoChip(
+                                icon: Icons.person_outline,
+                                label: _selectedStudent!.fullName,
+                                maxWidth: 260,
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(999),
+                          child: LinearProgressIndicator(
+                            value: activeShare,
+                            minHeight: 9,
+                            backgroundColor: colorScheme.surfaceContainerHighest
+                                .withValues(alpha: 0.55),
+                            color: colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '$activeRate% actifs • $archivedRate% archivés',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surface.withValues(alpha: 0.78),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: colorScheme.outlineVariant.withValues(
+                            alpha: 0.55,
+                          ),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Actions principales',
+                            style: textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Opérations les plus utilisées pour piloter rapidement la scolarité.',
+                            style: textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              FilledButton.icon(
+                                onPressed: _saving
+                                    ? null
+                                    : _openRegistrationForm,
+                                icon: const Icon(Icons.person_add_alt_1),
+                                label: const Text('Ajouter un élève'),
+                              ),
+                              FilledButton.tonalIcon(
+                                onPressed: _saving
+                                    ? null
+                                    : _openStudentsByClassPanel,
+                                icon: const Icon(Icons.view_list_outlined),
+                                label: const Text('Liste par classe'),
+                              ),
+                              FilledButton.tonalIcon(
+                                onPressed: _saving
+                                    ? null
+                                    : _openClassCardsPanel,
+                                icon: const Icon(Icons.badge_outlined),
+                                label: const Text('Cartes classe'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: _saving
+                                    ? null
+                                    : () => _loadBaseData(
+                                        keepSelectedId: _selectedStudent?.id,
+                                      ),
+                                icon: const Icon(Icons.sync),
+                                label: const Text('Actualiser'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _dashboardInfoChip(
+                                icon: Icons.tune_outlined,
+                                label: appliedFilters == 0
+                                    ? 'Aucun filtre actif'
+                                    : '$appliedFilters filtre${appliedFilters > 1 ? 's' : ''} actif${appliedFilters > 1 ? 's' : ''}',
+                              ),
+                              _dashboardInfoChip(
+                                icon: Icons.class_outlined,
+                                label: selectedClassLabel,
+                                maxWidth: 220,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -2597,21 +2728,29 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               title: 'Nombre total d’élèves',
               value: '$total',
               icon: Icons.groups_2_outlined,
+              subtitle: '$classCount classes suivies',
+              tone: colorScheme.primary,
             ),
             _overviewMetricCard(
               title: 'Actifs',
               value: '$active',
               icon: Icons.verified_user_outlined,
+              subtitle: '$activeRate% du total',
+              tone: colorScheme.tertiary,
             ),
             _overviewMetricCard(
               title: 'Archivés',
               value: '$archived',
               icon: Icons.archive_outlined,
+              subtitle: '$archivedRate% du total',
+              tone: colorScheme.secondary,
             ),
             _overviewMetricCard(
               title: 'Nouveaux inscrits',
               value: '$newEnrolled',
               icon: Icons.person_add_alt_1_outlined,
+              subtitle: 'Année active',
+              tone: colorScheme.primary,
             ),
           ],
         ),
@@ -2622,27 +2761,65 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      'Recherche et filtres',
-                      style: Theme.of(context).textTheme.titleMedium,
+                Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: colorScheme.outlineVariant.withValues(alpha: 0.5),
                     ),
-                    Text(
-                      '$totalFiltered résultat${totalFiltered > 1 ? 's' : ''}',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: colorScheme.primary,
+                  ),
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 520),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Recherche et filtres',
+                              style: textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'Affichage type tableau: applique les filtres puis sélectionne une ligne pour ouvrir le dossier.',
+                              style: textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Affichage type tableau: applique les filtres puis sélectionne une ligne pour ouvrir le dossier.',
-                  style: Theme.of(context).textTheme.bodySmall,
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          Chip(
+                            avatar: const Icon(
+                              Icons.query_stats_outlined,
+                              size: 16,
+                            ),
+                            label: Text(
+                              '$totalFiltered résultat${totalFiltered > 1 ? 's' : ''}',
+                            ),
+                          ),
+                          Chip(
+                            avatar: const Icon(
+                              Icons.filter_alt_outlined,
+                              size: 16,
+                            ),
+                            label: Text(
+                              appliedFilters == 0
+                                  ? 'Aucun filtre avancé'
+                                  : '$appliedFilters filtre${appliedFilters > 1 ? 's' : ''} actif${appliedFilters > 1 ? 's' : ''}',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Wrap(
@@ -2769,6 +2946,13 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 8),
+                Text(
+                  'Classe affichée: $selectedClassLabel',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
               ],
             ),
           ),
@@ -2779,44 +2963,76 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      'Tableau des élèves (${_filteredStudents.length})',
-                      style: Theme.of(context).textTheme.titleMedium,
+                Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: colorScheme.outlineVariant.withValues(alpha: 0.5),
                     ),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: [
-                        Chip(
-                          avatar: const Icon(Icons.verified_outlined, size: 16),
-                          label: Text('$active actifs'),
+                  ),
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 540),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Tableau des élèves (${_filteredStudents.length})',
+                              style: textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'Vue tabulaire professionnelle pour la consultation et les actions rapides.',
+                              style: textTheme.bodySmall,
+                            ),
+                          ],
                         ),
-                        Chip(
-                          avatar: const Icon(Icons.archive_outlined, size: 16),
-                          label: Text('$archived archivés'),
-                        ),
-                        if (_selectedStudent != null)
+                      ),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
                           Chip(
-                            avatar: const Icon(Icons.person_outline, size: 16),
-                            label: SizedBox(
-                              width: 220,
-                              child: Text(
-                                _selectedStudent!.fullName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                            avatar: const Icon(
+                              Icons.verified_outlined,
+                              size: 16,
+                            ),
+                            label: Text('$active actifs'),
+                          ),
+                          Chip(
+                            avatar: const Icon(
+                              Icons.archive_outlined,
+                              size: 16,
+                            ),
+                            label: Text('$archived archivés'),
+                          ),
+                          if (_selectedStudent != null)
+                            Chip(
+                              avatar: const Icon(
+                                Icons.person_outline,
+                                size: 16,
+                              ),
+                              label: SizedBox(
+                                width: 220,
+                                child: Text(
+                                  _selectedStudent!.fullName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             ),
-                          ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 if (_filteredStudents.isEmpty)
                   const Text('Aucun élève trouvé avec ces critères.')
                 else ...[
@@ -2835,6 +3051,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         scrollDirection: Axis.horizontal,
                         child: DataTable(
                           showBottomBorder: true,
+                          dividerThickness: 0.65,
                           border: TableBorder.all(
                             color: colorScheme.outlineVariant.withValues(
                               alpha: 0.4,
@@ -2842,16 +3059,20 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             width: 0.7,
                           ),
                           headingRowColor: WidgetStatePropertyAll(
-                            colorScheme.surfaceContainerHighest,
+                            colorScheme.surfaceContainerHighest.withValues(
+                              alpha: 0.9,
+                            ),
                           ),
                           headingTextStyle: Theme.of(context)
                               .textTheme
                               .labelLarge
                               ?.copyWith(fontWeight: FontWeight.w700),
-                          dataTextStyle: Theme.of(context).textTheme.bodyMedium,
-                          columnSpacing: 22,
+                          dataTextStyle: Theme.of(
+                            context,
+                          ).textTheme.bodyMedium?.copyWith(fontSize: 13),
+                          columnSpacing: 20,
                           horizontalMargin: 12,
-                          headingRowHeight: 46,
+                          headingRowHeight: 48,
                           dataRowMinHeight: 52,
                           dataRowMaxHeight: 62,
                           columns: const [
@@ -2885,6 +3106,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 if (selected) {
                                   return colorScheme.primary.withValues(
                                     alpha: 0.1,
+                                  );
+                                }
+                                if (states.contains(WidgetState.hovered)) {
+                                  return colorScheme.primary.withValues(
+                                    alpha: 0.05,
                                   );
                                 }
                                 return rowIndex.isEven
@@ -3732,21 +3958,70 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     return DateTime.tryParse(value.toString());
   }
 
+  Widget _dashboardInfoChip({
+    required IconData icon,
+    required String label,
+    double maxWidth = 220,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: scheme.surface.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: scheme.outlineVariant.withValues(alpha: 0.55),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: scheme.primary),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _overviewMetricCard({
     required String title,
     required String value,
     required IconData icon,
+    required String subtitle,
+    required Color tone,
   }) {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
       width: 260,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        border: Border.all(color: scheme.outlineVariant),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [tone.withValues(alpha: 0.1), scheme.surface],
+        ),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(radius: 16, child: Icon(icon, size: 18)),
+          CircleAvatar(
+            radius: 17,
+            backgroundColor: tone.withValues(alpha: 0.18),
+            child: Icon(icon, size: 18, color: tone),
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -3757,9 +4032,26 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
-                Text(value, style: Theme.of(context).textTheme.headlineSmall),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
               ],
             ),
           ),
