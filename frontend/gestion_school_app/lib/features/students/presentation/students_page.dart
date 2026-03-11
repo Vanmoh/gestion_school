@@ -939,6 +939,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
+                    _studentDesignCardPreview(student, compact: true),
+                    const SizedBox(height: 8),
                     Expanded(
                       child: PdfPreview(
                         build: (_) async => bytes,
@@ -1047,6 +1049,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         break;
       }
     }
+    final layoutLabel = _cardsLayoutMode == 'a4_6up'
+        ? 'A4 • 6 cartes/page'
+        : _cardsLayoutMode == 'a4_9up'
+        ? 'A4 • 9 cartes/page'
+        : 'Standard • 1 carte/page';
 
     try {
       final bytes = await ref
@@ -1068,6 +1075,15 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     Text(
                       'Aperçu rapide: cartes $className',
                       style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _studentCardTag('Classe', className),
+                        _studentCardTag('Format', layoutLabel),
+                      ],
                     ),
                     const SizedBox(height: 8),
                     Expanded(
@@ -3278,6 +3294,13 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           ],
                         ),
                       ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Carte étudiant (aperçu design)',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      _studentDesignCardPreview(_selectedStudent!),
                       const SizedBox(height: 12),
                       if (_detailLoading)
                         const Padding(
@@ -3803,6 +3826,138 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentCardTag(String label, String value) {
+    final scheme = Theme.of(context).colorScheme;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 240),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+          border: Border.all(
+            color: scheme.outlineVariant.withValues(alpha: 0.55),
+          ),
+        ),
+        child: Text(
+          '$label: $value',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.labelSmall,
+        ),
+      ),
+    );
+  }
+
+  Widget _studentDesignCardPreview(Student student, {bool compact = false}) {
+    final scheme = Theme.of(context).colorScheme;
+    final classLabel = student.classroomName.trim().isEmpty
+        ? 'Non attribuée'
+        : student.classroomName;
+    final hasPhoto = student.photo.trim().isNotEmpty;
+    final statusLabel = student.isArchived ? 'Archivé' : 'Actif';
+    final photoWidth = compact ? 70.0 : 86.0;
+    final cardPadding = compact
+        ? const EdgeInsets.fromLTRB(10, 8, 10, 8)
+        : const EdgeInsets.fromLTRB(12, 10, 12, 10);
+
+    return Container(
+      constraints: BoxConstraints(minHeight: compact ? 114 : 132),
+      padding: cardPadding,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: scheme.outlineVariant.withValues(alpha: 0.62),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.badge_outlined, size: 16, color: scheme.primary),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Carte étudiant',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  student.fullName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Matricule: ${student.matricule}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    _studentCardTag('Classe', classLabel),
+                    _studentCardTag('Statut', statusLabel),
+                    _studentCardTag('Année', _activeAcademicYearLabel()),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              width: photoWidth,
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                border: Border.all(
+                  color: scheme.outlineVariant.withValues(alpha: 0.65),
+                ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: hasPhoto
+                  ? InkWell(
+                      onTap: () => _viewProfilePhoto(student.photo),
+                      child: Image.network(
+                        _resolveMediaUrl(student.photo),
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Center(
+                            child: Icon(
+                              Icons.person_outline,
+                              size: compact ? 20 : 24,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          );
+                        },
+                      ),
+                    )
+                  : Center(
+                      child: Icon(
+                        Icons.person_outline,
+                        size: compact ? 20 : 24,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
             ),
           ),
         ],
