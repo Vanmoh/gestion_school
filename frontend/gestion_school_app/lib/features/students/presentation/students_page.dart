@@ -22,7 +22,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   final _searchController = TextEditingController();
   Timer? _searchDebounce;
 
-  static const int _tableRowsPerPage = 15;
+  static const List<int> _tableRowsPerPageOptions = [10, 15, 25, 50];
+  int _tableRowsPerPage = 15;
   int _tablePage = 1;
 
   final _usernameController = TextEditingController();
@@ -2721,34 +2722,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             ),
           ),
         ),
-        const SizedBox(height: 14),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            _overviewMetricCard(
-              title: 'Nombre total d’élèves',
-              value: '$total',
-              icon: Icons.groups_2_outlined,
-            ),
-            _overviewMetricCard(
-              title: 'Actifs',
-              value: '$active',
-              icon: Icons.verified_user_outlined,
-            ),
-            _overviewMetricCard(
-              title: 'Archivés',
-              value: '$archived',
-              icon: Icons.archive_outlined,
-            ),
-            _overviewMetricCard(
-              title: 'Nouveaux inscrits',
-              value: '$newEnrolled',
-              icon: Icons.person_add_alt_1_outlined,
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
         Card(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
@@ -2785,6 +2758,16 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: DataTable(
+                      showBottomBorder: true,
+                      border: TableBorder.all(
+                        color: colorScheme.outlineVariant.withValues(
+                          alpha: 0.45,
+                        ),
+                        width: 0.7,
+                      ),
+                      headingRowColor: WidgetStatePropertyAll(
+                        colorScheme.surfaceContainerHighest,
+                      ),
                       columnSpacing: 22,
                       horizontalMargin: 12,
                       headingRowHeight: 46,
@@ -2848,27 +2831,48 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                               Wrap(
                                 spacing: 4,
                                 children: [
-                                  TextButton(
+                                  OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
+                                    ),
                                     onPressed: () => _activateStudent(student),
-                                    child: const Text('Voir'),
+                                    icon: const Icon(
+                                      Icons.visibility_outlined,
+                                      size: 16,
+                                    ),
+                                    label: const Text('Voir'),
                                   ),
-                                  TextButton(
+                                  OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
+                                    ),
                                     onPressed: _saving
                                         ? null
                                         : () {
                                             _activateStudent(student);
                                             _openProfileForm();
                                           },
-                                    child: const Text('Éditer'),
+                                    icon: const Icon(
+                                      Icons.edit_outlined,
+                                      size: 16,
+                                    ),
+                                    label: const Text('Éditer'),
                                   ),
-                                  TextButton(
-                                    style: TextButton.styleFrom(
+                                  OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
                                       foregroundColor: colorScheme.error,
                                     ),
                                     onPressed: _saving
                                         ? null
                                         : () => _toggleArchive(student),
-                                    child: Text(
+                                    icon: Icon(
+                                      student.isArchived
+                                          ? Icons.restore_from_trash_outlined
+                                          : Icons.delete_outline,
+                                      size: 16,
+                                    ),
+                                    label: Text(
                                       student.isArchived
                                           ? 'Restaurer'
                                           : 'Supprimer',
@@ -2896,6 +2900,30 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          const Text('Lignes/page:'),
+                          const SizedBox(width: 6),
+                          DropdownButton<int>(
+                            value: _tableRowsPerPage,
+                            items: _tableRowsPerPageOptions
+                                .map(
+                                  (rows) => DropdownMenuItem<int>(
+                                    value: rows,
+                                    child: Text('$rows'),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null || value == _tableRowsPerPage) {
+                                return;
+                              }
+                              setState(() {
+                                _tableRowsPerPage = value;
+                                _tablePage = 1;
+                              });
+                              _applyFilters(resetVisibleCount: true);
+                            },
+                          ),
+                          const SizedBox(width: 8),
                           IconButton(
                             tooltip: 'Première page',
                             onPressed: currentPage > 1
@@ -2937,6 +2965,33 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               ],
             ),
           ),
+        ),
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            _overviewMetricCard(
+              title: 'Nombre total d’élèves',
+              value: '$total',
+              icon: Icons.groups_2_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Actifs',
+              value: '$active',
+              icon: Icons.verified_user_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Archivés',
+              value: '$archived',
+              icon: Icons.archive_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Nouveaux inscrits',
+              value: '$newEnrolled',
+              icon: Icons.person_add_alt_1_outlined,
+            ),
+          ],
         ),
         const SizedBox(height: 14),
         Card(
