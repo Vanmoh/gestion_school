@@ -277,6 +277,19 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     _applyFilters(resetVisibleCount: true);
   }
 
+  void _resetStudentsFilters() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() {
+      _classFilterId = null;
+      _statusFilter = 'all';
+      _sortBy = 'name';
+      _sortAscending = true;
+      _tablePage = 1;
+    });
+    _applyFilters(resetVisibleCount: true);
+  }
+
   Future<void> _pickProfilePhoto({required bool forRegistration}) async {
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -2474,7 +2487,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final archived = total - active;
     final newEnrolled = _newlyEnrolledCount();
     final activeYearLabel = _activeAcademicYearLabel();
-    final compactHeader = MediaQuery.of(context).size.width < 980;
+    final colorScheme = Theme.of(context).colorScheme;
     final totalFiltered = _filteredStudents.length;
     final totalPages = totalFiltered == 0
         ? 1
@@ -2491,108 +2504,70 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        if (compactHeader) ...[
-          Text(
-            'Gestion des élèves',
-            style: Theme.of(context).textTheme.headlineSmall,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Année scolaire : $activeYearLabel',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              FilledButton.icon(
-                onPressed: _saving ? null : _openRegistrationForm,
-                icon: const Icon(Icons.person_add_alt_1),
-                label: const Text('Ajouter un élève'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: _saving ? null : _openStudentsByClassPanel,
-                icon: const Icon(Icons.view_list_outlined),
-                label: const Text('Liste par classe'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: _saving ? null : _openClassCardsPanel,
-                icon: const Icon(Icons.badge_outlined),
-                label: const Text('Cartes classe'),
-              ),
-              OutlinedButton.icon(
-                onPressed: _saving
-                    ? null
-                    : () => _loadBaseData(keepSelectedId: _selectedStudent?.id),
-                icon: const Icon(Icons.sync),
-                label: const Text('Actualiser'),
-              ),
-            ],
-          ),
-        ] else
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Gestion des élèves',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Année scolaire : $activeYearLabel',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                ),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
                   children: [
-                    Text(
-                      'Gestion des élèves',
-                      style: Theme.of(context).textTheme.headlineSmall,
+                    FilledButton.icon(
+                      onPressed: _saving ? null : _openRegistrationForm,
+                      icon: const Icon(Icons.person_add_alt_1),
+                      label: const Text('Ajouter un élève'),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Année scolaire : $activeYearLabel',
-                      style: Theme.of(context).textTheme.titleMedium,
+                    FilledButton.tonalIcon(
+                      onPressed: _saving ? null : _openStudentsByClassPanel,
+                      icon: const Icon(Icons.view_list_outlined),
+                      label: const Text('Liste par classe'),
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
-                      style: Theme.of(context).textTheme.bodyMedium,
+                    FilledButton.tonalIcon(
+                      onPressed: _saving ? null : _openClassCardsPanel,
+                      icon: const Icon(Icons.badge_outlined),
+                      label: const Text('Cartes classe'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : () => _loadBaseData(
+                              keepSelectedId: _selectedStudent?.id,
+                            ),
+                      icon: const Icon(Icons.sync),
+                      label: const Text('Actualiser'),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 14),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  FilledButton.icon(
-                    onPressed: _saving ? null : _openRegistrationForm,
-                    icon: const Icon(Icons.person_add_alt_1),
-                    label: const Text('Ajouter un élève'),
-                  ),
-                  FilledButton.tonalIcon(
-                    onPressed: _saving ? null : _openStudentsByClassPanel,
-                    icon: const Icon(Icons.view_list_outlined),
-                    label: const Text('Liste par classe'),
-                  ),
-                  FilledButton.tonalIcon(
-                    onPressed: _saving ? null : _openClassCardsPanel,
-                    icon: const Icon(Icons.badge_outlined),
-                    label: const Text('Cartes classe'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _saving
-                        ? null
-                        : () => _loadBaseData(
-                            keepSelectedId: _selectedStudent?.id,
-                          ),
-                    icon: const Icon(Icons.sync),
-                    label: const Text('Actualiser'),
-                  ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
+        ),
         const SizedBox(height: 14),
         Wrap(
           spacing: 10,
@@ -2624,111 +2599,150 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                SizedBox(
-                  width: 320,
-                  child: TextField(
-                    controller: _searchController,
-                    textInputAction: TextInputAction.search,
-                    decoration: InputDecoration(
-                      hintText: 'Rechercher un élève...',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _searchController.text.isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: 'Effacer',
-                              icon: const Icon(Icons.clear),
-                              onPressed: _clearSearch,
-                            ),
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Recherche et filtres',
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    onChanged: _onSearchChanged,
-                    onSubmitted: (_) => _applyFilters(resetVisibleCount: true),
-                  ),
-                ),
-                SizedBox(
-                  width: 220,
-                  child: DropdownButtonFormField<int?>(
-                    initialValue: _classFilterId,
-                    decoration: const InputDecoration(labelText: 'Classe'),
-                    items: [
-                      const DropdownMenuItem<int?>(
-                        value: null,
-                        child: Text('Toutes les classes'),
+                    Text(
+                      '$totalFiltered résultat${totalFiltered > 1 ? 's' : ''}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: colorScheme.primary,
                       ),
-                      ..._classrooms.map(
-                        (row) => DropdownMenuItem<int?>(
-                          value: _asInt(row['id']),
-                          child: Text('${row['name']} (ID ${row['id']})'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    SizedBox(
+                      width: 320,
+                      child: TextField(
+                        controller: _searchController,
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          hintText: 'Rechercher un élève...',
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon: _searchController.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: 'Effacer',
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: _clearSearch,
+                                ),
                         ),
+                        onChanged: _onSearchChanged,
+                        onSubmitted: (_) =>
+                            _applyFilters(resetVisibleCount: true),
                       ),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _classFilterId = value);
-                      _applyFilters(resetVisibleCount: true);
-                    },
-                  ),
-                ),
-                SizedBox(
-                  width: 200,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _statusFilter,
-                    decoration: const InputDecoration(labelText: 'Statut'),
-                    items: const [
-                      DropdownMenuItem(value: 'all', child: Text('Tous')),
-                      DropdownMenuItem(value: 'active', child: Text('Actifs')),
-                      DropdownMenuItem(
-                        value: 'archived',
-                        child: Text('Archivés'),
+                    ),
+                    SizedBox(
+                      width: 220,
+                      child: DropdownButtonFormField<int?>(
+                        initialValue: _classFilterId,
+                        decoration: const InputDecoration(labelText: 'Classe'),
+                        items: [
+                          const DropdownMenuItem<int?>(
+                            value: null,
+                            child: Text('Toutes les classes'),
+                          ),
+                          ..._classrooms.map(
+                            (row) => DropdownMenuItem<int?>(
+                              value: _asInt(row['id']),
+                              child: Text('${row['name']} (ID ${row['id']})'),
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _classFilterId = value);
+                          _applyFilters(resetVisibleCount: true);
+                        },
                       ),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _statusFilter = value ?? 'active');
-                      _applyFilters(resetVisibleCount: true);
-                    },
-                  ),
-                ),
-                SizedBox(
-                  width: 200,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _sortBy,
-                    decoration: const InputDecoration(labelText: 'Trier par'),
-                    items: const [
-                      DropdownMenuItem(value: 'name', child: Text('Nom')),
-                      DropdownMenuItem(
-                        value: 'matricule',
-                        child: Text('Matricule'),
+                    ),
+                    SizedBox(
+                      width: 200,
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _statusFilter,
+                        decoration: const InputDecoration(labelText: 'Statut'),
+                        items: const [
+                          DropdownMenuItem(value: 'all', child: Text('Tous')),
+                          DropdownMenuItem(
+                            value: 'active',
+                            child: Text('Actifs'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'archived',
+                            child: Text('Archivés'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _statusFilter = value ?? 'active');
+                          _applyFilters(resetVisibleCount: true);
+                        },
                       ),
-                      DropdownMenuItem(
-                        value: 'classroom',
-                        child: Text('Classe'),
+                    ),
+                    SizedBox(
+                      width: 200,
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _sortBy,
+                        decoration: const InputDecoration(
+                          labelText: 'Trier par',
+                        ),
+                        items: const [
+                          DropdownMenuItem(value: 'name', child: Text('Nom')),
+                          DropdownMenuItem(
+                            value: 'matricule',
+                            child: Text('Matricule'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'classroom',
+                            child: Text('Classe'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'status',
+                            child: Text('Statut'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _sortBy = value ?? 'name');
+                          _applyFilters(resetVisibleCount: true);
+                        },
                       ),
-                      DropdownMenuItem(value: 'status', child: Text('Statut')),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _sortBy = value ?? 'name');
-                      _applyFilters(resetVisibleCount: true);
-                    },
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() => _sortAscending = !_sortAscending);
-                    _applyFilters(resetVisibleCount: true);
-                  },
-                  icon: Icon(
-                    _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
-                  ),
-                  label: Text(_sortAscending ? 'Ascendant' : 'Descendant'),
-                ),
-                FilledButton.icon(
-                  onPressed: _saving
-                      ? null
-                      : () => _applyFilters(resetVisibleCount: true),
-                  icon: const Icon(Icons.filter_alt_outlined),
-                  label: const Text('Filtrer'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        setState(() => _sortAscending = !_sortAscending);
+                        _applyFilters(resetVisibleCount: true);
+                      },
+                      icon: Icon(
+                        _sortAscending
+                            ? Icons.arrow_upward
+                            : Icons.arrow_downward,
+                      ),
+                      label: Text(_sortAscending ? 'Ascendant' : 'Descendant'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : () => _applyFilters(resetVisibleCount: true),
+                      icon: const Icon(Icons.filter_alt_outlined),
+                      label: const Text('Filtrer'),
+                    ),
+                    TextButton.icon(
+                      onPressed: _saving ? null : _resetStudentsFilters,
+                      icon: const Icon(Icons.restart_alt),
+                      label: const Text('Réinitialiser'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -2752,6 +2766,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: DataTable(
+                      columnSpacing: 22,
+                      horizontalMargin: 12,
                       headingRowHeight: 46,
                       dataRowMinHeight: 52,
                       dataRowMaxHeight: 62,
@@ -2823,6 +2839,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                     child: const Text('Éditer'),
                                   ),
                                   TextButton(
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: colorScheme.error,
+                                    ),
                                     onPressed: _saving
                                         ? null
                                         : () => _toggleArchive(student),
