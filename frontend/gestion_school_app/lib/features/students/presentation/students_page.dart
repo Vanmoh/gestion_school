@@ -2569,33 +2569,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           ),
         ),
         const SizedBox(height: 14),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            _overviewMetricCard(
-              title: 'Nombre total d’élèves',
-              value: '$total',
-              icon: Icons.groups_2_outlined,
-            ),
-            _overviewMetricCard(
-              title: 'Actifs',
-              value: '$active',
-              icon: Icons.verified_user_outlined,
-            ),
-            _overviewMetricCard(
-              title: 'Archivés',
-              value: '$archived',
-              icon: Icons.archive_outlined,
-            ),
-            _overviewMetricCard(
-              title: 'Nouveaux inscrits',
-              value: '$newEnrolled',
-              icon: Icons.person_add_alt_1_outlined,
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -2749,15 +2722,61 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           ),
         ),
         const SizedBox(height: 14),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            _overviewMetricCard(
+              title: 'Nombre total d’élèves',
+              value: '$total',
+              icon: Icons.groups_2_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Actifs',
+              value: '$active',
+              icon: Icons.verified_user_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Archivés',
+              value: '$archived',
+              icon: Icons.archive_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Nouveaux inscrits',
+              value: '$newEnrolled',
+              icon: Icons.person_add_alt_1_outlined,
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
         Card(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'Liste des élèves (${_filteredStudents.length})',
-                  style: Theme.of(context).textTheme.titleMedium,
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Liste des élèves (${_filteredStudents.length})',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    if (_selectedStudent != null)
+                      Chip(
+                        avatar: const Icon(Icons.person_outline, size: 16),
+                        label: SizedBox(
+                          width: 220,
+                          child: Text(
+                            _selectedStudent!.fullName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 8),
                 if (_filteredStudents.isEmpty)
@@ -2772,6 +2791,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       dataRowMinHeight: 52,
                       dataRowMaxHeight: 62,
                       columns: const [
+                        DataColumn(label: Text('N°')),
                         DataColumn(label: Text('Matricule')),
                         DataColumn(label: Text('Nom complet')),
                         DataColumn(label: Text('Classe')),
@@ -2780,12 +2800,15 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         DataColumn(label: Text('Statut')),
                         DataColumn(label: Text('Actions')),
                       ],
-                      rows: visibleStudents.map((student) {
+                      rows: visibleStudents.asMap().entries.map((entry) {
+                        final rowIndex = entry.key;
+                        final student = entry.value;
                         final selected = _selectedStudent?.id == student.id;
                         return DataRow(
                           selected: selected,
                           onSelectChanged: (_) => _activateStudent(student),
                           cells: [
+                            DataCell(Text('${startIndex + rowIndex + 1}')),
                             DataCell(Text(student.matricule)),
                             DataCell(
                               Text(
