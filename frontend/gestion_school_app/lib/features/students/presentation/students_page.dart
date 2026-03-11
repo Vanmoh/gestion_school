@@ -23,6 +23,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   Timer? _searchDebounce;
 
   static const List<int> _tableRowsPerPageOptions = [10, 15, 25, 50];
+  static const String _studentCardTemplateAsset =
+      'assets/images/student_card_template.png';
+  static const double _studentCardTemplateAspectRatio = 1024 / 1536;
   int _tableRowsPerPage = 15;
   int _tablePage = 1;
 
@@ -3833,24 +3836,31 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
-  Widget _studentCardTag(String label, String value) {
+  Widget _studentCardTag(String label, String value, {bool onDark = false}) {
     final scheme = Theme.of(context).colorScheme;
+    final backgroundColor = onDark
+        ? Colors.white.withValues(alpha: 0.2)
+        : scheme.surfaceContainerHighest.withValues(alpha: 0.55);
+    final borderColor = onDark
+        ? Colors.white.withValues(alpha: 0.35)
+        : scheme.outlineVariant.withValues(alpha: 0.55);
+    final textColor = onDark ? Colors.white : null;
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 240),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(999),
-          color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
-          border: Border.all(
-            color: scheme.outlineVariant.withValues(alpha: 0.55),
-          ),
+          color: backgroundColor,
+          border: Border.all(color: borderColor),
         ),
         child: Text(
           '$label: $value',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.labelSmall,
+          style: Theme.of(
+            context,
+          ).textTheme.labelSmall?.copyWith(color: textColor),
         ),
       ),
     );
@@ -3863,104 +3873,168 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         : student.classroomName;
     final hasPhoto = student.photo.trim().isNotEmpty;
     final statusLabel = student.isArchived ? 'Archivé' : 'Actif';
-    final photoWidth = compact ? 70.0 : 86.0;
-    final cardPadding = compact
-        ? const EdgeInsets.fromLTRB(10, 8, 10, 8)
-        : const EdgeInsets.fromLTRB(12, 10, 12, 10);
+    final photoWidth = compact ? 56.0 : 68.0;
 
     return Container(
-      constraints: BoxConstraints(minHeight: compact ? 114 : 132),
-      padding: cardPadding,
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: scheme.outlineVariant.withValues(alpha: 0.62),
         ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.badge_outlined, size: 16, color: scheme.primary),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Carte étudiant',
-                      style: Theme.of(context).textTheme.titleSmall,
+      clipBehavior: Clip.antiAlias,
+      child: AspectRatio(
+        aspectRatio: _studentCardTemplateAspectRatio,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.asset(
+              _studentCardTemplateAsset,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return ColoredBox(
+                  color: scheme.surfaceContainerLowest,
+                  child: Center(
+                    child: Text(
+                      'Template carte indisponible',
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  student.fullName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Matricule: ${student.matricule}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    _studentCardTag('Classe', classLabel),
-                    _studentCardTag('Statut', statusLabel),
-                    _studentCardTag('Année', _activeAcademicYearLabel()),
-                  ],
-                ),
-              ],
+                  ),
+                );
+              },
             ),
-          ),
-          const SizedBox(width: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              width: photoWidth,
+            DecoratedBox(
               decoration: BoxDecoration(
-                color: scheme.surfaceContainerHighest,
-                border: Border.all(
-                  color: scheme.outlineVariant.withValues(alpha: 0.65),
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.1),
+                    Colors.black.withValues(alpha: 0.58),
+                  ],
+                  stops: const [0.52, 0.72, 1],
                 ),
-                borderRadius: BorderRadius.circular(10),
               ),
-              child: hasPhoto
-                  ? InkWell(
-                      onTap: () => _viewProfilePhoto(student.photo),
-                      child: Image.network(
-                        _resolveMediaUrl(student.photo),
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Center(
-                            child: Icon(
-                              Icons.person_outline,
-                              size: compact ? 20 : 24,
-                              color: scheme.onSurfaceVariant,
-                            ),
-                          );
-                        },
-                      ),
-                    )
-                  : Center(
-                      child: Icon(
-                        Icons.person_outline,
-                        size: compact ? 20 : 24,
-                        color: scheme.onSurfaceVariant,
+            ),
+            Positioned(
+              top: compact ? 8 : 10,
+              right: compact ? 8 : 10,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.48),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.25),
+                  ),
+                ),
+                child: Text(
+                  statusLabel,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: compact ? 8 : 10,
+              right: compact ? 8 : 10,
+              bottom: compact ? 8 : 10,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.2),
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            student.fullName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
+                          const SizedBox(height: 1),
+                          Text(
+                            'Matricule: ${student.matricule}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: Colors.white),
+                          ),
+                          const SizedBox(height: 5),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              _studentCardTag(
+                                'Classe',
+                                classLabel,
+                                onDark: true,
+                              ),
+                              _studentCardTag(
+                                'Année',
+                                _activeAcademicYearLabel(),
+                                onDark: true,
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        width: photoWidth,
+                        height: photoWidth + 6,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.18),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: hasPhoto
+                            ? InkWell(
+                                onTap: () => _viewProfilePhoto(student.photo),
+                                child: Image.network(
+                                  _resolveMediaUrl(student.photo),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return const Icon(
+                                      Icons.person_outline,
+                                      color: Colors.white,
+                                    );
+                                  },
+                                ),
+                              )
+                            : const Icon(
+                                Icons.person_outline,
+                                color: Colors.white,
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
