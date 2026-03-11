@@ -2570,6 +2570,33 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           ),
         ),
         const SizedBox(height: 14),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            _overviewMetricCard(
+              title: 'Nombre total d’élèves',
+              value: '$total',
+              icon: Icons.groups_2_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Actifs',
+              value: '$active',
+              icon: Icons.verified_user_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Archivés',
+              value: '$archived',
+              icon: Icons.archive_outlined,
+            ),
+            _overviewMetricCard(
+              title: 'Nouveaux inscrits',
+              value: '$newEnrolled',
+              icon: Icons.person_add_alt_1_outlined,
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -2592,6 +2619,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Affichage type tableau: applique les filtres puis sélectionne une ligne pour ouvrir le dossier.',
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
                 Wrap(
@@ -2734,156 +2766,216 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(
-                      'Liste des élèves (${_filteredStudents.length})',
+                      'Tableau des élèves (${_filteredStudents.length})',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    if (_selectedStudent != null)
-                      Chip(
-                        avatar: const Icon(Icons.person_outline, size: 16),
-                        label: SizedBox(
-                          width: 220,
-                          child: Text(
-                            _selectedStudent!.fullName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        Chip(
+                          avatar: const Icon(Icons.verified_outlined, size: 16),
+                          label: Text('$active actifs'),
                         ),
-                      ),
+                        Chip(
+                          avatar: const Icon(Icons.archive_outlined, size: 16),
+                          label: Text('$archived archivés'),
+                        ),
+                        if (_selectedStudent != null)
+                          Chip(
+                            avatar: const Icon(Icons.person_outline, size: 16),
+                            label: SizedBox(
+                              width: 220,
+                              child: Text(
+                                _selectedStudent!.fullName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
                 if (_filteredStudents.isEmpty)
                   const Text('Aucun élève trouvé avec ces critères.')
                 else ...[
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: DataTable(
-                      showBottomBorder: true,
-                      border: TableBorder.all(
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
                         color: colorScheme.outlineVariant.withValues(
-                          alpha: 0.45,
+                          alpha: 0.5,
                         ),
-                        width: 0.7,
                       ),
-                      headingRowColor: WidgetStatePropertyAll(
-                        colorScheme.surfaceContainerHighest,
-                      ),
-                      columnSpacing: 22,
-                      horizontalMargin: 12,
-                      headingRowHeight: 46,
-                      dataRowMinHeight: 52,
-                      dataRowMaxHeight: 62,
-                      columns: const [
-                        DataColumn(label: Text('N°')),
-                        DataColumn(label: Text('Matricule')),
-                        DataColumn(label: Text('Nom complet')),
-                        DataColumn(label: Text('Classe')),
-                        DataColumn(label: Text('Date naissance')),
-                        DataColumn(label: Text('Téléphone')),
-                        DataColumn(label: Text('Statut')),
-                        DataColumn(label: Text('Actions')),
-                      ],
-                      rows: visibleStudents.asMap().entries.map((entry) {
-                        final rowIndex = entry.key;
-                        final student = entry.value;
-                        final selected = _selectedStudent?.id == student.id;
-                        return DataRow(
-                          selected: selected,
-                          onSelectChanged: (_) => _activateStudent(student),
-                          cells: [
-                            DataCell(Text('${startIndex + rowIndex + 1}')),
-                            DataCell(Text(student.matricule)),
-                            DataCell(
-                              Text(
-                                student.fullName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: DataTable(
+                          showBottomBorder: true,
+                          border: TableBorder.all(
+                            color: colorScheme.outlineVariant.withValues(
+                              alpha: 0.4,
                             ),
-                            DataCell(
-                              Text(
-                                student.classroomName.isEmpty
-                                    ? 'Non attribuée'
-                                    : student.classroomName,
-                              ),
-                            ),
-                            DataCell(
-                              Text(
-                                student.birthDate == null
-                                    ? '-'
-                                    : _apiDate(student.birthDate!),
-                              ),
-                            ),
-                            DataCell(
-                              Text(
-                                student.phone.trim().isEmpty
-                                    ? '-'
-                                    : student.phone,
-                              ),
-                            ),
-                            DataCell(
-                              _statusBadge(
-                                student.isArchived ? 'Archivé' : 'Actif',
-                                student.isArchived,
-                              ),
-                            ),
-                            DataCell(
-                              Wrap(
-                                spacing: 4,
-                                children: [
-                                  OutlinedButton.icon(
-                                    style: OutlinedButton.styleFrom(
-                                      visualDensity: VisualDensity.compact,
-                                    ),
-                                    onPressed: () => _activateStudent(student),
-                                    icon: const Icon(
-                                      Icons.visibility_outlined,
-                                      size: 16,
-                                    ),
-                                    label: const Text('Voir'),
-                                  ),
-                                  OutlinedButton.icon(
-                                    style: OutlinedButton.styleFrom(
-                                      visualDensity: VisualDensity.compact,
-                                    ),
-                                    onPressed: _saving
-                                        ? null
-                                        : () {
-                                            _activateStudent(student);
-                                            _openProfileForm();
-                                          },
-                                    icon: const Icon(
-                                      Icons.edit_outlined,
-                                      size: 16,
-                                    ),
-                                    label: const Text('Éditer'),
-                                  ),
-                                  OutlinedButton.icon(
-                                    style: OutlinedButton.styleFrom(
-                                      visualDensity: VisualDensity.compact,
-                                      foregroundColor: colorScheme.error,
-                                    ),
-                                    onPressed: _saving
-                                        ? null
-                                        : () => _toggleArchive(student),
-                                    icon: Icon(
-                                      student.isArchived
-                                          ? Icons.restore_from_trash_outlined
-                                          : Icons.delete_outline,
-                                      size: 16,
-                                    ),
-                                    label: Text(
-                                      student.isArchived
-                                          ? 'Restaurer'
-                                          : 'Supprimer',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                            width: 0.7,
+                          ),
+                          headingRowColor: WidgetStatePropertyAll(
+                            colorScheme.surfaceContainerHighest,
+                          ),
+                          headingTextStyle: Theme.of(context)
+                              .textTheme
+                              .labelLarge
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                          dataTextStyle: Theme.of(context).textTheme.bodyMedium,
+                          columnSpacing: 22,
+                          horizontalMargin: 12,
+                          headingRowHeight: 46,
+                          dataRowMinHeight: 52,
+                          dataRowMaxHeight: 62,
+                          columns: const [
+                            DataColumn(label: Text('N°')),
+                            DataColumn(label: Text('Matricule')),
+                            DataColumn(label: Text('Nom complet')),
+                            DataColumn(label: Text('Classe')),
+                            DataColumn(label: Text('Date naissance')),
+                            DataColumn(label: Text('Téléphone')),
+                            DataColumn(label: Text('Statut')),
+                            DataColumn(label: Text('Actions')),
                           ],
-                        );
-                      }).toList(),
+                          rows: visibleStudents.asMap().entries.map((entry) {
+                            final rowIndex = entry.key;
+                            final student = entry.value;
+                            final selected = _selectedStudent?.id == student.id;
+                            final rowActionStyle = OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              minimumSize: const Size(0, 34),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 6,
+                              ),
+                            );
+                            return DataRow(
+                              selected: selected,
+                              color: WidgetStateProperty.resolveWith<Color?>((
+                                states,
+                              ) {
+                                if (selected) {
+                                  return colorScheme.primary.withValues(
+                                    alpha: 0.1,
+                                  );
+                                }
+                                return rowIndex.isEven
+                                    ? colorScheme.surface
+                                    : colorScheme.surfaceContainerHighest
+                                          .withValues(alpha: 0.22);
+                              }),
+                              onSelectChanged: (_) => _activateStudent(student),
+                              cells: [
+                                DataCell(Text('${startIndex + rowIndex + 1}')),
+                                DataCell(Text(student.matricule)),
+                                DataCell(
+                                  Text(
+                                    student.fullName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                DataCell(
+                                  Text(
+                                    student.classroomName.isEmpty
+                                        ? 'Non attribuée'
+                                        : student.classroomName,
+                                  ),
+                                ),
+                                DataCell(
+                                  Text(
+                                    student.birthDate == null
+                                        ? '-'
+                                        : _apiDate(student.birthDate!),
+                                  ),
+                                ),
+                                DataCell(
+                                  Text(
+                                    student.phone.trim().isEmpty
+                                        ? '-'
+                                        : student.phone,
+                                  ),
+                                ),
+                                DataCell(
+                                  _statusBadge(
+                                    student.isArchived ? 'Archivé' : 'Actif',
+                                    student.isArchived,
+                                  ),
+                                ),
+                                DataCell(
+                                  Wrap(
+                                    spacing: 4,
+                                    runSpacing: 4,
+                                    children: [
+                                      OutlinedButton.icon(
+                                        style: rowActionStyle,
+                                        onPressed: () =>
+                                            _activateStudent(student),
+                                        icon: const Icon(
+                                          Icons.visibility_outlined,
+                                          size: 16,
+                                        ),
+                                        label: const Text('Voir'),
+                                      ),
+                                      OutlinedButton.icon(
+                                        style: rowActionStyle,
+                                        onPressed: _saving
+                                            ? null
+                                            : () {
+                                                _activateStudent(student);
+                                                _openProfileForm();
+                                              },
+                                        icon: const Icon(
+                                          Icons.edit_outlined,
+                                          size: 16,
+                                        ),
+                                        label: const Text('Éditer'),
+                                      ),
+                                      OutlinedButton.icon(
+                                        style: OutlinedButton.styleFrom(
+                                          visualDensity: VisualDensity.compact,
+                                          tapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                          minimumSize: const Size(0, 34),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 6,
+                                          ),
+                                          foregroundColor: colorScheme.error,
+                                        ),
+                                        onPressed: _saving
+                                            ? null
+                                            : () => _toggleArchive(student),
+                                        icon: Icon(
+                                          student.isArchived
+                                              ? Icons
+                                                    .restore_from_trash_outlined
+                                              : Icons.delete_outline,
+                                          size: 16,
+                                        ),
+                                        label: Text(
+                                          student.isArchived
+                                              ? 'Restaurer'
+                                              : 'Supprimer',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            );
+                          }).toList(),
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -2897,8 +2989,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             ? 'Aucun résultat'
                             : 'Affichage ${startIndex + 1}-$endIndex sur $totalFiltered',
                       ),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
+                      Wrap(
+                        spacing: 2,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           const Text('Lignes/page:'),
                           const SizedBox(width: 6),
@@ -2940,7 +3034,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 : null,
                             icon: const Icon(Icons.chevron_left),
                           ),
-                          Text('Page $currentPage / $totalPages'),
+                          Text(
+                            'Page $currentPage / $totalPages',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
                           IconButton(
                             tooltip: 'Page suivante',
                             onPressed: currentPage < totalPages
@@ -2965,33 +3062,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               ],
             ),
           ),
-        ),
-        const SizedBox(height: 14),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            _overviewMetricCard(
-              title: 'Nombre total d’élèves',
-              value: '$total',
-              icon: Icons.groups_2_outlined,
-            ),
-            _overviewMetricCard(
-              title: 'Actifs',
-              value: '$active',
-              icon: Icons.verified_user_outlined,
-            ),
-            _overviewMetricCard(
-              title: 'Archivés',
-              value: '$archived',
-              icon: Icons.archive_outlined,
-            ),
-            _overviewMetricCard(
-              title: 'Nouveaux inscrits',
-              value: '$newEnrolled',
-              icon: Icons.person_add_alt_1_outlined,
-            ),
-          ],
         ),
         const SizedBox(height: 14),
         Card(
