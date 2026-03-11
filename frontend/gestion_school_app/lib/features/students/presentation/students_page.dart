@@ -3075,107 +3075,208 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        'Dossier élève: ${_selectedStudent!.fullName}',
+                        'Dossier élève',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
-                      const SizedBox(height: 8),
-                      Text('Matricule: ${_selectedStudent!.matricule}'),
+                      const SizedBox(height: 4),
                       Text(
-                        'Classe actuelle: ${_selectedStudent!.classroomName.isEmpty ? 'Non attribuée' : _selectedStudent!.classroomName}',
-                      ),
-                      Text(
-                        'Parent: ${_selectedStudent!.parentName.isEmpty ? 'Non attribué' : _selectedStudent!.parentName}',
-                      ),
-                      if (_selectedStudent!.phone.trim().isNotEmpty)
-                        Text('Téléphone: ${_selectedStudent!.phone}'),
-                      if (_selectedStudent!.email.trim().isNotEmpty)
-                        Text('Email: ${_selectedStudent!.email}'),
-                      Text(
-                        'Date de naissance: ${_selectedStudent!.birthDate == null ? 'Non renseignée' : _apiDate(_selectedStudent!.birthDate!)}',
+                        'Fiche complète de l’élève sélectionné.',
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          FilledButton.tonalIcon(
-                            onPressed: _saving ? null : _openProfileForm,
-                            icon: const Icon(Icons.edit_note_outlined),
-                            label: const Text('Modifier dossier'),
-                          ),
-                          FilledButton.tonalIcon(
-                            onPressed: _saving
-                                ? null
-                                : () => _toggleArchive(_selectedStudent!),
-                            icon: Icon(
-                              _selectedStudent!.isArchived
-                                  ? Icons.unarchive_outlined
-                                  : Icons.archive_outlined,
-                            ),
-                            label: Text(
-                              _selectedStudent!.isArchived
-                                  ? 'Réactiver'
-                                  : 'Archiver',
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerLowest,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: colorScheme.outlineVariant.withValues(
+                              alpha: 0.55,
                             ),
                           ),
-                          if (_selectedStudent!.photo.trim().isNotEmpty)
-                            FilledButton.tonalIcon(
-                              onPressed: _saving
-                                  ? null
-                                  : () => _viewProfilePhoto(
-                                      _selectedStudent!.photo,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                Chip(
+                                  avatar: const Icon(
+                                    Icons.person_outline,
+                                    size: 16,
+                                  ),
+                                  label: Text(_selectedStudent!.fullName),
+                                ),
+                                Chip(
+                                  avatar: const Icon(
+                                    Icons.badge_outlined,
+                                    size: 16,
+                                  ),
+                                  label: Text(_selectedStudent!.matricule),
+                                ),
+                                _statusBadge(
+                                  _selectedStudent!.isArchived
+                                      ? 'Archivé'
+                                      : 'Actif',
+                                  _selectedStudent!.isArchived,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                _studentInfoPill(
+                                  icon: Icons.class_outlined,
+                                  label: 'Classe',
+                                  value: _selectedStudent!.classroomName.isEmpty
+                                      ? 'Non attribuée'
+                                      : _selectedStudent!.classroomName,
+                                ),
+                                _studentInfoPill(
+                                  icon: Icons.family_restroom_outlined,
+                                  label: 'Parent',
+                                  value: _selectedStudent!.parentName.isEmpty
+                                      ? 'Non attribué'
+                                      : _selectedStudent!.parentName,
+                                ),
+                                _studentInfoPill(
+                                  icon: Icons.cake_outlined,
+                                  label: 'Naissance',
+                                  value: _selectedStudent!.birthDate == null
+                                      ? 'Non renseignée'
+                                      : _apiDate(_selectedStudent!.birthDate!),
+                                ),
+                                if (_selectedStudent!.phone.trim().isNotEmpty)
+                                  _studentInfoPill(
+                                    icon: Icons.phone_outlined,
+                                    label: 'Téléphone',
+                                    value: _selectedStudent!.phone,
+                                  ),
+                                if (_selectedStudent!.email.trim().isNotEmpty)
+                                  _studentInfoPill(
+                                    icon: Icons.alternate_email_outlined,
+                                    label: 'Email',
+                                    value: _selectedStudent!.email,
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerLowest,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: colorScheme.outlineVariant.withValues(
+                              alpha: 0.5,
+                            ),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Actions dossier',
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                FilledButton.tonalIcon(
+                                  onPressed: _saving ? null : _openProfileForm,
+                                  icon: const Icon(Icons.edit_note_outlined),
+                                  label: const Text('Modifier dossier'),
+                                ),
+                                FilledButton.tonalIcon(
+                                  onPressed: _saving
+                                      ? null
+                                      : () => _toggleArchive(_selectedStudent!),
+                                  icon: Icon(
+                                    _selectedStudent!.isArchived
+                                        ? Icons.unarchive_outlined
+                                        : Icons.archive_outlined,
+                                  ),
+                                  label: Text(
+                                    _selectedStudent!.isArchived
+                                        ? 'Réactiver'
+                                        : 'Archiver',
+                                  ),
+                                ),
+                                if (_selectedStudent!.photo.trim().isNotEmpty)
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving
+                                        ? null
+                                        : () => _viewProfilePhoto(
+                                            _selectedStudent!.photo,
+                                          ),
+                                    icon: const Icon(
+                                      Icons.account_box_outlined,
                                     ),
-                              icon: const Icon(Icons.account_box_outlined),
-                              label: const Text('Voir photo'),
+                                    label: const Text('Voir photo'),
+                                  ),
+                                FilledButton.tonalIcon(
+                                  onPressed: _saving
+                                      ? null
+                                      : () async {
+                                          final success =
+                                              await _printStudentCard();
+                                          if (success) {
+                                            _showMessage(
+                                              'Carte élève prête à l’impression.',
+                                              isSuccess: true,
+                                            );
+                                          }
+                                        },
+                                  icon: const Icon(Icons.badge_outlined),
+                                  label: const Text('Carte élève'),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: _saving
+                                      ? null
+                                      : () async {
+                                          final success =
+                                              await _quickPreviewStudentCard();
+                                          if (success) {
+                                            _showMessage(
+                                              'Aperçu rapide affiché.',
+                                              isSuccess: true,
+                                            );
+                                          }
+                                        },
+                                  icon: const Icon(Icons.visibility_outlined),
+                                  label: const Text('Aperçu rapide'),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: _saving
+                                      ? null
+                                      : () async {
+                                          final success =
+                                              await _exportStudentCardPdf();
+                                          if (success) {
+                                            _showMessage(
+                                              'Carte élève exportée en PDF.',
+                                              isSuccess: true,
+                                            );
+                                          }
+                                        },
+                                  icon: const Icon(
+                                    Icons.picture_as_pdf_outlined,
+                                  ),
+                                  label: const Text('Exporter PDF'),
+                                ),
+                              ],
                             ),
-                          FilledButton.tonalIcon(
-                            onPressed: _saving
-                                ? null
-                                : () async {
-                                    final success = await _printStudentCard();
-                                    if (success) {
-                                      _showMessage(
-                                        'Carte élève prête à l’impression.',
-                                        isSuccess: true,
-                                      );
-                                    }
-                                  },
-                            icon: const Icon(Icons.badge_outlined),
-                            label: const Text('Carte élève'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: _saving
-                                ? null
-                                : () async {
-                                    final success =
-                                        await _quickPreviewStudentCard();
-                                    if (success) {
-                                      _showMessage(
-                                        'Aperçu rapide affiché.',
-                                        isSuccess: true,
-                                      );
-                                    }
-                                  },
-                            icon: const Icon(Icons.visibility_outlined),
-                            label: const Text('Aperçu rapide'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: _saving
-                                ? null
-                                : () async {
-                                    final success =
-                                        await _exportStudentCardPdf();
-                                    if (success) {
-                                      _showMessage(
-                                        'Carte élève exportée en PDF.',
-                                        isSuccess: true,
-                                      );
-                                    }
-                                  },
-                            icon: const Icon(Icons.picture_as_pdf_outlined),
-                            label: const Text('Exporter PDF'),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 12),
                       if (_detailLoading)
@@ -3215,48 +3316,78 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 10),
-                        Text(
-                          'Actions rapides',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _openHistoryForm,
-                              icon: const Icon(Icons.history_edu_outlined),
-                              label: const Text('Historique'),
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                          decoration: BoxDecoration(
+                            color: colorScheme.surfaceContainerLowest,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: colorScheme.outlineVariant.withValues(
+                                alpha: 0.5,
+                              ),
                             ),
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _openIncidentForm,
-                              icon: const Icon(Icons.gavel_outlined),
-                              label: const Text('Discipline'),
-                            ),
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _openAttendanceForm,
-                              icon: const Icon(Icons.fact_check_outlined),
-                              label: const Text('Absence/Retard'),
-                            ),
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _openFeeForm,
-                              icon: const Icon(Icons.add_card_outlined),
-                              label: const Text('Nouveau frais'),
-                            ),
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _openPaymentForm,
-                              icon: const Icon(Icons.payments_outlined),
-                              label: const Text('Nouveau paiement'),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        ExpansionTile(
-                          title: Text(
-                            'Historique académique (${_history.length})',
                           ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Actions rapides',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Créer une opération sans quitter la fiche élève.',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 10,
+                                children: [
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving
+                                        ? null
+                                        : _openHistoryForm,
+                                    icon: const Icon(
+                                      Icons.history_edu_outlined,
+                                    ),
+                                    label: const Text('Historique'),
+                                  ),
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving
+                                        ? null
+                                        : _openIncidentForm,
+                                    icon: const Icon(Icons.gavel_outlined),
+                                    label: const Text('Discipline'),
+                                  ),
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving
+                                        ? null
+                                        : _openAttendanceForm,
+                                    icon: const Icon(Icons.fact_check_outlined),
+                                    label: const Text('Absence/Retard'),
+                                  ),
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving ? null : _openFeeForm,
+                                    icon: const Icon(Icons.add_card_outlined),
+                                    label: const Text('Nouveau frais'),
+                                  ),
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving
+                                        ? null
+                                        : _openPaymentForm,
+                                    icon: const Icon(Icons.payments_outlined),
+                                    label: const Text('Nouveau paiement'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        _dossierSectionCard(
+                          title: 'Historique académique (${_history.length})',
                           children: _history.isEmpty
                               ? const [
                                   Padding(
@@ -3278,10 +3409,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                     )
                                     .toList(),
                         ),
-                        ExpansionTile(
-                          title: Text(
-                            'Dossier disciplinaire (${_incidents.length})',
-                          ),
+                        _dossierSectionCard(
+                          title: 'Dossier disciplinaire (${_incidents.length})',
                           children: _incidents.isEmpty
                               ? const [
                                   Padding(
@@ -3320,10 +3449,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                   );
                                 }).toList(),
                         ),
-                        ExpansionTile(
-                          title: Text(
-                            'Absences & retards (${_attendances.length})',
-                          ),
+                        _dossierSectionCard(
+                          title: 'Absences & retards (${_attendances.length})',
                           children: _attendances.isEmpty
                               ? const [
                                   Padding(
@@ -3390,10 +3517,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                   );
                                 }).toList(),
                         ),
-                        ExpansionTile(
-                          title: Text(
-                            'Frais & paiements (${_fees.length} frais / ${_payments.length} paiements)',
-                          ),
+                        _dossierSectionCard(
+                          title:
+                              'Frais & paiements (${_fees.length} frais / ${_payments.length} paiements)',
                           children: [
                             Padding(
                               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -3635,6 +3761,80 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           color: foreground,
           fontWeight: FontWeight.w600,
           fontSize: 12,
+        ),
+      ),
+    );
+  }
+
+  Widget _studentInfoPill({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      constraints: const BoxConstraints(minWidth: 190, maxWidth: 320),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: scheme.primary),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dossierSectionCard({
+    required String title,
+    required List<Widget> children,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+        color: scheme.surface,
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          collapsedShape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          title: Text(title, style: Theme.of(context).textTheme.titleSmall),
+          children: children,
         ),
       ),
     );
