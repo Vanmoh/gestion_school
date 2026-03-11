@@ -45,7 +45,12 @@ Le fichier blueprint staging est:
 3. Blueprint file path: `render.staging.yaml`
 4. Crée le service
 
-Le service créé est `gestion-school-staging-api` et suit la branche `staging`.
+Les services créés sont:
+
+- `gestion-school-staging-api` (backend API)
+- `gestion-school-staging-web` (frontend Flutter Web)
+
+Ils suivent la branche `staging`.
 
 ## 3) Variables à renseigner dans staging
 
@@ -65,6 +70,7 @@ Endpoints utiles:
 
 - `https://gestion-school-staging-api.onrender.com/api/docs/`
 - `https://gestion-school-staging-api.onrender.com/api/auth/login/`
+- `https://gestion-school-staging-web.onrender.com/`
 
 Depuis l'app Flutter, utilise l'URL API staging:
 
