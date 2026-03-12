@@ -4,10 +4,12 @@ from .views import (
     ClassStudentCardsPdfView,
     PaymentExcelExportView,
     PaymentReceiptPdfView,
+    ReportsContextView,
     StudentCardPdfView,
 )
 
 urlpatterns = [
+    path("context/", ReportsContextView.as_view(), name="reports-context"),
     path("bulletin/<int:student_id>/<int:academic_year_id>/<str:term>/", BulletinPdfView.as_view(), name="bulletin-pdf"),
     path("receipt/<int:payment_id>/", PaymentReceiptPdfView.as_view(), name="payment-receipt-pdf"),
     path("payments/export-excel/", PaymentExcelExportView.as_view(), name="payments-export-excel"),

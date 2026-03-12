@@ -87,12 +87,16 @@ class StudentsRepository {
         if (photoPath != null && photoPath.trim().isNotEmpty) {
           payload['photo'] = await MultipartFile.fromFile(
             photoPath,
-            filename: photoFileName ?? 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
+            filename:
+                photoFileName ??
+                'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
           );
         } else if (photoBytes != null && photoBytes.isNotEmpty) {
           payload['photo'] = MultipartFile.fromBytes(
             photoBytes,
-            filename: photoFileName ?? 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
+            filename:
+                photoFileName ??
+                'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
           );
         }
         studentResponse = await dio.post(
@@ -176,12 +180,16 @@ class StudentsRepository {
     if (photoPath != null && photoPath.trim().isNotEmpty) {
       payload['photo'] = await MultipartFile.fromFile(
         photoPath,
-        filename: photoFileName ?? 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        filename:
+            photoFileName ??
+            'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
     } else if (photoBytes != null && photoBytes.isNotEmpty) {
       payload['photo'] = MultipartFile.fromBytes(
         photoBytes,
-        filename: photoFileName ?? 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        filename:
+            photoFileName ??
+            'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
     } else {
       throw Exception('Aucune photo sélectionnée.');
@@ -202,7 +210,9 @@ class StudentsRepository {
     return _extractRows(response.data);
   }
 
-  Future<List<Map<String, dynamic>>> fetchStudentDiscipline(int studentId) async {
+  Future<List<Map<String, dynamic>>> fetchStudentDiscipline(
+    int studentId,
+  ) async {
     final response = await dio.get(
       '/discipline-incidents/',
       queryParameters: {'student': studentId},
@@ -210,7 +220,9 @@ class StudentsRepository {
     return _extractRows(response.data);
   }
 
-  Future<List<Map<String, dynamic>>> fetchStudentAttendances(int studentId) async {
+  Future<List<Map<String, dynamic>>> fetchStudentAttendances(
+    int studentId,
+  ) async {
     final response = await dio.get(
       '/attendances/',
       queryParameters: {'student': studentId},
@@ -316,7 +328,10 @@ class StudentsRepository {
             proofFileName ??
             'justificatif_${DateTime.now().millisecondsSinceEpoch}',
       );
-      response = await dio.post('/attendances/', data: FormData.fromMap(payload));
+      response = await dio.post(
+        '/attendances/',
+        data: FormData.fromMap(payload),
+      );
     } else if (proofBytes != null && proofBytes.isNotEmpty) {
       payload['proof'] = MultipartFile.fromBytes(
         proofBytes,
@@ -324,7 +339,10 @@ class StudentsRepository {
             proofFileName ??
             'justificatif_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
-      response = await dio.post('/attendances/', data: FormData.fromMap(payload));
+      response = await dio.post(
+        '/attendances/',
+        data: FormData.fromMap(payload),
+      );
     } else {
       response = await dio.post('/attendances/', data: payload);
     }
@@ -429,7 +447,9 @@ class StudentsRepository {
       email: map['user_email']?.toString() ?? '',
       phone: map['user_phone']?.toString() ?? '',
       matricule: map['matricule'] as String? ?? '',
-      fullName: (fullName != null && fullName.isNotEmpty) ? fullName : 'Inconnu',
+      fullName: (fullName != null && fullName.isNotEmpty)
+          ? fullName
+          : 'Inconnu',
       isArchived: map['is_archived'] as bool? ?? false,
       classroomId: map['classroom'] == null ? null : _asInt(map['classroom']),
       classroomName: map['classroom_name']?.toString() ?? '',

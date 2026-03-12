@@ -31,3 +31,12 @@ services:
         value: "True"
       - key: CSRF_COOKIE_SECURE
         value: "True"
+
+  - type: web
+    name: gestion-school-staging-web
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.web.staging
+    autoDeploy: true
+    branch: staging
+    healthCheckPath: /

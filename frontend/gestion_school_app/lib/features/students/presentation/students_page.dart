@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -21,8 +22,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   final _searchController = TextEditingController();
   Timer? _searchDebounce;
 
-  static const int _studentsPageSize = 30;
-  int _visibleStudentsCount = _studentsPageSize;
+  static const List<int> _tableRowsPerPageOptions = [10, 15, 25, 50];
+  static const String _studentCardTemplateAsset =
+      'assets/images/student_card_template.png';
+  static const double _studentCardTemplateAspectRatio = 1024 / 1536;
+  int _tableRowsPerPage = 15;
+  int _tablePage = 1;
 
   final _usernameController = TextEditingController();
   final _firstNameController = TextEditingController();
@@ -158,10 +163,14 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             ? _asInt(_classrooms.first['id'])
             : null;
         _cardsClassroomId ??= _classrooms.isNotEmpty
-          ? _asInt(_classrooms.first['id'])
-          : null;
-        _historyYearId ??= _years.isNotEmpty ? _asInt(_years.first['id']) : null;
-        _feeAcademicYearId ??= _years.isNotEmpty ? _asInt(_years.first['id']) : null;
+            ? _asInt(_classrooms.first['id'])
+            : null;
+        _historyYearId ??= _years.isNotEmpty
+            ? _asInt(_years.first['id'])
+            : null;
+        _feeAcademicYearId ??= _years.isNotEmpty
+            ? _asInt(_years.first['id'])
+            : null;
       });
 
       _applyFilters(preferredStudentId: keepSelectedId ?? _selectedStudent?.id);
@@ -172,7 +181,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     }
   }
 
-  void _applyFilters({int? preferredStudentId, bool resetVisibleCount = false}) {
+  void _applyFilters({
+    int? preferredStudentId,
+    bool resetVisibleCount = false,
+  }) {
     final search = _searchController.text.trim().toLowerCase();
     final filtered = _students.where((student) {
       if (_statusFilter == 'active' && student.isArchived) return false;
@@ -201,30 +213,40 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       }
     }
 
-    if (nextSelected != null && !filtered.any((s) => s.id == nextSelected!.id)) {
+    if (nextSelected != null &&
+        !filtered.any((s) => s.id == nextSelected!.id)) {
       nextSelected = filtered.isNotEmpty ? filtered.first : null;
     }
     if (nextSelected == null && filtered.isNotEmpty) {
       nextSelected = filtered.first;
     }
     final selectedClassroomId = nextSelected?.classroomId;
-    var nextVisibleCount = resetVisibleCount
-        ? _studentsPageSize
-        : _visibleStudentsCount;
-    if (nextVisibleCount < _studentsPageSize) {
-      nextVisibleCount = _studentsPageSize;
+    final totalPages = filtered.isEmpty
+        ? 1
+        : ((filtered.length + _tableRowsPerPage - 1) ~/ _tableRowsPerPage);
+    var nextTablePage = resetVisibleCount ? 1 : _tablePage;
+    if (nextTablePage < 1) {
+      nextTablePage = 1;
     }
     if (nextSelected != null) {
-      final selectedIndex = filtered.indexWhere((s) => s.id == nextSelected!.id);
-      if (selectedIndex >= 0 && selectedIndex >= nextVisibleCount) {
-        nextVisibleCount = selectedIndex + 1;
+      final selectedIndex = filtered.indexWhere(
+        (s) => s.id == nextSelected!.id,
+      );
+      if (selectedIndex >= 0) {
+        final selectedPage = (selectedIndex ~/ _tableRowsPerPage) + 1;
+        if (resetVisibleCount) {
+          nextTablePage = selectedPage;
+        }
       }
+    }
+    if (nextTablePage > totalPages) {
+      nextTablePage = totalPages;
     }
 
     setState(() {
       _filteredStudents = filtered;
       _selectedStudent = nextSelected;
-      _visibleStudentsCount = nextVisibleCount;
+      _tablePage = nextTablePage;
       _selectedClassroomUpdateId = nextSelected?.classroomId;
       _selectedParentUpdateId = nextSelected?.parentId;
       if (selectedClassroomId != null &&
@@ -259,10 +281,17 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     _applyFilters(resetVisibleCount: true);
   }
 
-  void _showMoreStudents() {
+  void _resetStudentsFilters() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
     setState(() {
-      _visibleStudentsCount += _studentsPageSize;
+      _classFilterId = null;
+      _statusFilter = 'all';
+      _sortBy = 'name';
+      _sortAscending = true;
+      _tablePage = 1;
     });
+    _applyFilters(resetVisibleCount: true);
   }
 
   Future<void> _pickProfilePhoto({required bool forRegistration}) async {
@@ -327,7 +356,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
       if (result == null || result.files.isEmpty) return;
       final file = result.files.first;
-      _attendanceProofPath = file.path?.trim().isEmpty ?? true ? null : file.path;
+      _attendanceProofPath = file.path?.trim().isEmpty ?? true
+          ? null
+          : file.path;
       _attendanceProofBytes = file.bytes;
       _attendanceProofFileName = file.name.trim().isEmpty ? null : file.name;
       if (mounted) {
@@ -380,7 +411,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           (row) => _toDouble(row['balance']) > 0,
           orElse: () => _fees.isNotEmpty ? _fees.first : <String, dynamic>{},
         );
-        _paymentFeeId = remainingFee.isNotEmpty ? _asInt(remainingFee['id']) : null;
+        _paymentFeeId = remainingFee.isNotEmpty
+            ? _asInt(remainingFee['id'])
+            : null;
       });
     } catch (error) {
       _showMessage('Erreur chargement dossier élève: $error');
@@ -521,7 +554,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         lastName != student.lastName.trim() ||
         email != student.email.trim() ||
         phone != student.phone.trim();
-    final hasClassroomChanges = _selectedClassroomUpdateId != student.classroomId;
+    final hasClassroomChanges =
+        _selectedClassroomUpdateId != student.classroomId;
     final hasParentChanges = _selectedParentUpdateId != student.parentId;
     final hasBirthDateChanges =
         _apiDateOrEmpty(_updateBirthDate) != _apiDateOrEmpty(student.birthDate);
@@ -613,7 +647,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).createStudentHistory(
+      await ref
+          .read(studentsRepositoryProvider)
+          .createStudentHistory(
             studentId: student.id,
             academicYearId: yearId,
             classroomId: classroomId,
@@ -645,7 +681,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).createDisciplineIncident(
+      await ref
+          .read(studentsRepositoryProvider)
+          .createDisciplineIncident(
             studentId: student.id,
             incidentDate: _incidentDate,
             category: category,
@@ -686,7 +724,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).updateDisciplineIncidentStatus(
+      await ref
+          .read(studentsRepositoryProvider)
+          .updateDisciplineIncidentStatus(
             incidentId: incidentId,
             status: targetStatus,
           );
@@ -715,7 +755,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).createAttendance(
+      await ref
+          .read(studentsRepositoryProvider)
+          .createAttendance(
             studentId: student.id,
             date: _attendanceDate,
             isAbsent: _attendanceAbsent,
@@ -759,7 +801,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).createStudentFee(
+      await ref
+          .read(studentsRepositoryProvider)
+          .createStudentFee(
             studentId: student.id,
             academicYearId: academicYearId,
             feeType: _feeType,
@@ -801,7 +845,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(studentsRepositoryProvider).createPayment(
+      await ref
+          .read(studentsRepositoryProvider)
+          .createPayment(
             feeId: feeId,
             amount: amount,
             method: method,
@@ -896,6 +942,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
+                    _studentDesignCardPreview(student, compact: true),
+                    const SizedBox(height: 8),
                     Expanded(
                       child: PdfPreview(
                         build: (_) async => bytes,
@@ -959,10 +1007,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     try {
       final bytes = await ref
           .read(studentsRepositoryProvider)
-          .fetchClassStudentCardsPdf(
-            classroomId,
-            layoutMode: _cardsLayoutMode,
-          );
+          .fetchClassStudentCardsPdf(classroomId, layoutMode: _cardsLayoutMode);
       await Printing.layoutPdf(onLayout: (_) async => bytes);
       return true;
     } catch (error) {
@@ -981,10 +1026,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     try {
       final bytes = await ref
           .read(studentsRepositoryProvider)
-          .fetchClassStudentCardsPdf(
-            classroomId,
-            layoutMode: _cardsLayoutMode,
-          );
+          .fetchClassStudentCardsPdf(classroomId, layoutMode: _cardsLayoutMode);
       await Printing.sharePdf(
         bytes: bytes,
         filename: _classCardsExportFileName(classroomId),
@@ -1010,14 +1052,16 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         break;
       }
     }
+    final layoutLabel = _cardsLayoutMode == 'a4_6up'
+        ? 'A4 • 6 cartes/page'
+        : _cardsLayoutMode == 'a4_9up'
+        ? 'A4 • 9 cartes/page'
+        : 'Standard • 1 carte/page';
 
     try {
       final bytes = await ref
           .read(studentsRepositoryProvider)
-          .fetchClassStudentCardsPdf(
-            classroomId,
-            layoutMode: _cardsLayoutMode,
-          );
+          .fetchClassStudentCardsPdf(classroomId, layoutMode: _cardsLayoutMode);
       if (!mounted) return false;
 
       await showDialog<void>(
@@ -1034,6 +1078,15 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     Text(
                       'Aperçu rapide: cartes $className',
                       style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _studentCardTag('Classe', className),
+                        _studentCardTag('Format', layoutLabel),
+                      ],
                     ),
                     const SizedBox(height: 8),
                     Expanded(
@@ -1069,7 +1122,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   Future<void> _openClassCardsPanel() {
     _cardsClassroomId ??= _classFilterId;
-    _cardsClassroomId ??= _classrooms.isNotEmpty ? _asInt(_classrooms.first['id']) : null;
+    _cardsClassroomId ??= _classrooms.isNotEmpty
+        ? _asInt(_classrooms.first['id'])
+        : null;
 
     return _openFloatingPanel(
       title: 'Imprimer / Exporter cartes d’élèves',
@@ -1134,12 +1189,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _printClassStudentCards,
-                        successMessage: _cardsLayoutMode == 'a4_6up'
-                            ? 'Cartes élèves prêtes à l’impression (A4 - 6 cartes/page).'
-                            : 'Cartes élèves générées.',
-                      ),
+                      panelContext: panelContext,
+                      action: _printClassStudentCards,
+                      successMessage: _cardsLayoutMode == 'a4_6up'
+                          ? 'Cartes élèves prêtes à l’impression (A4 - 6 cartes/page).'
+                          : 'Cartes élèves générées.',
+                    ),
               icon: const Icon(Icons.badge_outlined),
               label: const Text('Imprimer cartes'),
             ),
@@ -1147,12 +1202,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _exportClassStudentCardsPdf,
-                        successMessage: _cardsLayoutMode == 'a4_6up'
-                            ? 'PDF exporté (A4 - 6 cartes/page).'
-                            : 'PDF exporté.',
-                      ),
+                      panelContext: panelContext,
+                      action: _exportClassStudentCardsPdf,
+                      successMessage: _cardsLayoutMode == 'a4_6up'
+                          ? 'PDF exporté (A4 - 6 cartes/page).'
+                          : 'PDF exporté.',
+                    ),
               icon: const Icon(Icons.picture_as_pdf_outlined),
               label: const Text('Exporter PDF'),
             ),
@@ -1164,7 +1219,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   Future<void> _openFloatingPanel({
     required String title,
-    required Widget Function(BuildContext panelContext, VoidCallback refreshPanel)
+    required Widget Function(
+      BuildContext panelContext,
+      VoidCallback refreshPanel,
+    )
     contentBuilder,
   }) async {
     final compact = MediaQuery.of(context).size.width < 920;
@@ -1316,7 +1374,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 260,
               child: DropdownButtonFormField<int?>(
                 initialValue: _historyClassroomId,
-                decoration: const InputDecoration(labelText: 'Classe concernée'),
+                decoration: const InputDecoration(
+                  labelText: 'Classe concernée',
+                ),
                 items: _classrooms
                     .map(
                       (row) => DropdownMenuItem<int?>(
@@ -1335,7 +1395,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 180,
               child: TextField(
                 controller: _historyAverageController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(labelText: 'Moyenne'),
               ),
             ),
@@ -1351,10 +1413,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _createHistoryEntry,
-                        successMessage: 'Historique académique ajouté.',
-                      ),
+                      panelContext: panelContext,
+                      action: _createHistoryEntry,
+                      successMessage: 'Historique académique ajouté.',
+                    ),
               icon: const Icon(Icons.history_edu_outlined),
               label: const Text('Enregistrer'),
             ),
@@ -1445,7 +1507,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 300,
               child: DropdownButtonFormField<int?>(
                 initialValue: _registrationParentId,
-                decoration: const InputDecoration(labelText: 'Parent (optionnel)'),
+                decoration: const InputDecoration(
+                  labelText: 'Parent (optionnel)',
+                ),
                 items: [
                   const DropdownMenuItem<int?>(
                     value: null,
@@ -1553,7 +1617,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           child: Image.memory(
                             _registrationPhotoBytes!,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) {
+                            errorBuilder: (context, error, stackTrace) {
                               return const Padding(
                                 padding: EdgeInsets.all(10),
                                 child: Text('Aperçu indisponible.'),
@@ -1570,10 +1634,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _registerStudent,
-                        successMessage: 'Élève inscrit avec succès.',
-                      ),
+                      panelContext: panelContext,
+                      action: _registerStudent,
+                      successMessage: 'Élève inscrit avec succès.',
+                    ),
               icon: const Icon(Icons.person_add_alt_1),
               label: const Text('Inscrire élève'),
             ),
@@ -1636,7 +1700,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 final picked = await showDatePicker(
                   context: panelContext,
                   initialDate:
-                      _updateBirthDate ?? student.birthDate ?? DateTime(2010, 1, 1),
+                      _updateBirthDate ??
+                      student.birthDate ??
+                      DateTime(2010, 1, 1),
                   firstDate: DateTime(1980),
                   lastDate: DateTime.now(),
                 );
@@ -1656,7 +1722,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 280,
               child: DropdownButtonFormField<int?>(
                 initialValue: _selectedClassroomUpdateId,
-                decoration: const InputDecoration(labelText: 'Réattribuer classe'),
+                decoration: const InputDecoration(
+                  labelText: 'Réattribuer classe',
+                ),
                 items: _classrooms
                     .map(
                       (row) => DropdownMenuItem<int?>(
@@ -1698,10 +1766,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _saveStudentAssignments,
-                        successMessage: 'Dossier élève mis à jour.',
-                      ),
+                      panelContext: panelContext,
+                      action: _saveStudentAssignments,
+                      successMessage: 'Dossier élève mis à jour.',
+                    ),
               icon: const Icon(Icons.save_outlined),
               label: const Text('Enregistrer dossier'),
             ),
@@ -1784,7 +1852,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           child: Image.memory(
                             _updatePhotoBytes!,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) {
+                            errorBuilder: (context, error, stackTrace) {
                               return const Padding(
                                 padding: EdgeInsets.all(10),
                                 child: Text('Aperçu indisponible.'),
@@ -1801,10 +1869,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _updateStudentPhoto,
-                        successMessage: 'Photo élève mise à jour.',
-                      ),
+                      panelContext: panelContext,
+                      action: _updateStudentPhoto,
+                      successMessage: 'Photo élève mise à jour.',
+                    ),
               icon: const Icon(Icons.cloud_upload_outlined),
               label: const Text('Uploader photo'),
             ),
@@ -1897,10 +1965,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _createDisciplineIncident,
-                        successMessage: 'Incident disciplinaire enregistré.',
-                      ),
+                      panelContext: panelContext,
+                      action: _createDisciplineIncident,
+                      successMessage: 'Incident disciplinaire enregistré.',
+                    ),
               icon: const Icon(Icons.gavel_outlined),
               label: const Text('Enregistrer'),
             ),
@@ -1973,7 +2041,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 320,
               child: TextField(
                 controller: _attendanceReasonController,
-                decoration: const InputDecoration(labelText: 'Motif (optionnel)'),
+                decoration: const InputDecoration(
+                  labelText: 'Motif (optionnel)',
+                ),
               ),
             ),
             SizedBox(
@@ -2017,7 +2087,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 ],
               ),
             ),
-            if (_attendanceProofBytes != null && _attendanceProofBytes!.isNotEmpty)
+            if (_attendanceProofBytes != null &&
+                _attendanceProofBytes!.isNotEmpty)
               SizedBox(
                 width: 560,
                 child: Column(
@@ -2040,15 +2111,18 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             maxHeight: proofPreviewHeight,
                             maxWidth: proofPreviewWidth,
                           ),
-                          color:
-                              Theme.of(context).colorScheme.surfaceContainerHighest,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.surfaceContainerHighest,
                           child: Image.memory(
                             _attendanceProofBytes!,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) {
+                            errorBuilder: (context, error, stackTrace) {
                               return const Padding(
                                 padding: EdgeInsets.all(10),
-                                child: Text('Aperçu indisponible pour ce fichier.'),
+                                child: Text(
+                                  'Aperçu indisponible pour ce fichier.',
+                                ),
                               );
                             },
                           ),
@@ -2062,10 +2136,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _createAttendanceEntry,
-                        successMessage: 'Absence/retard enregistré.',
-                      ),
+                      panelContext: panelContext,
+                      action: _createAttendanceEntry,
+                      successMessage: 'Absence/retard enregistré.',
+                    ),
               icon: const Icon(Icons.fact_check_outlined),
               label: const Text('Enregistrer'),
             ),
@@ -2108,7 +2182,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 initialValue: _feeType,
                 decoration: const InputDecoration(labelText: 'Type de frais'),
                 items: const [
-                  DropdownMenuItem(value: 'registration', child: Text('Inscription')),
+                  DropdownMenuItem(
+                    value: 'registration',
+                    child: Text('Inscription'),
+                  ),
                   DropdownMenuItem(value: 'monthly', child: Text('Mensuel')),
                   DropdownMenuItem(value: 'exam', child: Text('Examen')),
                 ],
@@ -2138,7 +2215,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 220,
               child: TextField(
                 controller: _feeAmountDueController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(labelText: 'Montant dû'),
               ),
             ),
@@ -2146,10 +2225,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _createStudentFeeEntry,
-                        successMessage: 'Frais scolaire ajouté.',
-                      ),
+                      panelContext: panelContext,
+                      action: _createStudentFeeEntry,
+                      successMessage: 'Frais scolaire ajouté.',
+                    ),
               icon: const Icon(Icons.add_card_outlined),
               label: const Text('Enregistrer'),
             ),
@@ -2203,7 +2282,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               width: 180,
               child: TextField(
                 controller: _paymentAmountController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(labelText: 'Montant'),
               ),
             ),
@@ -2227,10 +2308,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               onPressed: _saving
                   ? null
                   : () => _submitFromPanel(
-                        panelContext: panelContext,
-                        action: _createPaymentEntry,
-                        successMessage: 'Paiement enregistré.',
-                      ),
+                      panelContext: panelContext,
+                      action: _createPaymentEntry,
+                      successMessage: 'Paiement enregistré.',
+                    ),
               icon: const Icon(Icons.payments_outlined),
               label: const Text('Enregistrer'),
             ),
@@ -2267,10 +2348,14 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       orderedClassNames.add(name);
     }
 
-    final otherClassNames = studentsByClass.keys
-        .where((name) => name != 'Sans classe' && !knownClassNames.contains(name))
-        .toList()
-      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final otherClassNames =
+        studentsByClass.keys
+            .where(
+              (name) =>
+                  name != 'Sans classe' && !knownClassNames.contains(name),
+            )
+            .toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
     final classNames = <String>[
       ...orderedClassNames,
@@ -2357,52 +2442,53 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 )
               else
                 ...filteredStudentsByClass.entries.map((entry) {
-                final className = entry.key;
-                final group = entry.value;
-                final totalInClass = (studentsByClass[className] ?? const <Student>[])
-                    .length;
-                return Card(
-                  child: ExpansionTile(
-                    title: Text(
-                      normalizedQuery.isEmpty
-                          ? '$className (${group.length})'
-                          : '$className (${group.length}/$totalInClass)',
-                    ),
-                    children: group
-                        .map(
-                          (student) => ListTile(
-                            dense: true,
-                            onTap: () {
-                              if (panelContext.mounted) {
-                                final navigator = Navigator.of(panelContext);
-                                if (navigator.canPop()) {
-                                  navigator.pop();
+                  final className = entry.key;
+                  final group = entry.value;
+                  final totalInClass =
+                      (studentsByClass[className] ?? const <Student>[]).length;
+                  return Card(
+                    child: ExpansionTile(
+                      title: Text(
+                        normalizedQuery.isEmpty
+                            ? '$className (${group.length})'
+                            : '$className (${group.length}/$totalInClass)',
+                      ),
+                      children: group
+                          .map(
+                            (student) => ListTile(
+                              dense: true,
+                              onTap: () {
+                                if (panelContext.mounted) {
+                                  final navigator = Navigator.of(panelContext);
+                                  if (navigator.canPop()) {
+                                    navigator.pop();
+                                  }
                                 }
-                              }
 
-                              if (!mounted) return;
-                              setState(() {
-                                _selectedStudent = student;
-                                _selectedClassroomUpdateId = student.classroomId;
-                                _selectedParentUpdateId = student.parentId;
-                              });
-                              _loadStudentLinkedData(student.id);
-                            },
-                            leading: Icon(
-                              student.isArchived
-                                  ? Icons.archive_outlined
-                                  : Icons.school_outlined,
+                                if (!mounted) return;
+                                setState(() {
+                                  _selectedStudent = student;
+                                  _selectedClassroomUpdateId =
+                                      student.classroomId;
+                                  _selectedParentUpdateId = student.parentId;
+                                });
+                                _loadStudentLinkedData(student.id);
+                              },
+                              leading: Icon(
+                                student.isArchived
+                                    ? Icons.archive_outlined
+                                    : Icons.school_outlined,
+                              ),
+                              title: Text(student.fullName),
+                              subtitle: Text(
+                                'Matricule: ${student.matricule} • ${student.isArchived ? 'Archivé' : 'Actif'}',
+                              ),
                             ),
-                            title: Text(student.fullName),
-                            subtitle: Text(
-                              'Matricule: ${student.matricule} • ${student.isArchived ? 'Archivé' : 'Actif'}',
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                );
-              }),
+                          )
+                          .toList(),
+                    ),
+                  );
+                }),
             ],
           ),
         );
@@ -2419,33 +2505,253 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final total = _students.length;
     final active = _students.where((s) => !s.isArchived).length;
     final archived = total - active;
-    final isCompactStudentList = MediaQuery.of(context).size.width < 720;
-    final visibleStudents = _filteredStudents.take(_visibleStudentsCount).toList();
-    final remainingStudents = _filteredStudents.length - visibleStudents.length;
-    final nextBatch = remainingStudents > _studentsPageSize
-      ? _studentsPageSize
-      : remainingStudents;
+    final newEnrolled = _newlyEnrolledCount();
+    final activeYearLabel = _activeAcademicYearLabel();
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final classCount = _classrooms.length;
+    final activeRate = total == 0 ? 0 : ((active / total) * 100).round();
+    final archivedRate = total == 0 ? 0 : ((archived / total) * 100).round();
+    final activeShare = total == 0 ? 0.0 : active / total;
+    final appliedFilters =
+        (_searchController.text.trim().isNotEmpty ? 1 : 0) +
+        (_classFilterId != null ? 1 : 0) +
+        (_statusFilter != 'active' ? 1 : 0) +
+        (_sortBy != 'name' ? 1 : 0) +
+        (!_sortAscending ? 1 : 0);
+    final selectedClassLabel = _classFilterId == null
+        ? 'Toutes classes'
+        : _classroomName(_classFilterId!);
+    final totalFiltered = _filteredStudents.length;
+    final totalPages = totalFiltered == 0
+        ? 1
+        : ((totalFiltered + _tableRowsPerPage - 1) ~/ _tableRowsPerPage);
+    final currentPage = math.min(_tablePage, totalPages);
+    final startIndex = totalFiltered == 0
+        ? 0
+        : (currentPage - 1) * _tableRowsPerPage;
+    final endIndex = math.min(startIndex + _tableRowsPerPage, totalFiltered);
+    final visibleStudents = totalFiltered == 0
+        ? <Student>[]
+        : _filteredStudents.sublist(startIndex, endIndex);
 
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        Text(
-          'Gestion des élèves',
-          style: Theme.of(context).textTheme.headlineSmall,
-        ),
-        const SizedBox(height: 6),
-        Text(
-          'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
-          style: Theme.of(context).textTheme.bodyMedium,
+        Card(
+          clipBehavior: Clip.antiAlias,
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  colorScheme.primaryContainer.withValues(alpha: 0.75),
+                  colorScheme.surfaceContainerLowest,
+                ],
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              child: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                runSpacing: 12,
+                crossAxisAlignment: WrapCrossAlignment.start,
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 620),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Tableau de bord élèves',
+                          style: textTheme.labelLarge?.copyWith(
+                            color: colorScheme.primary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Gestion des élèves',
+                          style: textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
+                          style: textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _dashboardInfoChip(
+                              icon: Icons.calendar_month_outlined,
+                              label: 'Année: $activeYearLabel',
+                            ),
+                            _dashboardInfoChip(
+                              icon: Icons.class_outlined,
+                              label: '$classCount classes',
+                            ),
+                            _dashboardInfoChip(
+                              icon: Icons.groups_2_outlined,
+                              label: '$totalFiltered élèves visibles',
+                            ),
+                            if (_selectedStudent != null)
+                              _dashboardInfoChip(
+                                icon: Icons.person_outline,
+                                label: _selectedStudent!.fullName,
+                                maxWidth: 260,
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(999),
+                          child: LinearProgressIndicator(
+                            value: activeShare,
+                            minHeight: 9,
+                            backgroundColor: colorScheme.surfaceContainerHighest
+                                .withValues(alpha: 0.55),
+                            color: colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '$activeRate% actifs • $archivedRate% archivés',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surface.withValues(alpha: 0.78),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: colorScheme.outlineVariant.withValues(
+                            alpha: 0.55,
+                          ),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Actions principales',
+                            style: textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Opérations les plus utilisées pour piloter rapidement la scolarité.',
+                            style: textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              FilledButton.icon(
+                                onPressed: _saving
+                                    ? null
+                                    : _openRegistrationForm,
+                                icon: const Icon(Icons.person_add_alt_1),
+                                label: const Text('Ajouter un élève'),
+                              ),
+                              FilledButton.tonalIcon(
+                                onPressed: _saving
+                                    ? null
+                                    : _openStudentsByClassPanel,
+                                icon: const Icon(Icons.view_list_outlined),
+                                label: const Text('Liste par classe'),
+                              ),
+                              FilledButton.tonalIcon(
+                                onPressed: _saving
+                                    ? null
+                                    : _openClassCardsPanel,
+                                icon: const Icon(Icons.badge_outlined),
+                                label: const Text('Cartes classe'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: _saving
+                                    ? null
+                                    : () => _loadBaseData(
+                                        keepSelectedId: _selectedStudent?.id,
+                                      ),
+                                icon: const Icon(Icons.sync),
+                                label: const Text('Actualiser'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _dashboardInfoChip(
+                                icon: Icons.tune_outlined,
+                                label: appliedFilters == 0
+                                    ? 'Aucun filtre actif'
+                                    : '$appliedFilters filtre${appliedFilters > 1 ? 's' : ''} actif${appliedFilters > 1 ? 's' : ''}',
+                              ),
+                              _dashboardInfoChip(
+                                icon: Icons.class_outlined,
+                                label: selectedClassLabel,
+                                maxWidth: 220,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
         const SizedBox(height: 14),
         Wrap(
           spacing: 10,
           runSpacing: 10,
           children: [
-            _metricChip('Total', '$total'),
-            _metricChip('Actifs', '$active'),
-            _metricChip('Archivés', '$archived'),
+            _overviewMetricCard(
+              title: 'Nombre total d’élèves',
+              value: '$total',
+              icon: Icons.groups_2_outlined,
+              subtitle: '$classCount classes suivies',
+              tone: colorScheme.primary,
+            ),
+            _overviewMetricCard(
+              title: 'Actifs',
+              value: '$active',
+              icon: Icons.verified_user_outlined,
+              subtitle: '$activeRate% du total',
+              tone: colorScheme.tertiary,
+            ),
+            _overviewMetricCard(
+              title: 'Archivés',
+              value: '$archived',
+              icon: Icons.archive_outlined,
+              subtitle: '$archivedRate% du total',
+              tone: colorScheme.secondary,
+            ),
+            _overviewMetricCard(
+              title: 'Nouveaux inscrits',
+              value: '$newEnrolled',
+              icon: Icons.person_add_alt_1_outlined,
+              subtitle: 'Année active',
+              tone: colorScheme.primary,
+            ),
           ],
         ),
         const SizedBox(height: 14),
@@ -2455,251 +2761,548 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'Inscription d\'un élève',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Utilise la fenêtre flottante pour inscrire un élève sans surcharger la page.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: FilledButton.icon(
-                    onPressed: _saving ? null : _openRegistrationForm,
-                    icon: const Icon(Icons.person_add_alt_1),
-                    label: const Text('Inscrire élève (fenêtre flottante)'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 14),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                SizedBox(
-                  width: 260,
-                  child: TextField(
-                    controller: _searchController,
-                    textInputAction: TextInputAction.search,
-                    decoration: InputDecoration(
-                      labelText: 'Recherche (nom, matricule, classe)',
-                      suffixIcon: _searchController.text.isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: 'Effacer',
-                              icon: const Icon(Icons.clear),
-                              onPressed: _clearSearch,
-                            ),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: colorScheme.outlineVariant.withValues(alpha: 0.5),
                     ),
-                    onChanged: _onSearchChanged,
-                    onSubmitted: (_) => _applyFilters(resetVisibleCount: true),
                   ),
-                ),
-                SizedBox(
-                  width: 230,
-                  child: DropdownButtonFormField<int?>(
-                    initialValue: _classFilterId,
-                    decoration: const InputDecoration(labelText: 'Classe'),
-                    items: [
-                      const DropdownMenuItem<int?>(
-                        value: null,
-                        child: Text('Toutes les classes'),
-                      ),
-                      ..._classrooms.map(
-                        (row) => DropdownMenuItem<int?>(
-                          value: _asInt(row['id']),
-                          child: Text('${row['name']} (ID ${row['id']})'),
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 520),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Recherche et filtres',
+                              style: textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'Affichage type tableau: applique les filtres puis sélectionne une ligne pour ouvrir le dossier.',
+                              style: textTheme.bodySmall,
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _classFilterId = value);
-                      _applyFilters(resetVisibleCount: true);
-                    },
-                  ),
-                ),
-                SizedBox(
-                  width: 230,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _statusFilter,
-                    decoration: const InputDecoration(labelText: 'Statut'),
-                    items: const [
-                      DropdownMenuItem(value: 'all', child: Text('Tous')),
-                      DropdownMenuItem(value: 'active', child: Text('Actifs')),
-                      DropdownMenuItem(value: 'archived', child: Text('Archivés')),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _statusFilter = value ?? 'active');
-                      _applyFilters(resetVisibleCount: true);
-                    },
-                  ),
-                ),
-                SizedBox(
-                  width: 230,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _sortBy,
-                    decoration: const InputDecoration(labelText: 'Trier par'),
-                    items: const [
-                      DropdownMenuItem(value: 'name', child: Text('Nom')),
-                      DropdownMenuItem(
-                        value: 'matricule',
-                        child: Text('Matricule'),
-                      ),
-                      DropdownMenuItem(value: 'classroom', child: Text('Classe')),
-                      DropdownMenuItem(value: 'status', child: Text('Statut')),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _sortBy = value ?? 'name');
-                      _applyFilters(resetVisibleCount: true);
-                    },
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() => _sortAscending = !_sortAscending);
-                    _applyFilters(resetVisibleCount: true);
-                  },
-                  icon: Icon(
-                    _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
-                  ),
-                  label: Text(_sortAscending ? 'Ascendant' : 'Descendant'),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: _saving ? null : _openStudentsByClassPanel,
-                  icon: const Icon(Icons.view_list_outlined),
-                  label: const Text('Liste par classe'),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: _saving ? null : _openClassCardsPanel,
-                  icon: const Icon(Icons.badge_outlined),
-                  label: const Text('Cartes classe'),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: _saving
-                      ? null
-                      : () => _loadBaseData(
-                            keepSelectedId: _selectedStudent?.id,
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          Chip(
+                            avatar: const Icon(
+                              Icons.query_stats_outlined,
+                              size: 16,
+                            ),
+                            label: Text(
+                              '$totalFiltered résultat${totalFiltered > 1 ? 's' : ''}',
+                            ),
                           ),
-                  icon: const Icon(Icons.sync),
-                  label: const Text('Actualiser'),
+                          Chip(
+                            avatar: const Icon(
+                              Icons.filter_alt_outlined,
+                              size: 16,
+                            ),
+                            label: Text(
+                              appliedFilters == 0
+                                  ? 'Aucun filtre avancé'
+                                  : '$appliedFilters filtre${appliedFilters > 1 ? 's' : ''} actif${appliedFilters > 1 ? 's' : ''}',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    SizedBox(
+                      width: 320,
+                      child: TextField(
+                        controller: _searchController,
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          hintText: 'Rechercher un élève...',
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon: _searchController.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: 'Effacer',
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: _clearSearch,
+                                ),
+                        ),
+                        onChanged: _onSearchChanged,
+                        onSubmitted: (_) =>
+                            _applyFilters(resetVisibleCount: true),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 220,
+                      child: DropdownButtonFormField<int?>(
+                        initialValue: _classFilterId,
+                        decoration: const InputDecoration(labelText: 'Classe'),
+                        items: [
+                          const DropdownMenuItem<int?>(
+                            value: null,
+                            child: Text('Toutes les classes'),
+                          ),
+                          ..._classrooms.map(
+                            (row) => DropdownMenuItem<int?>(
+                              value: _asInt(row['id']),
+                              child: Text('${row['name']} (ID ${row['id']})'),
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _classFilterId = value);
+                          _applyFilters(resetVisibleCount: true);
+                        },
+                      ),
+                    ),
+                    SizedBox(
+                      width: 200,
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _statusFilter,
+                        decoration: const InputDecoration(labelText: 'Statut'),
+                        items: const [
+                          DropdownMenuItem(value: 'all', child: Text('Tous')),
+                          DropdownMenuItem(
+                            value: 'active',
+                            child: Text('Actifs'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'archived',
+                            child: Text('Archivés'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _statusFilter = value ?? 'active');
+                          _applyFilters(resetVisibleCount: true);
+                        },
+                      ),
+                    ),
+                    SizedBox(
+                      width: 200,
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _sortBy,
+                        decoration: const InputDecoration(
+                          labelText: 'Trier par',
+                        ),
+                        items: const [
+                          DropdownMenuItem(value: 'name', child: Text('Nom')),
+                          DropdownMenuItem(
+                            value: 'matricule',
+                            child: Text('Matricule'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'classroom',
+                            child: Text('Classe'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'status',
+                            child: Text('Statut'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _sortBy = value ?? 'name');
+                          _applyFilters(resetVisibleCount: true);
+                        },
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        setState(() => _sortAscending = !_sortAscending);
+                        _applyFilters(resetVisibleCount: true);
+                      },
+                      icon: Icon(
+                        _sortAscending
+                            ? Icons.arrow_upward
+                            : Icons.arrow_downward,
+                      ),
+                      label: Text(_sortAscending ? 'Ascendant' : 'Descendant'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : () => _applyFilters(resetVisibleCount: true),
+                      icon: const Icon(Icons.filter_alt_outlined),
+                      label: const Text('Filtrer'),
+                    ),
+                    TextButton.icon(
+                      onPressed: _saving ? null : _resetStudentsFilters,
+                      icon: const Icon(Icons.restart_alt),
+                      label: const Text('Réinitialiser'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Classe affichée: $selectedClassLabel',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
           ),
         ),
-        const SizedBox(height: 14),
         Card(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'Liste des élèves (${_filteredStudents.length})',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                if (_filteredStudents.isEmpty)
-                  const Text('Aucun élève trouvé avec ces critères.')
-                else ...[
-                  ...visibleStudents.map((student) {
-                    final selected = _selectedStudent?.id == student.id;
-                    return Card(
-                      margin: isCompactStudentList
-                          ? const EdgeInsets.symmetric(vertical: 3)
-                          : null,
-                      color: selected
-                          ? Theme.of(
-                              context,
-                            ).colorScheme.primary.withValues(alpha: 0.08)
-                          : null,
-                      child: ListTile(
-                        dense: isCompactStudentList,
-                        visualDensity: isCompactStudentList
-                            ? const VisualDensity(vertical: -2)
-                            : null,
-                        contentPadding: isCompactStudentList
-                            ? const EdgeInsets.symmetric(horizontal: 12, vertical: 2)
-                            : null,
-                        onTap: () {
-                          setState(() {
-                            _selectedStudent = student;
-                            _selectedClassroomUpdateId = student.classroomId;
-                            _selectedParentUpdateId = student.parentId;
-                          });
-                          _loadStudentLinkedData(student.id);
-                        },
-                        leading: CircleAvatar(
-                          radius: isCompactStudentList ? 18 : 20,
-                          child: student.isArchived
-                              ? const Icon(Icons.archive)
-                              : const Icon(Icons.school_outlined),
-                        ),
-                        title: Text(
-                          student.fullName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          isCompactStudentList
-                              ? 'Matricule: ${student.matricule} • Classe: ${student.classroomName.isEmpty ? 'Non attribuée' : student.classroomName}'
-                              : 'Matricule: ${student.matricule}\nClasse: ${student.classroomName.isEmpty ? 'Non attribuée' : student.classroomName}',
-                          maxLines: isCompactStudentList ? 2 : 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        isThreeLine: !isCompactStudentList,
-                        trailing: PopupMenuButton<String>(
-                          onSelected: (value) {
-                            if (value == 'toggle_archive') {
-                              _toggleArchive(student);
-                            }
-                          },
-                          itemBuilder: (context) => [
-                            PopupMenuItem<String>(
-                              value: 'toggle_archive',
-                              child: Text(
-                                student.isArchived
-                                    ? 'Réactiver élève'
-                                    : 'Archiver élève',
-                              ),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                    ),
+                  ),
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 540),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Tableau des élèves (${_filteredStudents.length})',
+                              style: textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'Vue tabulaire professionnelle pour la consultation et les actions rapides.',
+                              style: textTheme.bodySmall,
                             ),
                           ],
                         ),
                       ),
-                    );
-                  }),
-                  if (remainingStudents > 0)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(0, 6, 0, 2),
-                      child: Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
                         children: [
-                          FilledButton.tonalIcon(
-                            onPressed: _showMoreStudents,
-                            icon: const Icon(Icons.expand_more),
-                            label: Text('Afficher $nextBatch de plus'),
+                          Chip(
+                            avatar: const Icon(
+                              Icons.verified_outlined,
+                              size: 16,
+                            ),
+                            label: Text('$active actifs'),
                           ),
-                          TextButton(
-                            onPressed: () {
+                          Chip(
+                            avatar: const Icon(
+                              Icons.archive_outlined,
+                              size: 16,
+                            ),
+                            label: Text('$archived archivés'),
+                          ),
+                          if (_selectedStudent != null)
+                            Chip(
+                              avatar: const Icon(
+                                Icons.person_outline,
+                                size: 16,
+                              ),
+                              label: SizedBox(
+                                width: 220,
+                                child: Text(
+                                  _selectedStudent!.fullName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                if (_filteredStudents.isEmpty)
+                  const Text('Aucun élève trouvé avec ces critères.')
+                else ...[
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: colorScheme.outlineVariant.withValues(
+                          alpha: 0.5,
+                        ),
+                      ),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: DataTable(
+                          showBottomBorder: true,
+                          dividerThickness: 0.65,
+                          border: TableBorder.all(
+                            color: colorScheme.outlineVariant.withValues(
+                              alpha: 0.4,
+                            ),
+                            width: 0.7,
+                          ),
+                          headingRowColor: WidgetStatePropertyAll(
+                            colorScheme.surfaceContainerHighest.withValues(
+                              alpha: 0.9,
+                            ),
+                          ),
+                          headingTextStyle: Theme.of(context)
+                              .textTheme
+                              .labelLarge
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                          dataTextStyle: Theme.of(
+                            context,
+                          ).textTheme.bodyMedium?.copyWith(fontSize: 13),
+                          columnSpacing: 20,
+                          horizontalMargin: 12,
+                          headingRowHeight: 48,
+                          dataRowMinHeight: 52,
+                          dataRowMaxHeight: 62,
+                          columns: const [
+                            DataColumn(label: Text('N°')),
+                            DataColumn(label: Text('Matricule')),
+                            DataColumn(label: Text('Nom complet')),
+                            DataColumn(label: Text('Classe')),
+                            DataColumn(label: Text('Date naissance')),
+                            DataColumn(label: Text('Téléphone')),
+                            DataColumn(label: Text('Statut')),
+                            DataColumn(label: Text('Actions')),
+                          ],
+                          rows: visibleStudents.asMap().entries.map((entry) {
+                            final rowIndex = entry.key;
+                            final student = entry.value;
+                            final selected = _selectedStudent?.id == student.id;
+                            final rowActionStyle = OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              minimumSize: const Size(0, 34),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 6,
+                              ),
+                            );
+                            return DataRow(
+                              selected: selected,
+                              color: WidgetStateProperty.resolveWith<Color?>((
+                                states,
+                              ) {
+                                if (selected) {
+                                  return colorScheme.primary.withValues(
+                                    alpha: 0.1,
+                                  );
+                                }
+                                if (states.contains(WidgetState.hovered)) {
+                                  return colorScheme.primary.withValues(
+                                    alpha: 0.05,
+                                  );
+                                }
+                                return rowIndex.isEven
+                                    ? colorScheme.surface
+                                    : colorScheme.surfaceContainerHighest
+                                          .withValues(alpha: 0.22);
+                              }),
+                              onSelectChanged: (_) => _activateStudent(student),
+                              cells: [
+                                DataCell(Text('${startIndex + rowIndex + 1}')),
+                                DataCell(Text(student.matricule)),
+                                DataCell(
+                                  Text(
+                                    student.fullName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                DataCell(
+                                  Text(
+                                    student.classroomName.isEmpty
+                                        ? 'Non attribuée'
+                                        : student.classroomName,
+                                  ),
+                                ),
+                                DataCell(
+                                  Text(
+                                    student.birthDate == null
+                                        ? '-'
+                                        : _apiDate(student.birthDate!),
+                                  ),
+                                ),
+                                DataCell(
+                                  Text(
+                                    student.phone.trim().isEmpty
+                                        ? '-'
+                                        : student.phone,
+                                  ),
+                                ),
+                                DataCell(
+                                  _statusBadge(
+                                    student.isArchived ? 'Archivé' : 'Actif',
+                                    student.isArchived,
+                                  ),
+                                ),
+                                DataCell(
+                                  Wrap(
+                                    spacing: 4,
+                                    runSpacing: 4,
+                                    children: [
+                                      OutlinedButton.icon(
+                                        style: rowActionStyle,
+                                        onPressed: () =>
+                                            _activateStudent(student),
+                                        icon: const Icon(
+                                          Icons.visibility_outlined,
+                                          size: 16,
+                                        ),
+                                        label: const Text('Voir'),
+                                      ),
+                                      OutlinedButton.icon(
+                                        style: rowActionStyle,
+                                        onPressed: _saving
+                                            ? null
+                                            : () {
+                                                _activateStudent(student);
+                                                _openProfileForm();
+                                              },
+                                        icon: const Icon(
+                                          Icons.edit_outlined,
+                                          size: 16,
+                                        ),
+                                        label: const Text('Éditer'),
+                                      ),
+                                      OutlinedButton.icon(
+                                        style: OutlinedButton.styleFrom(
+                                          visualDensity: VisualDensity.compact,
+                                          tapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                          minimumSize: const Size(0, 34),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 6,
+                                          ),
+                                          foregroundColor: colorScheme.error,
+                                        ),
+                                        onPressed: _saving
+                                            ? null
+                                            : () => _toggleArchive(student),
+                                        icon: Icon(
+                                          student.isArchived
+                                              ? Icons
+                                                    .restore_from_trash_outlined
+                                              : Icons.delete_outline,
+                                          size: 16,
+                                        ),
+                                        label: Text(
+                                          student.isArchived
+                                              ? 'Restaurer'
+                                              : 'Supprimer',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        totalFiltered == 0
+                            ? 'Aucun résultat'
+                            : 'Affichage ${startIndex + 1}-$endIndex sur $totalFiltered',
+                      ),
+                      Wrap(
+                        spacing: 2,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          const Text('Lignes/page:'),
+                          const SizedBox(width: 6),
+                          DropdownButton<int>(
+                            value: _tableRowsPerPage,
+                            items: _tableRowsPerPageOptions
+                                .map(
+                                  (rows) => DropdownMenuItem<int>(
+                                    value: rows,
+                                    child: Text('$rows'),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null || value == _tableRowsPerPage) {
+                                return;
+                              }
                               setState(() {
-                                _visibleStudentsCount = _filteredStudents.length;
+                                _tableRowsPerPage = value;
+                                _tablePage = 1;
                               });
+                              _applyFilters(resetVisibleCount: true);
                             },
-                            child: Text('Tout afficher ($remainingStudents restants)'),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            tooltip: 'Première page',
+                            onPressed: currentPage > 1
+                                ? () => setState(() => _tablePage = 1)
+                                : null,
+                            icon: const Icon(Icons.first_page),
+                          ),
+                          IconButton(
+                            tooltip: 'Page précédente',
+                            onPressed: currentPage > 1
+                                ? () => setState(
+                                    () => _tablePage = currentPage - 1,
+                                  )
+                                : null,
+                            icon: const Icon(Icons.chevron_left),
+                          ),
+                          Text(
+                            'Page $currentPage / $totalPages',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                          IconButton(
+                            tooltip: 'Page suivante',
+                            onPressed: currentPage < totalPages
+                                ? () => setState(
+                                    () => _tablePage = currentPage + 1,
+                                  )
+                                : null,
+                            icon: const Icon(Icons.chevron_right),
+                          ),
+                          IconButton(
+                            tooltip: 'Dernière page',
+                            onPressed: currentPage < totalPages
+                                ? () => setState(() => _tablePage = totalPages)
+                                : null,
+                            icon: const Icon(Icons.last_page),
                           ),
                         ],
                       ),
-                    ),
+                    ],
+                  ),
                 ],
               ],
             ),
@@ -2710,111 +3313,223 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
             child: _selectedStudent == null
-                ? const Text('Sélectionne un élève pour voir son dossier complet.')
+                ? const Text(
+                    'Sélectionne un élève pour voir son dossier complet.',
+                  )
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        'Dossier élève: ${_selectedStudent!.fullName}',
+                        'Dossier élève',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
-                      const SizedBox(height: 8),
-                      Text('Matricule: ${_selectedStudent!.matricule}'),
+                      const SizedBox(height: 4),
                       Text(
-                        'Classe actuelle: ${_selectedStudent!.classroomName.isEmpty ? 'Non attribuée' : _selectedStudent!.classroomName}',
-                      ),
-                      Text(
-                        'Parent: ${_selectedStudent!.parentName.isEmpty ? 'Non attribué' : _selectedStudent!.parentName}',
-                      ),
-                      if (_selectedStudent!.phone.trim().isNotEmpty)
-                        Text('Téléphone: ${_selectedStudent!.phone}'),
-                      if (_selectedStudent!.email.trim().isNotEmpty)
-                        Text('Email: ${_selectedStudent!.email}'),
-                      Text(
-                        'Date de naissance: ${_selectedStudent!.birthDate == null ? 'Non renseignée' : _apiDate(_selectedStudent!.birthDate!)}',
+                        'Fiche complète de l’élève sélectionné.',
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          FilledButton.tonalIcon(
-                            onPressed: _saving ? null : _openProfileForm,
-                            icon: const Icon(Icons.edit_note_outlined),
-                            label: const Text('Modifier dossier'),
-                          ),
-                          FilledButton.tonalIcon(
-                            onPressed: _saving
-                                ? null
-                                : () => _toggleArchive(_selectedStudent!),
-                            icon: Icon(
-                              _selectedStudent!.isArchived
-                                  ? Icons.unarchive_outlined
-                                  : Icons.archive_outlined,
-                            ),
-                            label: Text(
-                              _selectedStudent!.isArchived
-                                  ? 'Réactiver'
-                                  : 'Archiver',
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerLowest,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: colorScheme.outlineVariant.withValues(
+                              alpha: 0.55,
                             ),
                           ),
-                          if (_selectedStudent!.photo.trim().isNotEmpty)
-                            FilledButton.tonalIcon(
-                              onPressed: _saving
-                                  ? null
-                                  : () => _viewProfilePhoto(
-                                        _selectedStudent!.photo,
-                                      ),
-                              icon: const Icon(Icons.account_box_outlined),
-                              label: const Text('Voir photo'),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                Chip(
+                                  avatar: const Icon(
+                                    Icons.person_outline,
+                                    size: 16,
+                                  ),
+                                  label: Text(_selectedStudent!.fullName),
+                                ),
+                                Chip(
+                                  avatar: const Icon(
+                                    Icons.badge_outlined,
+                                    size: 16,
+                                  ),
+                                  label: Text(_selectedStudent!.matricule),
+                                ),
+                                _statusBadge(
+                                  _selectedStudent!.isArchived
+                                      ? 'Archivé'
+                                      : 'Actif',
+                                  _selectedStudent!.isArchived,
+                                ),
+                              ],
                             ),
-                          FilledButton.tonalIcon(
-                            onPressed: _saving
-                                ? null
-                                : () async {
-                                    final success = await _printStudentCard();
-                                    if (success) {
-                                      _showMessage(
-                                        'Carte élève prête à l’impression.',
-                                        isSuccess: true,
-                                      );
-                                    }
-                                  },
-                            icon: const Icon(Icons.badge_outlined),
-                            label: const Text('Carte élève'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: _saving
-                                ? null
-                                : () async {
-                                    final success = await _quickPreviewStudentCard();
-                                    if (success) {
-                                      _showMessage(
-                                        'Aperçu rapide affiché.',
-                                        isSuccess: true,
-                                      );
-                                    }
-                                  },
-                            icon: const Icon(Icons.visibility_outlined),
-                            label: const Text('Aperçu rapide'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: _saving
-                                ? null
-                                : () async {
-                                    final success = await _exportStudentCardPdf();
-                                    if (success) {
-                                      _showMessage(
-                                        'Carte élève exportée en PDF.',
-                                        isSuccess: true,
-                                      );
-                                    }
-                                  },
-                            icon: const Icon(Icons.picture_as_pdf_outlined),
-                            label: const Text('Exporter PDF'),
-                          ),
-                        ],
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                _studentInfoPill(
+                                  icon: Icons.class_outlined,
+                                  label: 'Classe',
+                                  value: _selectedStudent!.classroomName.isEmpty
+                                      ? 'Non attribuée'
+                                      : _selectedStudent!.classroomName,
+                                ),
+                                _studentInfoPill(
+                                  icon: Icons.family_restroom_outlined,
+                                  label: 'Parent',
+                                  value: _selectedStudent!.parentName.isEmpty
+                                      ? 'Non attribué'
+                                      : _selectedStudent!.parentName,
+                                ),
+                                _studentInfoPill(
+                                  icon: Icons.cake_outlined,
+                                  label: 'Naissance',
+                                  value: _selectedStudent!.birthDate == null
+                                      ? 'Non renseignée'
+                                      : _apiDate(_selectedStudent!.birthDate!),
+                                ),
+                                if (_selectedStudent!.phone.trim().isNotEmpty)
+                                  _studentInfoPill(
+                                    icon: Icons.phone_outlined,
+                                    label: 'Téléphone',
+                                    value: _selectedStudent!.phone,
+                                  ),
+                                if (_selectedStudent!.email.trim().isNotEmpty)
+                                  _studentInfoPill(
+                                    icon: Icons.alternate_email_outlined,
+                                    label: 'Email',
+                                    value: _selectedStudent!.email,
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerLowest,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: colorScheme.outlineVariant.withValues(
+                              alpha: 0.5,
+                            ),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Actions dossier',
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                FilledButton.tonalIcon(
+                                  onPressed: _saving ? null : _openProfileForm,
+                                  icon: const Icon(Icons.edit_note_outlined),
+                                  label: const Text('Modifier dossier'),
+                                ),
+                                FilledButton.tonalIcon(
+                                  onPressed: _saving
+                                      ? null
+                                      : () => _toggleArchive(_selectedStudent!),
+                                  icon: Icon(
+                                    _selectedStudent!.isArchived
+                                        ? Icons.unarchive_outlined
+                                        : Icons.archive_outlined,
+                                  ),
+                                  label: Text(
+                                    _selectedStudent!.isArchived
+                                        ? 'Réactiver'
+                                        : 'Archiver',
+                                  ),
+                                ),
+                                if (_selectedStudent!.photo.trim().isNotEmpty)
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving
+                                        ? null
+                                        : () => _viewProfilePhoto(
+                                            _selectedStudent!.photo,
+                                          ),
+                                    icon: const Icon(
+                                      Icons.account_box_outlined,
+                                    ),
+                                    label: const Text('Voir photo'),
+                                  ),
+                                FilledButton.tonalIcon(
+                                  onPressed: _saving
+                                      ? null
+                                      : () async {
+                                          final success =
+                                              await _printStudentCard();
+                                          if (success) {
+                                            _showMessage(
+                                              'Carte élève prête à l’impression.',
+                                              isSuccess: true,
+                                            );
+                                          }
+                                        },
+                                  icon: const Icon(Icons.badge_outlined),
+                                  label: const Text('Carte élève'),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: _saving
+                                      ? null
+                                      : () async {
+                                          final success =
+                                              await _quickPreviewStudentCard();
+                                          if (success) {
+                                            _showMessage(
+                                              'Aperçu rapide affiché.',
+                                              isSuccess: true,
+                                            );
+                                          }
+                                        },
+                                  icon: const Icon(Icons.visibility_outlined),
+                                  label: const Text('Aperçu rapide'),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: _saving
+                                      ? null
+                                      : () async {
+                                          final success =
+                                              await _exportStudentCardPdf();
+                                          if (success) {
+                                            _showMessage(
+                                              'Carte élève exportée en PDF.',
+                                              isSuccess: true,
+                                            );
+                                          }
+                                        },
+                                  icon: const Icon(
+                                    Icons.picture_as_pdf_outlined,
+                                  ),
+                                  label: const Text('Exporter PDF'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Carte étudiant (aperçu design)',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      _studentDesignCardPreview(_selectedStudent!),
                       const SizedBox(height: 12),
                       if (_detailLoading)
                         const Padding(
@@ -2826,7 +3541,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           spacing: 10,
                           runSpacing: 10,
                           children: [
-                            _metricChip('Historique académique', '${_history.length}'),
+                            _metricChip(
+                              'Historique académique',
+                              '${_history.length}',
+                            ),
                             _metricChip(
                               'Incidents ouverts',
                               '${_incidents.where((i) => (i['status']?.toString() ?? '') != 'resolved').length}',
@@ -2850,46 +3568,78 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                          decoration: BoxDecoration(
+                            color: colorScheme.surfaceContainerLowest,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: colorScheme.outlineVariant.withValues(
+                                alpha: 0.5,
+                              ),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Actions rapides',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Créer une opération sans quitter la fiche élève.',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 10,
+                                children: [
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving
+                                        ? null
+                                        : _openHistoryForm,
+                                    icon: const Icon(
+                                      Icons.history_edu_outlined,
+                                    ),
+                                    label: const Text('Historique'),
+                                  ),
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving
+                                        ? null
+                                        : _openIncidentForm,
+                                    icon: const Icon(Icons.gavel_outlined),
+                                    label: const Text('Discipline'),
+                                  ),
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving
+                                        ? null
+                                        : _openAttendanceForm,
+                                    icon: const Icon(Icons.fact_check_outlined),
+                                    label: const Text('Absence/Retard'),
+                                  ),
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving ? null : _openFeeForm,
+                                    icon: const Icon(Icons.add_card_outlined),
+                                    label: const Text('Nouveau frais'),
+                                  ),
+                                  FilledButton.tonalIcon(
+                                    onPressed: _saving
+                                        ? null
+                                        : _openPaymentForm,
+                                    icon: const Icon(Icons.payments_outlined),
+                                    label: const Text('Nouveau paiement'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
                         const SizedBox(height: 10),
-                        Text(
-                          'Actions rapides',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _openHistoryForm,
-                              icon: const Icon(Icons.history_edu_outlined),
-                              label: const Text('Historique'),
-                            ),
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _openIncidentForm,
-                              icon: const Icon(Icons.gavel_outlined),
-                              label: const Text('Discipline'),
-                            ),
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _openAttendanceForm,
-                              icon: const Icon(Icons.fact_check_outlined),
-                              label: const Text('Absence/Retard'),
-                            ),
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _openFeeForm,
-                              icon: const Icon(Icons.add_card_outlined),
-                              label: const Text('Nouveau frais'),
-                            ),
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _openPaymentForm,
-                              icon: const Icon(Icons.payments_outlined),
-                              label: const Text('Nouveau paiement'),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        ExpansionTile(
-                          title: Text('Historique académique (${_history.length})'),
+                        _dossierSectionCard(
+                          title: 'Historique académique (${_history.length})',
                           children: _history.isEmpty
                               ? const [
                                   Padding(
@@ -2911,51 +3661,48 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                     )
                                     .toList(),
                         ),
-                        ExpansionTile(
-                          title: Text('Dossier disciplinaire (${_incidents.length})'),
+                        _dossierSectionCard(
+                          title: 'Dossier disciplinaire (${_incidents.length})',
                           children: _incidents.isEmpty
                               ? const [
                                   Padding(
                                     padding: EdgeInsets.fromLTRB(16, 0, 16, 14),
-                                    child: Text('Aucun incident disciplinaire.'),
+                                    child: Text(
+                                      'Aucun incident disciplinaire.',
+                                    ),
                                   ),
                                 ]
-                              : _incidents
-                                    .take(20)
-                                    .map(
-                                      (row) {
-                                        final isResolved =
-                                            (row['status'] ?? '').toString() ==
-                                            'resolved';
-                                        return ListTile(
-                                          dense: true,
-                                          title: Text(
-                                            '${row['category'] ?? 'Incident'} • ${row['incident_date'] ?? ''}',
-                                          ),
-                                          subtitle: Text(
-                                            '${row['description'] ?? ''}\nStatut: ${isResolved ? 'Traité' : 'Ouvert'} • Gravité: ${_severityLabel((row['severity'] ?? '').toString())}',
-                                          ),
-                                          isThreeLine: true,
-                                          trailing: IconButton(
-                                            tooltip: isResolved
-                                                ? 'Rouvrir incident'
-                                                : 'Marquer traité',
-                                            icon: Icon(
-                                              isResolved
-                                                  ? Icons.undo_outlined
-                                                  : Icons.check_circle_outline,
-                                            ),
-                                            onPressed: _saving
-                                                ? null
-                                                : () => _toggleIncidentStatus(row),
-                                          ),
-                                        );
-                                      },
-                                    )
-                                    .toList(),
+                              : _incidents.take(20).map((row) {
+                                  final isResolved =
+                                      (row['status'] ?? '').toString() ==
+                                      'resolved';
+                                  return ListTile(
+                                    dense: true,
+                                    title: Text(
+                                      '${row['category'] ?? 'Incident'} • ${row['incident_date'] ?? ''}',
+                                    ),
+                                    subtitle: Text(
+                                      '${row['description'] ?? ''}\nStatut: ${isResolved ? 'Traité' : 'Ouvert'} • Gravité: ${_severityLabel((row['severity'] ?? '').toString())}',
+                                    ),
+                                    isThreeLine: true,
+                                    trailing: IconButton(
+                                      tooltip: isResolved
+                                          ? 'Rouvrir incident'
+                                          : 'Marquer traité',
+                                      icon: Icon(
+                                        isResolved
+                                            ? Icons.undo_outlined
+                                            : Icons.check_circle_outline,
+                                      ),
+                                      onPressed: _saving
+                                          ? null
+                                          : () => _toggleIncidentStatus(row),
+                                    ),
+                                  );
+                                }).toList(),
                         ),
-                        ExpansionTile(
-                          title: Text('Absences & retards (${_attendances.length})'),
+                        _dossierSectionCard(
+                          title: 'Absences & retards (${_attendances.length})',
                           children: _attendances.isEmpty
                               ? const [
                                   Padding(
@@ -2963,70 +3710,68 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                     child: Text('Aucune donnée de présence.'),
                                   ),
                                 ]
-                              : _attendances
-                                    .take(25)
-                                    .map(
-                                      (row) {
-                                        final proofPath =
-                                            (row['proof'] ?? '').toString().trim();
-                                        final hasProof = proofPath.isNotEmpty;
-                                        final proofThumbSize =
-                                          MediaQuery.of(context).size.width < 720
-                                          ? 36.0
-                                          : 44.0;
-                                        final proofIconSize =
-                                          proofThumbSize < 40 ? 16.0 : 18.0;
-                                        final proofUrl = hasProof
-                                            ? _resolveMediaUrl(proofPath)
-                                            : '';
-                                        return ListTile(
-                                          dense: true,
-                                          leading: hasProof
-                                              ? GestureDetector(
-                                                  onTap: () =>
-                                                      _viewAttendanceProof(
-                                                        proofPath,
-                                                      ),
-                                                  child: ClipRRect(
-                                                    borderRadius:
-                                                        BorderRadius.circular(6),
-                                                    child: Container(
-                                                      width: proofThumbSize,
-                                                      height: proofThumbSize,
-                                                      color: Theme.of(context)
-                                                          .colorScheme
-                                                          .surfaceContainerHighest,
-                                                      child: Image.network(
-                                                        proofUrl,
-                                                        fit: BoxFit.cover,
-                                                        errorBuilder:
-                                                            (_, __, ___) {
-                                                          return Icon(
-                                                            Icons
-                                                                .image_not_supported_outlined,
-                                                            size: proofIconSize,
-                                                          );
-                                                        },
-                                                      ),
-                                                    ),
-                                                  ),
-                                                )
-                                              : null,
-                                          title: Text('${row['date'] ?? ''}'),
-                                          subtitle: Text(
-                                            'Absent: ${row['is_absent'] == true ? 'Oui' : 'Non'} • Retard: ${row['is_late'] == true ? 'Oui' : 'Non'} • Justificatif: ${hasProof ? 'Oui' : 'Non'}'
-                                            '${hasProof ? '\nFichier: ${_fileNameFromPath(proofPath)}' : ''}',
-                                          ),
-                                          isThreeLine: hasProof,
-                                        );
-                                      },
-                                    )
-                                    .toList(),
+                              : _attendances.take(25).map((row) {
+                                  final proofPath = (row['proof'] ?? '')
+                                      .toString()
+                                      .trim();
+                                  final hasProof = proofPath.isNotEmpty;
+                                  final proofThumbSize =
+                                      MediaQuery.of(context).size.width < 720
+                                      ? 36.0
+                                      : 44.0;
+                                  final proofIconSize = proofThumbSize < 40
+                                      ? 16.0
+                                      : 18.0;
+                                  final proofUrl = hasProof
+                                      ? _resolveMediaUrl(proofPath)
+                                      : '';
+                                  return ListTile(
+                                    dense: true,
+                                    leading: hasProof
+                                        ? GestureDetector(
+                                            onTap: () =>
+                                                _viewAttendanceProof(proofPath),
+                                            child: ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                              child: Container(
+                                                width: proofThumbSize,
+                                                height: proofThumbSize,
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .surfaceContainerHighest,
+                                                child: Image.network(
+                                                  proofUrl,
+                                                  fit: BoxFit.cover,
+                                                  errorBuilder:
+                                                      (
+                                                        context,
+                                                        error,
+                                                        stackTrace,
+                                                      ) {
+                                                        return Icon(
+                                                          Icons
+                                                              .image_not_supported_outlined,
+                                                          size: proofIconSize,
+                                                        );
+                                                      },
+                                                ),
+                                              ),
+                                            ),
+                                          )
+                                        : null,
+                                    title: Text('${row['date'] ?? ''}'),
+                                    subtitle: Text(
+                                      'Absent: ${row['is_absent'] == true ? 'Oui' : 'Non'} • Retard: ${row['is_late'] == true ? 'Oui' : 'Non'} • Justificatif: ${hasProof ? 'Oui' : 'Non'}'
+                                      '${hasProof ? '\nFichier: ${_fileNameFromPath(proofPath)}' : ''}',
+                                    ),
+                                    isThreeLine: hasProof,
+                                  );
+                                }).toList(),
                         ),
-                        ExpansionTile(
-                          title: Text(
-                            'Frais & paiements (${_fees.length} frais / ${_payments.length} paiements)',
-                          ),
+                        _dossierSectionCard(
+                          title:
+                              'Frais & paiements (${_fees.length} frais / ${_payments.length} paiements)',
                           children: [
                             Padding(
                               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -3035,7 +3780,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 children: [
                                   Text(
                                     'Actions financières',
-                                    style: Theme.of(context).textTheme.titleSmall,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleSmall,
                                   ),
                                   const SizedBox(height: 8),
                                   Wrap(
@@ -3043,13 +3790,21 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                     runSpacing: 10,
                                     children: [
                                       FilledButton.tonalIcon(
-                                        onPressed: _saving ? null : _openFeeForm,
-                                        icon: const Icon(Icons.add_card_outlined),
+                                        onPressed: _saving
+                                            ? null
+                                            : _openFeeForm,
+                                        icon: const Icon(
+                                          Icons.add_card_outlined,
+                                        ),
                                         label: const Text('Nouveau frais'),
                                       ),
                                       FilledButton.tonalIcon(
-                                        onPressed: _saving ? null : _openPaymentForm,
-                                        icon: const Icon(Icons.payments_outlined),
+                                        onPressed: _saving
+                                            ? null
+                                            : _openPaymentForm,
+                                        icon: const Icon(
+                                          Icons.payments_outlined,
+                                        ),
                                         label: const Text('Nouveau paiement'),
                                       ),
                                     ],
@@ -3069,46 +3824,54 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 child: Text('Aucun frais scolaire enregistré.'),
                               )
                             else
-                              ..._fees.take(20).map(
-                                (row) => ListTile(
-                                  dense: true,
-                                  title: Text(
-                                    '${_feeTypeLabel((row['fee_type'] ?? '').toString())} • Échéance ${row['due_date'] ?? ''}',
+                              ..._fees
+                                  .take(20)
+                                  .map(
+                                    (row) => ListTile(
+                                      dense: true,
+                                      title: Text(
+                                        '${_feeTypeLabel((row['fee_type'] ?? '').toString())} • Échéance ${row['due_date'] ?? ''}',
+                                      ),
+                                      subtitle: Text(
+                                        'Dû: ${_money(_toDouble(row['amount_due']))} • Payé: ${_money(_toDouble(row['amount_paid']))} • Solde: ${_money(_toDouble(row['balance']))}',
+                                      ),
+                                    ),
                                   ),
-                                  subtitle: Text(
-                                    'Dû: ${_money(_toDouble(row['amount_due']))} • Payé: ${_money(_toDouble(row['amount_paid']))} • Solde: ${_money(_toDouble(row['balance']))}',
-                                  ),
-                                ),
-                              ),
                             if (_payments.isEmpty)
                               const Padding(
                                 padding: EdgeInsets.fromLTRB(16, 0, 16, 14),
                                 child: Text('Aucun paiement enregistré.'),
                               )
                             else
-                              ..._payments.take(15).map(
-                                (row) => ListTile(
-                                  dense: true,
-                                  title: Text(
-                                    '${_money(_toDouble(row['amount']))} • ${row['method'] ?? 'N/A'}',
+                              ..._payments
+                                  .take(15)
+                                  .map(
+                                    (row) => ListTile(
+                                      dense: true,
+                                      title: Text(
+                                        '${_money(_toDouble(row['amount']))} • ${row['method'] ?? 'N/A'}',
+                                      ),
+                                      subtitle: Text(
+                                        'Référence: ${row['reference'] ?? '-'} • Date: ${row['created_at'] ?? ''}',
+                                      ),
+                                      trailing: IconButton(
+                                        tooltip: 'Imprimer reçu',
+                                        icon: const Icon(
+                                          Icons.receipt_long_outlined,
+                                        ),
+                                        onPressed: () {
+                                          final paymentId = _asInt(row['id']);
+                                          if (paymentId <= 0) {
+                                            _showMessage(
+                                              'Paiement invalide pour impression.',
+                                            );
+                                            return;
+                                          }
+                                          _printPaymentReceipt(paymentId);
+                                        },
+                                      ),
+                                    ),
                                   ),
-                                  subtitle: Text(
-                                    'Référence: ${row['reference'] ?? '-'} • Date: ${row['created_at'] ?? ''}',
-                                  ),
-                                  trailing: IconButton(
-                                    tooltip: 'Imprimer reçu',
-                                    icon: const Icon(Icons.receipt_long_outlined),
-                                    onPressed: () {
-                                      final paymentId = _asInt(row['id']);
-                                      if (paymentId <= 0) {
-                                        _showMessage('Paiement invalide pour impression.');
-                                        return;
-                                      }
-                                      _printPaymentReceipt(paymentId);
-                                    },
-                                  ),
-                                ),
-                              ),
                           ],
                         ),
                       ],
@@ -3120,21 +3883,498 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
+  void _activateStudent(Student student) {
+    setState(() {
+      _selectedStudent = student;
+      _selectedClassroomUpdateId = student.classroomId;
+      _selectedParentUpdateId = student.parentId;
+    });
+    _loadStudentLinkedData(student.id);
+  }
+
+  int _newlyEnrolledCount() {
+    DateTime? start;
+    DateTime? end;
+
+    for (final row in _years) {
+      if (row['is_active'] == true) {
+        start = _parseDate(row['start_date']);
+        end = _parseDate(row['end_date']);
+        break;
+      }
+    }
+
+    if (start == null || end == null) {
+      final now = DateTime.now();
+      start = DateTime(now.year, 1, 1);
+      end = DateTime(now.year, 12, 31, 23, 59, 59);
+    }
+
+    return _students.where((student) {
+      final enrolledAt = student.enrollmentDate;
+      if (enrolledAt == null) return false;
+      return !enrolledAt.isBefore(start!) && !enrolledAt.isAfter(end!);
+    }).length;
+  }
+
+  String _activeAcademicYearLabel() {
+    Map<String, dynamic>? activeYear;
+    for (final row in _years) {
+      if (row['is_active'] == true) {
+        activeYear = row;
+        break;
+      }
+    }
+
+    if (activeYear == null && _feeAcademicYearId != null) {
+      for (final row in _years) {
+        if (_asInt(row['id']) == _feeAcademicYearId) {
+          activeYear = row;
+          break;
+        }
+      }
+    }
+
+    activeYear ??= _years.isNotEmpty ? _years.first : null;
+    if (activeYear == null) return 'Non définie';
+    return _academicYearLabel(activeYear);
+  }
+
+  String _academicYearLabel(Map<String, dynamic> row) {
+    final name = row['name']?.toString().trim() ?? '';
+    if (name.isNotEmpty) return name;
+
+    final start = row['start_date']?.toString().trim() ?? '';
+    final end = row['end_date']?.toString().trim() ?? '';
+    if (start.isNotEmpty || end.isNotEmpty) {
+      return '$start - $end';
+    }
+
+    return 'Année ${row['id'] ?? ''}'.trim();
+  }
+
+  DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+    return DateTime.tryParse(value.toString());
+  }
+
+  Widget _dashboardInfoChip({
+    required IconData icon,
+    required String label,
+    double maxWidth = 220,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: scheme.surface.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: scheme.outlineVariant.withValues(alpha: 0.55),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: scheme.primary),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _overviewMetricCard({
+    required String title,
+    required String value,
+    required IconData icon,
+    required String subtitle,
+    required Color tone,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: 260,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: scheme.outlineVariant),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [tone.withValues(alpha: 0.1), scheme.surface],
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 17,
+            backgroundColor: tone.withValues(alpha: 0.18),
+            child: Icon(icon, size: 18, color: tone),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusBadge(String label, bool archived) {
+    final scheme = Theme.of(context).colorScheme;
+    final background = archived
+        ? scheme.surfaceContainerHighest
+        : scheme.primary.withValues(alpha: 0.14);
+    final foreground = archived ? scheme.onSurfaceVariant : scheme.primary;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: foreground,
+          fontWeight: FontWeight.w600,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+
+  Widget _studentInfoPill({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      constraints: const BoxConstraints(minWidth: 190, maxWidth: 320),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: scheme.primary),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentCardTag(String label, String value, {bool onDark = false}) {
+    final scheme = Theme.of(context).colorScheme;
+    final backgroundColor = onDark
+        ? Colors.white.withValues(alpha: 0.2)
+        : scheme.surfaceContainerHighest.withValues(alpha: 0.55);
+    final borderColor = onDark
+        ? Colors.white.withValues(alpha: 0.35)
+        : scheme.outlineVariant.withValues(alpha: 0.55);
+    final textColor = onDark ? Colors.white : null;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 240),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          color: backgroundColor,
+          border: Border.all(color: borderColor),
+        ),
+        child: Text(
+          '$label: $value',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(
+            context,
+          ).textTheme.labelSmall?.copyWith(color: textColor),
+        ),
+      ),
+    );
+  }
+
+  Widget _studentDesignCardPreview(Student student, {bool compact = false}) {
+    final scheme = Theme.of(context).colorScheme;
+    final classLabel = student.classroomName.trim().isEmpty
+        ? 'Non attribuée'
+        : student.classroomName;
+    final hasPhoto = student.photo.trim().isNotEmpty;
+    final statusLabel = student.isArchived ? 'Archivé' : 'Actif';
+    final photoWidth = compact ? 56.0 : 68.0;
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: scheme.outlineVariant.withValues(alpha: 0.62),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: AspectRatio(
+        aspectRatio: _studentCardTemplateAspectRatio,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.asset(
+              _studentCardTemplateAsset,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return ColoredBox(
+                  color: scheme.surfaceContainerLowest,
+                  child: Center(
+                    child: Text(
+                      'Template carte indisponible',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                );
+              },
+            ),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.1),
+                    Colors.black.withValues(alpha: 0.58),
+                  ],
+                  stops: const [0.52, 0.72, 1],
+                ),
+              ),
+            ),
+            Positioned(
+              top: compact ? 8 : 10,
+              right: compact ? 8 : 10,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.48),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.25),
+                  ),
+                ),
+                child: Text(
+                  statusLabel,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: compact ? 8 : 10,
+              right: compact ? 8 : 10,
+              bottom: compact ? 8 : 10,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.2),
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            student.fullName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
+                          const SizedBox(height: 1),
+                          Text(
+                            'Matricule: ${student.matricule}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: Colors.white),
+                          ),
+                          const SizedBox(height: 5),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              _studentCardTag(
+                                'Classe',
+                                classLabel,
+                                onDark: true,
+                              ),
+                              _studentCardTag(
+                                'Année',
+                                _activeAcademicYearLabel(),
+                                onDark: true,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        width: photoWidth,
+                        height: photoWidth + 6,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.18),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: hasPhoto
+                            ? InkWell(
+                                onTap: () => _viewProfilePhoto(student.photo),
+                                child: Image.network(
+                                  _resolveMediaUrl(student.photo),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return const Icon(
+                                      Icons.person_outline,
+                                      color: Colors.white,
+                                    );
+                                  },
+                                ),
+                              )
+                            : const Icon(
+                                Icons.person_outline,
+                                color: Colors.white,
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _dossierSectionCard({
+    required String title,
+    required List<Widget> children,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+        color: scheme.surface,
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          collapsedShape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          title: Text(title, style: Theme.of(context).textTheme.titleSmall),
+          children: children,
+        ),
+      ),
+    );
+  }
+
   Widget _metricChip(String label, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outlineVariant,
-        ),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Text('$label: $value'),
     );
   }
 
   String _parentLabel(Map<String, dynamic> row) {
-    final first = (row['user_first_name'] ?? row['first_name'] ?? '').toString();
+    final first = (row['user_first_name'] ?? row['first_name'] ?? '')
+        .toString();
     final last = (row['user_last_name'] ?? row['last_name'] ?? '').toString();
     final name = '$first $last'.trim();
     final user = (row['user'] ?? '').toString();
@@ -3149,8 +4389,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required String query,
   }) {
     if (query.isEmpty) return true;
-    final haystack =
-        '${student.fullName} ${student.matricule} $className'.toLowerCase();
+    final haystack = '${student.fullName} ${student.matricule} $className'
+        .toLowerCase();
     return haystack.contains(query);
   }
 
@@ -3158,13 +4398,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     int result;
     switch (_sortBy) {
       case 'matricule':
-        result =
-            a.matricule.toLowerCase().compareTo(b.matricule.toLowerCase());
+        result = a.matricule.toLowerCase().compareTo(b.matricule.toLowerCase());
         break;
       case 'classroom':
-        result = a.classroomName
-            .toLowerCase()
-            .compareTo(b.classroomName.toLowerCase());
+        result = a.classroomName.toLowerCase().compareTo(
+          b.classroomName.toLowerCase(),
+        );
         if (result == 0) {
           result = a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase());
         }
@@ -3256,8 +4495,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   String _resolveMediaUrl(String value) {
     final normalized = value.trim();
-    if (normalized.startsWith('http://') ||
-        normalized.startsWith('https://')) {
+    if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
       return normalized;
     }
 
@@ -3300,7 +4538,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       child: Image.memory(
                         bytes,
                         fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) {
+                        errorBuilder: (context, error, stackTrace) {
                           return const Center(
                             child: Text('Impossible d’afficher cette image.'),
                           );
@@ -3357,7 +4595,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       child: Image.network(
                         imageUrl,
                         fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) {
+                        errorBuilder: (context, error, stackTrace) {
                           return Center(
                             child: Text(
                               'Impossible d’afficher l’image.\nURL: $imageUrl',
@@ -3454,7 +4692,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       }
 
       final fallback = error.message?.trim() ?? '';
-      return fallback.isEmpty ? 'Erreur réseau pendant l’inscription.' : fallback;
+      return fallback.isEmpty
+          ? 'Erreur réseau pendant l’inscription.'
+          : fallback;
     }
 
     final raw = error.toString().trim();
