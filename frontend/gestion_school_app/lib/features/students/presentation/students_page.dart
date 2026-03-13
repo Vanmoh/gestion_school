@@ -1166,6 +1166,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     value: 'a4_6up',
                     child: Text('A4 (6 cartes / page - conseillé)'),
                   ),
+                  DropdownMenuItem(
+                    value: 'a4_9up',
+                    child: Text('A4 (9 cartes / page)'),
+                  ),
                 ],
                 onChanged: (value) {
                   _cardsLayoutMode = value ?? 'a4_6up';
@@ -1193,6 +1197,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       action: _printClassStudentCards,
                       successMessage: _cardsLayoutMode == 'a4_6up'
                           ? 'Cartes élèves prêtes à l’impression (A4 - 6 cartes/page).'
+                          : _cardsLayoutMode == 'a4_9up'
+                          ? 'Cartes élèves prêtes à l’impression (A4 - 9 cartes/page).'
                           : 'Cartes élèves générées.',
                     ),
               icon: const Icon(Icons.badge_outlined),
@@ -1206,6 +1212,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       action: _exportClassStudentCardsPdf,
                       successMessage: _cardsLayoutMode == 'a4_6up'
                           ? 'PDF exporté (A4 - 6 cartes/page).'
+                          : _cardsLayoutMode == 'a4_9up'
+                          ? 'PDF exporté (A4 - 9 cartes/page).'
                           : 'PDF exporté.',
                     ),
               icon: const Icon(Icons.picture_as_pdf_outlined),
