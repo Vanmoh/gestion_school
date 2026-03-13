@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>GESTION SCHOOL - Téléchargements</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 0; background: #f5f7fb; color: #1f2937; }
@@ -18,15 +21,31 @@
   </style>
 </head>
 <body>
+  <!-- Bump this value on each release to force fresh download URLs in normal browsers. -->
+  <script>
+    const releaseVersion = '2026-03-13-r1';
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('[data-artifact-link]').forEach((link) => {
+        const url = new URL(link.getAttribute('href'), window.location.href);
+        url.searchParams.set('v', releaseVersion);
+        link.setAttribute('href', `${url.pathname}${url.search}`);
+      });
+      const versionNode = document.getElementById('release-version');
+      if (versionNode) {
+        versionNode.textContent = releaseVersion;
+      }
+    });
+  </script>
   <div class="wrap">
     <div class="card">
       <h1>GESTION SCHOOL - Téléchargements</h1>
       <p>Utilise ces liens pour installer les versions publiées.</p>
       <div class="grid">
-        <a class="btn" href="./Gestion%20School.apk">Télécharger APK Android</a>
-        <a class="btn secondary" href="./gestion_school_desktop_linux.tar.gz">Télécharger Desktop Linux</a>
-        <a class="btn tertiary" href="./gestion_school_desktop_windows.zip">Télécharger Desktop Windows</a>
+        <a class="btn" data-artifact-link href="./Gestion%20School.apk">Télécharger APK Android</a>
+        <a class="btn secondary" data-artifact-link href="./gestion_school_desktop_linux.tar.gz">Télécharger Desktop Linux</a>
+        <a class="btn tertiary" data-artifact-link href="./gestion_school_desktop_windows.zip">Télécharger Desktop Windows</a>
       </div>
+      <p class="muted">Release: <code id="release-version">2026-03-13-r1</code></p>
       <p class="muted">Mets à jour les fichiers <code>Gestion School.apk</code>, <code>gestion_school_desktop_linux.tar.gz</code> et <code>gestion_school_desktop_windows.zip</code> dans ce dossier avant chaque release.</p>
     </div>
   </div>
