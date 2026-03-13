@@ -109,22 +109,6 @@ def _format_fcfa(value) -> str:
         return f"{raw} FCFA"
 
 
-def _student_photo_path(student: Student) -> str | None:
-    if not getattr(student, "photo", None):
-        return None
-
-    try:
-        raw_path = str(student.photo.path or "").strip()
-    except Exception:
-        raw_path = ""
-
-    if not raw_path:
-        return None
-
-    path = Path(raw_path)
-    return str(path) if path.exists() else None
-
-
 def _draw_card_separator_line(pdf: FPDF, x1: float, y: float, x2: float) -> None:
     if x2 <= x1:
         return
@@ -233,23 +217,16 @@ def _draw_student_card_template(
     pdf.set_line_width(max(0.1, outer_line_w * 0.55))
     pdf.rect(photo_x, photo_y, photo_w, photo_h, style="DF")
 
-    student_photo_path = _student_photo_path(student)
-    if student_photo_path:
-        try:
-            pdf.image(
-                student_photo_path,
-                x=photo_x + 0.5,
-                y=photo_y + 0.5,
-                w=photo_w - 1.0,
-                h=photo_h - 1.0,
-            )
-        except Exception:
-            pass
-    else:
-        pdf.set_text_color(82, 92, 108)
-        pdf.set_xy(photo_x, photo_y + (photo_h / 2.0) - 1.6)
-        pdf.set_font("Helvetica", "B", 7.0 if width >= 92 else 5.3)
-        pdf.cell(photo_w, 3.2, _pdf_text("PHOTO"), align="C")
+    # Keep the card layout and photo frame style, but never render student photos.
+    pdf.set_fill_color(240, 244, 250)
+    pdf.rect(photo_x + 0.5, photo_y + 0.5, photo_w - 1.0, photo_h - 1.0, style="F")
+    pdf.set_text_color(82, 92, 108)
+    pdf.set_xy(photo_x, photo_y + (photo_h / 2.0) - 2.3)
+    pdf.set_font("Helvetica", "B", 7.0 if width >= 92 else 5.3)
+    pdf.cell(photo_w, 2.8, _pdf_text("PROFIL"), align="C")
+    pdf.set_xy(photo_x, photo_y + (photo_h / 2.0) + 0.1)
+    pdf.set_font("Helvetica", "", 6.3 if width >= 92 else 4.8)
+    pdf.cell(photo_w, 2.4, _pdf_text("SANS PHOTO"), align="C")
 
     first_name, last_name, _ = _student_name_parts(student)
     class_name = student.classroom.name if student.classroom else "Non attribuee"

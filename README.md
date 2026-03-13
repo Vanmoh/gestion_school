@@ -158,6 +158,15 @@ Exemple:
 - Simulation push staging sans effet: `./push_to_staging.sh --dry-run`
 - Script one-click de promotion staging -> prod: `./promote_staging_to_main.sh`
 
+## Deploiement One-Click (local -> en ligne)
+- Script unique: `./deploy_one_click.sh`
+- Vers staging: `./deploy_one_click.sh --target=staging -y`
+- Vers prod: `./deploy_one_click.sh --target=prod -y`
+- Vers prod + regeneration artifacts downloads: `./deploy_one_click.sh --target=prod --publish-downloads -y`
+
+Le script commit automatiquement les modifications locales (si presentes), push la branche courante,
+puis orchestre le merge/promotion necessaire pour rendre les changements visibles en ligne.
+
 ## Dépannage rapide (Docker)
 - Vérifier l'état global: `./status.sh`
 - En cas d'accès refusé au socket Docker, relancer la commande avec `sudo` ou ajouter l'utilisateur au groupe `docker`.

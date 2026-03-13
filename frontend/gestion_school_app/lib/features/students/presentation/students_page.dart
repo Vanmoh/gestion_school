@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
@@ -65,6 +65,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   bool _loading = true;
   bool _saving = false;
   bool _detailLoading = false;
+  DateTime? _lastStudentsRefreshAt;
 
   List<Student> _students = [];
   List<Student> _filteredStudents = [];
@@ -159,6 +160,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         _classrooms = results[1] as List<Map<String, dynamic>>;
         _parents = results[2] as List<Map<String, dynamic>>;
         _years = results[3] as List<Map<String, dynamic>>;
+        _lastStudentsRefreshAt = DateTime.now();
         _registrationClassroomId ??= _classrooms.isNotEmpty
             ? _asInt(_classrooms.first['id'])
             : null;
@@ -2518,6 +2520,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final classCount = _classrooms.length;
+    final refreshLabel = _lastStudentsRefreshAt == null
+        ? 'Maj: -'
+        : 'Maj: ${_refreshTimestampLabel(_lastStudentsRefreshAt!)}';
     final activeRate = total == 0 ? 0 : ((active / total) * 100).round();
     final archivedRate = total == 0 ? 0 : ((archived / total) * 100).round();
     final activeShare = total == 0 ? 0.0 : active / total;
@@ -2606,6 +2611,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             _dashboardInfoChip(
                               icon: Icons.groups_2_outlined,
                               label: '$totalFiltered élèves visibles',
+                            ),
+                            _dashboardInfoChip(
+                              icon: Icons.schedule_outlined,
+                              label: refreshLabel,
                             ),
                             if (_selectedStudent != null)
                               _dashboardInfoChip(
@@ -2951,6 +2960,13 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       onPressed: _saving ? null : _resetStudentsFilters,
                       icon: const Icon(Icons.restart_alt),
                       label: const Text('Réinitialiser'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _filteredStudents.isEmpty
+                          ? null
+                          : _copyFilteredStudentsCsv,
+                      icon: const Icon(Icons.content_copy_outlined),
+                      label: const Text('Copier CSV'),
                     ),
                   ],
                 ),
@@ -4171,9 +4187,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final classLabel = student.classroomName.trim().isEmpty
         ? 'Non attribuée'
         : student.classroomName;
-    final hasPhoto = student.photo.trim().isNotEmpty;
     final statusLabel = student.isArchived ? 'Archivé' : 'Actif';
-    final photoWidth = compact ? 56.0 : 68.0;
+    final profileBlockWidth = compact ? 56.0 : 68.0;
 
     return Container(
       decoration: BoxDecoration(
@@ -4301,32 +4316,32 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
-                        width: photoWidth,
-                        height: photoWidth + 6,
+                        width: profileBlockWidth,
+                        height: profileBlockWidth + 6,
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.18),
                           border: Border.all(
                             color: Colors.white.withValues(alpha: 0.3),
                           ),
                         ),
-                        child: hasPhoto
-                            ? InkWell(
-                                onTap: () => _viewProfilePhoto(student.photo),
-                                child: Image.network(
-                                  _resolveMediaUrl(student.photo),
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) {
-                                    return const Icon(
-                                      Icons.person_outline,
-                                      color: Colors.white,
-                                    );
-                                  },
-                                ),
-                              )
-                            : const Icon(
-                                Icons.person_outline,
-                                color: Colors.white,
-                              ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(
+                              Icons.person_outline,
+                              color: Colors.white,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Profil',
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ],
@@ -4645,6 +4660,72 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       mediaPath: proofPath,
       emptyMessage: 'Aucun justificatif disponible.',
     );
+  }
+
+  Future<void> _copyFilteredStudentsCsv() async {
+    if (_filteredStudents.isEmpty) {
+      _showMessage('Aucun élève à exporter.');
+      return;
+    }
+
+    const separator = ';';
+    final csv = StringBuffer();
+    csv.writeln(
+      [
+        'Matricule',
+        'Nom complet',
+        'Classe',
+        'Date naissance',
+        'Téléphone',
+        'Email',
+        'Parent',
+        'Statut',
+      ].join(separator),
+    );
+
+    for (final student in _filteredStudents) {
+      csv.writeln(
+        [
+          _csvCell(student.matricule),
+          _csvCell(student.fullName),
+          _csvCell(
+            student.classroomName.trim().isEmpty
+                ? 'Non attribuée'
+                : student.classroomName,
+          ),
+          _csvCell(
+            student.birthDate == null ? '' : _apiDate(student.birthDate!),
+          ),
+          _csvCell(student.phone),
+          _csvCell(student.email),
+          _csvCell(student.parentName),
+          _csvCell(student.isArchived ? 'Archivé' : 'Actif'),
+        ].join(separator),
+      );
+    }
+
+    await Clipboard.setData(ClipboardData(text: csv.toString()));
+    _showMessage(
+      'CSV copié (${_filteredStudents.length} élève${_filteredStudents.length > 1 ? 's' : ''}).',
+      isSuccess: true,
+    );
+  }
+
+  String _csvCell(String value) {
+    final normalized = value.replaceAll('\n', ' ').trim();
+    final escaped = normalized.replaceAll('"', '""');
+    return '"$escaped"';
+  }
+
+  String _refreshTimestampLabel(DateTime value) {
+    final now = DateTime.now();
+    final hh = value.hour.toString().padLeft(2, '0');
+    final mm = value.minute.toString().padLeft(2, '0');
+    final sameDay =
+        value.year == now.year &&
+        value.month == now.month &&
+        value.day == now.day;
+    return sameDay ? '$hh:$mm' : '${_apiDate(value)} $hh:$mm';
   }
 
   String _apiDateOrEmpty(DateTime? value) {
