@@ -402,8 +402,10 @@ class StudentsRepository {
   }
 
   Future<Uint8List> fetchStudentCardPdf(int studentId) async {
+    final cacheBust = DateTime.now().millisecondsSinceEpoch;
     final response = await dio.get<List<int>>(
       '/reports/student-card/$studentId/',
+      queryParameters: {'_ts': cacheBust},
       options: Options(responseType: ResponseType.bytes),
     );
 
@@ -422,6 +424,7 @@ class StudentsRepository {
     if (layoutMode.trim().isNotEmpty) {
       query['layout_mode'] = layoutMode.trim();
     }
+    query['_ts'] = DateTime.now().millisecondsSinceEpoch;
 
     final response = await dio.get<List<int>>(
       '/reports/student-cards/class/$classroomId/',

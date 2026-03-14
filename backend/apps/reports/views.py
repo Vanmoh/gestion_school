@@ -104,6 +104,11 @@ def pdf_output_response(pdf: FPDF, filename: str) -> HttpResponse:
     data = bytes(pdf.output())
     response = HttpResponse(data, content_type="application/pdf")
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    # Prevent stale browser/proxy cache for dynamically generated PDFs.
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    response["Expires"] = "0"
+    response["X-Card-Template-Version"] = "2026-03-14-1"
     return response
 
 

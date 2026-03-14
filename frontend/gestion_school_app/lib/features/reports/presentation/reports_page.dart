@@ -154,8 +154,10 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
 
     await _runBusyTask(() async {
       final dio = ref.read(dioProvider);
+      final cacheBust = DateTime.now().millisecondsSinceEpoch;
       final response = await dio.get(
         '/reports/student-card/$_selectedStudentId/',
+        queryParameters: {'_ts': cacheBust},
         options: Options(responseType: ResponseType.bytes),
       );
       final bytes = _toUint8List(response.data);
@@ -171,9 +173,13 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
 
     await _runBusyTask(() async {
       final dio = ref.read(dioProvider);
+      final cacheBust = DateTime.now().millisecondsSinceEpoch;
       final response = await dio.get(
         '/reports/student-cards/class/$_selectedClassroomId/',
-        queryParameters: {'layout_mode': _cardsLayoutMode},
+        queryParameters: {
+          'layout_mode': _cardsLayoutMode,
+          '_ts': cacheBust,
+        },
         options: Options(responseType: ResponseType.bytes),
       );
       final bytes = _toUint8List(response.data);
