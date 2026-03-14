@@ -50,4 +50,42 @@ class PaymentMutationController extends StateNotifier<AsyncValue<void>> {
       ref.invalidate(feesProvider);
     }
   }
+
+  Future<void> updatePayment({
+    required int paymentId,
+    required int feeId,
+    required double amount,
+    required String method,
+    required String reference,
+  }) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() {
+      return ref
+          .read(paymentsRepositoryProvider)
+          .updatePayment(
+            paymentId: paymentId,
+            feeId: feeId,
+            amount: amount,
+            method: method,
+            reference: reference,
+          );
+    });
+
+    if (!state.hasError) {
+      ref.invalidate(paymentsProvider);
+      ref.invalidate(feesProvider);
+    }
+  }
+
+  Future<void> deletePayment({required int paymentId}) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() {
+      return ref.read(paymentsRepositoryProvider).deletePayment(paymentId);
+    });
+
+    if (!state.hasError) {
+      ref.invalidate(paymentsProvider);
+      ref.invalidate(feesProvider);
+    }
+  }
 }

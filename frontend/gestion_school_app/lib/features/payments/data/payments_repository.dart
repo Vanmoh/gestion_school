@@ -82,6 +82,28 @@ class PaymentsRepository {
     );
   }
 
+  Future<void> updatePayment({
+    required int paymentId,
+    required int feeId,
+    required double amount,
+    required String method,
+    required String reference,
+  }) async {
+    await dio.patch(
+      '/payments/$paymentId/',
+      data: {
+        'fee': feeId,
+        'amount': amount,
+        'method': method,
+        'reference': reference,
+      },
+    );
+  }
+
+  Future<void> deletePayment(int paymentId) async {
+    await dio.delete('/payments/$paymentId/');
+  }
+
   Future<Uint8List> fetchReceiptPdf(int paymentId) async {
     final response = await dio.get<List<int>>(
       '/reports/receipt/$paymentId/',
