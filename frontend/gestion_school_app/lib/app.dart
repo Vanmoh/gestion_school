@@ -112,7 +112,11 @@ class _GlobalFeatureRefreshHostState
   int _epoch = 0;
 
   Future<void> _handleRefresh() async {
-    await _invalidateRefreshProvidersForView(ref, widget.child);
+    try {
+      await _invalidateRefreshProvidersForView(ref, widget.child);
+    } catch (_) {
+      // Keep pull-to-refresh usable even if a provider refresh fails.
+    }
     if (!mounted) {
       return;
     }
