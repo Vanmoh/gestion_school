@@ -4185,7 +4185,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Widget _studentDesignCardPreview(Student student, {bool compact = false}) {
-    final scheme = Theme.of(context).colorScheme;
     final classLabel = student.classroomName.trim().isEmpty
         ? 'Non attribuée'
         : student.classroomName;
@@ -4197,224 +4196,257 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final birthLabel = student.birthDate == null
         ? '-'
         : '${student.birthDate!.day.toString().padLeft(2, '0')}/${student.birthDate!.month.toString().padLeft(2, '0')}/${student.birthDate!.year.toString().padLeft(4, '0')}';
-    final padding = compact ? 8.0 : 11.0;
-    final photoWidth = compact ? 58.0 : 76.0;
+    final cardNumber = student.id > 0
+        ? student.id.toString().padLeft(5, '0')
+        : '00000';
+    final padding = compact ? 6.5 : 8.0;
+    final photoWidth = compact ? 57.0 : 75.0;
     final phoneLine = 'Tel : 78 78 59 13 / 66 74 22 32';
+    final signatureWidth = compact ? 74.0 : 98.0;
+    final signatureHeight = compact ? 30.0 : 39.0;
+    final stampSize = compact ? 42.0 : 52.0;
+    final labelStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: const Color(0xFF2C303B),
+      fontSize: compact ? 6.4 : 7.6,
+      fontWeight: FontWeight.w800,
+    );
+    final valueStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: const Color(0xFF19488A),
+      fontSize: compact ? 6.5 : 7.7,
+      fontWeight: FontWeight.w800,
+    );
 
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF1F4F86), width: 1.2),
-        color: const Color(0xFFF7FAFF),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: const Color(0xFF5C6675), width: 1.0),
+        color: const Color(0xFFF6F8FC),
       ),
       clipBehavior: Clip.antiAlias,
       child: AspectRatio(
         aspectRatio: _studentCardTemplateAspectRatio,
-        child: Padding(
-          padding: EdgeInsets.all(padding),
-          child: Column(
-            children: [
-              Container(
-                width: double.infinity,
-                padding: EdgeInsets.fromLTRB(
-                  compact ? 6 : 8,
-                  compact ? 5 : 7,
-                  compact ? 6 : 8,
-                  compact ? 4 : 6,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEAF2FF),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFF8AA9D1)),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      'LYCEE TECHNIQUE OUMAR BAH',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: const Color(0xFF0E3B73),
-                        fontSize: compact ? 9.0 : 11.0,
-                        letterSpacing: 0.2,
-                      ),
-                    ),
-                    Text(
-                      'LTOB',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        color: const Color(0xFF0E3B73),
-                        fontSize: compact ? 8.0 : 9.5,
-                      ),
-                    ),
-                    Text(
-                      phoneLine,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: const Color(0xFFB13B43),
-                        fontSize: compact ? 6.2 : 7.1,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(height: compact ? 5 : 7),
-              Container(
-                width: double.infinity,
-                padding: EdgeInsets.symmetric(vertical: compact ? 3 : 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A5DA8),
-                  borderRadius: BorderRadius.circular(7),
-                ),
-                child: Text(
-                  'CARTE SCOLAIRE',
+        child: Container(
+          margin: EdgeInsets.all(compact ? 3.5 : 4.8),
+          decoration: BoxDecoration(
+            border: Border.all(color: const Color(0xFF9EA8BA), width: 0.9),
+          ),
+          child: Padding(
+            padding: EdgeInsets.all(padding),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'LYCEE TECHNIQUE OUMAR BAH',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.5,
-                    fontSize: compact ? 8.2 : 10.2,
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFF144688),
+                    fontSize: compact ? 8.8 : 11.3,
+                    letterSpacing: 0.1,
                   ),
                 ),
-              ),
-              SizedBox(height: compact ? 5 : 7),
-              Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      width: photoWidth,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(8),
-                        color: Colors.white,
-                        border: Border.all(color: const Color(0xFF3A6FAE)),
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(7),
-                        child: _studentCardPhoto(student),
-                      ),
+                Text(
+                  'LTOB (1er ETAGE)',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFF2C303B),
+                    fontSize: compact ? 7.6 : 9.4,
+                  ),
+                ),
+                Text(
+                  phoneLine,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFFB13B43),
+                    fontSize: compact ? 6.0 : 7.2,
+                  ),
+                ),
+                SizedBox(height: compact ? 4.0 : 5.2),
+                Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.symmetric(vertical: compact ? 2.6 : 3.4),
+                  color: const Color(0xFF1B5CA6),
+                  child: Text(
+                    'CARTE SCOLAIRE',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.35,
+                      fontSize: compact ? 8.2 : 10.4,
                     ),
-                    SizedBox(width: compact ? 7 : 10),
+                  ),
+                ),
+                SizedBox(height: compact ? 4.0 : 5.4),
+                Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: photoWidth,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(
+                            color: const Color(0xFF326AAF),
+                            width: 1.1,
+                          ),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(1.2),
+                          child: _studentCardPhoto(student),
+                        ),
+                      ),
+                      SizedBox(width: compact ? 6.5 : 8.8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _studentCardInfoRow(
+                              'Nom',
+                              lastName,
+                              compact: compact,
+                            ),
+                            _studentCardInfoRow(
+                              'Prenom',
+                              firstName,
+                              compact: compact,
+                            ),
+                            _studentCardInfoRow(
+                              'Classe',
+                              classLabel,
+                              compact: compact,
+                            ),
+                            _studentCardInfoRow(
+                              'Annee Scolaire',
+                              yearLabel,
+                              compact: compact,
+                            ),
+                            _studentCardInfoRow(
+                              'Matricule',
+                              student.matricule,
+                              compact: compact,
+                            ),
+                            SizedBox(height: compact ? 2.0 : 2.8),
+                            _studentCardInfoRow(
+                              'Ne(e) le',
+                              birthLabel,
+                              compact: compact,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: compact ? 3.6 : 4.8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
                     Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _studentCardInfoRow(
-                            'Nom',
-                            lastName,
-                            compact: compact,
-                          ),
-                          _studentCardInfoRow(
-                            'Prénom',
-                            firstName,
-                            compact: compact,
-                          ),
-                          _studentCardInfoRow(
-                            'Classe',
-                            classLabel,
-                            compact: compact,
-                          ),
-                          _studentCardInfoRow(
-                            'Année scolaire',
-                            yearLabel,
-                            compact: compact,
-                          ),
-                          _studentCardInfoRow(
-                            'Matricule',
-                            student.matricule,
-                            compact: compact,
-                          ),
-                          _studentCardInfoRow(
-                            'Date de naissance',
-                            birthLabel,
-                            compact: compact,
-                          ),
-                        ],
+                      child: SizedBox(
+                        width: compact ? 116 : 156,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            RichText(
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              text: TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: 'No de Carte : ',
+                                    style: labelStyle,
+                                  ),
+                                  TextSpan(text: cardNumber, style: valueStyle),
+                                ],
+                              ),
+                            ),
+                            SizedBox(height: compact ? 1.2 : 1.6),
+                            Container(
+                              height: 1,
+                              color: const Color(0xFFAAC0DE),
+                            ),
+                          ],
+                        ),
                       ),
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: signatureWidth,
+                              height: signatureHeight,
+                              child: Image.asset(
+                                _studentCardSignatureAsset,
+                                fit: BoxFit.contain,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return Container(
+                                    decoration: const BoxDecoration(
+                                      border: Border(
+                                        bottom: BorderSide(
+                                          color: Color(0xFF3A5F93),
+                                          width: 1.1,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            Text(
+                              'Le Principal',
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    fontSize: compact ? 6.0 : 7.0,
+                                    fontWeight: FontWeight.w700,
+                                    color: const Color(0xFF2C303B),
+                                  ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(width: compact ? 5.5 : 7.0),
+                        SizedBox(
+                          width: stampSize,
+                          height: stampSize,
+                          child: Image.asset(
+                            _studentCardStampAsset,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) {
+                              return Container(
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: const Color(0xFF1F5C9E),
+                                    width: 1.2,
+                                  ),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  'Cachet',
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(
+                                        fontSize: compact ? 5.0 : 5.8,
+                                        color: const Color(0xFF1F5C9E),
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-              ),
-              SizedBox(height: compact ? 5 : 7),
-              Align(
-                alignment: Alignment.centerRight,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: compact ? 74 : 96,
-                      height: compact ? 34 : 42,
-                      padding: EdgeInsets.symmetric(
-                        horizontal: compact ? 3 : 4,
-                        vertical: compact ? 2 : 3,
-                      ),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: scheme.outlineVariant.withValues(alpha: 0.75),
-                        ),
-                        color: Colors.white,
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(5),
-                        child: Image.asset(
-                          _studentCardSignatureAsset,
-                          fit: BoxFit.contain,
-                          errorBuilder: (context, error, stackTrace) {
-                            return Center(
-                              child: Text(
-                                'Signature',
-                                style: Theme.of(context).textTheme.labelSmall
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: compact ? 6.2 : 7.0,
-                                    ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                    SizedBox(width: compact ? 6 : 8),
-                    Container(
-                      width: compact ? 34 : 42,
-                      height: compact ? 34 : 42,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: const Color(0xFF1F5C9E),
-                          width: 1.2,
-                        ),
-                        color: const Color(0xFFF2F7FF),
-                      ),
-                      child: ClipOval(
-                        child: Image.asset(
-                          _studentCardStampAsset,
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) {
-                            return Center(
-                              child: Text(
-                                'CACHET\nLTOB',
-                                textAlign: TextAlign.center,
-                                style: Theme.of(context).textTheme.labelSmall
-                                    ?.copyWith(
-                                      fontSize: compact ? 5.4 : 6.0,
-                                      color: const Color(0xFF1F5C9E),
-                                      fontWeight: FontWeight.w800,
-                                      height: 1.0,
-                                    ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -4452,27 +4484,39 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required bool compact,
   }) {
     return Padding(
-      padding: EdgeInsets.symmetric(vertical: compact ? 1.5 : 2.0),
-      child: RichText(
-        textAlign: TextAlign.center,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        text: TextSpan(
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: const Color(0xFF1A2A3C),
-            fontSize: compact ? 6.3 : 7.5,
+      padding: EdgeInsets.only(bottom: compact ? 2.2 : 2.8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          RichText(
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            text: TextSpan(
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: const Color(0xFF1A2A3C),
+                fontSize: compact ? 6.2 : 7.4,
+              ),
+              children: [
+                TextSpan(
+                  text: '$label : ',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF2C303B),
+                  ),
+                ),
+                TextSpan(
+                  text: value.trim().isEmpty ? '-' : value,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF19488A),
+                  ),
+                ),
+              ],
+            ),
           ),
-          children: [
-            TextSpan(
-              text: '$label: ',
-              style: const TextStyle(fontWeight: FontWeight.w800),
-            ),
-            TextSpan(
-              text: value.trim().isEmpty ? '-' : value,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
+          SizedBox(height: compact ? 1.1 : 1.5),
+          Container(height: 1, color: const Color(0xFFB8C6DA)),
+        ],
       ),
     );
   }

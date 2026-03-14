@@ -108,7 +108,7 @@ def pdf_output_response(pdf: FPDF, filename: str) -> HttpResponse:
     response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response["Pragma"] = "no-cache"
     response["Expires"] = "0"
-    response["X-Card-Template-Version"] = "2026-03-14-1"
+    response["X-Card-Template-Version"] = "2026-03-14-2"
     return response
 
 
@@ -223,82 +223,83 @@ def _draw_student_card_template(
         return
 
     compact = width < 72
-    line_w = max(0.13, min(0.5, width * 0.004))
-    inset = max(0.42, min(1.15, min(width, height) * 0.018))
-    content_pad_x = max(0.5, min(1.2, width * 0.015))
-    content_pad_y = max(0.42, min(1.0, height * 0.013))
+    outer_line_w = max(0.12, min(0.44, width * 0.0034))
+    inset = max(0.36, min(1.16, min(width, height) * 0.016))
+    pad_x = max(0.55, min(1.9, width * 0.014))
+    pad_y = max(0.45, min(1.45, height * 0.014))
 
-    pdf.set_fill_color(247, 250, 255)
-    pdf.set_draw_color(30, 79, 134)
-    pdf.set_line_width(line_w)
+    pdf.set_fill_color(246, 248, 252)
+    pdf.set_draw_color(90, 99, 114)
+    pdf.set_line_width(outer_line_w)
     pdf.rect(x, y, width, height, style="DF")
 
-    pdf.set_draw_color(133, 160, 198)
-    pdf.set_line_width(max(0.1, line_w * 0.5))
+    pdf.set_draw_color(160, 169, 184)
+    pdf.set_line_width(max(0.08, outer_line_w * 0.62))
     pdf.rect(x + inset, y + inset, width - (2 * inset), height - (2 * inset))
 
-    content_x = x + inset + content_pad_x
-    content_y = y + inset + content_pad_y
-    content_w = width - (2 * (inset + content_pad_x))
-    content_h = height - (2 * (inset + content_pad_y))
+    content_x = x + inset + pad_x
+    content_y = y + inset + pad_y
+    content_w = width - (2 * (inset + pad_x))
+    content_h = height - (2 * (inset + pad_y))
     if content_w <= 0 or content_h <= 0:
         return
 
-    school_name = _pdf_text("LYCEE TECHNIQUE OUMAR BAH")
-    school_short = _pdf_text("LTOB")
-    phone_line = _pdf_text("Tel : 78 78 59 13 / 66 74 22 32")
+    school_name_raw = (school.get("name") or "LYCEE TECHNIQUE OUMAR BAH").strip().upper()
+    school_short_raw = (school.get("short") or "LTOB").strip().upper()
+    school_level_raw = (school.get("level") or "1er ETAGE").strip().upper()
+    school_phone_raw = (school.get("phone") or "78 78 59 13 / 66 74 22 32").strip()
 
-    header_h = max(11.5, min(20.0, content_h * 0.24))
-    header_name_font = 9.8 if width >= 120 else 8.0 if width >= 85 else 6.3 if width >= 72 else 5.2
-    header_short_font = header_name_font * 0.87
-    phone_font = header_name_font * 0.65
+    school_name = _pdf_text(school_name_raw)
+    school_subtitle = _pdf_text(f"{school_short_raw} ({school_level_raw})")
+    school_phone = _pdf_text(f"Tel : {school_phone_raw}")
 
-    pdf.set_fill_color(234, 242, 255)
-    pdf.set_draw_color(138, 169, 209)
-    pdf.set_line_width(max(0.1, line_w * 0.55))
-    pdf.rect(content_x, content_y, content_w, header_h, style="DF")
+    header_h = max(8.7, min(16.2, content_h * 0.22))
+    header_name_font = 11.0 if width >= 120 else 8.8 if width >= 85 else 6.8 if width >= 72 else 5.8
+    header_sub_font = header_name_font * 0.86
+    header_phone_font = header_name_font * 0.66
 
-    pdf.set_text_color(14, 59, 115)
-    pdf.set_xy(content_x, content_y + 0.6)
+    pdf.set_text_color(20, 70, 136)
+    pdf.set_xy(content_x, content_y)
     pdf.set_font("Helvetica", "B", header_name_font)
-    pdf.cell(content_w, max(3.0, header_h * 0.28), school_name, align="C")
+    pdf.cell(content_w, max(2.7, header_h * 0.34), school_name, align="C")
 
-    pdf.set_xy(content_x, content_y + max(2.9, header_h * 0.28))
-    pdf.set_font("Helvetica", "B", header_short_font)
-    pdf.cell(content_w, max(2.4, header_h * 0.22), school_short, align="C")
+    pdf.set_text_color(44, 45, 59)
+    pdf.set_xy(content_x, content_y + max(2.5, header_h * 0.31))
+    pdf.set_font("Helvetica", "B", header_sub_font)
+    pdf.cell(content_w, max(2.3, header_h * 0.25), school_subtitle, align="C")
 
     pdf.set_text_color(177, 59, 67)
-    pdf.set_xy(content_x, content_y + max(5.0, header_h * 0.5))
-    pdf.set_font("Helvetica", "B", phone_font)
-    pdf.cell(content_w, max(2.2, header_h * 0.2), phone_line, align="C")
+    pdf.set_xy(content_x, content_y + max(4.8, header_h * 0.56))
+    pdf.set_font("Helvetica", "B", header_phone_font)
+    pdf.cell(content_w, max(2.0, header_h * 0.18), school_phone, align="C")
 
-    title_y = content_y + header_h + max(0.7, content_h * 0.014)
-    title_h = max(3.0, min(6.0, content_h * 0.09))
-    pdf.set_fill_color(26, 93, 168)
+    title_y = content_y + header_h + max(0.45, content_h * 0.008)
+    title_h = max(3.1, min(5.9, content_h * 0.088))
+    pdf.set_fill_color(27, 93, 168)
     pdf.rect(content_x, title_y, content_w, title_h, style="F")
     pdf.set_text_color(255, 255, 255)
-    pdf.set_xy(content_x, title_y + 0.1)
+    pdf.set_xy(content_x, title_y + 0.05)
     pdf.set_font(
         "Helvetica",
         "B",
-        10.4 if width >= 120 else 8.5 if width >= 85 else 6.7 if width >= 72 else 5.4,
+        10.6 if width >= 120 else 8.6 if width >= 85 else 6.8 if width >= 72 else 5.5,
     )
-    pdf.cell(content_w, title_h - 0.2, _pdf_text("CARTE SCOLAIRE"), align="C")
+    pdf.cell(content_w, max(2.0, title_h - 0.1), _pdf_text("CARTE SCOLAIRE"), align="C")
 
-    footer_h = max(8.5, min(15.0, content_h * 0.2))
-    body_top = title_y + title_h + max(0.75, content_h * 0.014)
-    body_bottom = content_y + content_h - footer_h - max(0.4, content_h * 0.008)
+    footer_h = max(10.2, min(17.6, content_h * 0.24))
+    body_top = title_y + title_h + max(0.62, content_h * 0.01)
+    body_bottom = content_y + content_h - footer_h - max(0.32, content_h * 0.006)
     if body_bottom <= body_top:
-        body_bottom = body_top + max(10.0, content_h * 0.3)
+        body_bottom = body_top + max(9.5, content_h * 0.28)
 
     photo_x = content_x
     photo_y = body_top
-    photo_w = max(13.0, min(34.0, content_w * (0.3 if not compact else 0.34)))
-    photo_h = max(16.0, body_bottom - body_top)
+    photo_w = max(13.0, min(34.0, content_w * (0.30 if not compact else 0.34)))
+    photo_h = max(15.0, body_bottom - body_top)
 
     pdf.set_fill_color(255, 255, 255)
-    pdf.set_draw_color(49, 102, 170)
-    pdf.set_line_width(max(0.1, line_w * 0.55))
+    pdf.set_draw_color(50, 106, 176)
+    pdf.set_line_width(max(0.09, outer_line_w * 0.57))
     pdf.rect(photo_x, photo_y, photo_w, photo_h, style="DF")
 
     photo_path = _student_photo_path(student)
@@ -306,20 +307,20 @@ def _draw_student_card_template(
         try:
             pdf.image(
                 photo_path,
-                x=photo_x + 0.6,
-                y=photo_y + 0.6,
-                w=max(1.0, photo_w - 1.2),
-                h=max(1.0, photo_h - 1.2),
+                x=photo_x + 0.5,
+                y=photo_y + 0.5,
+                w=max(1.0, photo_w - 1.0),
+                h=max(1.0, photo_h - 1.0),
             )
         except Exception:
             photo_path = None
 
     if not photo_path:
         pdf.set_fill_color(232, 238, 248)
-        pdf.rect(photo_x + 0.6, photo_y + 0.6, photo_w - 1.2, photo_h - 1.2, style="F")
+        pdf.rect(photo_x + 0.5, photo_y + 0.5, photo_w - 1.0, photo_h - 1.0, style="F")
         pdf.set_text_color(95, 108, 128)
-        pdf.set_xy(photo_x, photo_y + (photo_h / 2.0) - 1.5)
-        pdf.set_font("Helvetica", "B", 6.4 if width >= 85 else 5.0)
+        pdf.set_xy(photo_x, photo_y + (photo_h / 2.0) - 1.4)
+        pdf.set_font("Helvetica", "B", 6.1 if width >= 85 else 4.9)
         pdf.cell(photo_w, 2.6, _pdf_text("PHOTO"), align="C")
 
     first_name, last_name, _ = _student_name_parts(student)
@@ -327,36 +328,60 @@ def _draw_student_card_template(
     birth_date = student.birth_date.strftime("%d/%m/%Y") if student.birth_date else "-"
     year_label = _active_academic_year_label()
 
-    info_x = photo_x + photo_w + max(1.0, min(3.8, content_w * 0.027))
+    info_x = photo_x + photo_w + max(1.0, min(3.4, content_w * 0.024))
     info_w = max(8.0, (content_x + content_w) - info_x)
-    rows = [
+    label_w = max(6.5, min(info_w * 0.42, info_w - 4.0))
+    row_h = max(2.1, min(4.0, (body_bottom - body_top) * 0.135))
+    row_gap = max(0.45, min(1.25, row_h * 0.42))
+    label_font = 8.2 if width >= 120 else 6.7 if width >= 85 else 5.4 if width >= 72 else 4.7
+    value_font = label_font * 1.02
+    value_limit = 40 if width >= 120 else 31 if width >= 85 else 24 if width >= 72 else 17
+
+    def _draw_info_row(row_y: float, label: str, value: str) -> None:
+        pdf.set_xy(info_x, row_y)
+        pdf.set_text_color(44, 48, 59)
+        pdf.set_font("Helvetica", "B", label_font)
+        pdf.cell(label_w, row_h, _pdf_text(f"{label} :"), align="L")
+
+        pdf.set_xy(info_x + label_w, row_y)
+        pdf.set_text_color(25, 72, 138)
+        pdf.set_font("Helvetica", "B", value_font)
+        pdf.cell(info_w - label_w, row_h, _pdf_text(value or "-")[:value_limit], align="L")
+
+        _draw_card_separator_line(
+            pdf,
+            info_x,
+            row_y + row_h + 0.05,
+            info_x + info_w,
+        )
+
+    row_y = body_top + max(0.1, row_h * 0.05)
+    for label, value in [
         ("Nom", last_name),
         ("Prenom", first_name),
         ("Classe", class_name),
         ("Annee scolaire", year_label),
         ("Matricule", student.matricule or "-"),
-        ("Date de naissance", birth_date),
-    ]
-    row_h = (body_bottom - body_top) / len(rows)
-    info_font = 8.0 if width >= 120 else 6.8 if width >= 85 else 5.5 if width >= 72 else 4.7
-    value_limit = 45 if width >= 120 else 33 if width >= 85 else 24 if width >= 72 else 17
+    ]:
+        _draw_info_row(row_y, label, value)
+        row_y += row_h + row_gap
 
-    for index, (label, value) in enumerate(rows):
-        row_y = body_top + (row_h * index)
-        content = _pdf_text(f"{label}: {value}")[:value_limit]
-        pdf.set_xy(info_x, row_y + max(0.05, row_h * 0.06))
-        pdf.set_text_color(27, 42, 63)
-        pdf.set_font("Helvetica", "B", info_font)
-        pdf.cell(info_w, max(2.2, row_h * 0.58), content, align="C")
-        _draw_card_separator_line(pdf, info_x, row_y + (row_h * 0.82), info_x + info_w)
+    row_y += max(0.25, row_gap * 0.4)
+    _draw_info_row(row_y, "Ne(e) le", birth_date)
 
     footer_y = content_y + content_h - footer_h
-    stamp_d = max(8.0, min(22.0, footer_h - 0.8))
-    signature_w = max(14.0, min(34.0, content_w * 0.29))
-    signature_h = max(4.8, footer_h - 1.0)
-    footer_gap = max(0.9, min(2.6, content_w * 0.02))
-    footer_group_w = signature_w + footer_gap + stamp_d
-    footer_x = content_x + content_w - footer_group_w
+
+    card_digits = ""
+    if int(getattr(student, "id", 0) or 0) > 0:
+        card_digits = str(student.id).zfill(5)
+    if not card_digits:
+        raw_digits = "".join(ch for ch in str(student.matricule or "") if ch.isdigit())
+        card_digits = (raw_digits[-5:] if raw_digits else "00000").zfill(5)
+
+    number_x = content_x + max(0.15, content_w * 0.004)
+    number_y = footer_y + max(0.46, footer_h * 0.11)
+    number_label_font = 8.8 if width >= 120 else 6.9 if width >= 85 else 5.6 if width >= 72 else 4.8
+    number_value_font = number_label_font * 1.02
 
     signature_asset_path = _pdf_compatible_image_path(
         _school_signature_asset_path(),
@@ -367,48 +392,73 @@ def _draw_student_card_template(
         cache_prefix="stamp",
     )
 
-    pdf.set_fill_color(255, 255, 255)
-    pdf.set_draw_color(130, 148, 174)
-    pdf.set_line_width(max(0.08, line_w * 0.45))
-    pdf.rect(footer_x, footer_y, signature_w, signature_h, style="DF")
+    stamp_d = max(9.5, min(22.0, footer_h * 1.02))
+    stamp_x = content_x + content_w - stamp_d - max(0.25, content_w * 0.002)
+    stamp_y = footer_y + max(0.2, (footer_h - stamp_d) * 0.54)
+
+    signature_w = max(13.0, min(34.0, content_w * 0.30))
+    signature_h = max(4.3, min(9.0, footer_h * 0.48))
+    signature_x = stamp_x - signature_w - max(0.9, content_w * 0.015)
+    signature_y = footer_y + max(0.18, footer_h * 0.30)
+
+    number_max_x = max(number_x + 12.0, signature_x - max(0.8, content_w * 0.01))
+    number_line_w = max(8.0, number_max_x - number_x)
+
+    pdf.set_xy(number_x, number_y)
+    pdf.set_text_color(44, 48, 59)
+    pdf.set_font("Helvetica", "B", number_label_font)
+    label_text = _pdf_text("No de Carte :")
+    label_draw_w = min(number_line_w * 0.62, max(10.0, number_line_w - 8.0))
+    pdf.cell(label_draw_w, max(2.1, footer_h * 0.26), label_text, align="L")
+
+    pdf.set_xy(number_x + label_draw_w, number_y)
+    pdf.set_text_color(25, 72, 138)
+    pdf.set_font("Helvetica", "B", number_value_font)
+    pdf.cell(
+        max(2.0, number_line_w - label_draw_w),
+        max(2.1, footer_h * 0.26),
+        _pdf_text(card_digits),
+        align="L",
+    )
+    _draw_card_separator_line(
+        pdf,
+        number_x,
+        number_y + max(1.9, footer_h * 0.26),
+        number_x + number_line_w,
+    )
+
     if signature_asset_path:
         try:
             pdf.image(
                 signature_asset_path,
-                x=footer_x + 0.3,
-                y=footer_y + 0.3,
-                w=max(1.0, signature_w - 0.6),
-                h=max(1.0, signature_h - 0.6),
+                x=signature_x,
+                y=signature_y,
+                w=signature_w,
+                h=signature_h,
             )
         except Exception:
             signature_asset_path = None
 
     if not signature_asset_path:
-        line_y = footer_y + max(2.0, signature_h * 0.52)
-        pdf.set_draw_color(62, 97, 143)
-        pdf.line(footer_x + 1.0, line_y, footer_x + signature_w - 1.0, line_y)
-        pdf.set_xy(footer_x, line_y + 0.35)
-        pdf.set_text_color(47, 57, 72)
-        pdf.set_font("Helvetica", "B", 5.4 if width >= 85 else 4.5)
-        pdf.cell(signature_w, max(1.8, signature_h * 0.24), _pdf_text("Signature"), align="C")
+        line_y = signature_y + (signature_h * 0.58)
+        pdf.set_draw_color(55, 98, 156)
+        pdf.set_line_width(max(0.08, outer_line_w * 0.5))
+        pdf.line(signature_x + 0.4, line_y, signature_x + signature_w - 0.4, line_y)
 
-    stamp_x = footer_x + signature_w + footer_gap
-    stamp_y = footer_y + max(0.0, (signature_h - stamp_d) * 0.5)
+    pdf.set_xy(signature_x, signature_y + signature_h + max(0.18, footer_h * 0.02))
+    pdf.set_text_color(44, 48, 59)
+    pdf.set_font("Helvetica", "B", 5.9 if width >= 85 else 4.8)
+    pdf.cell(signature_w, max(1.8, footer_h * 0.2), _pdf_text("Le Principal"), align="C")
+
     if stamp_asset_path:
         try:
-            pdf.image(
-                stamp_asset_path,
-                x=stamp_x,
-                y=stamp_y,
-                w=stamp_d,
-                h=stamp_d,
-            )
+            pdf.image(stamp_asset_path, x=stamp_x, y=stamp_y, w=stamp_d, h=stamp_d)
         except Exception:
             stamp_asset_path = None
 
     if not stamp_asset_path:
         pdf.set_draw_color(31, 92, 158)
-        pdf.set_line_width(max(0.1, line_w * 0.55))
+        pdf.set_line_width(max(0.08, outer_line_w * 0.52))
         try:
             pdf.ellipse(stamp_x, stamp_y, stamp_d, stamp_d)
             pdf.ellipse(
@@ -425,14 +475,10 @@ def _draw_student_card_template(
                 stamp_d * 0.66,
                 stamp_d * 0.66,
             )
-
+        pdf.set_xy(stamp_x, stamp_y + (stamp_d * 0.48))
         pdf.set_text_color(31, 92, 158)
-        pdf.set_xy(stamp_x, stamp_y + (stamp_d * 0.37))
-        pdf.set_font("Helvetica", "B", 5.8 if width >= 85 else 4.8)
-        pdf.cell(stamp_d, stamp_d * 0.2, _pdf_text("LTOB"), align="C")
-        pdf.set_xy(stamp_x, stamp_y + (stamp_d * 0.57))
-        pdf.set_font("Helvetica", "B", 4.3 if width >= 85 else 3.7)
-        pdf.cell(stamp_d, stamp_d * 0.18, _pdf_text("Cachet"), align="C")
+        pdf.set_font("Helvetica", "B", 4.2 if width >= 85 else 3.5)
+        pdf.cell(stamp_d, stamp_d * 0.16, _pdf_text("Cachet"), align="C")
 
 
 def _add_student_card_page(
