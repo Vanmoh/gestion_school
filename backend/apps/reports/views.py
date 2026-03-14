@@ -1,3 +1,5 @@
+import hashlib
+import tempfile
 from pathlib import Path
 
 from django.conf import settings
@@ -8,6 +10,7 @@ from fpdf import FPDF
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from PIL import Image
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -53,6 +56,48 @@ def _school_stamp_asset_path() -> str | None:
         if candidate.exists():
             return str(candidate)
     return None
+
+
+def _pdf_compatible_image_path(source_path: str | None, *, cache_prefix: str) -> str | None:
+    if not source_path:
+        return None
+
+    source = Path(source_path)
+    if not source.exists():
+        return None
+
+    if source.suffix.lower() in {".jpg", ".jpeg"}:
+        return str(source)
+
+    try:
+        cache_dir = Path(tempfile.gettempdir()) / "gestion_school_pdf_assets"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        stat = source.stat()
+        cache_key = f"{source.resolve()}::{stat.st_mtime_ns}::{stat.st_size}"
+        cache_hash = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()[:12]
+        cached_file = cache_dir / f"{cache_prefix}_{cache_hash}.jpg"
+
+        if cached_file.exists():
+            return str(cached_file)
+
+        with Image.open(source) as image:
+            if image.mode in {"RGBA", "LA"}:
+                rgb = Image.new("RGB", image.size, (255, 255, 255))
+                rgb.paste(image.convert("RGB"), mask=image.getchannel("A"))
+            elif image.mode == "P":
+                rgba = image.convert("RGBA")
+                rgb = Image.new("RGB", rgba.size, (255, 255, 255))
+                rgb.paste(rgba, mask=rgba.getchannel("A"))
+            else:
+                rgb = image.convert("RGB")
+
+            rgb.save(cached_file, format="JPEG", quality=95, optimize=True)
+
+        return str(cached_file)
+    except Exception:
+        # Last resort: return original path and let FPDF attempt loading it.
+        return str(source)
 
 
 def pdf_output_response(pdf: FPDF, filename: str) -> HttpResponse:
@@ -308,8 +353,14 @@ def _draw_student_card_template(
     footer_group_w = signature_w + footer_gap + stamp_d
     footer_x = content_x + content_w - footer_group_w
 
-    signature_asset_path = _school_signature_asset_path()
-    stamp_asset_path = _school_stamp_asset_path()
+    signature_asset_path = _pdf_compatible_image_path(
+        _school_signature_asset_path(),
+        cache_prefix="signature",
+    )
+    stamp_asset_path = _pdf_compatible_image_path(
+        _school_stamp_asset_path(),
+        cache_prefix="stamp",
+    )
 
     pdf.set_fill_color(255, 255, 255)
     pdf.set_draw_color(130, 148, 174)
