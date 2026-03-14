@@ -176,10 +176,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
       final cacheBust = DateTime.now().millisecondsSinceEpoch;
       final response = await dio.get(
         '/reports/student-cards/class/$_selectedClassroomId/',
-        queryParameters: {
-          'layout_mode': _cardsLayoutMode,
-          '_ts': cacheBust,
-        },
+        queryParameters: {'layout_mode': _cardsLayoutMode, '_ts': cacheBust},
         options: Options(responseType: ResponseType.bytes),
       );
       final bytes = _toUint8List(response.data);
@@ -224,8 +221,22 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return RefreshIndicator(
+        onRefresh: _loadData,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(18),
+          children: const [
+            SizedBox(
+              height: 460,
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          ],
+        ),
+      );
     }
+
+    final colorScheme = Theme.of(context).colorScheme;
 
     final bulletinSearch = _bulletinSearchController.text.trim().toLowerCase();
     final bulletinRows = _students.where((row) {
@@ -268,497 +279,602 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
         : receiptRows.sublist(receiptStart, receiptEnd);
     final classRows = _classroomsFromStudents(_students);
 
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Rapports',
-                    style: Theme.of(context).textTheme.headlineSmall,
+    final totalPaymentsAmount = _payments.fold<double>(
+      0,
+      (sum, row) => sum + _toDouble(row['amount'] ?? row['paid_amount']),
+    );
+
+    final bulletinSection = Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Bulletin scolaire (PDF)',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              SizedBox(
+                width: 260,
+                child: DropdownButtonFormField<int>(
+                  initialValue: _selectedYearId,
+                  decoration: const InputDecoration(
+                    labelText: 'Annee academique',
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Générez les bulletins, reçus et exports Excel à partir des données réelles.',
-                    style: Theme.of(context).textTheme.bodyMedium,
+                  items: _years
+                      .map(
+                        (row) => DropdownMenuItem<int>(
+                          value: _asInt(row['id']),
+                          child: Text(_yearLabel(row)),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    setState(() => _selectedYearId = value);
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 220,
+                child: DropdownButtonFormField<String>(
+                  initialValue: _term,
+                  decoration: const InputDecoration(labelText: 'Trimestre'),
+                  items: const [
+                    DropdownMenuItem(value: '1', child: Text('Trimestre 1')),
+                    DropdownMenuItem(value: '2', child: Text('Trimestre 2')),
+                    DropdownMenuItem(value: '3', child: Text('Trimestre 3')),
+                  ],
+                  onChanged: (value) {
+                    setState(() => _term = value ?? '1');
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 300,
+                child: TextField(
+                  controller: _bulletinSearchController,
+                  decoration: const InputDecoration(
+                    labelText: 'Rechercher eleve',
+                    prefixIcon: Icon(Icons.search),
+                  ),
+                  onChanged: (_) {
+                    setState(() => _bulletinPage = 1);
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (pagedBulletinRows.isEmpty)
+            const Text('Aucun eleve trouve.')
+          else
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 46,
+                dataRowMinHeight: 52,
+                dataRowMaxHeight: 62,
+                columns: const [
+                  DataColumn(label: Text('Matricule')),
+                  DataColumn(label: Text('Eleve')),
+                  DataColumn(label: Text('Classe')),
+                  DataColumn(label: Text('Actions')),
+                ],
+                rows: pagedBulletinRows.map((row) {
+                  final rowId = _asInt(row['id']);
+                  final selected = rowId == _selectedStudentId;
+                  return DataRow(
+                    selected: selected,
+                    onSelectChanged: (_) {
+                      setState(() => _selectedStudentId = rowId);
+                    },
+                    cells: [
+                      DataCell(Text(_studentMatricule(row))),
+                      DataCell(Text(_studentName(row))),
+                      DataCell(Text(_studentClassName(row))),
+                      DataCell(
+                        Wrap(
+                          spacing: 4,
+                          children: [
+                            TextButton(
+                              onPressed: () {
+                                setState(() => _selectedStudentId = rowId);
+                              },
+                              child: const Text('Voir'),
+                            ),
+                            TextButton(
+                              onPressed: _busy
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        _selectedStudentId = rowId;
+                                      });
+                                      _printBulletin();
+                                    },
+                              child: const Text('Imprimer'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                bulletinRows.isEmpty
+                    ? 'Aucun resultat'
+                    : 'Affichage ${bulletinStart + 1}-$bulletinEnd sur ${bulletinRows.length}',
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Page precedente',
+                    onPressed: bulletinCurrentPage > 1
+                        ? () {
+                            setState(() {
+                              _bulletinPage = bulletinCurrentPage - 1;
+                            });
+                          }
+                        : null,
+                    icon: const Icon(Icons.chevron_left),
+                  ),
+                  Text('Page $bulletinCurrentPage / $bulletinTotalPages'),
+                  IconButton(
+                    tooltip: 'Page suivante',
+                    onPressed: bulletinCurrentPage < bulletinTotalPages
+                        ? () {
+                            setState(() {
+                              _bulletinPage = bulletinCurrentPage + 1;
+                            });
+                          }
+                        : null,
+                    icon: const Icon(Icons.chevron_right),
                   ),
                 ],
               ),
-            ),
-            OutlinedButton.icon(
-              onPressed: _busy ? null : _loadData,
-              icon: const Icon(Icons.sync),
-              label: const Text('Actualiser'),
-            ),
-          ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            onPressed: _busy ? null : _printBulletin,
+            icon: const Icon(Icons.picture_as_pdf),
+            label: const Text('Imprimer le bulletin selectionne'),
+          ),
+        ],
+      ),
+    );
+
+    final cardSection = Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
         ),
-        const SizedBox(height: 16),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Bulletin scolaire (PDF)',
-                  style: Theme.of(context).textTheme.titleMedium,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Carte scolaire (PDF)',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          const Text('Impression carte eleve individuelle ou par classe.'),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              SizedBox(
+                width: 320,
+                child: DropdownButtonFormField<int>(
+                  initialValue: _selectedStudentId,
+                  decoration: const InputDecoration(labelText: 'Eleve'),
+                  items: _students
+                      .map(
+                        (row) => DropdownMenuItem<int>(
+                          value: _asInt(row['id']),
+                          child: Text(_studentLabel(row)),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    setState(() => _selectedStudentId = value);
+                  },
                 ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    SizedBox(
-                      width: 260,
-                      child: DropdownButtonFormField<int>(
-                        initialValue: _selectedYearId,
-                        decoration: const InputDecoration(
-                          labelText: 'Année académique',
+              ),
+              SizedBox(
+                width: 260,
+                child: DropdownButtonFormField<int>(
+                  initialValue: _selectedClassroomId,
+                  decoration: const InputDecoration(labelText: 'Classe'),
+                  items: classRows
+                      .map(
+                        (row) => DropdownMenuItem<int>(
+                          value: _asInt(row['id']),
+                          child: Text(row['name']?.toString() ?? ''),
                         ),
-                        items: _years
-                            .map(
-                              (row) => DropdownMenuItem<int>(
-                                value: _asInt(row['id']),
-                                child: Text(_yearLabel(row)),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          setState(() => _selectedYearId = value);
+                      )
+                      .toList(),
+                  onChanged: classRows.isEmpty
+                      ? null
+                      : (value) {
+                          setState(() => _selectedClassroomId = value);
                         },
-                      ),
-                    ),
-                    SizedBox(
-                      width: 220,
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _term,
-                        decoration: const InputDecoration(
-                          labelText: 'Trimestre',
-                        ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: '1',
-                            child: Text('Trimestre 1'),
-                          ),
-                          DropdownMenuItem(
-                            value: '2',
-                            child: Text('Trimestre 2'),
-                          ),
-                          DropdownMenuItem(
-                            value: '3',
-                            child: Text('Trimestre 3'),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setState(() => _term = value ?? '1');
-                        },
-                      ),
-                    ),
-                    SizedBox(
-                      width: 300,
-                      child: TextField(
-                        controller: _bulletinSearchController,
-                        decoration: const InputDecoration(
-                          labelText: 'Rechercher élève',
-                          prefixIcon: Icon(Icons.search),
-                        ),
-                        onChanged: (_) {
-                          setState(() => _bulletinPage = 1);
-                        },
-                      ),
-                    ),
-                  ],
                 ),
-                const SizedBox(height: 12),
-                if (pagedBulletinRows.isEmpty)
-                  const Text('Aucun élève trouvé.')
-                else
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: DataTable(
-                      headingRowHeight: 46,
-                      dataRowMinHeight: 52,
-                      dataRowMaxHeight: 62,
-                      columns: const [
-                        DataColumn(label: Text('Matricule')),
-                        DataColumn(label: Text('Élève')),
-                        DataColumn(label: Text('Classe')),
-                        DataColumn(label: Text('Actions')),
-                      ],
-                      rows: pagedBulletinRows.map((row) {
-                        final rowId = _asInt(row['id']);
-                        final selected = rowId == _selectedStudentId;
-                        return DataRow(
-                          selected: selected,
-                          onSelectChanged: (_) {
-                            setState(() => _selectedStudentId = rowId);
-                          },
-                          cells: [
-                            DataCell(Text(_studentMatricule(row))),
-                            DataCell(Text(_studentName(row))),
-                            DataCell(Text(_studentClassName(row))),
-                            DataCell(
-                              Wrap(
-                                spacing: 4,
-                                children: [
-                                  TextButton(
-                                    onPressed: () {
-                                      setState(
-                                        () => _selectedStudentId = rowId,
-                                      );
-                                    },
-                                    child: const Text('Voir'),
-                                  ),
-                                  TextButton(
-                                    onPressed: _busy
-                                        ? null
-                                        : () {
-                                            setState(() {
-                                              _selectedStudentId = rowId;
-                                            });
-                                            _printBulletin();
-                                          },
-                                    child: const Text('Imprimer'),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        );
-                      }).toList(),
-                    ),
+              ),
+              SizedBox(
+                width: 250,
+                child: DropdownButtonFormField<String>(
+                  initialValue: _cardsLayoutMode,
+                  decoration: const InputDecoration(
+                    labelText: 'Mode impression cartes classe',
                   ),
-                const SizedBox(height: 8),
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      bulletinRows.isEmpty
-                          ? 'Aucun résultat'
-                          : 'Affichage ${bulletinStart + 1}-$bulletinEnd sur ${bulletinRows.length}',
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'standard',
+                      child: Text('Standard (1 carte / page)'),
                     ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          tooltip: 'Page précédente',
-                          onPressed: bulletinCurrentPage > 1
-                              ? () {
-                                  setState(() {
-                                    _bulletinPage = bulletinCurrentPage - 1;
-                                  });
-                                }
-                              : null,
-                          icon: const Icon(Icons.chevron_left),
-                        ),
-                        Text('Page $bulletinCurrentPage / $bulletinTotalPages'),
-                        IconButton(
-                          tooltip: 'Page suivante',
-                          onPressed: bulletinCurrentPage < bulletinTotalPages
-                              ? () {
-                                  setState(() {
-                                    _bulletinPage = bulletinCurrentPage + 1;
-                                  });
-                                }
-                              : null,
-                          icon: const Icon(Icons.chevron_right),
-                        ),
-                      ],
+                    DropdownMenuItem(
+                      value: 'a4_6up',
+                      child: Text('A4 (6 cartes / page)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'a4_9up',
+                      child: Text('A4 (9 cartes / page)'),
                     ),
                   ],
+                  onChanged: (value) {
+                    setState(() {
+                      _cardsLayoutMode = value ?? 'a4_6up';
+                    });
+                  },
                 ),
-                const SizedBox(height: 8),
-                FilledButton.icon(
-                  onPressed: _busy ? null : _printBulletin,
-                  icon: const Icon(Icons.picture_as_pdf),
-                  label: const Text('Imprimer le bulletin sélectionné'),
-                ),
-              ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: _busy ? null : _printStudentCard,
+                icon: const Icon(Icons.badge_outlined),
+                label: const Text('Imprimer carte eleve'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _busy || classRows.isEmpty ? null : _printClassCards,
+                icon: const Icon(Icons.grid_view_outlined),
+                label: const Text('Imprimer cartes classe'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    final receiptSection = Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Recu de paiement (PDF)',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: 320,
+            child: TextField(
+              controller: _receiptSearchController,
+              decoration: const InputDecoration(
+                labelText: 'Rechercher paiement',
+                prefixIcon: Icon(Icons.search),
+              ),
+              onChanged: (_) {
+                setState(() => _receiptPage = 1);
+              },
             ),
           ),
-        ),
-        const SizedBox(height: 14),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Carte scolaire (PDF)',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Modèle de carte scolaire adapté à la maquette fournie.',
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    SizedBox(
-                      width: 320,
-                      child: DropdownButtonFormField<int>(
-                        initialValue: _selectedStudentId,
-                        decoration: const InputDecoration(labelText: 'Élève'),
-                        items: _students
-                            .map(
-                              (row) => DropdownMenuItem<int>(
-                                value: _asInt(row['id']),
-                                child: Text(_studentLabel(row)),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          setState(() => _selectedStudentId = value);
-                        },
-                      ),
-                    ),
-                    SizedBox(
-                      width: 260,
-                      child: DropdownButtonFormField<int>(
-                        initialValue: _selectedClassroomId,
-                        decoration: const InputDecoration(labelText: 'Classe'),
-                        items: classRows
-                            .map(
-                              (row) => DropdownMenuItem<int>(
-                                value: _asInt(row['id']),
-                                child: Text(row['name']?.toString() ?? ''),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: classRows.isEmpty
-                            ? null
-                            : (value) {
-                                setState(() => _selectedClassroomId = value);
-                              },
-                      ),
-                    ),
-                    SizedBox(
-                      width: 250,
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _cardsLayoutMode,
-                        decoration: const InputDecoration(
-                          labelText: 'Mode impression cartes classe',
-                        ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'standard',
-                            child: Text('Standard (1 carte / page)'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'a4_6up',
-                            child: Text('A4 (6 cartes / page)'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'a4_9up',
-                            child: Text('A4 (9 cartes / page)'),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setState(() {
-                            _cardsLayoutMode = value ?? 'a4_6up';
-                          });
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: _busy ? null : _printStudentCard,
-                      icon: const Icon(Icons.badge_outlined),
-                      label: const Text('Imprimer carte élève'),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: _busy || classRows.isEmpty
-                          ? null
-                          : _printClassCards,
-                      icon: const Icon(Icons.grid_view_outlined),
-                      label: const Text('Imprimer cartes classe'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 14),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Reçu de paiement (PDF)',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: 320,
-                  child: TextField(
-                    controller: _receiptSearchController,
-                    decoration: const InputDecoration(
-                      labelText: 'Rechercher paiement',
-                      prefixIcon: Icon(Icons.search),
-                    ),
-                    onChanged: (_) {
-                      setState(() => _receiptPage = 1);
+          const SizedBox(height: 12),
+          if (pagedReceiptRows.isEmpty)
+            const Text('Aucun paiement trouve.')
+          else
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 46,
+                dataRowMinHeight: 52,
+                dataRowMaxHeight: 62,
+                columns: const [
+                  DataColumn(label: Text('ID')),
+                  DataColumn(label: Text('Eleve')),
+                  DataColumn(label: Text('Type frais')),
+                  DataColumn(label: Text('Montant')),
+                  DataColumn(label: Text('Date')),
+                  DataColumn(label: Text('Actions')),
+                ],
+                rows: pagedReceiptRows.map((row) {
+                  final rowId = _asInt(row['id']);
+                  final selected = rowId == _selectedPaymentId;
+                  return DataRow(
+                    selected: selected,
+                    onSelectChanged: (_) {
+                      setState(() => _selectedPaymentId = rowId);
                     },
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (pagedReceiptRows.isEmpty)
-                  const Text('Aucun paiement trouvé.')
-                else
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: DataTable(
-                      headingRowHeight: 46,
-                      dataRowMinHeight: 52,
-                      dataRowMaxHeight: 62,
-                      columns: const [
-                        DataColumn(label: Text('ID')),
-                        DataColumn(label: Text('Élève')),
-                        DataColumn(label: Text('Type frais')),
-                        DataColumn(label: Text('Montant')),
-                        DataColumn(label: Text('Date')),
-                        DataColumn(label: Text('Actions')),
-                      ],
-                      rows: pagedReceiptRows.map((row) {
-                        final rowId = _asInt(row['id']);
-                        final selected = rowId == _selectedPaymentId;
-                        return DataRow(
-                          selected: selected,
-                          onSelectChanged: (_) {
-                            setState(() => _selectedPaymentId = rowId);
-                          },
-                          cells: [
-                            DataCell(Text('#$rowId')),
-                            DataCell(Text(_paymentStudentName(row))),
-                            DataCell(Text(_paymentFeeType(row))),
-                            DataCell(Text(_paymentAmount(row))),
-                            DataCell(Text(_paymentDate(row))),
-                            DataCell(
-                              Wrap(
-                                spacing: 4,
-                                children: [
-                                  TextButton(
-                                    onPressed: () {
-                                      setState(
-                                        () => _selectedPaymentId = rowId,
-                                      );
+                    cells: [
+                      DataCell(Text('#$rowId')),
+                      DataCell(Text(_paymentStudentName(row))),
+                      DataCell(Text(_paymentFeeType(row))),
+                      DataCell(Text(_paymentAmount(row))),
+                      DataCell(Text(_paymentDate(row))),
+                      DataCell(
+                        Wrap(
+                          spacing: 4,
+                          children: [
+                            TextButton(
+                              onPressed: () {
+                                setState(() => _selectedPaymentId = rowId);
+                              },
+                              child: const Text('Voir'),
+                            ),
+                            TextButton(
+                              onPressed: _busy
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        _selectedPaymentId = rowId;
+                                      });
+                                      _printReceipt();
                                     },
-                                    child: const Text('Voir'),
-                                  ),
-                                  TextButton(
-                                    onPressed: _busy
-                                        ? null
-                                        : () {
-                                            setState(() {
-                                              _selectedPaymentId = rowId;
-                                            });
-                                            _printReceipt();
-                                          },
-                                    child: const Text('Imprimer'),
-                                  ),
-                                ],
-                              ),
+                              child: const Text('Imprimer'),
                             ),
                           ],
-                        );
-                      }).toList(),
-                    ),
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                receiptRows.isEmpty
+                    ? 'Aucun resultat'
+                    : 'Affichage ${receiptStart + 1}-$receiptEnd sur ${receiptRows.length}',
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Page precedente',
+                    onPressed: receiptCurrentPage > 1
+                        ? () {
+                            setState(() {
+                              _receiptPage = receiptCurrentPage - 1;
+                            });
+                          }
+                        : null,
+                    icon: const Icon(Icons.chevron_left),
                   ),
-                const SizedBox(height: 8),
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
+                  Text('Page $receiptCurrentPage / $receiptTotalPages'),
+                  IconButton(
+                    tooltip: 'Page suivante',
+                    onPressed: receiptCurrentPage < receiptTotalPages
+                        ? () {
+                            setState(() {
+                              _receiptPage = receiptCurrentPage + 1;
+                            });
+                          }
+                        : null,
+                    icon: const Icon(Icons.chevron_right),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          FilledButton.tonalIcon(
+            onPressed: _busy ? null : _printReceipt,
+            icon: const Icon(Icons.receipt_long),
+            label: const Text('Imprimer le recu selectionne'),
+          ),
+        ],
+      ),
+    );
+
+    final exportSection = Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Export paiements (Excel)',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Telecharge un fichier .xlsx avec l\'historique des paiements.',
+          ),
+          const SizedBox(height: 12),
+          FilledButton.tonalIcon(
+            onPressed: _busy ? null : _downloadPaymentsExcel,
+            icon: const Icon(Icons.table_view_outlined),
+            label: const Text('Exporter Excel'),
+          ),
+        ],
+      ),
+    );
+
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(18),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      receiptRows.isEmpty
-                          ? 'Aucun résultat'
-                          : 'Affichage ${receiptStart + 1}-$receiptEnd sur ${receiptRows.length}',
+                      'Rapports',
+                      style: Theme.of(context).textTheme.headlineSmall,
                     ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          tooltip: 'Page précédente',
-                          onPressed: receiptCurrentPage > 1
-                              ? () {
-                                  setState(() {
-                                    _receiptPage = receiptCurrentPage - 1;
-                                  });
-                                }
-                              : null,
-                          icon: const Icon(Icons.chevron_left),
-                        ),
-                        Text('Page $receiptCurrentPage / $receiptTotalPages'),
-                        IconButton(
-                          tooltip: 'Page suivante',
-                          onPressed: receiptCurrentPage < receiptTotalPages
-                              ? () {
-                                  setState(() {
-                                    _receiptPage = receiptCurrentPage + 1;
-                                  });
-                                }
-                              : null,
-                          icon: const Icon(Icons.chevron_right),
-                        ),
-                      ],
+                    const SizedBox(height: 6),
+                    Text(
+                      'Generation des bulletins, recus et exports a partir des donnees en production.',
+                      style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                FilledButton.tonalIcon(
-                  onPressed: _busy ? null : _printReceipt,
-                  icon: const Icon(Icons.receipt_long),
-                  label: const Text('Imprimer le reçu sélectionné'),
-                ),
-              ],
-            ),
+              ),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _loadData,
+                icon: const Icon(Icons.sync),
+                label: const Text('Actualiser'),
+              ),
+            ],
           ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          if (_busy) ...[
+            const SizedBox(height: 8),
+            const LinearProgressIndicator(),
+          ],
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+              ),
+            ),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
               children: [
-                Text(
-                  'Export paiements (Excel)',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Télécharge un fichier .xlsx avec l\'historique des paiements.',
-                ),
-                const SizedBox(height: 12),
-                FilledButton.tonalIcon(
-                  onPressed: _busy ? null : _downloadPaymentsExcel,
-                  icon: const Icon(Icons.table_view_outlined),
-                  label: const Text('Exporter Excel'),
+                _metricChip('Eleves', '${_students.length}'),
+                _metricChip('Annees', '${_years.length}'),
+                _metricChip('Paiements', '${_payments.length}'),
+                _metricChip('Classes', '${classRows.length}'),
+                _metricChip(
+                  'Montants traces',
+                  _paymentAmount({
+                    'amount': totalPaymentsAmount.toStringAsFixed(0),
+                  }),
                 ),
               ],
             ),
           ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isWide = constraints.maxWidth >= 1120;
+              if (isWide) {
+                return Column(
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(flex: 7, child: bulletinSection),
+                        const SizedBox(width: 12),
+                        Expanded(flex: 5, child: cardSection),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(flex: 7, child: receiptSection),
+                        const SizedBox(width: 12),
+                        Expanded(flex: 5, child: exportSection),
+                      ],
+                    ),
+                  ],
+                );
+              }
+
+              return Column(
+                children: [
+                  bulletinSection,
+                  const SizedBox(height: 12),
+                  cardSection,
+                  const SizedBox(height: 12),
+                  receiptSection,
+                  const SizedBox(height: 12),
+                  exportSection,
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metricChip(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
     );
   }
 
@@ -781,6 +897,11 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
   int _asInt(dynamic value) {
     if (value is int) return value;
     return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  double _toDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '0') ?? 0;
   }
 
   String _studentLabel(Map<String, dynamic> row) {
