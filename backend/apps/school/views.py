@@ -458,6 +458,10 @@ class PaymentViewSet(BaseModelViewSet):
             return queryset.filter(fee__student__parent__user_id=self.request.user.id)
         return queryset
 
+    def perform_create(self, serializer):
+        # The cashier shown on the receipt must be the user who records the payment.
+        serializer.save(received_by=self.request.user)
+
 
 class ExpenseViewSet(BaseModelViewSet):
     queryset = Expense.objects.all().order_by("-date")

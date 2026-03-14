@@ -182,101 +182,217 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     await Printing.layoutPdf(onLayout: (_) async => doc.save());
   }
 
+  Future<void> _refreshTimetable() async {
+    await _loadData();
+  }
+
+  Widget _metricChip(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionCard({required String title, required Widget child}) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          child,
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    final grouped = _groupedAssignments();
-
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        Text(
-          'Emploi du temps',
-          style: Theme.of(context).textTheme.headlineSmall,
-        ),
-        const SizedBox(height: 6),
-        Text(
-          'Vue pédagogique basée sur les affectations enseignants/matières/classes.',
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(
-                  value: 'classroom',
-                  label: Text('Par classe'),
-                  icon: Icon(Icons.class_rounded),
-                ),
-                ButtonSegment(
-                  value: 'teacher',
-                  label: Text('Par enseignant'),
-                  icon: Icon(Icons.badge_outlined),
-                ),
-              ],
-              selected: {_viewMode},
-              onSelectionChanged: (value) {
-                setState(() => _viewMode = value.first);
-              },
-            ),
-            FilledButton.tonalIcon(
-              onPressed: _printCurrentView,
-              icon: const Icon(Icons.picture_as_pdf),
-              label: const Text('Imprimer PDF'),
-            ),
-            FilledButton.tonalIcon(
-              onPressed: _loadData,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Actualiser'),
+      return RefreshIndicator(
+        onRefresh: _refreshTimetable,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(18),
+          children: const [
+            SizedBox(
+              height: 460,
+              child: Center(child: CircularProgressIndicator()),
             ),
           ],
         ),
-        const SizedBox(height: 14),
-        if (_assignments.isEmpty)
-          const Card(
-            child: Padding(
-              padding: EdgeInsets.all(16),
+      );
+    }
+
+    final grouped = _groupedAssignments();
+    final colorScheme = Theme.of(context).colorScheme;
+    final totalGroups = grouped.length;
+
+    final controlsPanel = _sectionCard(
+      title: 'Filtres et actions',
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(
+                value: 'classroom',
+                label: Text('Par classe'),
+                icon: Icon(Icons.class_rounded),
+              ),
+              ButtonSegment(
+                value: 'teacher',
+                label: Text('Par enseignant'),
+                icon: Icon(Icons.badge_outlined),
+              ),
+            ],
+            selected: {_viewMode},
+            onSelectionChanged: (value) {
+              setState(() => _viewMode = value.first);
+            },
+          ),
+          FilledButton.tonalIcon(
+            onPressed: _printCurrentView,
+            icon: const Icon(Icons.picture_as_pdf),
+            label: const Text('Imprimer PDF'),
+          ),
+          FilledButton.tonalIcon(
+            onPressed: _loadData,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Actualiser'),
+          ),
+        ],
+      ),
+    );
+
+    final groupsPanel = _sectionCard(
+      title: 'Affectations',
+      child: _assignments.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
               child: Text('Aucune affectation disponible.'),
+            )
+          : Column(
+              children: grouped.entries
+                  .map(
+                    (entry) => Card(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              entry.key,
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 6),
+                            ...entry.value.map(
+                              (row) => ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.schedule_outlined),
+                                title: Text(
+                                  '${row['subjectCode']} - ${row['subjectName']}',
+                                ),
+                                subtitle: Text(
+                                  'Classe: ${row['classroomName']} • Enseignant: ${row['teacherCode']}',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(),
             ),
-          )
-        else
-          ...grouped.entries.map(
-            (entry) => Card(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+    );
+
+    return RefreshIndicator(
+      onRefresh: _refreshTimetable,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(18),
+        children: [
+          Row(
+            children: [
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      entry.key,
-                      style: Theme.of(context).textTheme.titleMedium,
+                      'Emploi du temps',
+                      style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     const SizedBox(height: 6),
-                    ...entry.value.map(
-                      (row) => ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.schedule_outlined),
-                        title: Text(
-                          '${row['subjectCode']} - ${row['subjectName']}',
-                        ),
-                        subtitle: Text(
-                          'Classe: ${row['classroomName']} • Enseignant: ${row['teacherCode']}',
-                        ),
-                      ),
+                    Text(
+                      'Vue pedagogique basee sur les affectations enseignants/matieres/classes.',
+                      style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
                 ),
               ),
+              OutlinedButton.icon(
+                onPressed: _loadData,
+                icon: const Icon(Icons.sync),
+                label: const Text('Actualiser'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+              ),
+            ),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _metricChip('Enseignants', '${_teachers.length}'),
+                _metricChip('Matieres', '${_subjects.length}'),
+                _metricChip('Classes', '${_classrooms.length}'),
+                _metricChip('Affectations', '${_assignments.length}'),
+                _metricChip('Groupes', '$totalGroups'),
+              ],
             ),
           ),
-      ],
+          const SizedBox(height: 12),
+          controlsPanel,
+          const SizedBox(height: 12),
+          groupsPanel,
+        ],
+      ),
     );
   }
 

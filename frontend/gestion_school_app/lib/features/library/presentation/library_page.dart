@@ -176,183 +176,226 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     }
   }
 
+  Future<void> _refreshLibrary() async {
+    await _loadData();
+  }
+
+  Widget _metricChip(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionCard({required String title, required Widget child}) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          child,
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return RefreshIndicator(
+        onRefresh: _refreshLibrary,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(18),
+          children: const [
+            SizedBox(
+              height: 460,
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          ],
+        ),
+      );
     }
 
+    final colorScheme = Theme.of(context).colorScheme;
     final studentsById = {for (final s in _students) _asInt(s['id']): s};
     final booksById = {for (final b in _books) _asInt(b['id']): b};
 
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        Text('Bibliothèque', style: Theme.of(context).textTheme.headlineSmall),
-        const SizedBox(height: 6),
-        Text(
-          'Gestion des livres et suivi des emprunts/retours.',
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-        const SizedBox(height: 14),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Ajouter un livre',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _bookTitleController,
-                  decoration: const InputDecoration(labelText: 'Titre'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _bookAuthorController,
-                  decoration: const InputDecoration(labelText: 'Auteur'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _bookIsbnController,
-                  decoration: const InputDecoration(labelText: 'ISBN'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _bookTotalController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Quantité totale',
+    final availableBooks = _books.where((b) {
+      final qty = int.tryParse(b['quantity_available']?.toString() ?? '') ?? 0;
+      return qty > 0;
+    }).length;
+
+    final overdueBorrows = _borrows.where((br) {
+      final dueDateRaw = br['due_date']?.toString();
+      if (dueDateRaw == null || dueDateRaw.isEmpty) return false;
+      final dueDate = DateTime.tryParse(dueDateRaw);
+      if (dueDate == null) return false;
+      final returned =
+          br['returned_at'] != null &&
+          br['returned_at'].toString().trim().isNotEmpty;
+      return !returned && dueDate.isBefore(DateTime.now());
+    }).length;
+
+    final createBookPanel = _sectionCard(
+      title: 'Ajouter un livre',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _bookTitleController,
+            decoration: const InputDecoration(labelText: 'Titre'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _bookAuthorController,
+            decoration: const InputDecoration(labelText: 'Auteur'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _bookIsbnController,
+            decoration: const InputDecoration(labelText: 'ISBN'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _bookTotalController,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'Quantite totale'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _bookAvailableController,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'Quantite disponible'),
+          ),
+          const SizedBox(height: 10),
+          FilledButton(
+            onPressed: _saving ? null : _createBook,
+            child: const Text('Ajouter livre'),
+          ),
+        ],
+      ),
+    );
+
+    final createBorrowPanel = _sectionCard(
+      title: 'Enregistrer un emprunt',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DropdownButtonFormField<int>(
+            initialValue: _selectedBorrowStudent,
+            decoration: const InputDecoration(labelText: 'Eleve'),
+            items: _students
+                .map(
+                  (s) => DropdownMenuItem<int>(
+                    value: _asInt(s['id']),
+                    child: Text(
+                      '${s['matricule']} • ${s['user_full_name'] ?? ''}',
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _bookAvailableController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Quantité disponible',
+                )
+                .toList(),
+            onChanged: (v) => setState(() => _selectedBorrowStudent = v),
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<int>(
+            initialValue: _selectedBorrowBook,
+            decoration: const InputDecoration(labelText: 'Livre'),
+            items: _books
+                .map(
+                  (b) => DropdownMenuItem<int>(
+                    value: _asInt(b['id']),
+                    child: Text(
+                      '${b['title']} (dispo: ${b['quantity_available']})',
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                FilledButton(
-                  onPressed: _saving ? null : _createBook,
-                  child: const Text('Ajouter livre'),
-                ),
-              ],
+                )
+                .toList(),
+            onChanged: (v) => setState(() => _selectedBorrowBook = v),
+          ),
+          const SizedBox(height: 10),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Date emprunt'),
+            subtitle: Text(_apiDate(_borrowDate)),
+            trailing: const Icon(Icons.calendar_month),
+            onTap: () async {
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: _borrowDate,
+                firstDate: DateTime(2020),
+                lastDate: DateTime(2100),
+              );
+              if (picked != null) setState(() => _borrowDate = picked);
+            },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Date limite retour'),
+            subtitle: Text(_apiDate(_borrowDueDate)),
+            trailing: const Icon(Icons.calendar_month),
+            onTap: () async {
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: _borrowDueDate,
+                firstDate: DateTime(2020),
+                lastDate: DateTime(2100),
+              );
+              if (picked != null) setState(() => _borrowDueDate = picked);
+            },
+          ),
+          TextField(
+            controller: _borrowPenaltyController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Penalite (optionnel)',
             ),
           ),
-        ),
-        const SizedBox(height: 14),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Enregistrer un emprunt',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<int>(
-                  initialValue: _selectedBorrowStudent,
-                  decoration: const InputDecoration(labelText: 'Élève'),
-                  items: _students
-                      .map(
-                        (s) => DropdownMenuItem<int>(
-                          value: _asInt(s['id']),
-                          child: Text(
-                            '${s['matricule']} • ${s['user_full_name'] ?? ''}',
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedBorrowStudent = v),
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<int>(
-                  initialValue: _selectedBorrowBook,
-                  decoration: const InputDecoration(labelText: 'Livre'),
-                  items: _books
-                      .map(
-                        (b) => DropdownMenuItem<int>(
-                          value: _asInt(b['id']),
-                          child: Text(
-                            '${b['title']} (dispo: ${b['quantity_available']})',
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedBorrowBook = v),
-                ),
-                const SizedBox(height: 10),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Date emprunt'),
-                  subtitle: Text(_apiDate(_borrowDate)),
-                  trailing: const Icon(Icons.calendar_month),
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: _borrowDate,
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime(2100),
-                    );
-                    if (picked != null) setState(() => _borrowDate = picked);
-                  },
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Date limite retour'),
-                  subtitle: Text(_apiDate(_borrowDueDate)),
-                  trailing: const Icon(Icons.calendar_month),
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: _borrowDueDate,
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime(2100),
-                    );
-                    if (picked != null) setState(() => _borrowDueDate = picked);
-                  },
-                ),
-                TextField(
-                  controller: _borrowPenaltyController,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Pénalité (optionnel)',
-                  ),
-                ),
-                const SizedBox(height: 10),
-                FilledButton.tonal(
-                  onPressed: _saving ? null : _createBorrow,
-                  child: const Text('Créer emprunt'),
-                ),
-              ],
-            ),
+          const SizedBox(height: 10),
+          FilledButton.tonal(
+            onPressed: _saving ? null : _createBorrow,
+            child: const Text('Creer emprunt'),
           ),
-        ),
-        const SizedBox(height: 14),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Livres disponibles',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                if (_books.isEmpty)
-                  const Text('Aucun livre enregistré')
-                else
-                  ..._books.map(
+        ],
+      ),
+    );
+
+    final booksPanel = _sectionCard(
+      title: 'Livres disponibles',
+      child: _books.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Text('Aucun livre enregistre'),
+            )
+          : Column(
+              children: _books
+                  .map(
                     (b) => Card(
                       child: ListTile(
                         title: Text('${b['title']}'),
@@ -362,45 +405,130 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
                         ),
                       ),
                     ),
+                  )
+                  .toList(),
+            ),
+    );
+
+    final borrowsPanel = _sectionCard(
+      title: 'Historique emprunts',
+      child: _borrows.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Text('Aucun emprunt enregistre'),
+            )
+          : Column(
+              children: _borrows.map((br) {
+                final student = studentsById[_asInt(br['student'])];
+                final book = booksById[_asInt(br['book'])];
+                return Card(
+                  child: ListTile(
+                    title: Text('${book?['title'] ?? 'Livre'}'),
+                    subtitle: Text(
+                      '${student?['matricule'] ?? ''} • ${student?['user_full_name'] ?? ''}\n'
+                      '${br['borrowed_at']} -> ${br['due_date']}',
+                    ),
+                    isThreeLine: true,
                   ),
-              ],
+                );
+              }).toList(),
             ),
-          ),
-        ),
-        const SizedBox(height: 14),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Historique emprunts',
-                  style: Theme.of(context).textTheme.titleMedium,
+    );
+
+    return RefreshIndicator(
+      onRefresh: _refreshLibrary,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(18),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Bibliotheque',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Gestion des livres et suivi des emprunts/retours.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                if (_borrows.isEmpty)
-                  const Text('Aucun emprunt enregistré')
-                else
-                  ..._borrows.map((br) {
-                    final student = studentsById[_asInt(br['student'])];
-                    final book = booksById[_asInt(br['book'])];
-                    return Card(
-                      child: ListTile(
-                        title: Text('${book?['title'] ?? 'Livre'}'),
-                        subtitle: Text(
-                          '${student?['matricule'] ?? ''} • ${student?['user_full_name'] ?? ''}\n'
-                          '${br['borrowed_at']} → ${br['due_date']}',
-                        ),
-                        isThreeLine: true,
-                      ),
-                    );
-                  }),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _loadData,
+                icon: const Icon(Icons.sync),
+                label: const Text('Actualiser'),
+              ),
+            ],
+          ),
+          if (_saving) ...[
+            const SizedBox(height: 8),
+            const LinearProgressIndicator(),
+          ],
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+              ),
+            ),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _metricChip('Livres', '${_books.length}'),
+                _metricChip('Disponibles', '$availableBooks'),
+                _metricChip('Emprunts', '${_borrows.length}'),
+                _metricChip('Retards', '$overdueBorrows'),
+                _metricChip('Eleves', '${_students.length}'),
               ],
             ),
           ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isWide = constraints.maxWidth >= 1120;
+              final leftPanel = Column(
+                children: [
+                  createBookPanel,
+                  const SizedBox(height: 12),
+                  createBorrowPanel,
+                ],
+              );
+              final rightPanel = Column(
+                children: [
+                  booksPanel,
+                  const SizedBox(height: 12),
+                  borrowsPanel,
+                ],
+              );
+
+              if (isWide) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 6, child: leftPanel),
+                    const SizedBox(width: 12),
+                    Expanded(flex: 5, child: rightPanel),
+                  ],
+                );
+              }
+
+              return Column(
+                children: [leftPanel, const SizedBox(height: 12), rightPanel],
+              );
+            },
+          ),
+        ],
+      ),
     );
   }
 
