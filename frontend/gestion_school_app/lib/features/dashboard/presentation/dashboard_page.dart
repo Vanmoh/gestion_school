@@ -12,7 +12,11 @@ class DashboardPage extends ConsumerWidget {
 
   Future<void> _refreshDashboard(WidgetRef ref) async {
     ref.invalidate(dashboardStatsProvider);
-    await ref.read(dashboardStatsProvider.future);
+    try {
+      await ref.read(dashboardStatsProvider.future);
+    } catch (_) {
+      // Keep refresh gesture responsive even when backend is temporarily down.
+    }
   }
 
   @override
@@ -20,35 +24,59 @@ class DashboardPage extends ConsumerWidget {
     final statsAsync = ref.watch(dashboardStatsProvider);
 
     return statsAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (error, _) => Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Card(
-            child: Padding(
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Impossible de charger le tableau de bord',
-                    style: Theme.of(context).textTheme.titleLarge,
+      loading: () => RefreshIndicator(
+        onRefresh: () => _refreshDashboard(ref),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
+          children: const [
+            SizedBox(
+              height: 420,
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          ],
+        ),
+      ),
+      error: (error, _) => RefreshIndicator(
+        onRefresh: () => _refreshDashboard(ref),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
+          children: [
+            SizedBox(
+              height: 420,
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(18),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Impossible de charger le tableau de bord',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 8),
+                          Text('Erreur: $error'),
+                          const SizedBox(height: 12),
+                          FilledButton.icon(
+                            onPressed: () {
+                              _refreshDashboard(ref);
+                            },
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text('Réessayer'),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: 8),
-                  Text('Erreur: $error'),
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: () {
-                      _refreshDashboard(ref);
-                    },
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Réessayer'),
-                  ),
-                ],
+                ),
               ),
             ),
-          ),
+          ],
         ),
       ),
       data: (stats) {

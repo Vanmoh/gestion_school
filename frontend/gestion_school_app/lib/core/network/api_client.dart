@@ -5,13 +5,24 @@ import 'token_storage.dart';
 
 final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
 
+bool _isTransientNetworkError(DioException error) {
+  return error.type == DioExceptionType.connectionTimeout ||
+      error.type == DioExceptionType.receiveTimeout ||
+      error.type == DioExceptionType.connectionError;
+}
+
+bool _isIdempotentMethod(String method) {
+  final normalized = method.toUpperCase();
+  return normalized == 'GET' || normalized == 'HEAD' || normalized == 'OPTIONS';
+}
+
 final dioProvider = Provider<Dio>((ref) {
   final tokenStorage = ref.read(tokenStorageProvider);
   final dio = Dio(
     BaseOptions(
       baseUrl: ApiConstants.baseUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 15),
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 45),
       headers: {'Content-Type': 'application/json'},
     ),
   );
@@ -55,8 +66,8 @@ final dioProvider = Provider<Dio>((ref) {
               final refreshDio = Dio(
                 BaseOptions(
                   baseUrl: effectiveBaseUrl,
-                  connectTimeout: const Duration(seconds: 10),
-                  receiveTimeout: const Duration(seconds: 15),
+                  connectTimeout: const Duration(seconds: 30),
+                  receiveTimeout: const Duration(seconds: 45),
                   headers: {'Content-Type': 'application/json'},
                 ),
               );
@@ -88,6 +99,23 @@ final dioProvider = Provider<Dio>((ref) {
             } catch (_) {
               await tokenStorage.clear();
             }
+          }
+        }
+
+        final canRetryNetworkError =
+            _isTransientNetworkError(error) &&
+            _isIdempotentMethod(request.method) &&
+            request.extra['retried_network'] != true;
+
+        if (canRetryNetworkError) {
+          final retriedOptions = request.copyWith();
+          retriedOptions.extra['retried_network'] = true;
+          try {
+            final response = await dio.fetch(retriedOptions);
+            handler.resolve(response);
+            return;
+          } catch (_) {
+            // Continue with original error if retry fails.
           }
         }
 

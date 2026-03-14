@@ -3549,13 +3549,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           ],
                         ),
                       ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Carte scolaire (aperçu)',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 8),
-                      _studentDesignCardPreview(_selectedStudent!),
                       const SizedBox(height: 12),
                       if (_detailLoading)
                         const Padding(
