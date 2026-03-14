@@ -17,6 +17,7 @@
     <p>Montant payé : {{ payment.amount }}</p>
     <p>Méthode : {{ payment.method }}</p>
     <p>Référence : {{ payment.reference }}</p>
+    <p>Encaisse par : {% if payment.received_by %}{{ payment.received_by.get_full_name|default:payment.received_by.username }}{% else %}-{% endif %}</p>
     <p>Date : {{ payment.created_at|date:"d/m/Y H:i" }}</p>
   </div>
 </body>

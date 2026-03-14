@@ -37,6 +37,42 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     super.dispose();
   }
 
+  Future<void> _refreshExams() async {
+    ref.invalidate(examSessionsProvider);
+    ref.invalidate(examPlanningsProvider);
+    ref.invalidate(examResultsProvider);
+    ref.invalidate(examInvigilationsProvider);
+    ref.invalidate(examAcademicYearsProvider);
+    ref.invalidate(examClassroomsProvider);
+    ref.invalidate(examSubjectsProvider);
+    ref.invalidate(examStudentsProvider);
+    ref.invalidate(examSupervisorsProvider);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+  }
+
+  Widget _metricChip(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sessionsAsync = ref.watch(examSessionsProvider);
@@ -50,6 +86,11 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     final supervisorsAsync = ref.watch(examSupervisorsProvider);
     final mutationState = ref.watch(examMutationProvider);
     final planningsSnapshot = planningsAsync.valueOrNull ?? const [];
+    final sessionsCount = sessionsAsync.valueOrNull?.length ?? 0;
+    final planningsCount = planningsAsync.valueOrNull?.length ?? 0;
+    final resultsCount = resultsAsync.valueOrNull?.length ?? 0;
+    final invigilationsCount = invigilationsAsync.valueOrNull?.length ?? 0;
+    final colorScheme = Theme.of(context).colorScheme;
 
     ref.listen<AsyncValue<void>>(examMutationProvider, (prev, next) {
       if (prev?.isLoading == true && !next.isLoading && mounted) {
@@ -65,18 +106,61 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
       }
     });
 
-    return Scaffold(
-      body: ListView(
+    return RefreshIndicator(
+      onRefresh: _refreshExams,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(16),
         children: [
-          Text(
-            'Gestion des examens',
-            style: Theme.of(context).textTheme.headlineSmall,
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Gestion des examens',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Sessions, plannings et publication des resultats.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: mutationState.isLoading ? null : _refreshExams,
+                icon: const Icon(Icons.sync),
+                label: const Text('Actualiser'),
+              ),
+            ],
           ),
-          const SizedBox(height: 6),
-          Text(
-            'Sessions, plannings et publication des résultats.',
-            style: Theme.of(context).textTheme.bodyMedium,
+          if (mutationState.isLoading) ...[
+            const SizedBox(height: 8),
+            const LinearProgressIndicator(),
+          ],
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+              ),
+            ),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _metricChip('Sessions', '$sessionsCount'),
+                _metricChip('Plannings', '$planningsCount'),
+                _metricChip('Surveillances', '$invigilationsCount'),
+                _metricChip('Resultats', '$resultsCount'),
+              ],
+            ),
           ),
           const SizedBox(height: 14),
           Card(
