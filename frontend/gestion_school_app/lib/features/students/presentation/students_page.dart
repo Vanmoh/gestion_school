@@ -23,9 +23,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   Timer? _searchDebounce;
 
   static const List<int> _tableRowsPerPageOptions = [10, 15, 25, 50];
-  static const String _studentCardTemplateAsset =
-      'assets/images/student_card_template.png';
-  static const double _studentCardTemplateAspectRatio = 1024 / 1536;
+  static const double _studentCardTemplateAspectRatio = 148 / 105;
+  static const String _studentCardStampAsset =
+      'assets/images/str_cachet_signature.png';
+  static const String _studentCardSignatureAsset =
+      'assets/images/str_signature.png';
   int _tableRowsPerPage = 15;
   int _tablePage = 1;
 
@@ -3549,7 +3551,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        'Carte étudiant (aperçu design)',
+                        'Carte scolaire (aperçu)',
                         style: Theme.of(context).textTheme.titleSmall,
                       ),
                       const SizedBox(height: 8),
@@ -4187,166 +4189,287 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final classLabel = student.classroomName.trim().isEmpty
         ? 'Non attribuée'
         : student.classroomName;
-    final statusLabel = student.isArchived ? 'Archivé' : 'Actif';
-    final profileBlockWidth = compact ? 56.0 : 68.0;
+    final firstName = student.firstName.trim().isEmpty
+        ? '-'
+        : student.firstName;
+    final lastName = student.lastName.trim().isEmpty ? '-' : student.lastName;
+    final yearLabel = _activeAcademicYearLabel();
+    final birthLabel = student.birthDate == null
+        ? '-'
+        : '${student.birthDate!.day.toString().padLeft(2, '0')}/${student.birthDate!.month.toString().padLeft(2, '0')}/${student.birthDate!.year.toString().padLeft(4, '0')}';
+    final padding = compact ? 8.0 : 11.0;
+    final photoWidth = compact ? 58.0 : 76.0;
+    final phoneLine = 'Tel : 78 78 59 13 / 66 74 22 32';
 
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: scheme.outlineVariant.withValues(alpha: 0.62),
-        ),
+        border: Border.all(color: const Color(0xFF1F4F86), width: 1.2),
+        color: const Color(0xFFF7FAFF),
       ),
       clipBehavior: Clip.antiAlias,
       child: AspectRatio(
         aspectRatio: _studentCardTemplateAspectRatio,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Image.asset(
-              _studentCardTemplateAsset,
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
-                return ColoredBox(
-                  color: scheme.surfaceContainerLowest,
-                  child: Center(
-                    child: Text(
-                      'Template carte indisponible',
-                      style: Theme.of(context).textTheme.bodySmall,
+        child: Padding(
+          padding: EdgeInsets.all(padding),
+          child: Column(
+            children: [
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.fromLTRB(
+                  compact ? 6 : 8,
+                  compact ? 5 : 7,
+                  compact ? 6 : 8,
+                  compact ? 4 : 6,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF2FF),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF8AA9D1)),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      'LYCEE TECHNIQUE OUMAR BAH',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFF0E3B73),
+                        fontSize: compact ? 9.0 : 11.0,
+                        letterSpacing: 0.2,
+                      ),
                     ),
-                  ),
-                );
-              },
-            ),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withValues(alpha: 0.1),
-                    Colors.black.withValues(alpha: 0.58),
+                    Text(
+                      'LTOB',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w900,
+                        color: const Color(0xFF0E3B73),
+                        fontSize: compact ? 8.0 : 9.5,
+                      ),
+                    ),
+                    Text(
+                      phoneLine,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFFB13B43),
+                        fontSize: compact ? 6.2 : 7.1,
+                      ),
+                    ),
                   ],
-                  stops: const [0.52, 0.72, 1],
                 ),
               ),
-            ),
-            Positioned(
-              top: compact ? 8 : 10,
-              right: compact ? 8 : 10,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              SizedBox(height: compact ? 5 : 7),
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.symmetric(vertical: compact ? 3 : 4),
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.48),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.25),
-                  ),
+                  color: const Color(0xFF1A5DA8),
+                  borderRadius: BorderRadius.circular(7),
                 ),
                 child: Text(
-                  statusLabel,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  'CARTE SCOLAIRE',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
                     color: Colors.white,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                    fontSize: compact ? 8.2 : 10.2,
                   ),
                 ),
               ),
-            ),
-            Positioned(
-              left: compact ? 8 : 10,
-              right: compact ? 8 : 10,
-              bottom: compact ? 8 : 10,
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.5),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.2),
-                  ),
-                ),
+              SizedBox(height: compact ? 5 : 7),
+              Expanded(
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    Container(
+                      width: photoWidth,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        color: Colors.white,
+                        border: Border.all(color: const Color(0xFF3A6FAE)),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(7),
+                        child: _studentCardPhoto(student),
+                      ),
+                    ),
+                    SizedBox(width: compact ? 7 : 10),
                     Expanded(
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Text(
-                            student.fullName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                          _studentCardInfoRow(
+                            'Nom',
+                            lastName,
+                            compact: compact,
                           ),
-                          const SizedBox(height: 1),
-                          Text(
-                            'Matricule: ${student.matricule}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: Colors.white),
+                          _studentCardInfoRow(
+                            'Prénom',
+                            firstName,
+                            compact: compact,
                           ),
-                          const SizedBox(height: 5),
-                          Wrap(
-                            spacing: 6,
-                            runSpacing: 6,
-                            children: [
-                              _studentCardTag(
-                                'Classe',
-                                classLabel,
-                                onDark: true,
-                              ),
-                              _studentCardTag(
-                                'Année',
-                                _activeAcademicYearLabel(),
-                                onDark: true,
-                              ),
-                            ],
+                          _studentCardInfoRow(
+                            'Classe',
+                            classLabel,
+                            compact: compact,
+                          ),
+                          _studentCardInfoRow(
+                            'Année scolaire',
+                            yearLabel,
+                            compact: compact,
+                          ),
+                          _studentCardInfoRow(
+                            'Matricule',
+                            student.matricule,
+                            compact: compact,
+                          ),
+                          _studentCardInfoRow(
+                            'Date de naissance',
+                            birthLabel,
+                            compact: compact,
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        width: profileBlockWidth,
-                        height: profileBlockWidth + 6,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.18),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.3),
-                          ),
+                  ],
+                ),
+              ),
+              SizedBox(height: compact ? 5 : 7),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: compact ? 74 : 96,
+                      height: compact ? 34 : 42,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: compact ? 3 : 4,
+                        vertical: compact ? 2 : 3,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: scheme.outlineVariant.withValues(alpha: 0.75),
                         ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(
-                              Icons.person_outline,
-                              color: Colors.white,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Profil',
-                              style: Theme.of(context).textTheme.labelSmall
-                                  ?.copyWith(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                            ),
-                          ],
+                        color: Colors.white,
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(5),
+                        child: Image.asset(
+                          _studentCardSignatureAsset,
+                          fit: BoxFit.contain,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Center(
+                              child: Text(
+                                'Signature',
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: compact ? 6.2 : 7.0,
+                                    ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: compact ? 6 : 8),
+                    Container(
+                      width: compact ? 34 : 42,
+                      height: compact ? 34 : 42,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: const Color(0xFF1F5C9E),
+                          width: 1.2,
+                        ),
+                        color: const Color(0xFFF2F7FF),
+                      ),
+                      child: ClipOval(
+                        child: Image.asset(
+                          _studentCardStampAsset,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Center(
+                              child: Text(
+                                'CACHET\nLTOB',
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(
+                                      fontSize: compact ? 5.4 : 6.0,
+                                      color: const Color(0xFF1F5C9E),
+                                      fontWeight: FontWeight.w800,
+                                      height: 1.0,
+                                    ),
+                              ),
+                            );
+                          },
                         ),
                       ),
                     ),
                   ],
                 ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _studentCardPhoto(Student student) {
+    final rawPath = student.photo.trim();
+    if (rawPath.isEmpty) {
+      return _studentCardPhotoPlaceholder();
+    }
+
+    final imageUrl = _resolveMediaUrl(rawPath);
+    return Image.network(
+      imageUrl,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) {
+        return _studentCardPhotoPlaceholder();
+      },
+    );
+  }
+
+  Widget _studentCardPhotoPlaceholder() {
+    return Container(
+      color: const Color(0xFFE8EEF8),
+      child: const Center(
+        child: Icon(Icons.person_outline, color: Color(0xFF6A7D99)),
+      ),
+    );
+  }
+
+  Widget _studentCardInfoRow(
+    String label,
+    String value, {
+    required bool compact,
+  }) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: compact ? 1.5 : 2.0),
+      child: RichText(
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        text: TextSpan(
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: const Color(0xFF1A2A3C),
+            fontSize: compact ? 6.3 : 7.5,
+          ),
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            TextSpan(
+              text: value.trim().isEmpty ? '-' : value,
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ],
         ),
