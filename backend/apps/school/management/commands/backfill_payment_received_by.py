@@ -43,22 +43,46 @@ class Command(BaseCommand):
             type=int,
             help="Only process the N oldest payments with received_by=NULL.",
         )
+        parser.add_argument(
+            "--list-users",
+            action="store_true",
+            help="List available users (id, username, role) and exit.",
+        )
+        parser.add_argument(
+            "--fallback-auto",
+            action="store_true",
+            help=(
+                "Auto-select fallback cashier when unique candidate exists "
+                "(priority: accountant, director, super_admin)."
+            ),
+        )
 
     def handle(self, *args, **options):
         dry_run = options["dry_run"]
         window_seconds = max(15, int(options["window_seconds"]))
         fallback_user_id = options.get("fallback_user_id")
         fallback_username = options.get("fallback_username")
+        fallback_auto = options.get("fallback_auto", False)
         limit = options.get("limit")
+
+        if options.get("list_users"):
+            self._print_users()
+            return
 
         if fallback_user_id and fallback_username:
             raise CommandError(
                 "Use either --fallback-user-id or --fallback-username, not both."
             )
 
+        if fallback_auto and (fallback_user_id or fallback_username):
+            raise CommandError(
+                "Use --fallback-auto alone, or provide --fallback-user-id / --fallback-username."
+            )
+
         fallback_user = self._resolve_fallback_user(
             fallback_user_id=fallback_user_id,
             fallback_username=fallback_username,
+            fallback_auto=fallback_auto,
         )
 
         queryset = Payment.objects.filter(received_by__isnull=True).select_related("fee")
@@ -125,7 +149,12 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.SUCCESS(summary))
 
-    def _resolve_fallback_user(self, fallback_user_id=None, fallback_username=None):
+    def _resolve_fallback_user(
+        self,
+        fallback_user_id=None,
+        fallback_username=None,
+        fallback_auto=False,
+    ):
         User = get_user_model()
 
         if fallback_user_id is not None:
@@ -140,11 +169,59 @@ class Command(BaseCommand):
             try:
                 return User.objects.get(username=fallback_username)
             except User.DoesNotExist as exc:
+                examples = list(
+                    User.objects.order_by("id").values_list("username", flat=True)[:12]
+                )
+                sample = ", ".join(examples) if examples else "<no user>"
                 raise CommandError(
-                    f"No user found with username='{fallback_username}'."
+                    f"No user found with username='{fallback_username}'. "
+                    f"Try --list-users. Sample usernames: {sample}"
                 ) from exc
 
+        if fallback_auto:
+            for role in ("accountant", "director", "super_admin"):
+                role_users = list(User.objects.filter(role=role, is_active=True).order_by("id")[:3])
+                if len(role_users) == 1:
+                    selected = role_users[0]
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"[AUTO] Fallback user selected: user#{selected.id} "
+                            f"({self._display_user(selected)} | {selected.username} | {selected.role})"
+                        )
+                    )
+                    return selected
+
+            candidates = list(
+                User.objects.filter(is_active=True)
+                .order_by("id")
+                .values_list("id", "username", "role")[:12]
+            )
+            display = ", ".join(
+                [f"#{u[0]}:{u[1]}({u[2]})" for u in candidates]
+            )
+            raise CommandError(
+                "Unable to auto-select a unique fallback user. "
+                "Use --fallback-username or --fallback-user-id. "
+                f"Candidates: {display or '<none>'}"
+            )
+
         return None
+
+    def _print_users(self):
+        User = get_user_model()
+        rows = list(
+            User.objects.order_by("id").values_list(
+                "id", "username", "role", "first_name", "last_name", "is_active"
+            )
+        )
+        self.stdout.write(f"Users: {len(rows)}")
+        for row in rows:
+            user_id, username, role, first_name, last_name, is_active = row
+            full_name = f"{(first_name or '').strip()} {(last_name or '').strip()}".strip()
+            status = "active" if is_active else "inactive"
+            self.stdout.write(
+                f"- #{user_id} | {username} | {role} | {full_name or '-'} | {status}"
+            )
 
     def _infer_user_from_logs(self, payment: Payment, window_seconds: int):
         start = payment.created_at - timedelta(seconds=window_seconds)
