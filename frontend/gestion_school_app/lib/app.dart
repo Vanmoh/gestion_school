@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/constants/branding.dart';
 import 'core/theme/app_theme.dart';
+import 'features/attendance/presentation/attendance_controller.dart';
 import 'features/attendance/presentation/attendance_page.dart';
 import 'features/attendance/presentation/teacher_attendance_page.dart';
 import 'features/academics/presentation/academics_page.dart';
@@ -10,21 +11,127 @@ import 'features/auth/presentation/auth_controller.dart';
 import 'features/auth/domain/auth_user.dart';
 import 'features/auth/presentation/login_page.dart';
 import 'features/canteen/presentation/canteen_page.dart';
+import 'features/dashboard/presentation/dashboard_controller.dart';
 import 'features/dashboard/presentation/dashboard_page.dart';
+import 'features/exams/presentation/exams_controller.dart';
 import 'features/exams/presentation/exams_page.dart';
 import 'features/communication/presentation/communication_page.dart';
 import 'features/discipline/presentation/discipline_page.dart';
 import 'features/grades/presentation/grades_page.dart';
 import 'features/library/presentation/library_page.dart';
+import 'features/payments/presentation/payments_controller.dart';
 import 'features/payments/presentation/payments_page.dart';
 import 'features/reports/presentation/reports_page.dart';
 import 'features/stock/presentation/stock_page.dart';
+import 'features/students/presentation/students_controller.dart';
 import 'features/students/presentation/students_page.dart';
 import 'features/teachers/presentation/teachers_page.dart';
 import 'features/timetable/presentation/timetable_page.dart';
+import 'features/users/presentation/users_controller.dart';
 import 'features/users/presentation/users_page.dart';
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
+
+class _AppScrollBehavior extends MaterialScrollBehavior {
+  const _AppScrollBehavior();
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) {
+    final parent = super.getScrollPhysics(context);
+    return const AlwaysScrollableScrollPhysics().applyTo(parent);
+  }
+}
+
+Future<void> _invalidateRefreshProvidersForView(
+  WidgetRef ref,
+  Widget view,
+) async {
+  if (view is DashboardPage) {
+    ref.invalidate(dashboardStatsProvider);
+    await ref.read(dashboardStatsProvider.future);
+    return;
+  }
+
+  if (view is AttendancePage || view is TeacherAttendancePage) {
+    ref.invalidate(attendanceStudentsProvider);
+    ref.invalidate(attendancesProvider);
+    ref.invalidate(attendanceMonthlyStatsProvider);
+    await ref.read(attendancesProvider.future);
+    return;
+  }
+
+  if (view is ExamsPage) {
+    ref.invalidate(examSessionsProvider);
+    ref.invalidate(examPlanningsProvider);
+    ref.invalidate(examResultsProvider);
+    ref.invalidate(examInvigilationsProvider);
+    ref.invalidate(examAcademicYearsProvider);
+    ref.invalidate(examClassroomsProvider);
+    ref.invalidate(examSubjectsProvider);
+    ref.invalidate(examStudentsProvider);
+    ref.invalidate(examSupervisorsProvider);
+    await ref.read(examSessionsProvider.future);
+    return;
+  }
+
+  if (view is PaymentsPage) {
+    ref.invalidate(paymentsProvider);
+    ref.invalidate(feesProvider);
+    await ref.read(paymentsProvider.future);
+    return;
+  }
+
+  if (view is UsersPage) {
+    ref.invalidate(usersProvider);
+    await ref.read(usersProvider.future);
+    return;
+  }
+
+  if (view is StudentsPage) {
+    ref.invalidate(studentsProvider);
+    await ref.read(studentsProvider.future);
+    return;
+  }
+
+  // For feature pages loading data in initState, remount is enough.
+  await Future<void>.delayed(const Duration(milliseconds: 150));
+}
+
+class _GlobalFeatureRefreshHost extends ConsumerStatefulWidget {
+  final Widget child;
+
+  const _GlobalFeatureRefreshHost({super.key, required this.child});
+
+  @override
+  ConsumerState<_GlobalFeatureRefreshHost> createState() =>
+      _GlobalFeatureRefreshHostState();
+}
+
+class _GlobalFeatureRefreshHostState
+    extends ConsumerState<_GlobalFeatureRefreshHost> {
+  int _epoch = 0;
+
+  Future<void> _handleRefresh() async {
+    await _invalidateRefreshProvidersForView(ref, widget.child);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _epoch++);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RefreshIndicator(
+      triggerMode: RefreshIndicatorTriggerMode.anywhere,
+      notificationPredicate: (_) => true,
+      onRefresh: _handleRefresh,
+      child: KeyedSubtree(
+        key: ValueKey('${widget.child.runtimeType}-$_epoch'),
+        child: widget.child,
+      ),
+    );
+  }
+}
 
 class GestionSchoolApp extends ConsumerWidget {
   const GestionSchoolApp({super.key});
@@ -39,6 +146,7 @@ class GestionSchoolApp extends ConsumerWidget {
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: themeMode,
+      scrollBehavior: const _AppScrollBehavior(),
       routes: {
         '/': (_) => const LoginPage(),
         '/dashboard': (_) => const _AdminShell(),
@@ -48,12 +156,16 @@ class GestionSchoolApp extends ConsumerWidget {
         '/home/supervisor': (_) => const _SupervisorShell(),
         '/home/parent': (_) => const _ParentStudentShell(roleLabel: 'Parent'),
         '/home/student': (_) => const _ParentStudentShell(roleLabel: 'Élève'),
-        '/attendance': (_) => const AttendancePage(),
-        '/exams': (_) => const ExamsPage(),
-        '/students': (_) => const StudentsPage(),
-        '/payments': (_) => const PaymentsPage(),
-        '/reports': (_) => const ReportsPage(),
-        '/users': (_) => const UsersPage(),
+        '/attendance': (_) =>
+            const _GlobalFeatureRefreshHost(child: AttendancePage()),
+        '/exams': (_) => const _GlobalFeatureRefreshHost(child: ExamsPage()),
+        '/students': (_) =>
+            const _GlobalFeatureRefreshHost(child: StudentsPage()),
+        '/payments': (_) =>
+            const _GlobalFeatureRefreshHost(child: PaymentsPage()),
+        '/reports': (_) =>
+            const _GlobalFeatureRefreshHost(child: ReportsPage()),
+        '/users': (_) => const _GlobalFeatureRefreshHost(child: UsersPage()),
       },
     );
   }
@@ -146,7 +258,13 @@ class _RoleShell extends ConsumerWidget {
                 ),
               ),
             ),
-            Positioned.fill(child: TabBarView(children: views)),
+            Positioned.fill(
+              child: TabBarView(
+                children: views
+                    .map((view) => _GlobalFeatureRefreshHost(child: view))
+                    .toList(growable: false),
+              ),
+            ),
           ],
         ),
       ),
@@ -508,7 +626,12 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
             ),
           ),
         ),
-        body: SafeArea(child: _selectedItem.view),
+        body: SafeArea(
+          child: _GlobalFeatureRefreshHost(
+            key: ValueKey('admin-mobile-${_selectedItem.keyName}'),
+            child: _selectedItem.view,
+          ),
+        ),
       );
     }
 
@@ -662,7 +785,12 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                       Expanded(
                         child: Padding(
                           padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-                          child: _selectedItem.view,
+                          child: _GlobalFeatureRefreshHost(
+                            key: ValueKey(
+                              'admin-desktop-${_selectedItem.keyName}',
+                            ),
+                            child: _selectedItem.view,
+                          ),
                         ),
                       ),
                     ],
