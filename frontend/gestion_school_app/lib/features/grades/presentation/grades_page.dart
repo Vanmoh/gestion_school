@@ -1,9 +1,12 @@
 import 'dart:math' as math;
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../../core/network/api_client.dart';
@@ -375,6 +378,149 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     } catch (error) {
       if (!mounted) return;
       _showMessage('Erreur génération bulletin: $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _exportFilteredNotesCsv(
+    List<Map<String, dynamic>> grades,
+    Map<int, Map<String, dynamic>> studentById,
+    Map<int, Map<String, dynamic>> subjectById,
+  ) async {
+    if (grades.isEmpty) {
+      _showMessage('Aucune note à exporter pour les filtres actuels.');
+      return;
+    }
+
+    final classroomName =
+        (_findById(_classrooms, _selectedClassroom ?? 0)?['name'] ?? 'Toutes')
+            .toString();
+    final academicYearName =
+        (_findById(_years, _selectedAcademicYear ?? 0)?['name'] ?? 'Toutes')
+            .toString();
+    final period = _termController.text.trim().isEmpty
+        ? 'Toutes'
+        : _termController.text.trim();
+
+    setState(() => _saving = true);
+    try {
+      final buffer = StringBuffer();
+      buffer.writeln('Export Notes Filtrees');
+      buffer.writeln('Classe;$classroomName');
+      buffer.writeln('Annee;$academicYearName');
+      buffer.writeln('Periode;$period');
+      buffer.writeln('');
+      buffer.writeln('Eleve;Matiere;Periode;Note');
+
+      for (final grade in grades) {
+        final student = studentById[_asInt(grade['student'])];
+        final subject = subjectById[_asInt(grade['subject'])];
+
+        final studentLabel =
+            '${student?['matricule'] ?? ''} ${(student?['user_full_name'] ?? 'Eleve').toString().trim()}';
+        final subjectLabel =
+            '${subject?['code'] ?? 'MAT'} ${(subject?['name'] ?? 'Matiere').toString().trim()}';
+
+        final row = [
+          _csvCell(studentLabel),
+          _csvCell(subjectLabel),
+          _csvCell(grade['term']),
+          _csvCell(grade['value']),
+        ].join(';');
+        buffer.writeln(row);
+      }
+
+      final fileName =
+          'notes_filtrees_${DateTime.now().millisecondsSinceEpoch}.csv';
+      final contentWithBom = '\uFEFF${buffer.toString()}';
+      final bytes = Uint8List.fromList(utf8.encode(contentWithBom));
+      await Printing.sharePdf(bytes: bytes, filename: fileName);
+
+      if (!mounted) return;
+      _showMessage('Export Excel (CSV) lancé: $fileName');
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur export Excel (CSV): $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _exportFilteredNotesPdf(
+    List<Map<String, dynamic>> grades,
+    Map<int, Map<String, dynamic>> studentById,
+    Map<int, Map<String, dynamic>> subjectById,
+  ) async {
+    if (grades.isEmpty) {
+      _showMessage('Aucune note à exporter pour les filtres actuels.');
+      return;
+    }
+
+    final classroomName =
+        (_findById(_classrooms, _selectedClassroom ?? 0)?['name'] ?? 'Toutes')
+            .toString();
+    final academicYearName =
+        (_findById(_years, _selectedAcademicYear ?? 0)?['name'] ?? 'Toutes')
+            .toString();
+    final period = _termController.text.trim().isEmpty
+        ? 'Toutes'
+        : _termController.text.trim();
+
+    final tableRows = grades.map((grade) {
+      final student = studentById[_asInt(grade['student'])];
+      final subject = subjectById[_asInt(grade['subject'])];
+
+      return [
+        '${student?['matricule'] ?? ''} ${(student?['user_full_name'] ?? 'Eleve').toString().trim()}',
+        '${subject?['code'] ?? 'MAT'} ${(subject?['name'] ?? 'Matiere').toString().trim()}',
+        '${grade['term'] ?? '-'}',
+        '${grade['value'] ?? '-'} /20',
+      ];
+    }).toList();
+
+    setState(() => _saving = true);
+    try {
+      final doc = pw.Document();
+      doc.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4.landscape,
+          build: (context) {
+            return [
+              pw.Text(
+                'Export des notes filtrées',
+                style: pw.TextStyle(
+                  fontWeight: pw.FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              pw.SizedBox(height: 6),
+              pw.Text('Classe: $classroomName'),
+              pw.Text('Année scolaire: $academicYearName'),
+              pw.Text('Période: $period'),
+              pw.SizedBox(height: 10),
+              pw.TableHelper.fromTextArray(
+                headers: const ['Élève', 'Matière', 'Période', 'Note'],
+                data: tableRows,
+                headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                headerDecoration: const pw.BoxDecoration(
+                  color: PdfColors.grey300,
+                ),
+                cellStyle: const pw.TextStyle(fontSize: 9),
+                cellAlignment: pw.Alignment.centerLeft,
+              ),
+            ];
+          },
+        ),
+      );
+
+      final bytes = await doc.save();
+      final fileName =
+          'notes_filtrees_${DateTime.now().millisecondsSinceEpoch}.pdf';
+      await Printing.sharePdf(bytes: bytes, filename: fileName);
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur export PDF: $error');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1001,6 +1147,35 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                     ),
                   ),
                   const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _saving
+                            ? null
+                            : () => _exportFilteredNotesCsv(
+                                scopedGrades,
+                                studentById,
+                                subjectById,
+                              ),
+                        icon: const Icon(Icons.grid_on_outlined),
+                        label: const Text('Exporter Excel (CSV)'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _saving
+                            ? null
+                            : () => _exportFilteredNotesPdf(
+                                scopedGrades,
+                                studentById,
+                                subjectById,
+                              ),
+                        icon: const Icon(Icons.picture_as_pdf_outlined),
+                        label: const Text('Exporter PDF'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
                   Row(
                     children: [
                       Expanded(
@@ -1311,6 +1486,15 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   double _toDouble(dynamic value) {
     if (value is num) return value.toDouble();
     return double.tryParse(value?.toString() ?? '') ?? 0.0;
+  }
+
+  String _csvCell(dynamic value) {
+    final raw = (value ?? '').toString().replaceAll('"', '""');
+    final flattened = raw.replaceAll('\n', ' ').replaceAll('\r', ' ');
+    final safe = RegExp(r'^[=+\-@]').hasMatch(flattened)
+        ? "'$flattened"
+        : flattened;
+    return '"$safe"';
   }
 
   Uint8List _toUint8List(dynamic data) {
