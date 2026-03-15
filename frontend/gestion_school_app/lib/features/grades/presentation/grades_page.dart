@@ -17,6 +17,7 @@ class GradesPage extends ConsumerStatefulWidget {
 class _GradesPageState extends ConsumerState<GradesPage> {
   final _termController = TextEditingController(text: 'T1');
   final _validationNotesController = TextEditingController();
+  final _gradesSearchController = TextEditingController();
 
   int? _selectedStudent;
   int? _selectedSubject;
@@ -43,6 +44,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   void dispose() {
     _termController.dispose();
     _validationNotesController.dispose();
+    _gradesSearchController.dispose();
     super.dispose();
   }
 
@@ -375,6 +377,163 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     }
   }
 
+  Future<void> _openEditGradeDialog(Map<String, dynamic> gradeRow) async {
+    final gradeId = _asInt(gradeRow['id']);
+    if (gradeId <= 0) {
+      _showMessage('Impossible de modifier cette note (ID invalide).');
+      return;
+    }
+
+    final valueController = TextEditingController(
+      text: (gradeRow['value'] ?? '').toString(),
+    );
+
+    final student = _findById(_students, _asInt(gradeRow['student']));
+    final subject = _findById(_subjects, _asInt(gradeRow['subject']));
+
+    final shouldSave = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Modifier la note'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '${student?['matricule'] ?? ''} • ${(student?['user_full_name'] ?? '').toString().trim()}',
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${subject?['code'] ?? 'MAT'} - ${subject?['name'] ?? ''}',
+                ),
+                const SizedBox(height: 4),
+                Text('Période: ${gradeRow['term'] ?? '-'}'),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: valueController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Nouvelle note /20',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: _saving
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: _saving
+                  ? null
+                  : () {
+                      final parsed = double.tryParse(
+                        valueController.text.trim(),
+                      );
+                      if (parsed == null) {
+                        _showMessage('Entrez une note valide.');
+                        return;
+                      }
+                      Navigator.of(dialogContext).pop(true);
+                    },
+              child: const Text('Enregistrer'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldSave != true) {
+      valueController.dispose();
+      return;
+    }
+
+    final parsedValue = double.tryParse(valueController.text.trim());
+    valueController.dispose();
+    if (parsedValue == null) {
+      _showMessage('Entrez une note valide.');
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(dioProvider)
+          .patch('/grades/$gradeId/', data: {'value': parsedValue});
+
+      if (!mounted) return;
+      _showMessage('Note modifiée avec succès.');
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur modification note: $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _deleteGrade(Map<String, dynamic> gradeRow) async {
+    final gradeId = _asInt(gradeRow['id']);
+    if (gradeId <= 0) {
+      _showMessage('Impossible de supprimer cette note (ID invalide).');
+      return;
+    }
+
+    final student = _findById(_students, _asInt(gradeRow['student']));
+    final subject = _findById(_subjects, _asInt(gradeRow['subject']));
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Supprimer la note'),
+          content: Text(
+            'Confirmer la suppression de la note de '
+            '${student?['user_full_name'] ?? 'cet élève'} en '
+            '${subject?['name'] ?? 'matière'} ?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: _saving
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton.tonal(
+              onPressed: _saving
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Supprimer'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _saving = true);
+    try {
+      await ref.read(dioProvider).delete('/grades/$gradeId/');
+
+      if (!mounted) return;
+      _showMessage('Note supprimée avec succès.');
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur suppression note: $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   Future<void> _refreshValidationStatus() async {
     final classroom = _selectedClassroom;
     final academicYear = _selectedAcademicYear;
@@ -472,6 +631,27 @@ class _GradesPageState extends ConsumerState<GradesPage> {
         .toList();
   }
 
+  Map<String, dynamic>? _findById(List<Map<String, dynamic>> rows, int id) {
+    for (final row in rows) {
+      if (_asInt(row['id']) == id) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  String _normalizeTerm(dynamic value) {
+    final raw = (value ?? '').toString().trim().toUpperCase();
+    if (raw.isEmpty) return '';
+
+    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isNotEmpty) {
+      return 'T$digits';
+    }
+
+    return raw.replaceAll(' ', '');
+  }
+
   Widget _metricChip(String label, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -558,6 +738,47 @@ class _GradesPageState extends ConsumerState<GradesPage> {
         .toString();
     final validationDate = (_validationStatus?['validated_at'] ?? '-')
         .toString();
+
+    final termFilter = _normalizeTerm(_termController.text);
+    final search = _gradesSearchController.text.trim().toLowerCase();
+
+    final scopedGrades = _grades.where((grade) {
+      final matchesClass =
+          _selectedClassroom == null ||
+          _asInt(grade['classroom']) == _selectedClassroom;
+      final matchesYear =
+          _selectedAcademicYear == null ||
+          _asInt(grade['academic_year']) == _selectedAcademicYear;
+      final matchesTerm =
+          termFilter.isEmpty || _normalizeTerm(grade['term']) == termFilter;
+
+      if (!(matchesClass && matchesYear && matchesTerm)) {
+        return false;
+      }
+
+      if (search.isEmpty) {
+        return true;
+      }
+
+      final student = studentById[_asInt(grade['student'])];
+      final subject = subjectById[_asInt(grade['subject'])];
+
+      final studentText =
+          '${student?['matricule'] ?? ''} ${student?['user_full_name'] ?? ''}'
+              .toLowerCase();
+      final subjectText = '${subject?['code'] ?? ''} ${subject?['name'] ?? ''}'
+          .toLowerCase();
+
+      return studentText.contains(search) || subjectText.contains(search);
+    }).toList()..sort((a, b) => _asInt(b['id']).compareTo(_asInt(a['id'])));
+
+    final scopedAverage = scopedGrades.isEmpty
+        ? 0.0
+        : (scopedGrades.fold<double>(
+                0.0,
+                (sum, grade) => sum + _toDouble(grade['value']),
+              ) /
+              scopedGrades.length);
 
     final validationPanel = _sectionCard(
       title: 'Validation direction',
@@ -664,7 +885,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             decoration: const InputDecoration(
               labelText: 'Periode (ex: T1, T2)',
             ),
-            onChanged: (_) => _refreshValidationStatus(),
+            onChanged: (_) {
+              setState(() {});
+              _refreshValidationStatus();
+            },
           ),
           const SizedBox(height: 8),
           FilledButton.tonal(
@@ -716,32 +940,85 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     );
 
     final latestGradesPanel = _sectionCard(
-      title: 'Dernieres notes',
-      child: _grades.isEmpty
+      title: 'Dernieres notes (classe/période sélectionnées)',
+      child: scopedGrades.isEmpty
           ? const Padding(
               padding: EdgeInsets.symmetric(vertical: 18),
               child: Text('Aucune note enregistree'),
             )
           : SizedBox(
-              height: 620,
-              child: ListView.separated(
-                itemCount: _grades.take(50).length,
-                separatorBuilder: (_, _) => const SizedBox(height: 6),
-                itemBuilder: (context, index) {
-                  final g = _grades[index];
-                  final student = studentById[_asInt(g['student'])];
-                  final subject = subjectById[_asInt(g['subject'])];
-                  return Card(
-                    child: ListTile(
-                      title: Text(
-                        '${student?['matricule'] ?? ''} • ${student?['user_full_name'] ?? 'Eleve'}',
-                      ),
-                      subtitle: Text(
-                        '${subject?['code'] ?? 'Matiere'} • ${g['term']} • ${g['value']}/20',
-                      ),
+              height: 690,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _metricChip('Filtrées', '${scopedGrades.length}'),
+                      _metricChip('Moyenne', scopedAverage.toStringAsFixed(2)),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _gradesSearchController,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      labelText: 'Rechercher élève / matière',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _gradesSearchController.text.trim().isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () {
+                                _gradesSearchController.clear();
+                                setState(() {});
+                              },
+                              icon: const Icon(Icons.clear),
+                            ),
                     ),
-                  );
-                },
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: scopedGrades.take(80).length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 6),
+                      itemBuilder: (context, index) {
+                        final grade = scopedGrades[index];
+                        final student = studentById[_asInt(grade['student'])];
+                        final subject = subjectById[_asInt(grade['subject'])];
+                        return Card(
+                          child: ListTile(
+                            title: Text(
+                              '${student?['matricule'] ?? ''} • ${student?['user_full_name'] ?? 'Eleve'}',
+                            ),
+                            subtitle: Text(
+                              '${subject?['code'] ?? 'Matiere'} • ${grade['term']} • ${grade['value']}/20',
+                            ),
+                            trailing: Wrap(
+                              spacing: 2,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Modifier',
+                                  onPressed: (_saving || _isValidated)
+                                      ? null
+                                      : () => _openEditGradeDialog(grade),
+                                  icon: const Icon(Icons.edit_outlined),
+                                ),
+                                IconButton(
+                                  tooltip: 'Supprimer',
+                                  onPressed: (_saving || _isValidated)
+                                      ? null
+                                      : () => _deleteGrade(grade),
+                                  icon: const Icon(Icons.delete_outline),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
             ),
     );
@@ -862,6 +1139,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   int _asInt(dynamic value) {
     if (value is int) return value;
     return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  double _toDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0.0;
   }
 
   Uint8List _toUint8List(dynamic data) {
