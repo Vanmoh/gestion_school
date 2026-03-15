@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -26,6 +27,8 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
   bool _loading = true;
   bool _saving = false;
+  int _notesPage = 1;
+  int _notesRowsPerPage = 12;
 
   List<Map<String, dynamic>> _students = [];
   List<Map<String, dynamic>> _subjects = [];
@@ -780,6 +783,22 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               ) /
               scopedGrades.length);
 
+    final notesTotalPages = scopedGrades.isEmpty
+        ? 1
+        : ((scopedGrades.length + _notesRowsPerPage - 1) ~/ _notesRowsPerPage);
+    final notesCurrentPage = notesTotalPages <= 0
+        ? 1
+        : math.min(math.max(_notesPage, 1), notesTotalPages);
+    final notesStart = scopedGrades.isEmpty
+        ? 0
+        : (notesCurrentPage - 1) * _notesRowsPerPage;
+    final notesEnd = scopedGrades.isEmpty
+        ? 0
+        : math.min(notesStart + _notesRowsPerPage, scopedGrades.length);
+    final pagedGrades = scopedGrades.isEmpty
+        ? <Map<String, dynamic>>[]
+        : scopedGrades.sublist(notesStart, notesEnd);
+
     final validationPanel = _sectionCard(
       title: 'Validation direction',
       child: Column(
@@ -854,6 +873,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             onChanged: (v) {
               setState(() {
                 _selectedClassroom = v;
+                _notesPage = 1;
                 final scopedStudents = _studentsForClassroom(v);
                 if (scopedStudents.isNotEmpty) {
                   _selectedStudent = _asInt(scopedStudents.first['id']);
@@ -875,7 +895,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                 )
                 .toList(),
             onChanged: (v) {
-              setState(() => _selectedAcademicYear = v);
+              setState(() {
+                _selectedAcademicYear = v;
+                _notesPage = 1;
+              });
               _refreshValidationStatus();
             },
           ),
@@ -886,7 +909,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               labelText: 'Periode (ex: T1, T2)',
             ),
             onChanged: (_) {
-              setState(() {});
+              setState(() => _notesPage = 1);
               _refreshValidationStatus();
             },
           ),
@@ -947,7 +970,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               child: Text('Aucune note enregistree'),
             )
           : SizedBox(
-              height: 690,
+              height: 740,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -962,7 +985,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                   const SizedBox(height: 10),
                   TextField(
                     controller: _gradesSearchController,
-                    onChanged: (_) => setState(() {}),
+                    onChanged: (_) => setState(() => _notesPage = 1),
                     decoration: InputDecoration(
                       labelText: 'Rechercher élève / matière',
                       prefixIcon: const Icon(Icons.search),
@@ -971,45 +994,156 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                           : IconButton(
                               onPressed: () {
                                 _gradesSearchController.clear();
-                                setState(() {});
+                                setState(() => _notesPage = 1);
                               },
                               icon: const Icon(Icons.clear),
                             ),
                     ),
                   ),
                   const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Affichage ${notesStart + 1}-$notesEnd sur ${scopedGrades.length} notes',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                      SizedBox(
+                        width: 130,
+                        child: DropdownButtonFormField<int>(
+                          initialValue: _notesRowsPerPage,
+                          isDense: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Lignes',
+                          ),
+                          items: const [8, 12, 20, 30]
+                              .map(
+                                (value) => DropdownMenuItem<int>(
+                                  value: value,
+                                  child: Text('$value'),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() {
+                              _notesRowsPerPage = value;
+                              _notesPage = 1;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainer,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: colorScheme.outlineVariant.withValues(
+                          alpha: 0.6,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      children: const [
+                        Expanded(flex: 4, child: Text('Élève')),
+                        Expanded(flex: 3, child: Text('Matière')),
+                        Expanded(
+                          flex: 2,
+                          child: Text('Période', textAlign: TextAlign.center),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Text('Note', textAlign: TextAlign.center),
+                        ),
+                        SizedBox(
+                          width: 96,
+                          child: Text('Actions', textAlign: TextAlign.center),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   Expanded(
                     child: ListView.separated(
-                      itemCount: scopedGrades.take(80).length,
+                      itemCount: pagedGrades.length,
                       separatorBuilder: (_, _) => const SizedBox(height: 6),
                       itemBuilder: (context, index) {
-                        final grade = scopedGrades[index];
+                        final grade = pagedGrades[index];
                         final student = studentById[_asInt(grade['student'])];
                         final subject = subjectById[_asInt(grade['subject'])];
+                        final studentLabel =
+                            '${student?['matricule'] ?? ''} • ${student?['user_full_name'] ?? 'Eleve'}';
+                        final subjectLabel =
+                            '${subject?['code'] ?? 'MAT'} • ${subject?['name'] ?? 'Matiere'}';
+
                         return Card(
                           child: ListTile(
-                            title: Text(
-                              '${student?['matricule'] ?? ''} • ${student?['user_full_name'] ?? 'Eleve'}',
+                            dense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 2,
                             ),
-                            subtitle: Text(
-                              '${subject?['code'] ?? 'Matiere'} • ${grade['term']} • ${grade['value']}/20',
-                            ),
-                            trailing: Wrap(
-                              spacing: 2,
+                            title: Row(
                               children: [
-                                IconButton(
-                                  tooltip: 'Modifier',
-                                  onPressed: (_saving || _isValidated)
-                                      ? null
-                                      : () => _openEditGradeDialog(grade),
-                                  icon: const Icon(Icons.edit_outlined),
+                                Expanded(
+                                  flex: 4,
+                                  child: Text(
+                                    studentLabel,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
-                                IconButton(
-                                  tooltip: 'Supprimer',
-                                  onPressed: (_saving || _isValidated)
-                                      ? null
-                                      : () => _deleteGrade(grade),
-                                  icon: const Icon(Icons.delete_outline),
+                                Expanded(
+                                  flex: 3,
+                                  child: Text(
+                                    subjectLabel,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                Expanded(
+                                  flex: 2,
+                                  child: Text(
+                                    '${grade['term']}',
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                                Expanded(
+                                  flex: 2,
+                                  child: Text(
+                                    '${grade['value']}/20',
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 96,
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      IconButton(
+                                        tooltip: 'Modifier',
+                                        onPressed: (_saving || _isValidated)
+                                            ? null
+                                            : () => _openEditGradeDialog(grade),
+                                        icon: const Icon(Icons.edit_outlined),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Supprimer',
+                                        onPressed: (_saving || _isValidated)
+                                            ? null
+                                            : () => _deleteGrade(grade),
+                                        icon: const Icon(Icons.delete_outline),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ],
                             ),
@@ -1017,6 +1151,39 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                         );
                       },
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Text(
+                        'Page $notesCurrentPage / $notesTotalPages',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const Spacer(),
+                      OutlinedButton.icon(
+                        onPressed: notesCurrentPage > 1
+                            ? () {
+                                setState(
+                                  () => _notesPage = notesCurrentPage - 1,
+                                );
+                              }
+                            : null,
+                        icon: const Icon(Icons.chevron_left),
+                        label: const Text('Précédent'),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: notesCurrentPage < notesTotalPages
+                            ? () {
+                                setState(
+                                  () => _notesPage = notesCurrentPage + 1,
+                                );
+                              }
+                            : null,
+                        icon: const Icon(Icons.chevron_right),
+                        label: const Text('Suivant'),
+                      ),
+                    ],
                   ),
                 ],
               ),
