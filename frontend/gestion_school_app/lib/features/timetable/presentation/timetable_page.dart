@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
@@ -21,8 +23,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   List<Map<String, dynamic>> _subjects = [];
   List<Map<String, dynamic>> _classrooms = [];
   List<Map<String, dynamic>> _assignments = [];
-
-  String _viewMode = 'classroom';
+  int? _selectedClassroom;
 
   @override
   void initState() {
@@ -49,6 +50,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         _subjects = _extractRows(results[1].data);
         _classrooms = _extractRows(results[2].data);
         _assignments = _extractRows(results[3].data);
+
+        final classIds = _classrooms.map((row) => _asInt(row['id'])).toSet();
+        if (_selectedClassroom == null ||
+            !classIds.contains(_selectedClassroom)) {
+          _selectedClassroom = _classrooms.isNotEmpty
+              ? _asInt(_classrooms.first['id'])
+              : null;
+        }
       });
     } catch (error) {
       if (!mounted) return;
@@ -60,12 +69,22 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
-  Future<void> _printCurrentView() async {
-    final teacherById = {for (final t in _teachers) _asInt(t['id']): t};
-    final subjectById = {for (final s in _subjects) _asInt(s['id']): s};
-    final classroomById = {for (final c in _classrooms) _asInt(c['id']): c};
+  Future<void> _printCurrentClassTablePdf() async {
+    final classroomId = _selectedClassroom;
+    if (classroomId == null || classroomId <= 0) {
+      _showMessage('Sélectionnez une classe avant impression.');
+      return;
+    }
 
-    final grouped = _groupedAssignments();
+    final byClass = _classTimetableRows();
+    final rows = byClass[classroomId] ?? <Map<String, dynamic>>[];
+    if (rows.isEmpty) {
+      _showMessage('Aucune affectation disponible pour cette classe.');
+      return;
+    }
+
+    final className = _classNameById(classroomId);
+
     pw.MemoryImage? logoImage;
     try {
       final logoData = await rootBundle.load(SchoolBranding.logoAsset);
@@ -79,7 +98,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final doc = pw.Document();
     doc.addPage(
       pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
+        pageFormat: PdfPageFormat.a4.landscape,
         margin: const pw.EdgeInsets.fromLTRB(28, 24, 28, 24),
         build: (context) {
           final widgets = <pw.Widget>[
@@ -125,14 +144,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             pw.Divider(),
             pw.SizedBox(height: 8),
             pw.Text(
-              'EMPLOI DU TEMPS (AFFECTATIONS)',
+              'EMPLOI DU TEMPS - TABLEAU PAR CLASSE',
               style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
             ),
             pw.SizedBox(height: 4),
             pw.Text(
-              _viewMode == 'classroom'
-                  ? 'Vue par classe'
-                  : 'Vue par enseignant',
+              'Classe: $className',
               style: const pw.TextStyle(fontSize: 11),
             ),
             pw.Text(
@@ -142,37 +159,33 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             pw.SizedBox(height: 12),
           ];
 
-          for (final entry in grouped.entries) {
-            widgets.add(
-              pw.Container(
-                margin: const pw.EdgeInsets.only(bottom: 6),
-                child: pw.Text(
-                  entry.key,
-                  style: pw.TextStyle(
-                    fontSize: 13,
-                    fontWeight: pw.FontWeight.bold,
-                  ),
-                ),
+          widgets.add(
+            pw.TableHelper.fromTextArray(
+              headers: const [
+                'N°',
+                'Code matière',
+                'Matière',
+                'Coefficient',
+                'Code enseignant',
+              ],
+              data: List<List<String>>.generate(rows.length, (index) {
+                final row = rows[index];
+                return [
+                  '${index + 1}',
+                  '${row['subjectCode']}',
+                  '${row['subjectName']}',
+                  '${row['coefficient']}',
+                  '${row['teacherCode']}',
+                ];
+              }),
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              headerDecoration: const pw.BoxDecoration(
+                color: PdfColors.grey300,
               ),
-            );
-
-            for (final row in entry.value) {
-              final subject = subjectById[_asInt(row['subject'])];
-              final teacher = teacherById[_asInt(row['teacher'])];
-              final classroom = classroomById[_asInt(row['classroom'])];
-
-              widgets.add(
-                pw.Bullet(
-                  text:
-                      '${subject?['code'] ?? 'MAT'} - ${subject?['name'] ?? ''} | '
-                      'Classe: ${classroom?['name'] ?? row['classroom']} | '
-                      'Enseignant: ${teacher?['employee_code'] ?? row['teacher']}',
-                ),
-              );
-            }
-
-            widgets.add(pw.SizedBox(height: 8));
-          }
+              cellStyle: const pw.TextStyle(fontSize: 9),
+              cellAlignment: pw.Alignment.centerLeft,
+            ),
+          );
 
           return widgets;
         },
@@ -182,8 +195,52 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     await Printing.layoutPdf(onLayout: (_) async => doc.save());
   }
 
+  Future<void> _exportCurrentClassCsv() async {
+    final classroomId = _selectedClassroom;
+    if (classroomId == null || classroomId <= 0) {
+      _showMessage('Sélectionnez une classe avant export.');
+      return;
+    }
+
+    final byClass = _classTimetableRows();
+    final rows = byClass[classroomId] ?? <Map<String, dynamic>>[];
+    if (rows.isEmpty) {
+      _showMessage('Aucune affectation disponible pour cette classe.');
+      return;
+    }
+
+    final className = _classNameById(classroomId);
+    final buffer = StringBuffer();
+    buffer.writeln('Emploi du temps (tableau classe)');
+    buffer.writeln('Classe;${_csvCell(className)}');
+    buffer.writeln('Genere le;${_csvCell(_dateTimeLabel(DateTime.now()))}');
+    buffer.writeln('');
+    buffer.writeln('N°;Code matière;Matière;Coefficient;Code enseignant');
+
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      buffer.writeln(
+        '${i + 1};${_csvCell(row['subjectCode'])};${_csvCell(row['subjectName'])};${_csvCell(row['coefficient'])};${_csvCell(row['teacherCode'])}',
+      );
+    }
+
+    final bytes = Uint8List.fromList(utf8.encode('\uFEFF${buffer.toString()}'));
+    final fileName =
+        'emploi_du_temps_${_slugify(className)}_${DateTime.now().millisecondsSinceEpoch}.csv';
+
+    await Printing.sharePdf(bytes: bytes, filename: fileName);
+    _showMessage('Export Excel (CSV) lancé: $fileName');
+  }
+
   Future<void> _refreshTimetable() async {
     await _loadData();
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Widget _metricChip(String label, String value) {
@@ -249,88 +306,107 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       );
     }
 
-    final grouped = _groupedAssignments();
+    final byClass = _classTimetableRows();
     final colorScheme = Theme.of(context).colorScheme;
-    final totalGroups = grouped.length;
+    final classesWithAssignments = _classrooms
+        .where((row) => (byClass[_asInt(row['id'])] ?? []).isNotEmpty)
+        .length;
+
+    final selectedClassId = _selectedClassroom;
+    final selectedClassName = _classNameById(selectedClassId);
+    final selectedRows = selectedClassId == null
+        ? <Map<String, dynamic>>[]
+        : (byClass[selectedClassId] ?? <Map<String, dynamic>>[]);
 
     final controlsPanel = _sectionCard(
       title: 'Filtres et actions',
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(
-                value: 'classroom',
-                label: Text('Par classe'),
-                icon: Icon(Icons.class_rounded),
-              ),
-              ButtonSegment(
-                value: 'teacher',
-                label: Text('Par enseignant'),
-                icon: Icon(Icons.badge_outlined),
-              ),
-            ],
-            selected: {_viewMode},
-            onSelectionChanged: (value) {
-              setState(() => _viewMode = value.first);
+          DropdownButtonFormField<int>(
+            initialValue: _selectedClassroom,
+            decoration: const InputDecoration(labelText: 'Classe'),
+            items: _classrooms
+                .map(
+                  (row) => DropdownMenuItem<int>(
+                    value: _asInt(row['id']),
+                    child: Text('${row['name']}'),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              setState(() => _selectedClassroom = value);
             },
           ),
-          FilledButton.tonalIcon(
-            onPressed: _printCurrentView,
-            icon: const Icon(Icons.picture_as_pdf),
-            label: const Text('Imprimer PDF'),
-          ),
-          FilledButton.tonalIcon(
-            onPressed: _loadData,
-            icon: const Icon(Icons.refresh),
-            label: const Text('Actualiser'),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.tonalIcon(
+                onPressed: _printCurrentClassTablePdf,
+                icon: const Icon(Icons.picture_as_pdf),
+                label: const Text('Imprimer tableau PDF'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _exportCurrentClassCsv,
+                icon: const Icon(Icons.grid_on_outlined),
+                label: const Text('Exporter Excel (CSV)'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _loadData,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Actualiser'),
+              ),
+            ],
           ),
         ],
       ),
     );
 
-    final groupsPanel = _sectionCard(
-      title: 'Affectations',
-      child: _assignments.isEmpty
+    final selectedClassPanel = _sectionCard(
+      title: 'Tableau Excel - $selectedClassName',
+      child: selectedRows.isEmpty
           ? const Padding(
               padding: EdgeInsets.symmetric(vertical: 18),
-              child: Text('Aucune affectation disponible.'),
+              child: Text('Aucune affectation disponible pour cette classe.'),
+            )
+          : _buildClassExcelTable(selectedRows, showClassColumn: false),
+    );
+
+    final perClassPanel = _sectionCard(
+      title: 'Chaque classe a son emploi du temps',
+      child: _classrooms.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Text('Aucune classe disponible.'),
             )
           : Column(
-              children: grouped.entries
-                  .map(
-                    (entry) => Card(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              entry.key,
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 6),
-                            ...entry.value.map(
-                              (row) => ListTile(
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.schedule_outlined),
-                                title: Text(
-                                  '${row['subjectCode']} - ${row['subjectName']}',
-                                ),
-                                subtitle: Text(
-                                  'Classe: ${row['classroomName']} • Enseignant: ${row['teacherCode']}',
-                                ),
+              children: _classrooms.map((classroom) {
+                final classId = _asInt(classroom['id']);
+                final className = (classroom['name'] ?? 'Classe $classId')
+                    .toString();
+                final rows = byClass[classId] ?? <Map<String, dynamic>>[];
+
+                return Card(
+                  child: ExpansionTile(
+                    initiallyExpanded: classId == _selectedClassroom,
+                    title: Text(className),
+                    subtitle: Text('${rows.length} affectation(s)'),
+                    childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    children: [
+                      rows.isEmpty
+                          ? const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 10),
+                              child: Text(
+                                'Aucune affectation pour cette classe.',
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  )
-                  .toList(),
+                            )
+                          : _buildClassExcelTable(rows, showClassColumn: false),
+                    ],
+                  ),
+                );
+              }).toList(),
             ),
     );
 
@@ -383,52 +459,131 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 _metricChip('Matieres', '${_subjects.length}'),
                 _metricChip('Classes', '${_classrooms.length}'),
                 _metricChip('Affectations', '${_assignments.length}'),
-                _metricChip('Groupes', '$totalGroups'),
+                _metricChip('Classes planifiees', '$classesWithAssignments'),
               ],
             ),
           ),
           const SizedBox(height: 12),
           controlsPanel,
           const SizedBox(height: 12),
-          groupsPanel,
+          selectedClassPanel,
+          const SizedBox(height: 12),
+          perClassPanel,
         ],
       ),
     );
   }
 
-  Map<String, List<Map<String, dynamic>>> _groupedAssignments() {
+  Map<int, List<Map<String, dynamic>>> _classTimetableRows() {
     final teacherById = {for (final t in _teachers) _asInt(t['id']): t};
     final subjectById = {for (final s in _subjects) _asInt(s['id']): s};
     final classroomById = {for (final c in _classrooms) _asInt(c['id']): c};
 
-    final Map<String, List<Map<String, dynamic>>> grouped = {};
+    final Map<int, List<Map<String, dynamic>>> grouped = {};
 
     for (final row in _assignments) {
+      final classId = _asInt(row['classroom']);
       final teacher = teacherById[_asInt(row['teacher'])];
       final subject = subjectById[_asInt(row['subject'])];
-      final classroom = classroomById[_asInt(row['classroom'])];
+      final classroom = classroomById[classId];
 
       final teacherCode = (teacher?['employee_code'] ?? 'ENS-${row['teacher']}')
           .toString();
-      final classroomName = (classroom?['name'] ?? 'Classe ${row['classroom']}')
+      final classroomName = (classroom?['name'] ?? 'Classe $classId')
           .toString();
       final subjectCode = (subject?['code'] ?? 'MAT').toString();
       final subjectName = (subject?['name'] ?? '').toString();
+      final coefficient = (subject?['coefficient'] ?? '').toString();
 
-      final groupKey = _viewMode == 'classroom' ? classroomName : teacherCode;
       final enriched = {
         ...row,
+        'classroomId': classId,
         'teacherCode': teacherCode,
         'classroomName': classroomName,
         'subjectCode': subjectCode,
         'subjectName': subjectName,
+        'coefficient': coefficient,
       };
 
-      grouped.putIfAbsent(groupKey, () => []).add(enriched);
+      grouped.putIfAbsent(classId, () => []).add(enriched);
     }
 
-    final sortedKeys = grouped.keys.toList()..sort();
-    return {for (final key in sortedKeys) key: grouped[key]!};
+    for (final rows in grouped.values) {
+      rows.sort((a, b) {
+        final byCode = (a['subjectCode'] ?? '').toString().compareTo(
+          (b['subjectCode'] ?? '').toString(),
+        );
+        if (byCode != 0) return byCode;
+        return _asInt(a['id']).compareTo(_asInt(b['id']));
+      });
+    }
+
+    return grouped;
+  }
+
+  String _classNameById(int? classId) {
+    if (classId == null || classId <= 0) return 'Classe';
+    for (final row in _classrooms) {
+      if (_asInt(row['id']) == classId) {
+        return (row['name'] ?? 'Classe $classId').toString();
+      }
+    }
+    return 'Classe $classId';
+  }
+
+  Widget _buildClassExcelTable(
+    List<Map<String, dynamic>> rows, {
+    required bool showClassColumn,
+  }) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        columnSpacing: 22,
+        headingRowColor: WidgetStatePropertyAll(
+          Theme.of(context).colorScheme.surfaceContainer,
+        ),
+        columns: [
+          const DataColumn(label: Text('N°')),
+          if (showClassColumn) const DataColumn(label: Text('Classe')),
+          const DataColumn(label: Text('Code matière')),
+          const DataColumn(label: Text('Matière')),
+          const DataColumn(label: Text('Coefficient')),
+          const DataColumn(label: Text('Code enseignant')),
+        ],
+        rows: List<DataRow>.generate(rows.length, (index) {
+          final row = rows[index];
+
+          return DataRow(
+            cells: [
+              DataCell(Text('${index + 1}')),
+              if (showClassColumn) DataCell(Text('${row['classroomName']}')),
+              DataCell(Text('${row['subjectCode']}')),
+              DataCell(Text('${row['subjectName']}')),
+              DataCell(Text('${row['coefficient']}')),
+              DataCell(Text('${row['teacherCode']}')),
+            ],
+          );
+        }),
+      ),
+    );
+  }
+
+  String _csvCell(dynamic value) {
+    final raw = (value ?? '').toString().replaceAll('"', '""');
+    final flattened = raw.replaceAll('\n', ' ').replaceAll('\r', ' ');
+    final safe = RegExp(r'^[=+\-@]').hasMatch(flattened)
+        ? "'$flattened"
+        : flattened;
+    return '"$safe"';
+  }
+
+  String _slugify(String value) {
+    final cleaned = value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+    return cleaned.isEmpty ? 'classe' : cleaned;
   }
 
   List<Map<String, dynamic>> _extractRows(dynamic data) {
