@@ -33,6 +33,7 @@ from .views import (
     SmsProviderConfigViewSet,
     TeacherAttendanceViewSet,
     TeacherAssignmentViewSet,
+    TeacherScheduleSlotViewSet,
     TeacherPayrollViewSet,
     TeacherViewSet,
 )
@@ -46,6 +47,7 @@ router.register(r"classrooms", ClassRoomViewSet)
 router.register(r"subjects", SubjectViewSet)
 router.register(r"teachers", TeacherViewSet)
 router.register(r"teacher-assignments", TeacherAssignmentViewSet)
+router.register(r"teacher-schedule-slots", TeacherScheduleSlotViewSet)
 router.register(r"parents", ParentProfileViewSet)
 router.register(r"students", StudentViewSet)
 router.register(r"student-history", StudentAcademicHistoryViewSet)
