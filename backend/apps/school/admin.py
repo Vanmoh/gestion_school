@@ -34,6 +34,7 @@ from .models import (
     TeacherAttendance,
     TeacherAssignment,
     TeacherScheduleSlot,
+    TimetablePublication,
     TeacherPayroll,
 )
 
@@ -45,6 +46,7 @@ admin.site.register(Subject)
 admin.site.register(Teacher)
 admin.site.register(TeacherAssignment)
 admin.site.register(TeacherScheduleSlot)
+admin.site.register(TimetablePublication)
 admin.site.register(ParentProfile)
 admin.site.register(Student)
 admin.site.register(StudentAcademicHistory)

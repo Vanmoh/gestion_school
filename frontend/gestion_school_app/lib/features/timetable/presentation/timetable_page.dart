@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
@@ -26,6 +27,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   List<Map<String, dynamic>> _classrooms = [];
   List<Map<String, dynamic>> _assignments = [];
   List<Map<String, dynamic>> _scheduleSlots = [];
+  List<Map<String, dynamic>> _timetablePublications = [];
   int? _selectedClassroom;
 
   static const List<String> _dayOrder = [
@@ -63,6 +65,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         dio.get('/classrooms/'),
         dio.get('/teacher-assignments/'),
         dio.get('/teacher-schedule-slots/'),
+        dio.get('/timetable-publications/'),
       ]);
 
       if (!mounted) return;
@@ -73,6 +76,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         _classrooms = _extractRows(results[2].data);
         _assignments = _extractRows(results[3].data);
         _scheduleSlots = _extractRows(results[4].data);
+        _timetablePublications = _extractRows(results[5].data);
 
         final classIds = _classrooms.map((row) => _asInt(row['id'])).toSet();
         if (_selectedClassroom == null ||
@@ -275,6 +279,226 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     await _loadData();
   }
 
+  Map<int, Map<String, dynamic>> _publicationByClassroom() {
+    final map = <int, Map<String, dynamic>>{};
+    for (final row in _timetablePublications) {
+      final classId = _asInt(row['classroom']);
+      if (classId <= 0) continue;
+      map[classId] = row;
+    }
+    return map;
+  }
+
+  bool _asBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    final text = (value ?? '').toString().trim().toLowerCase();
+    return {'1', 'true', 'yes', 'on'}.contains(text);
+  }
+
+  bool _isClassLockedById(int? classId) {
+    if (classId == null || classId <= 0) return false;
+    final publication = _publicationByClassroom()[classId];
+    return _asBool(publication?['is_locked']);
+  }
+
+  String _publicationLabel(Map<String, dynamic>? publication) {
+    if (publication == null) return 'Brouillon';
+    final published = _asBool(publication['is_published']);
+    final locked = _asBool(publication['is_locked']);
+    if (!published) return 'Brouillon';
+    if (locked) return 'Publié • Verrouillé';
+    return 'Publié';
+  }
+
+  Future<void> _publishSelectedClass({required bool lockAfterPublish}) async {
+    final classId = _selectedClassroom;
+    if (classId == null || classId <= 0) {
+      _showMessage('Sélectionnez une classe.');
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(dioProvider)
+          .post(
+            '/teacher-schedule-slots/publish_class/',
+            data: {'classroom': classId, 'lock': lockAfterPublish},
+          );
+
+      if (!mounted) return;
+      _showMessage(
+        lockAfterPublish
+            ? 'Planning publié et verrouillé.'
+            : 'Planning publié sans verrouillage.',
+      );
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur publication: ${_extractErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _setSelectedClassLock({required bool lock}) async {
+    final classId = _selectedClassroom;
+    if (classId == null || classId <= 0) {
+      _showMessage('Sélectionnez une classe.');
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(dioProvider)
+          .post(
+            lock
+                ? '/teacher-schedule-slots/lock_class/'
+                : '/teacher-schedule-slots/unlock_class/',
+            data: {'classroom': classId},
+          );
+
+      if (!mounted) return;
+      _showMessage(lock ? 'Planning verrouillé.' : 'Planning déverrouillé.');
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur verrouillage: ${_extractErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _unpublishSelectedClass() async {
+    final classId = _selectedClassroom;
+    if (classId == null || classId <= 0) {
+      _showMessage('Sélectionnez une classe.');
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(dioProvider)
+          .post(
+            '/teacher-schedule-slots/unpublish_class/',
+            data: {'classroom': classId},
+          );
+
+      if (!mounted) return;
+      _showMessage('Planning remis en brouillon.');
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur retour brouillon: ${_extractErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  List<String> _predictSlotConflicts({
+    required int assignmentId,
+    required String dayCode,
+    required TimeOfDay start,
+    required TimeOfDay end,
+    required String room,
+    int? excludeSlotId,
+  }) {
+    final assignmentById = _assignmentById();
+    final selected = assignmentById[assignmentId];
+    if (selected == null) return const <String>[];
+
+    final startMinutes = start.hour * 60 + start.minute;
+    final endMinutes = end.hour * 60 + end.minute;
+    final selectedClassId = _asInt(selected['classroom']);
+    final selectedTeacherId = _asInt(selected['teacher']);
+    final selectedRoom = room.trim().toLowerCase();
+
+    final messages = <String>{};
+    for (final slot in _scheduleSlots) {
+      final slotId = _asInt(slot['id']);
+      if (excludeSlotId != null && slotId == excludeSlotId) {
+        continue;
+      }
+
+      final slotDay = (slot['day_of_week'] ?? '').toString();
+      if (slotDay != dayCode) {
+        continue;
+      }
+
+      final slotStart = _timeToMinutes(slot['start_time']);
+      final slotEnd = _timeToMinutes(slot['end_time']);
+      final isOverlap = slotStart < endMinutes && slotEnd > startMinutes;
+      if (!isOverlap) {
+        continue;
+      }
+
+      final otherAssignment = assignmentById[_asInt(slot['assignment'])];
+      if (otherAssignment == null) {
+        continue;
+      }
+
+      final label =
+          '${_hhmm(slot['start_time'])}-${_hhmm(slot['end_time'])} • '
+          '${otherAssignment['subjectCode']} (${otherAssignment['teacherCode']})';
+
+      final otherClassId = _asInt(otherAssignment['classroom']);
+      if (otherClassId == selectedClassId) {
+        messages.add('Conflit classe: $label');
+      }
+
+      final otherTeacherId = _asInt(otherAssignment['teacher']);
+      if (otherTeacherId == selectedTeacherId) {
+        messages.add('Conflit enseignant: $label');
+      }
+
+      final otherRoom = (slot['room'] ?? '').toString().trim().toLowerCase();
+      if (selectedRoom.isNotEmpty &&
+          otherRoom.isNotEmpty &&
+          selectedRoom == otherRoom) {
+        messages.add('Conflit salle: $label');
+      }
+    }
+
+    return messages.toList()..sort();
+  }
+
+  String _extractErrorMessage(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map<String, dynamic>) {
+        final nonFieldErrors = data['non_field_errors'];
+        if (nonFieldErrors is List && nonFieldErrors.isNotEmpty) {
+          return nonFieldErrors.map((item) => item.toString()).join(' | ');
+        }
+
+        final detail = data['detail'];
+        if (detail != null && detail.toString().trim().isNotEmpty) {
+          return detail.toString();
+        }
+
+        for (final entry in data.entries) {
+          final value = entry.value;
+          if (value is List && value.isNotEmpty) {
+            return value.map((item) => item.toString()).join(' | ');
+          }
+          if (value is String && value.trim().isNotEmpty) {
+            return value;
+          }
+        }
+      }
+
+      final message = error.message;
+      if (message != null && message.trim().isNotEmpty) {
+        return message;
+      }
+    }
+
+    return error.toString();
+  }
+
   Future<void> _openSlotDialog({
     Map<String, dynamic>? slot,
     int? forceClassroomId,
@@ -282,6 +506,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final classroomId = forceClassroomId ?? _selectedClassroom;
     if (classroomId == null || classroomId <= 0) {
       _showMessage('Sélectionnez une classe avant d\'ajouter un créneau.');
+      return;
+    }
+
+    if (_isClassLockedById(classroomId)) {
+      _showMessage(
+        'Emploi du temps verrouillé pour cette classe. Déverrouillez avant modification.',
+      );
       return;
     }
 
@@ -336,6 +567,34 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
+            List<String> computeDialogConflicts() {
+              final start = _parseTimeOfDay(startController.text.trim());
+              final end = _parseTimeOfDay(endController.text.trim());
+              if (start == null || end == null) {
+                return const <String>[];
+              }
+
+              final startMinutes = start.hour * 60 + start.minute;
+              final endMinutes = end.hour * 60 + end.minute;
+              if (endMinutes <= startMinutes) {
+                return const <String>[];
+              }
+
+              final excludeSlotId = isEdit
+                  ? _asInt(slot['slotId'] ?? slot['id'])
+                  : null;
+              return _predictSlotConflicts(
+                assignmentId: selectedAssignment,
+                dayCode: selectedDay,
+                start: start,
+                end: end,
+                room: roomController.text.trim(),
+                excludeSlotId: excludeSlotId,
+              );
+            }
+
+            final dialogConflicts = computeDialogConflicts();
+
             return AlertDialog(
               title: Text(
                 isEdit ? 'Modifier un créneau' : 'Ajouter un créneau',
@@ -391,6 +650,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                         Expanded(
                           child: TextField(
                             controller: startController,
+                            onChanged: (_) => setDialogState(() {}),
                             decoration: InputDecoration(
                               labelText: 'Heure début (HH:MM)',
                               suffixIcon: IconButton(
@@ -404,6 +664,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                         Expanded(
                           child: TextField(
                             controller: endController,
+                            onChanged: (_) => setDialogState(() {}),
                             decoration: InputDecoration(
                               labelText: 'Heure fin (HH:MM)',
                               suffixIcon: IconButton(
@@ -418,10 +679,43 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     const SizedBox(height: 10),
                     TextField(
                       controller: roomController,
+                      onChanged: (_) => setDialogState(() {}),
                       decoration: const InputDecoration(
                         labelText: 'Salle (optionnel)',
                       ),
                     ),
+                    if (dialogConflicts.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.shade200),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Conflits détectés',
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            ...dialogConflicts
+                                .take(5)
+                                .map(
+                                  (message) => Text(
+                                    '- $message',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -435,7 +729,39 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 FilledButton(
                   onPressed: _saving
                       ? null
-                      : () => Navigator.of(dialogContext).pop(true),
+                      : () {
+                          final start = _parseTimeOfDay(
+                            startController.text.trim(),
+                          );
+                          final end = _parseTimeOfDay(
+                            endController.text.trim(),
+                          );
+
+                          if (start == null || end == null) {
+                            _showMessage(
+                              'Heures invalides. Format attendu: HH:MM',
+                            );
+                            return;
+                          }
+
+                          final startMinutes = start.hour * 60 + start.minute;
+                          final endMinutes = end.hour * 60 + end.minute;
+                          if (endMinutes <= startMinutes) {
+                            _showMessage(
+                              'L\'heure de fin doit être après l\'heure de début.',
+                            );
+                            return;
+                          }
+
+                          if (dialogConflicts.isNotEmpty) {
+                            _showMessage(
+                              'Conflits détectés. Ajustez le créneau avant validation.',
+                            );
+                            return;
+                          }
+
+                          Navigator.of(dialogContext).pop(true);
+                        },
                   child: Text(isEdit ? 'Modifier' : 'Ajouter'),
                 ),
               ],
@@ -473,6 +799,22 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       return;
     }
 
+    final liveConflicts = _predictSlotConflicts(
+      assignmentId: selectedAssignment,
+      dayCode: selectedDay,
+      start: start,
+      end: end,
+      room: roomController.text.trim(),
+      excludeSlotId: isEdit ? _asInt(slot['slotId'] ?? slot['id']) : null,
+    );
+    if (liveConflicts.isNotEmpty) {
+      _showMessage('Conflits détectés. Ajustez le créneau avant validation.');
+      startController.dispose();
+      endController.dispose();
+      roomController.dispose();
+      return;
+    }
+
     final payload = {
       'assignment': selectedAssignment,
       'day_of_week': selectedDay,
@@ -502,7 +844,9 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await _loadData();
     } catch (error) {
       if (!mounted) return;
-      _showMessage('Erreur enregistrement créneau: $error');
+      _showMessage(
+        'Erreur enregistrement créneau: ${_extractErrorMessage(error)}',
+      );
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -514,6 +858,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final slotId = _asInt(slot['slotId'] ?? slot['id']);
     if (slotId <= 0) {
       _showMessage('Créneau invalide.');
+      return;
+    }
+
+    final classId = _asInt(slot['classroom']);
+    if (_isClassLockedById(classId)) {
+      _showMessage(
+        'Emploi du temps verrouillé pour cette classe. Déverrouillez avant suppression.',
+      );
       return;
     }
 
@@ -554,7 +906,9 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await _loadData();
     } catch (error) {
       if (!mounted) return;
-      _showMessage('Erreur suppression créneau: $error');
+      _showMessage(
+        'Erreur suppression créneau: ${_extractErrorMessage(error)}',
+      );
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -635,10 +989,22 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final assignmentById = _assignmentById();
     final assignmentsByClass = _assignmentsByClass(assignmentById);
     final slotsByClass = _slotsByClass(assignmentById);
+    final publicationByClass = _publicationByClassroom();
 
     final colorScheme = Theme.of(context).colorScheme;
     final classesWithSlots = _classrooms
         .where((row) => (slotsByClass[_asInt(row['id'])] ?? []).isNotEmpty)
+        .length;
+    final classesPublished = _classrooms
+        .where(
+          (row) =>
+              _asBool(publicationByClass[_asInt(row['id'])]?['is_published']),
+        )
+        .length;
+    final classesLocked = _classrooms
+        .where(
+          (row) => _asBool(publicationByClass[_asInt(row['id'])]?['is_locked']),
+        )
         .length;
 
     final selectedClassId = _selectedClassroom;
@@ -649,6 +1015,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final selectedSlots = selectedClassId == null
         ? <Map<String, dynamic>>[]
         : (slotsByClass[selectedClassId] ?? <Map<String, dynamic>>[]);
+    final selectedPublication = selectedClassId == null
+        ? null
+        : publicationByClass[selectedClassId];
+    final selectedIsPublished = _asBool(selectedPublication?['is_published']);
+    final selectedIsLocked = _asBool(selectedPublication?['is_locked']);
+    final selectedPublicationLabel = _publicationLabel(selectedPublication);
 
     final controlsPanel = _sectionCard(
       title: 'Filtres et actions',
@@ -670,13 +1042,25 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               setState(() => _selectedClassroom = value);
             },
           ),
+          if (selectedClassId != null) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _metricChip('Statut planning', selectedPublicationLabel),
+                _metricChip('Créneaux', '${selectedSlots.length}'),
+              ],
+            ),
+          ],
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
               FilledButton.icon(
-                onPressed: (_saving || selectedClassId == null)
+                onPressed:
+                    (_saving || selectedClassId == null || selectedIsLocked)
                     ? null
                     : () => _openSlotDialog(forceClassroomId: selectedClassId),
                 icon: const Icon(Icons.add_circle_outline),
@@ -703,6 +1087,53 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.tonalIcon(
+                onPressed:
+                    (_saving ||
+                        selectedClassId == null ||
+                        selectedAssignments.isEmpty)
+                    ? null
+                    : () => _publishSelectedClass(lockAfterPublish: true),
+                icon: const Icon(Icons.publish),
+                label: const Text('Publier + verrouiller'),
+              ),
+              OutlinedButton.icon(
+                onPressed:
+                    (_saving ||
+                        selectedClassId == null ||
+                        selectedAssignments.isEmpty)
+                    ? null
+                    : () => _publishSelectedClass(lockAfterPublish: false),
+                icon: const Icon(Icons.cloud_upload_outlined),
+                label: const Text('Publier sans verrou'),
+              ),
+              OutlinedButton.icon(
+                onPressed:
+                    (_saving || selectedClassId == null || !selectedIsPublished)
+                    ? null
+                    : () => _setSelectedClassLock(lock: !selectedIsLocked),
+                icon: Icon(
+                  selectedIsLocked
+                      ? Icons.lock_open_outlined
+                      : Icons.lock_outline,
+                ),
+                label: Text(selectedIsLocked ? 'Déverrouiller' : 'Verrouiller'),
+              ),
+              OutlinedButton.icon(
+                onPressed:
+                    (_saving || selectedClassId == null || !selectedIsPublished)
+                    ? null
+                    : _unpublishSelectedClass,
+                icon: const Icon(Icons.unpublished_outlined),
+                label: const Text('Repasser brouillon'),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -726,9 +1157,17 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       '${selectedAssignments.length}',
                     ),
                     _metricChip('Créneaux classe', '${selectedSlots.length}'),
+                    _metricChip('Statut', selectedPublicationLabel),
                   ],
                 ),
                 const SizedBox(height: 10),
+                if (selectedIsLocked)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'Planning verrouillé: les modifications de créneaux sont temporairement bloquées.',
+                    ),
+                  ),
                 if (selectedAssignments.isEmpty)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 10),
@@ -761,6 +1200,9 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     assignmentsByClass[classId] ?? <Map<String, dynamic>>[];
                 final classSlots =
                     slotsByClass[classId] ?? <Map<String, dynamic>>[];
+                final publication = publicationByClass[classId];
+                final classIsLocked = _asBool(publication?['is_locked']);
+                final publicationLabel = _publicationLabel(publication);
 
                 return Card(
                   child: ExpansionTile(
@@ -772,14 +1214,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     },
                     title: Text(className),
                     subtitle: Text(
-                      '${classSlots.length} créneau(x) • ${classAssignments.length} affectation(s)',
+                      '$publicationLabel • ${classSlots.length} créneau(x) • ${classAssignments.length} affectation(s)',
                     ),
                     childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                     children: [
                       Align(
                         alignment: Alignment.centerRight,
                         child: OutlinedButton.icon(
-                          onPressed: _saving
+                          onPressed: (_saving || classIsLocked)
                               ? null
                               : () =>
                                     _openSlotDialog(forceClassroomId: classId),
@@ -860,6 +1302,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 _metricChip('Affectations', '${_assignments.length}'),
                 _metricChip('Créneaux', '${_scheduleSlots.length}'),
                 _metricChip('Classes planifiées', '$classesWithSlots'),
+                _metricChip('Classes publiées', '$classesPublished'),
+                _metricChip('Classes verrouillées', '$classesLocked'),
               ],
             ),
           ),
@@ -1078,6 +1522,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
+    final classLocked = _isClassLockedById(classId);
     return SizedBox(
       width: 180,
       child: Column(
@@ -1118,7 +1563,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     children: [
                       IconButton(
                         tooltip: 'Modifier créneau',
-                        onPressed: _saving
+                        onPressed: (_saving || classLocked)
                             ? null
                             : () => _openSlotDialog(
                                 slot: slots[i],
@@ -1134,7 +1579,9 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       ),
                       IconButton(
                         tooltip: 'Supprimer créneau',
-                        onPressed: _saving ? null : () => _deleteSlot(slots[i]),
+                        onPressed: (_saving || classLocked)
+                            ? null
+                            : () => _deleteSlot(slots[i]),
                         icon: const Icon(Icons.delete_outline, size: 16),
                         visualDensity: VisualDensity.compact,
                         constraints: const BoxConstraints(

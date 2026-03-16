@@ -35,6 +35,7 @@ from .models import (
     TeacherAttendance,
     TeacherAssignment,
     TeacherScheduleSlot,
+    TimetablePublication,
     TeacherPayroll,
 )
 
@@ -82,8 +83,149 @@ class TeacherAssignmentSerializer(serializers.ModelSerializer):
 
 
 class TeacherScheduleSlotSerializer(serializers.ModelSerializer):
+    classroom = serializers.SerializerMethodField(read_only=True)
+    classroom_name = serializers.SerializerMethodField(read_only=True)
+    subject_code = serializers.SerializerMethodField(read_only=True)
+    teacher_code = serializers.SerializerMethodField(read_only=True)
+
+    def get_classroom(self, obj):
+        assignment = obj.assignment
+        return assignment.classroom_id if assignment else None
+
+    def get_classroom_name(self, obj):
+        assignment = obj.assignment
+        classroom = assignment.classroom if assignment else None
+        return classroom.name if classroom else ""
+
+    def get_subject_code(self, obj):
+        assignment = obj.assignment
+        subject = assignment.subject if assignment else None
+        return subject.code if subject else ""
+
+    def get_teacher_code(self, obj):
+        assignment = obj.assignment
+        teacher = assignment.teacher if assignment else None
+        return teacher.employee_code if teacher else ""
+
+    @staticmethod
+    def _slot_label(slot):
+        assignment = slot.assignment
+        subject_code = assignment.subject.code if assignment and assignment.subject else "MAT"
+        teacher_code = assignment.teacher.employee_code if assignment and assignment.teacher else "ENS"
+        class_name = assignment.classroom.name if assignment and assignment.classroom else "Classe"
+        room = slot.room.strip() if (slot.room or "").strip() else "-"
+        return (
+            f"{slot.get_day_of_week_display()} "
+            f"{slot.start_time.strftime('%H:%M')}-{slot.end_time.strftime('%H:%M')} "
+            f"| Classe {class_name} | {subject_code}/{teacher_code} | Salle {room}"
+        )
+
+    @staticmethod
+    def _overlap_queryset(day_of_week, start_time, end_time):
+        return TeacherScheduleSlot.objects.select_related(
+            "assignment",
+            "assignment__teacher",
+            "assignment__subject",
+            "assignment__classroom",
+        ).filter(
+            day_of_week=day_of_week,
+            start_time__lt=end_time,
+            end_time__gt=start_time,
+        )
+
+    @staticmethod
+    def _check_locked_classroom(assignment):
+        if not assignment:
+            return
+        publication = TimetablePublication.objects.filter(
+            classroom=assignment.classroom,
+            is_locked=True,
+        ).first()
+        if publication:
+            raise serializers.ValidationError(
+                {
+                    "non_field_errors": [
+                        "Emploi du temps verrouillé pour cette classe. "
+                        "Déverrouillez avant toute modification.",
+                    ]
+                }
+            )
+
+    def validate(self, attrs):
+        assignment = attrs.get("assignment") or getattr(self.instance, "assignment", None)
+        day_of_week = attrs.get("day_of_week") or getattr(self.instance, "day_of_week", None)
+        start_time = attrs.get("start_time") or getattr(self.instance, "start_time", None)
+        end_time = attrs.get("end_time") or getattr(self.instance, "end_time", None)
+        room = attrs.get("room")
+        if room is None and self.instance is not None:
+            room = self.instance.room
+
+        if not assignment or not day_of_week or not start_time or not end_time:
+            return attrs
+
+        if end_time <= start_time:
+            raise serializers.ValidationError(
+                {"end_time": "L'heure de fin doit être après l'heure de début."}
+            )
+
+        self._check_locked_classroom(assignment)
+
+        overlaps = self._overlap_queryset(day_of_week, start_time, end_time)
+        if self.instance:
+            overlaps = overlaps.exclude(pk=self.instance.pk)
+
+        class_conflicts = overlaps.filter(assignment__classroom=assignment.classroom)
+        teacher_conflicts = overlaps.filter(assignment__teacher=assignment.teacher)
+
+        room_conflicts = TeacherScheduleSlot.objects.none()
+        room_value = (room or "").strip()
+        if room_value:
+            room_conflicts = overlaps.exclude(room__exact="").filter(room__iexact=room_value)
+
+        errors = []
+
+        if class_conflicts.exists():
+            errors.append("Conflit de classe: un autre cours est déjà planifié sur ce créneau.")
+            for slot in class_conflicts[:3]:
+                errors.append(f"Classe: {self._slot_label(slot)}")
+
+        if teacher_conflicts.exists():
+            errors.append("Conflit enseignant: cet enseignant est déjà occupé sur ce créneau.")
+            for slot in teacher_conflicts[:3]:
+                errors.append(f"Enseignant: {self._slot_label(slot)}")
+
+        if room_conflicts.exists():
+            errors.append("Conflit de salle: la salle est déjà utilisée sur ce créneau.")
+            for slot in room_conflicts[:3]:
+                errors.append(f"Salle: {self._slot_label(slot)}")
+
+        if errors:
+            raise serializers.ValidationError({"non_field_errors": errors})
+
+        return attrs
+
     class Meta:
         model = TeacherScheduleSlot
+        fields = "__all__"
+
+
+class TimetablePublicationSerializer(serializers.ModelSerializer):
+    classroom_name = serializers.SerializerMethodField(read_only=True)
+    published_by_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_classroom_name(self, obj):
+        classroom = obj.classroom
+        return classroom.name if classroom else ""
+
+    def get_published_by_name(self, obj):
+        user = obj.published_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    class Meta:
+        model = TimetablePublication
         fields = "__all__"
 
 

@@ -41,6 +41,7 @@ from .models import (
     TeacherAttendance,
     TeacherAssignment,
     TeacherScheduleSlot,
+    TimetablePublication,
     TeacherPayroll,
     recalculate_term_ranking,
 )
@@ -78,6 +79,7 @@ from .serializers import (
     TeacherAttendanceSerializer,
     TeacherAssignmentSerializer,
     TeacherScheduleSlotSerializer,
+    TimetablePublicationSerializer,
     TeacherPayrollSerializer,
     TeacherSerializer,
 )
@@ -132,12 +134,151 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
     serializer_class = TeacherScheduleSlotSerializer
     filterset_fields = ["assignment", "day_of_week"]
 
+    def _parse_classroom_id(self, request):
+        raw = request.data.get("classroom")
+        if raw is None:
+            raw = request.query_params.get("classroom")
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def _publication_response(self, classroom):
+        publication = TimetablePublication.objects.filter(classroom=classroom).first()
+        if publication:
+            payload = TimetablePublicationSerializer(publication).data
+        else:
+            payload = {
+                "id": None,
+                "classroom": classroom.id,
+                "classroom_name": classroom.name,
+                "is_published": False,
+                "is_locked": False,
+                "published_by": None,
+                "published_by_name": "",
+                "published_at": None,
+                "notes": "",
+            }
+
+        slot_count = self.get_queryset().filter(assignment__classroom=classroom).count()
+        payload["slot_count"] = slot_count
+        return payload
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        publication = TimetablePublication.objects.filter(
+            classroom=instance.assignment.classroom,
+            is_locked=True,
+        ).first()
+        if publication:
+            return Response(
+                {
+                    "detail": "Emploi du temps verrouillé pour cette classe. "
+                    "Déverrouillez avant toute suppression."
+                },
+                status=400,
+            )
+        return super().destroy(request, *args, **kwargs)
+
     def get_queryset(self):
         queryset = super().get_queryset()
         classroom = self.request.query_params.get("classroom")
         if classroom:
             queryset = queryset.filter(assignment__classroom_id=classroom)
         return queryset
+
+    @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+    def publication_status(self, request):
+        classroom_id = self._parse_classroom_id(request)
+        if not classroom_id:
+            return Response({"detail": "classroom est requis."}, status=400)
+
+        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        return Response(self._publication_response(classroom))
+
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    def publish_class(self, request):
+        classroom_id = self._parse_classroom_id(request)
+        if not classroom_id:
+            return Response({"detail": "classroom est requis."}, status=400)
+
+        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+
+        lock_value = request.data.get("lock")
+        if isinstance(lock_value, bool):
+            lock_after_publish = lock_value
+        elif lock_value is None:
+            lock_after_publish = True
+        else:
+            lock_after_publish = str(lock_value).strip().lower() in {"1", "true", "yes", "on"}
+
+        notes = str(request.data.get("notes") or "").strip()
+        publication, _ = TimetablePublication.objects.get_or_create(classroom=classroom)
+        publication.is_published = True
+        publication.is_locked = lock_after_publish
+        publication.published_by = request.user
+        publication.published_at = timezone.now()
+        publication.notes = notes
+        publication.save()
+
+        return Response(self._publication_response(classroom))
+
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    def unpublish_class(self, request):
+        classroom_id = self._parse_classroom_id(request)
+        if not classroom_id:
+            return Response({"detail": "classroom est requis."}, status=400)
+
+        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        publication, _ = TimetablePublication.objects.get_or_create(classroom=classroom)
+        publication.is_published = False
+        publication.is_locked = False
+        publication.published_by = None
+        publication.published_at = None
+        publication.notes = ""
+        publication.save()
+
+        return Response(self._publication_response(classroom))
+
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    def lock_class(self, request):
+        classroom_id = self._parse_classroom_id(request)
+        if not classroom_id:
+            return Response({"detail": "classroom est requis."}, status=400)
+
+        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        publication, _ = TimetablePublication.objects.get_or_create(classroom=classroom)
+
+        if not publication.is_published:
+            return Response(
+                {"detail": "Publiez d'abord l'emploi du temps avant de le verrouiller."},
+                status=400,
+            )
+
+        publication.is_locked = True
+        publication.save(update_fields=["is_locked", "updated_at"])
+        return Response(self._publication_response(classroom))
+
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    def unlock_class(self, request):
+        classroom_id = self._parse_classroom_id(request)
+        if not classroom_id:
+            return Response({"detail": "classroom est requis."}, status=400)
+
+        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        publication, _ = TimetablePublication.objects.get_or_create(classroom=classroom)
+        publication.is_locked = False
+        publication.save(update_fields=["is_locked", "updated_at"])
+        return Response(self._publication_response(classroom))
+
+
+class TimetablePublicationViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = TimetablePublication.objects.select_related("classroom", "published_by").all().order_by("classroom__name")
+    serializer_class = TimetablePublicationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ["classroom", "is_published", "is_locked"]
 
 
 class ParentProfileViewSet(BaseModelViewSet):
