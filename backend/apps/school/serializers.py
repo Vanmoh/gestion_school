@@ -34,6 +34,7 @@ from .models import (
     Teacher,
     TeacherAttendance,
     TeacherAssignment,
+    TeacherScheduleSlot,
     TeacherPayroll,
 )
 
@@ -77,6 +78,12 @@ class TeacherSerializer(serializers.ModelSerializer):
 class TeacherAssignmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = TeacherAssignment
+        fields = "__all__"
+
+
+class TeacherScheduleSlotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TeacherScheduleSlot
         fields = "__all__"
 
 

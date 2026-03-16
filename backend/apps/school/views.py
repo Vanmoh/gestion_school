@@ -40,6 +40,7 @@ from .models import (
     Teacher,
     TeacherAttendance,
     TeacherAssignment,
+    TeacherScheduleSlot,
     TeacherPayroll,
     recalculate_term_ranking,
 )
@@ -76,6 +77,7 @@ from .serializers import (
     SmsProviderConfigSerializer,
     TeacherAttendanceSerializer,
     TeacherAssignmentSerializer,
+    TeacherScheduleSlotSerializer,
     TeacherPayrollSerializer,
     TeacherSerializer,
 )
@@ -118,6 +120,24 @@ class TeacherViewSet(BaseModelViewSet):
 class TeacherAssignmentViewSet(BaseModelViewSet):
     queryset = TeacherAssignment.objects.select_related("teacher", "subject", "classroom").all()
     serializer_class = TeacherAssignmentSerializer
+
+
+class TeacherScheduleSlotViewSet(BaseModelViewSet):
+    queryset = TeacherScheduleSlot.objects.select_related(
+        "assignment",
+        "assignment__teacher",
+        "assignment__subject",
+        "assignment__classroom",
+    ).all()
+    serializer_class = TeacherScheduleSlotSerializer
+    filterset_fields = ["assignment", "day_of_week"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        classroom = self.request.query_params.get("classroom")
+        if classroom:
+            queryset = queryset.filter(assignment__classroom_id=classroom)
+        return queryset
 
 
 class ParentProfileViewSet(BaseModelViewSet):

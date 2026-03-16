@@ -71,6 +71,33 @@ class TeacherAssignment(TimeStampedModel):
         unique_together = ("teacher", "subject", "classroom")
 
 
+class WeekDay(models.TextChoices):
+    MONDAY = "MON", "Lundi"
+    TUESDAY = "TUE", "Mardi"
+    WEDNESDAY = "WED", "Mercredi"
+    THURSDAY = "THU", "Jeudi"
+    FRIDAY = "FRI", "Vendredi"
+    SATURDAY = "SAT", "Samedi"
+
+
+class TeacherScheduleSlot(TimeStampedModel):
+    assignment = models.ForeignKey(TeacherAssignment, on_delete=models.CASCADE, related_name="schedule_slots")
+    day_of_week = models.CharField(max_length=3, choices=WeekDay.choices)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    room = models.CharField(max_length=60, blank=True)
+
+    class Meta:
+        unique_together = ("assignment", "day_of_week", "start_time", "end_time")
+        ordering = ("day_of_week", "start_time", "end_time", "id")
+
+    def __str__(self):
+        return (
+            f"{self.assignment.classroom} | {self.get_day_of_week_display()} "
+            f"{self.start_time.strftime('%H:%M')}-{self.end_time.strftime('%H:%M')}"
+        )
+
+
 class ParentProfile(TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="parent_profile")
     profession = models.CharField(max_length=120, blank=True)
