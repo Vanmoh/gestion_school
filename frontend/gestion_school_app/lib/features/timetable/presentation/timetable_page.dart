@@ -1,15 +1,13 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter/services.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
-import '../../../core/constants/branding.dart';
 import '../../../core/network/api_client.dart';
+import 'timetable_workload.dart';
 
 class TimetablePage extends ConsumerStatefulWidget {
   const TimetablePage({super.key});
@@ -28,7 +26,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   List<Map<String, dynamic>> _assignments = [];
   List<Map<String, dynamic>> _scheduleSlots = [];
   List<Map<String, dynamic>> _timetablePublications = [];
+
+  final _slotsSearchController = TextEditingController();
   int? _selectedClassroom;
+  String _viewMode = 'classroom';
+  String _teacherScope = 'selected';
+  String _mobileDayFilter = 'ALL';
 
   static const List<String> _dayOrder = [
     'MON',
@@ -52,6 +55,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _slotsSearchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -94,136 +103,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
-  }
-
-  Future<void> _printCurrentClassTablePdf() async {
-    final classroomId = _selectedClassroom;
-    if (classroomId == null || classroomId <= 0) {
-      _showMessage('Sélectionnez une classe avant impression.');
-      return;
-    }
-
-    final assignmentById = _assignmentById();
-    final slotsByClass = _slotsByClass(assignmentById);
-    final classSlots = slotsByClass[classroomId] ?? <Map<String, dynamic>>[];
-
-    if (classSlots.isEmpty) {
-      _showMessage('Aucun créneau planifié pour cette classe.');
-      return;
-    }
-
-    final matrix = _classMatrix(classSlots);
-    final ranges = matrix.keys.toList()
-      ..sort((a, b) => _rangeStartMinutes(a).compareTo(_rangeStartMinutes(b)));
-
-    final className = _classNameById(classroomId);
-
-    pw.MemoryImage? logoImage;
-    try {
-      final logoData = await rootBundle.load(SchoolBranding.logoAsset);
-      logoImage = pw.MemoryImage(logoData.buffer.asUint8List());
-    } catch (_) {
-      logoImage = null;
-    }
-
-    final generatedAt = _dateTimeLabel(DateTime.now());
-
-    final doc = pw.Document();
-    doc.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4.landscape,
-        margin: const pw.EdgeInsets.fromLTRB(28, 24, 28, 24),
-        build: (context) {
-          final widgets = <pw.Widget>[
-            pw.Row(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                if (logoImage != null)
-                  pw.Container(
-                    width: 46,
-                    height: 46,
-                    margin: const pw.EdgeInsets.only(right: 10),
-                    child: pw.Image(logoImage),
-                  ),
-                pw.Expanded(
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text(
-                        SchoolBranding.schoolName,
-                        style: pw.TextStyle(
-                          fontSize: 14,
-                          fontWeight: pw.FontWeight.bold,
-                        ),
-                      ),
-                      pw.SizedBox(height: 2),
-                      pw.Text(
-                        '${SchoolBranding.level} • Tel: ${SchoolBranding.phone}',
-                        style: const pw.TextStyle(fontSize: 9),
-                      ),
-                      pw.Text(
-                        'Application: ${SchoolBranding.schoolShort} - GESTION SCHOOL',
-                        style: pw.TextStyle(
-                          fontSize: 9,
-                          fontWeight: pw.FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            pw.SizedBox(height: 8),
-            pw.Divider(),
-            pw.SizedBox(height: 8),
-            pw.Text(
-              'EMPLOI DU TEMPS - GRILLE HEBDOMADAIRE',
-              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
-            ),
-            pw.SizedBox(height: 4),
-            pw.Text(
-              'Classe: $className',
-              style: const pw.TextStyle(fontSize: 11),
-            ),
-            pw.Text(
-              'Généré le $generatedAt',
-              style: const pw.TextStyle(fontSize: 9),
-            ),
-            pw.SizedBox(height: 12),
-          ];
-
-          final headers = ['Créneau', ..._dayOrder.map(_dayLabel)];
-          final data = ranges.map((range) {
-            final dayMap =
-                matrix[range] ?? const <String, List<Map<String, dynamic>>>{};
-            return <String>[
-              range,
-              ..._dayOrder.map((dayCode) {
-                final slots = dayMap[dayCode] ?? const <Map<String, dynamic>>[];
-                return _slotsExportCell(slots);
-              }),
-            ];
-          }).toList();
-
-          widgets.add(
-            pw.TableHelper.fromTextArray(
-              headers: headers,
-              data: data,
-              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-              headerDecoration: const pw.BoxDecoration(
-                color: PdfColors.grey300,
-              ),
-              cellStyle: const pw.TextStyle(fontSize: 9),
-              cellAlignment: pw.Alignment.centerLeft,
-            ),
-          );
-
-          return widgets;
-        },
-      ),
-    );
-
-    await Printing.layoutPdf(onLayout: (_) async => doc.save());
   }
 
   Future<void> _exportCurrentClassCsv() async {
@@ -395,6 +274,292 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       _showMessage('Erreur retour brouillon: ${_extractErrorMessage(error)}');
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Uint8List _toUint8List(dynamic data) {
+    if (data is Uint8List) return data;
+    if (data is List<int>) return Uint8List.fromList(data);
+    if (data is List) return Uint8List.fromList(data.cast<int>());
+    throw Exception('Réponse binaire invalide');
+  }
+
+  Future<void> _downloadTimetableBinary({
+    required String endpoint,
+    required String filename,
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    setState(() => _saving = true);
+    try {
+      final response = await ref
+          .read(dioProvider)
+          .get(
+            endpoint,
+            queryParameters: queryParameters,
+            options: Options(responseType: ResponseType.bytes),
+          );
+
+      final bytes = _toUint8List(response.data);
+      await Printing.sharePdf(bytes: bytes, filename: filename);
+
+      if (!mounted) return;
+      _showMessage('Export lancé: $filename');
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur export: ${_extractErrorMessage(error)}');
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<void> _exportGlobalXlsx() async {
+    await _downloadTimetableBinary(
+      endpoint: '/teacher-schedule-slots/export_excel/',
+      filename: 'planning_global_multi_classes.xlsx',
+    );
+  }
+
+  Future<void> _exportGlobalPdf() async {
+    await _downloadTimetableBinary(
+      endpoint: '/teacher-schedule-slots/export_pdf/',
+      filename: 'planning_global_multi_classes.pdf',
+    );
+  }
+
+  Future<void> _exportSelectedClassXlsx() async {
+    final classId = _selectedClassroom;
+    if (classId == null || classId <= 0) {
+      _showMessage('Sélectionnez une classe avant export XLSX.');
+      return;
+    }
+
+    await _downloadTimetableBinary(
+      endpoint: '/teacher-schedule-slots/export_excel/',
+      filename: 'planning_classe_${classId}_xlsx.xlsx',
+      queryParameters: {'classroom': classId},
+    );
+  }
+
+  Future<void> _printSelectedClassPdfFromBackend() async {
+    final classId = _selectedClassroom;
+    if (classId == null || classId <= 0) {
+      _showMessage('Sélectionnez une classe avant impression.');
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final response = await ref
+          .read(dioProvider)
+          .get(
+            '/teacher-schedule-slots/export_pdf/',
+            queryParameters: {'classroom': classId},
+            options: Options(responseType: ResponseType.bytes),
+          );
+
+      final bytes = _toUint8List(response.data);
+      await Printing.layoutPdf(onLayout: (_) async => bytes);
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur impression PDF: ${_extractErrorMessage(error)}');
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<void> _openDuplicateScheduleDialog() async {
+    if (_classrooms.length < 2) {
+      _showMessage(
+        'Au moins deux classes sont nécessaires pour la duplication.',
+      );
+      return;
+    }
+
+    int sourceClass = _selectedClassroom ?? _asInt(_classrooms.first['id']);
+    int targetClass = _asInt(_classrooms.first['id']);
+    if (targetClass == sourceClass && _classrooms.length > 1) {
+      targetClass = _asInt(_classrooms[1]['id']);
+    }
+
+    var overwrite = false;
+    var keepRoom = true;
+    final selectedDays = <String>{..._dayOrder};
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: const Text('Duplication intelligente du planning'),
+              content: SizedBox(
+                width: 560,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    DropdownButtonFormField<int>(
+                      initialValue: sourceClass,
+                      decoration: const InputDecoration(
+                        labelText: 'Classe source',
+                      ),
+                      items: _classrooms
+                          .map(
+                            (row) => DropdownMenuItem<int>(
+                              value: _asInt(row['id']),
+                              child: Text((row['name'] ?? '').toString()),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setDialogState(() {
+                          sourceClass = value;
+                          if (targetClass == sourceClass) {
+                            final alternative = _classrooms
+                                .map((row) => _asInt(row['id']))
+                                .firstWhere(
+                                  (id) => id != sourceClass,
+                                  orElse: () => sourceClass,
+                                );
+                            targetClass = alternative;
+                          }
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<int>(
+                      initialValue: targetClass,
+                      decoration: const InputDecoration(
+                        labelText: 'Classe cible',
+                      ),
+                      items: _classrooms
+                          .map(
+                            (row) => DropdownMenuItem<int>(
+                              value: _asInt(row['id']),
+                              child: Text((row['name'] ?? '').toString()),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setDialogState(() => targetClass = value);
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: _dayOrder.map((dayCode) {
+                        return FilterChip(
+                          selected: selectedDays.contains(dayCode),
+                          label: Text(_dayLabel(dayCode)),
+                          onSelected: (enabled) {
+                            setDialogState(() {
+                              if (enabled) {
+                                selectedDays.add(dayCode);
+                              } else {
+                                selectedDays.remove(dayCode);
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 10),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      value: overwrite,
+                      onChanged: (value) =>
+                          setDialogState(() => overwrite = value),
+                      title: const Text(
+                        'Remplacer les créneaux existants cible',
+                      ),
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      value: keepRoom,
+                      onChanged: (value) =>
+                          setDialogState(() => keepRoom = value),
+                      title: const Text('Conserver les salles'),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: _saving
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Annuler'),
+                ),
+                FilledButton(
+                  onPressed: _saving
+                      ? null
+                      : () {
+                          if (sourceClass == targetClass) {
+                            _showMessage(
+                              'La classe source et la classe cible doivent être différentes.',
+                            );
+                            return;
+                          }
+                          if (selectedDays.isEmpty) {
+                            _showMessage('Sélectionnez au moins un jour.');
+                            return;
+                          }
+                          Navigator.of(dialogContext).pop(true);
+                        },
+                  child: const Text('Dupliquer'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirm != true) {
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final response = await ref
+          .read(dioProvider)
+          .post(
+            '/teacher-schedule-slots/duplicate_schedule/',
+            data: {
+              'source_classroom': sourceClass,
+              'target_classroom': targetClass,
+              'days': selectedDays.toList()..sort(),
+              'overwrite': overwrite,
+              'keep_room': keepRoom,
+            },
+          );
+
+      final payload = Map<String, dynamic>.from(response.data as Map);
+      final created = _asInt(payload['created']);
+      final updated = _asInt(payload['updated']);
+      final skippedConflicts = _asInt(payload['skipped_conflicts']);
+      final skippedUnmapped = _asInt(payload['skipped_unmapped']);
+
+      if (!mounted) return;
+      _showMessage(
+        'Duplication terminée: créés $created, mis à jour $updated, '
+        'conflits $skippedConflicts, non mappés $skippedUnmapped.',
+      );
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur duplication: ${_extractErrorMessage(error)}');
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
   }
 
@@ -1021,12 +1186,40 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final selectedIsPublished = _asBool(selectedPublication?['is_published']);
     final selectedIsLocked = _asBool(selectedPublication?['is_locked']);
     final selectedPublicationLabel = _publicationLabel(selectedPublication);
+    final isNarrow = MediaQuery.of(context).size.width < 980;
+
+    final teacherWorkloads = buildTeacherWorkloadRows(
+      teachers: _teachers,
+      assignmentById: assignmentById,
+      scheduleSlots: _scheduleSlots,
+      classroomFilter: _teacherScope == 'selected' ? selectedClassId : null,
+    );
 
     final controlsPanel = _sectionCard(
       title: 'Filtres et actions',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment<String>(
+                value: 'classroom',
+                label: Text('Par classe'),
+                icon: Icon(Icons.grid_view_outlined),
+              ),
+              ButtonSegment<String>(
+                value: 'teacher',
+                label: Text('Par enseignant'),
+                icon: Icon(Icons.badge_outlined),
+              ),
+            ],
+            selected: {_viewMode},
+            onSelectionChanged: (values) {
+              final next = values.first;
+              setState(() => _viewMode = next);
+            },
+          ),
+          const SizedBox(height: 10),
           DropdownButtonFormField<int>(
             initialValue: _selectedClassroom,
             decoration: const InputDecoration(labelText: 'Classe'),
@@ -1069,9 +1262,16 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               FilledButton.tonalIcon(
                 onPressed: (_saving || selectedClassId == null)
                     ? null
-                    : _printCurrentClassTablePdf,
+                    : _printSelectedClassPdfFromBackend,
                 icon: const Icon(Icons.picture_as_pdf),
                 label: const Text('Imprimer tableau PDF'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: (_saving || selectedClassId == null)
+                    ? null
+                    : _exportSelectedClassXlsx,
+                icon: const Icon(Icons.table_view_outlined),
+                label: const Text('Exporter XLSX classe'),
               ),
               FilledButton.tonalIcon(
                 onPressed: (_saving || selectedClassId == null)
@@ -1084,6 +1284,28 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 onPressed: _saving ? null : _loadData,
                 icon: const Icon(Icons.refresh),
                 label: const Text('Actualiser'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _saving ? null : _openDuplicateScheduleDialog,
+                icon: const Icon(Icons.copy_all_outlined),
+                label: const Text('Dupliquer planning'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _exportGlobalXlsx,
+                icon: const Icon(Icons.dataset_outlined),
+                label: const Text('Export global XLSX'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _exportGlobalPdf,
+                icon: const Icon(Icons.picture_as_pdf_outlined),
+                label: const Text('Export global PDF'),
               ),
             ],
           ),
@@ -1134,6 +1356,32 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               ),
             ],
           ),
+          if (_viewMode == 'teacher') ...[
+            const SizedBox(height: 10),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment<String>(
+                  value: 'selected',
+                  label: Text('Classe sélectionnée'),
+                  icon: Icon(Icons.filter_1_outlined),
+                ),
+                ButtonSegment<String>(
+                  value: 'all',
+                  label: Text('Toutes classes'),
+                  icon: Icon(Icons.filter_none_outlined),
+                ),
+              ],
+              selected: {_teacherScope},
+              onSelectionChanged: (values) {
+                setState(() => _teacherScope = values.first);
+              },
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Charge calculée sur ${teacherWorkloads.length} enseignant(s).',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
         ],
       ),
     );
@@ -1175,12 +1423,133 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       'Aucune affectation pour cette classe. Créez des affectations puis des créneaux.',
                     ),
                   )
-                else
+                else ...[
+                  TextField(
+                    controller: _slotsSearchController,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      labelText: 'Filtre rapide (matière, enseignant, salle)',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _slotsSearchController.text.trim().isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () {
+                                _slotsSearchController.clear();
+                                setState(() {});
+                              },
+                              icon: const Icon(Icons.clear),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Tous jours'),
+                        selected: _mobileDayFilter == 'ALL',
+                        onSelected: (_) {
+                          setState(() => _mobileDayFilter = 'ALL');
+                        },
+                      ),
+                      ..._dayOrder.map(
+                        (dayCode) => ChoiceChip(
+                          label: Text(_dayLabel(dayCode)),
+                          selected: _mobileDayFilter == dayCode,
+                          onSelected: (_) {
+                            setState(() => _mobileDayFilter = dayCode);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
                   _buildClassWeeklyGrid(
                     classId: selectedClassId,
                     classSlots: selectedSlots,
+                    dayFilter: _mobileDayFilter,
+                    searchTerm: _slotsSearchController.text,
+                    compact: isNarrow,
                   ),
+                ],
               ],
+            ),
+    );
+
+    final teacherWorkloadPanel = _sectionCard(
+      title: _teacherScope == 'selected'
+          ? 'Charge horaire - classe sélectionnée'
+          : 'Charge horaire - toutes classes',
+      child: teacherWorkloads.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Text('Aucune charge disponible pour le filtre courant.'),
+            )
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columnSpacing: 16,
+                headingRowColor: WidgetStatePropertyAll(
+                  Theme.of(context).colorScheme.surfaceContainer,
+                ),
+                columns: const [
+                  DataColumn(label: Text('Enseignant')),
+                  DataColumn(label: Text('Créneaux')),
+                  DataColumn(label: Text('Classes')),
+                  DataColumn(label: Text('Lundi')),
+                  DataColumn(label: Text('Mardi')),
+                  DataColumn(label: Text('Mercredi')),
+                  DataColumn(label: Text('Jeudi')),
+                  DataColumn(label: Text('Vendredi')),
+                  DataColumn(label: Text('Samedi')),
+                  DataColumn(label: Text('Total h/sem.')),
+                  DataColumn(label: Text('Niveau')),
+                ],
+                rows: teacherWorkloads.map((row) {
+                  final levelColor = row.level == 'Surcharge'
+                      ? Colors.red
+                      : (row.level == 'A surveiller'
+                            ? Colors.orange
+                            : Colors.green);
+                  final perDay = row.perDayMinutes;
+
+                  String hours(String day) {
+                    final minutes = perDay[day] ?? 0;
+                    return (minutes / 60).toStringAsFixed(2);
+                  }
+
+                  return DataRow(
+                    cells: [
+                      DataCell(
+                        Text(
+                          '${row.teacherCode} - ${row.teacherName}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      DataCell(Text('${row.slotCount}')),
+                      DataCell(Text('${row.classCount}')),
+                      DataCell(Text(hours('MON'))),
+                      DataCell(Text(hours('TUE'))),
+                      DataCell(Text(hours('WED'))),
+                      DataCell(Text(hours('THU'))),
+                      DataCell(Text(hours('FRI'))),
+                      DataCell(Text(hours('SAT'))),
+                      DataCell(Text(row.totalHours.toStringAsFixed(2))),
+                      DataCell(
+                        Text(
+                          row.level,
+                          style: TextStyle(
+                            color: levelColor,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
             ),
     );
 
@@ -1309,10 +1678,15 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           ),
           const SizedBox(height: 12),
           controlsPanel,
-          const SizedBox(height: 12),
-          selectedClassPanel,
-          const SizedBox(height: 12),
-          perClassPanel,
+          if (_viewMode == 'classroom') ...[
+            const SizedBox(height: 12),
+            selectedClassPanel,
+            const SizedBox(height: 12),
+            perClassPanel,
+          ] else ...[
+            const SizedBox(height: 12),
+            teacherWorkloadPanel,
+          ],
         ],
       ),
     );
@@ -1464,17 +1838,52 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   Widget _buildClassWeeklyGrid({
     required int classId,
     required List<Map<String, dynamic>> classSlots,
+    String dayFilter = 'ALL',
+    String searchTerm = '',
+    bool compact = false,
   }) {
-    if (classSlots.isEmpty) {
+    final normalizedSearch = searchTerm.trim().toLowerCase();
+
+    final filteredSlots = classSlots.where((slot) {
+      final dayCode = (slot['day_of_week'] ?? '').toString();
+      if (dayFilter != 'ALL' && dayCode != dayFilter) {
+        return false;
+      }
+      if (normalizedSearch.isEmpty) {
+        return true;
+      }
+
+      final haystack = [
+        (slot['subjectCode'] ?? '').toString(),
+        (slot['subjectName'] ?? '').toString(),
+        (slot['teacherCode'] ?? '').toString(),
+        (slot['room'] ?? '').toString(),
+        _slotRange(slot),
+      ].join(' ').toLowerCase();
+      return haystack.contains(normalizedSearch);
+    }).toList();
+
+    if (filteredSlots.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 10),
-        child: Text('Aucun créneau planifié pour cette classe.'),
+        child: Text('Aucun créneau ne correspond au filtre sélectionné.'),
       );
     }
 
-    final matrix = _classMatrix(classSlots);
+    if (compact) {
+      return _buildCompactDayCards(
+        classId: classId,
+        classSlots: filteredSlots,
+        dayFilter: dayFilter,
+      );
+    }
+
+    final matrix = _classMatrix(filteredSlots);
     final ranges = matrix.keys.toList()
       ..sort((a, b) => _rangeStartMinutes(a).compareTo(_rangeStartMinutes(b)));
+    final visibleDays = dayFilter == 'ALL'
+        ? _dayOrder
+        : _dayOrder.where((day) => day == dayFilter).toList();
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
@@ -1487,7 +1896,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         ),
         columns: [
           const DataColumn(label: Text('Créneau')),
-          ..._dayOrder.map(
+          ...visibleDays.map(
             (dayCode) => DataColumn(label: Text(_dayLabel(dayCode))),
           ),
         ],
@@ -1497,7 +1906,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           return DataRow(
             cells: [
               DataCell(Text(range)),
-              ..._dayOrder.map((dayCode) {
+              ...visibleDays.map((dayCode) {
                 final slots = dayMap[dayCode] ?? const <Map<String, dynamic>>[];
                 return DataCell(
                   _buildMatrixCell(classId: classId, slots: slots),
@@ -1508,6 +1917,169 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         }).toList(),
       ),
     );
+  }
+
+  Widget _buildCompactDayCards({
+    required int classId,
+    required List<Map<String, dynamic>> classSlots,
+    required String dayFilter,
+  }) {
+    final visibleDays = dayFilter == 'ALL'
+        ? _dayOrder
+        : _dayOrder.where((day) => day == dayFilter).toList();
+    final grouped = {
+      for (final day in visibleDays) day: <Map<String, dynamic>>[],
+    };
+
+    for (final slot in classSlots) {
+      final dayCode = (slot['day_of_week'] ?? '').toString();
+      if (!grouped.containsKey(dayCode)) {
+        continue;
+      }
+      grouped[dayCode]!.add(slot);
+    }
+
+    for (final slots in grouped.values) {
+      slots.sort((a, b) {
+        final byStart = _timeToMinutes(
+          a['start_time'],
+        ).compareTo(_timeToMinutes(b['start_time']));
+        if (byStart != 0) return byStart;
+        return _asInt(a['slotId']).compareTo(_asInt(b['slotId']));
+      });
+    }
+
+    final daysWithContent = visibleDays
+        .where((day) => (grouped[day] ?? []).isNotEmpty)
+        .toList();
+    if (daysWithContent.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 10),
+        child: Text('Aucun créneau planifié.'),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final dayCode in daysWithContent) ...[
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+            decoration: BoxDecoration(
+              color: _dayAccent(dayCode).withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: _dayAccent(dayCode).withValues(alpha: 0.30),
+              ),
+            ),
+            child: Text(
+              _dayLabel(dayCode),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: _dayAccent(dayCode),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...grouped[dayCode]!.map(
+            (slot) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _buildCompactSlotCard(classId: classId, slot: slot),
+            ),
+          ),
+          const SizedBox(height: 6),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildCompactSlotCard({
+    required int classId,
+    required Map<String, dynamic> slot,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final classLocked = _isClassLockedById(classId);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  '${slot['subjectCode']} - ${slot['subjectName']}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _slotRange(slot),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text('Ens: ${slot['teacherCode']}'),
+          if ((slot['room'] ?? '').toString().trim().isNotEmpty)
+            Text('Salle: ${slot['room']}'),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            children: [
+              OutlinedButton.icon(
+                onPressed: (_saving || classLocked)
+                    ? null
+                    : () => _openSlotDialog(
+                        slot: slot,
+                        forceClassroomId: classId,
+                      ),
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('Modifier'),
+              ),
+              OutlinedButton.icon(
+                onPressed: (_saving || classLocked)
+                    ? null
+                    : () => _deleteSlot(slot),
+                icon: const Icon(Icons.delete_outline, size: 16),
+                label: const Text('Supprimer'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _dayAccent(String dayCode) {
+    switch (dayCode) {
+      case 'MON':
+        return Colors.blue;
+      case 'TUE':
+        return Colors.teal;
+      case 'WED':
+        return Colors.indigo;
+      case 'THU':
+        return Colors.orange;
+      case 'FRI':
+        return Colors.green;
+      case 'SAT':
+        return Colors.brown;
+      default:
+        return Theme.of(context).colorScheme.primary;
+    }
   }
 
   Widget _buildMatrixCell({
