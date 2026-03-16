@@ -1,9 +1,17 @@
+from datetime import datetime
+from io import BytesIO
+
+from django.db import transaction
 from django.db.models import Count, F, Q, Sum
+from django.http import HttpResponse
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from fpdf import FPDF
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import IsAdminOrDirector, IsReadOnlyForParentStudent
 from .models import (
@@ -125,6 +133,16 @@ class TeacherAssignmentViewSet(BaseModelViewSet):
 
 
 class TeacherScheduleSlotViewSet(BaseModelViewSet):
+    DAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT"]
+    DAY_LABELS = {
+        "MON": "Lundi",
+        "TUE": "Mardi",
+        "WED": "Mercredi",
+        "THU": "Jeudi",
+        "FRI": "Vendredi",
+        "SAT": "Samedi",
+    }
+
     queryset = TeacherScheduleSlot.objects.select_related(
         "assignment",
         "assignment__teacher",
@@ -133,6 +151,78 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
     ).all()
     serializer_class = TeacherScheduleSlotSerializer
     filterset_fields = ["assignment", "day_of_week"]
+
+    @staticmethod
+    def _to_bool(raw_value, default=False):
+        if raw_value is None:
+            return default
+        if isinstance(raw_value, bool):
+            return raw_value
+        return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _minutes(time_value):
+        return time_value.hour * 60 + time_value.minute
+
+    @classmethod
+    def _overlap(cls, start_a, end_a, start_b, end_b):
+        return cls._minutes(start_a) < cls._minutes(end_b) and cls._minutes(end_a) > cls._minutes(start_b)
+
+    @staticmethod
+    def _slot_range_label(slot):
+        return f"{slot.start_time.strftime('%H:%M')}-{slot.end_time.strftime('%H:%M')}"
+
+    @staticmethod
+    def _pdf_text(value):
+        return str(value or "").encode("latin-1", "replace").decode("latin-1")
+
+    @classmethod
+    def _slot_short_label(cls, slot):
+        assignment = slot.assignment
+        subject_code = assignment.subject.code if assignment and assignment.subject else "MAT"
+        teacher_code = assignment.teacher.employee_code if assignment and assignment.teacher else "ENS"
+        room = (slot.room or "").strip()
+        room_label = f" [{room}]" if room else ""
+        return f"{subject_code} ({teacher_code}){room_label}"
+
+    @classmethod
+    def _sorted_ranges(cls, matrix):
+        def key_func(range_label):
+            start_raw = range_label.split("-")[0]
+            start = datetime.strptime(start_raw, "%H:%M")
+            return start.hour * 60 + start.minute
+
+        return sorted(matrix.keys(), key=key_func)
+
+    @classmethod
+    def _build_class_matrix(cls, slots):
+        matrix = {}
+        for slot in slots:
+            range_label = cls._slot_range_label(slot)
+            day_map = matrix.setdefault(
+                range_label,
+                {day: [] for day in cls.DAY_ORDER},
+            )
+            day_map[slot.day_of_week].append(cls._slot_short_label(slot))
+
+        for day_map in matrix.values():
+            for entries in day_map.values():
+                entries.sort()
+
+        return matrix
+
+    @classmethod
+    def _sheet_title(cls, class_name):
+        cleaned = class_name.strip() or "Classe"
+        return cleaned[:31]
+
+    @staticmethod
+    def _teacher_name(teacher):
+        user = teacher.user if teacher else None
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
 
     def _parse_classroom_id(self, request):
         raw = request.data.get("classroom")
@@ -165,6 +255,82 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         slot_count = self.get_queryset().filter(assignment__classroom=classroom).count()
         payload["slot_count"] = slot_count
         return payload
+
+    def _class_slots_queryset(self, classroom):
+        return self.get_queryset().filter(assignment__classroom=classroom)
+
+    def _teacher_workload_rows(self, slots_queryset):
+        rows = {}
+        for slot in slots_queryset:
+            assignment = slot.assignment
+            teacher = assignment.teacher
+            teacher_id = teacher.id
+            row = rows.setdefault(
+                teacher_id,
+                {
+                    "teacher": teacher.id,
+                    "teacher_code": teacher.employee_code,
+                    "teacher_name": self._teacher_name(teacher),
+                    "slot_count": 0,
+                    "class_count": 0,
+                    "classrooms": set(),
+                    "per_day_minutes": {day: 0 for day in self.DAY_ORDER},
+                    "total_minutes": 0,
+                },
+            )
+
+            duration = self._minutes(slot.end_time) - self._minutes(slot.start_time)
+            if duration < 0:
+                duration = 0
+
+            row["slot_count"] += 1
+            row["total_minutes"] += duration
+            row["per_day_minutes"][slot.day_of_week] += duration
+            row["classrooms"].add(assignment.classroom_id)
+
+        result = []
+        for row in rows.values():
+            row["class_count"] = len(row["classrooms"])
+            del row["classrooms"]
+            row["total_hours"] = round(row["total_minutes"] / 60, 2)
+            row["per_day_hours"] = {
+                day: round(minutes / 60, 2)
+                for day, minutes in row["per_day_minutes"].items()
+            }
+            if row["total_minutes"] >= 26 * 60:
+                row["load_level"] = "overload"
+            elif row["total_minutes"] >= 20 * 60:
+                row["load_level"] = "watch"
+            else:
+                row["load_level"] = "ok"
+            result.append(row)
+
+        result.sort(key=lambda item: (-item["total_minutes"], item["teacher_code"]))
+        return result
+
+    @staticmethod
+    def _assignment_target_maps(target_assignments):
+        exact = {}
+        by_subject = {}
+        for assignment in target_assignments:
+            exact[(assignment.subject_id, assignment.teacher_id)] = assignment
+            by_subject.setdefault(assignment.subject_id, []).append(assignment)
+
+        for assignments in by_subject.values():
+            assignments.sort(key=lambda assignment: (assignment.teacher_id, assignment.id))
+
+        return exact, by_subject
+
+    def _resolve_target_assignment(self, source_assignment, exact_map, subject_map):
+        exact = exact_map.get((source_assignment.subject_id, source_assignment.teacher_id))
+        if exact:
+            return exact, "exact"
+
+        subject_matches = subject_map.get(source_assignment.subject_id) or []
+        if subject_matches:
+            return subject_matches[0], "subject-fallback"
+
+        return None, "unmapped"
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -272,6 +438,426 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         publication.is_locked = False
         publication.save(update_fields=["is_locked", "updated_at"])
         return Response(self._publication_response(classroom))
+
+    @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+    def teacher_workload(self, request):
+        classroom_id = self._parse_classroom_id(request)
+        queryset = self.get_queryset()
+        if classroom_id:
+            queryset = queryset.filter(assignment__classroom_id=classroom_id)
+
+        rows = self._teacher_workload_rows(queryset)
+        total_minutes = sum(item["total_minutes"] for item in rows)
+        payload = {
+            "classroom": classroom_id,
+            "teacher_count": len(rows),
+            "total_minutes": total_minutes,
+            "total_hours": round(total_minutes / 60, 2),
+            "items": rows,
+        }
+        return Response(payload)
+
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    def duplicate_schedule(self, request):
+        source_classroom_id = request.data.get("source_classroom")
+        target_classroom_id = request.data.get("target_classroom")
+
+        try:
+            source_classroom_id = int(source_classroom_id)
+            target_classroom_id = int(target_classroom_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "source_classroom et target_classroom sont requis."},
+                status=400,
+            )
+
+        if source_classroom_id == target_classroom_id:
+            return Response(
+                {"detail": "La classe source et la classe cible doivent être différentes."},
+                status=400,
+            )
+
+        source_classroom = get_object_or_404(ClassRoom, id=source_classroom_id)
+        target_classroom = get_object_or_404(ClassRoom, id=target_classroom_id)
+
+        publication = TimetablePublication.objects.filter(
+            classroom=target_classroom,
+            is_locked=True,
+        ).first()
+        if publication:
+            return Response(
+                {
+                    "detail": "Classe cible verrouillée. Déverrouillez avant duplication.",
+                },
+                status=400,
+            )
+
+        requested_days = request.data.get("days")
+        if isinstance(requested_days, str):
+            requested_days = [item.strip().upper() for item in requested_days.split(",") if item.strip()]
+        if not isinstance(requested_days, list) or not requested_days:
+            requested_days = list(self.DAY_ORDER)
+        copy_days = [day for day in requested_days if day in self.DAY_ORDER]
+        if not copy_days:
+            return Response({"detail": "Aucun jour valide fourni."}, status=400)
+
+        overwrite = self._to_bool(request.data.get("overwrite"), default=False)
+        keep_room = self._to_bool(request.data.get("keep_room"), default=True)
+
+        source_slots = list(
+            self.get_queryset()
+            .filter(assignment__classroom=source_classroom, day_of_week__in=copy_days)
+            .order_by("day_of_week", "start_time", "end_time", "id")
+        )
+        if not source_slots:
+            return Response(
+                {"detail": "Aucun créneau à copier pour la classe source."},
+                status=400,
+            )
+
+        target_assignments = list(
+            TeacherAssignment.objects.select_related("teacher", "subject", "classroom").filter(
+                classroom=target_classroom
+            )
+        )
+        if not target_assignments:
+            return Response(
+                {
+                    "detail": "La classe cible n'a aucune affectation. Ajoutez d'abord les affectations.",
+                },
+                status=400,
+            )
+
+        exact_map, subject_map = self._assignment_target_maps(target_assignments)
+
+        summary = {
+            "source_classroom": source_classroom.id,
+            "target_classroom": target_classroom.id,
+            "days": copy_days,
+            "overwrite": overwrite,
+            "keep_room": keep_room,
+            "source_slots": len(source_slots),
+            "deleted": 0,
+            "created": 0,
+            "updated": 0,
+            "skipped_unmapped": 0,
+            "skipped_conflicts": 0,
+            "mapping_examples": [],
+            "conflicts": [],
+            "unmapped": [],
+        }
+
+        with transaction.atomic():
+            if overwrite:
+                delete_qs = TeacherScheduleSlot.objects.filter(
+                    assignment__classroom=target_classroom,
+                    day_of_week__in=copy_days,
+                )
+                deleted_count, _ = delete_qs.delete()
+                summary["deleted"] = deleted_count
+
+            for source_slot in source_slots:
+                source_assignment = source_slot.assignment
+                target_assignment, mapping_mode = self._resolve_target_assignment(
+                    source_assignment,
+                    exact_map,
+                    subject_map,
+                )
+
+                if not target_assignment:
+                    summary["skipped_unmapped"] += 1
+                    if len(summary["unmapped"]) < 20:
+                        summary["unmapped"].append(
+                            {
+                                "day": source_slot.day_of_week,
+                                "time": self._slot_range_label(source_slot),
+                                "subject_code": source_assignment.subject.code,
+                                "teacher_code": source_assignment.teacher.employee_code,
+                            }
+                        )
+                    continue
+
+                room_value = source_slot.room if keep_room else ""
+
+                overlapping = TeacherScheduleSlot.objects.select_related(
+                    "assignment",
+                    "assignment__teacher",
+                    "assignment__subject",
+                    "assignment__classroom",
+                ).filter(
+                    day_of_week=source_slot.day_of_week,
+                    start_time__lt=source_slot.end_time,
+                    end_time__gt=source_slot.start_time,
+                ).exclude(
+                    assignment=target_assignment,
+                    start_time=source_slot.start_time,
+                    end_time=source_slot.end_time,
+                )
+
+                class_conflict = overlapping.filter(
+                    assignment__classroom=target_classroom
+                ).exists()
+                teacher_conflict = overlapping.filter(
+                    assignment__teacher=target_assignment.teacher
+                ).exists()
+                room_conflict = False
+                if room_value.strip():
+                    room_conflict = overlapping.exclude(room__exact="").filter(
+                        room__iexact=room_value.strip()
+                    ).exists()
+
+                if class_conflict or teacher_conflict or room_conflict:
+                    summary["skipped_conflicts"] += 1
+                    if len(summary["conflicts"]) < 20:
+                        labels = []
+                        if class_conflict:
+                            labels.append("classe")
+                        if teacher_conflict:
+                            labels.append("enseignant")
+                        if room_conflict:
+                            labels.append("salle")
+                        summary["conflicts"].append(
+                            {
+                                "day": source_slot.day_of_week,
+                                "time": self._slot_range_label(source_slot),
+                                "subject_code": target_assignment.subject.code,
+                                "teacher_code": target_assignment.teacher.employee_code,
+                                "types": labels,
+                            }
+                        )
+                    continue
+
+                duplicated, created = TeacherScheduleSlot.objects.update_or_create(
+                    assignment=target_assignment,
+                    day_of_week=source_slot.day_of_week,
+                    start_time=source_slot.start_time,
+                    end_time=source_slot.end_time,
+                    defaults={"room": room_value},
+                )
+
+                if created:
+                    summary["created"] += 1
+                else:
+                    summary["updated"] += 1
+
+                if len(summary["mapping_examples"]) < 20:
+                    summary["mapping_examples"].append(
+                        {
+                            "day": duplicated.day_of_week,
+                            "time": self._slot_range_label(duplicated),
+                            "subject_code": duplicated.assignment.subject.code,
+                            "teacher_code": duplicated.assignment.teacher.employee_code,
+                            "mode": mapping_mode,
+                        }
+                    )
+
+        return Response(summary)
+
+    @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+    def export_excel(self, request):
+        classroom_id = self._parse_classroom_id(request)
+
+        if classroom_id:
+            classrooms = list(ClassRoom.objects.filter(id=classroom_id).order_by("name"))
+            if not classrooms:
+                return Response({"detail": "Classe introuvable."}, status=404)
+            filename = f"planning_classe_{classroom_id}.xlsx"
+        else:
+            classrooms = list(ClassRoom.objects.all().order_by("name"))
+            filename = "planning_global_multi_classes.xlsx"
+
+        wb = Workbook()
+        default_sheet = wb.active
+        wb.remove(default_sheet)
+
+        workload_rows = self._teacher_workload_rows(self.get_queryset())
+        ws_load = wb.create_sheet("Charge Enseignants")
+        ws_load.append(
+            [
+                "Code enseignant",
+                "Nom",
+                "Créneaux",
+                "Classes",
+                "Lundi",
+                "Mardi",
+                "Mercredi",
+                "Jeudi",
+                "Vendredi",
+                "Samedi",
+                "Total (h)",
+                "Niveau",
+            ]
+        )
+        for row in workload_rows:
+            ws_load.append(
+                [
+                    row["teacher_code"],
+                    row["teacher_name"],
+                    row["slot_count"],
+                    row["class_count"],
+                    row["per_day_hours"]["MON"],
+                    row["per_day_hours"]["TUE"],
+                    row["per_day_hours"]["WED"],
+                    row["per_day_hours"]["THU"],
+                    row["per_day_hours"]["FRI"],
+                    row["per_day_hours"]["SAT"],
+                    row["total_hours"],
+                    row["load_level"],
+                ]
+            )
+
+        header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+        for row in ws_load.iter_rows(min_row=1, max_row=1):
+            for cell in row:
+                cell.font = Font(bold=True)
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        for classroom in classrooms:
+            ws = wb.create_sheet(self._sheet_title(classroom.name))
+            ws.merge_cells("A1:G1")
+            ws["A1"] = f"Emploi du temps - {classroom.name}"
+            ws["A1"].font = Font(size=13, bold=True)
+            ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+
+            headers = ["Créneau", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
+            ws.append(headers)
+            for index, header in enumerate(headers, start=1):
+                cell = ws.cell(row=2, column=index)
+                cell.value = header
+                cell.font = Font(bold=True)
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            class_slots = list(
+                self._class_slots_queryset(classroom)
+                .order_by("day_of_week", "start_time", "end_time", "id")
+            )
+            matrix = self._build_class_matrix(class_slots)
+            ranges = self._sorted_ranges(matrix)
+
+            if not ranges:
+                ws.append(["Aucun créneau planifié", "", "", "", "", "", ""])
+            else:
+                for range_label in ranges:
+                    day_map = matrix[range_label]
+                    ws.append(
+                        [
+                            range_label,
+                            " | ".join(day_map["MON"]),
+                            " | ".join(day_map["TUE"]),
+                            " | ".join(day_map["WED"]),
+                            " | ".join(day_map["THU"]),
+                            " | ".join(day_map["FRI"]),
+                            " | ".join(day_map["SAT"]),
+                        ]
+                    )
+
+            ws.column_dimensions["A"].width = 18
+            for col in ["B", "C", "D", "E", "F", "G"]:
+                ws.column_dimensions[col].width = 28
+
+            for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=1, max_col=7):
+                for cell in row:
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+        stream = BytesIO()
+        wb.save(stream)
+        response = HttpResponse(
+            stream.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response["Cache-Control"] = "no-store, max-age=0"
+        return response
+
+    @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+    def export_pdf(self, request):
+        classroom_id = self._parse_classroom_id(request)
+
+        if classroom_id:
+            classrooms = list(ClassRoom.objects.filter(id=classroom_id).order_by("name"))
+            if not classrooms:
+                return Response({"detail": "Classe introuvable."}, status=404)
+            filename = f"planning_classe_{classroom_id}.pdf"
+        else:
+            classrooms = list(ClassRoom.objects.all().order_by("name"))
+            filename = "planning_global_multi_classes.pdf"
+
+        pdf = FPDF(orientation="L", unit="mm", format="A4")
+        pdf.set_auto_page_break(auto=True, margin=12)
+
+        col_widths = [28, 41, 41, 41, 41, 41, 41]
+
+        def draw_headers():
+            pdf.set_font("Helvetica", "B", 9)
+            for header, width in zip(
+                ["Créneau", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"],
+                col_widths,
+            ):
+                pdf.cell(width, 8, self._pdf_text(header), border=1, align="C")
+            pdf.ln(8)
+
+        for classroom in classrooms:
+            class_slots = list(
+                self._class_slots_queryset(classroom)
+                .order_by("day_of_week", "start_time", "end_time", "id")
+            )
+            matrix = self._build_class_matrix(class_slots)
+            ranges = self._sorted_ranges(matrix)
+
+            pdf.add_page()
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.cell(
+                0,
+                8,
+                self._pdf_text(f"Emploi du temps - {classroom.name}"),
+                ln=1,
+            )
+            pdf.set_font("Helvetica", "", 9)
+            pdf.cell(
+                0,
+                6,
+                self._pdf_text(f"Généré le {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"),
+                ln=1,
+            )
+            pdf.ln(2)
+
+            draw_headers()
+
+            if not ranges:
+                pdf.set_font("Helvetica", "", 10)
+                pdf.cell(0, 8, self._pdf_text("Aucun créneau planifié"), ln=1)
+                continue
+
+            for range_label in ranges:
+                if pdf.get_y() > 185:
+                    pdf.add_page()
+                    draw_headers()
+
+                day_map = matrix[range_label]
+                values = [
+                    range_label,
+                    " | ".join(day_map["MON"]),
+                    " | ".join(day_map["TUE"]),
+                    " | ".join(day_map["WED"]),
+                    " | ".join(day_map["THU"]),
+                    " | ".join(day_map["FRI"]),
+                    " | ".join(day_map["SAT"]),
+                ]
+
+                pdf.set_font("Helvetica", "", 8)
+                for value, width in zip(values, col_widths):
+                    text = self._pdf_text(value)
+                    if len(text) > 65:
+                        text = f"{text[:62]}..."
+                    pdf.cell(width, 8, text, border=1)
+                pdf.ln(8)
+
+        response = HttpResponse(bytes(pdf.output()), content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response["Cache-Control"] = "no-store, max-age=0"
+        return response
 
 
 class TimetablePublicationViewSet(viewsets.ReadOnlyModelViewSet):
