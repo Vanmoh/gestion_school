@@ -32,6 +32,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   String _viewMode = 'classroom';
   String _teacherScope = 'selected';
   String _mobileDayFilter = 'ALL';
+  bool _apiUrlResetAttempted = false;
 
   static const List<String> _dayOrder = [
     'MON',
@@ -63,29 +64,59 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     super.dispose();
   }
 
+  Future<List<Map<String, dynamic>>> _loadRowsSafely(
+    Dio dio, {
+    required String path,
+    required List<String> failures,
+  }) async {
+    try {
+      final response = await dio.get(path);
+      return _extractRows(response.data);
+    } on DioException catch (error) {
+      final endpoint = error.requestOptions.path.isNotEmpty
+          ? error.requestOptions.path
+          : path;
+      final status = error.response?.statusCode;
+      failures.add(status == null ? endpoint : '$endpoint ($status)');
+      return <Map<String, dynamic>>[];
+    } catch (_) {
+      failures.add(path);
+      return <Map<String, dynamic>>[];
+    }
+  }
+
   Future<void> _loadData() async {
     setState(() => _loading = true);
     final dio = ref.read(dioProvider);
+    final failures = <String>[];
 
     try {
       final results = await Future.wait([
-        dio.get('/teachers/'),
-        dio.get('/subjects/'),
-        dio.get('/classrooms/'),
-        dio.get('/teacher-assignments/'),
-        dio.get('/teacher-schedule-slots/'),
-        dio.get('/timetable-publications/'),
+        _loadRowsSafely(dio, path: '/teachers/', failures: failures),
+        _loadRowsSafely(dio, path: '/subjects/', failures: failures),
+        _loadRowsSafely(dio, path: '/classrooms/', failures: failures),
+        _loadRowsSafely(dio, path: '/teacher-assignments/', failures: failures),
+        _loadRowsSafely(
+          dio,
+          path: '/teacher-schedule-slots/',
+          failures: failures,
+        ),
+        _loadRowsSafely(
+          dio,
+          path: '/timetable-publications/',
+          failures: failures,
+        ),
       ]);
 
       if (!mounted) return;
 
       setState(() {
-        _teachers = _extractRows(results[0].data);
-        _subjects = _extractRows(results[1].data);
-        _classrooms = _extractRows(results[2].data);
-        _assignments = _extractRows(results[3].data);
-        _scheduleSlots = _extractRows(results[4].data);
-        _timetablePublications = _extractRows(results[5].data);
+        _teachers = results[0];
+        _subjects = results[1];
+        _classrooms = results[2];
+        _assignments = results[3];
+        _scheduleSlots = results[4];
+        _timetablePublications = results[5];
 
         final classIds = _classrooms.map((row) => _asInt(row['id'])).toSet();
         if (_selectedClassroom == null ||
@@ -95,10 +126,36 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               : null;
         }
       });
+
+      final allEndpoints404 =
+          failures.length >= 6 &&
+          failures.every((entry) => entry.contains('(404)'));
+      if (allEndpoints404 && !_apiUrlResetAttempted) {
+        _apiUrlResetAttempted = true;
+        await ref.read(tokenStorageProvider).clearApiBaseUrl();
+        if (!mounted) return;
+        _showMessage(
+          'URL API personnalisée introuvable, tentative automatique avec l\'URL par défaut...',
+        );
+        await _loadData();
+        return;
+      }
+
+      if (failures.isEmpty) {
+        _apiUrlResetAttempted = false;
+      }
+
+      if (failures.isNotEmpty && mounted) {
+        final endpoints = failures.toSet().toList()..sort();
+        _showMessage(
+          'Certaines routes planning sont indisponibles: ${endpoints.join(', ')}. '
+          'Vérifiez l\'URL API (Connexion > Configuration API).',
+        );
+      }
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur chargement emploi du temps: $error')),
+      _showMessage(
+        'Erreur chargement emploi du temps: ${_extractErrorMessage(error)}',
       );
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -653,6 +710,15 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             return value;
           }
         }
+      }
+
+      final status = error.response?.statusCode;
+      if (status != null) {
+        final endpoint = error.requestOptions.path;
+        if (endpoint.trim().isNotEmpty) {
+          return 'HTTP $status sur $endpoint';
+        }
+        return 'HTTP $status';
       }
 
       final message = error.message;

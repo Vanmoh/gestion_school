@@ -28,6 +28,10 @@ class TokenStorage {
     await _storage.write(key: _apiBaseUrlKey, value: url);
   }
 
+  Future<void> clearApiBaseUrl() async {
+    await _storage.delete(key: _apiBaseUrlKey);
+  }
+
   Future<void> clear() async {
     await _storage.delete(key: _accessKey);
     await _storage.delete(key: _refreshKey);
