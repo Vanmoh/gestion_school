@@ -98,6 +98,29 @@ class TeacherScheduleSlot(TimeStampedModel):
         )
 
 
+class TimetablePublication(TimeStampedModel):
+    classroom = models.OneToOneField(ClassRoom, on_delete=models.CASCADE, related_name="timetable_publication")
+    is_published = models.BooleanField(default=False)
+    is_locked = models.BooleanField(default=False)
+    published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="published_timetables",
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
+    notes = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ("classroom__name",)
+
+    def __str__(self):
+        state = "Publié" if self.is_published else "Brouillon"
+        lock_state = " - Verrouillé" if self.is_locked else ""
+        return f"{self.classroom.name}: {state}{lock_state}"
+
+
 class ParentProfile(TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="parent_profile")
     profession = models.CharField(max_length=120, blank=True)
