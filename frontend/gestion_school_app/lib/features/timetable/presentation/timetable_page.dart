@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
+import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
 import 'timetable_workload.dart';
 
@@ -32,6 +33,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   String _viewMode = 'classroom';
   String _teacherScope = 'selected';
   String _mobileDayFilter = 'ALL';
+  bool _scheduleApiSupported = true;
+  String _activeApiBaseUrl = ApiConstants.baseUrl;
   bool _apiUrlResetAttempted = false;
 
   static const List<String> _dayOrder = [
@@ -88,6 +91,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   Future<void> _loadData() async {
     setState(() => _loading = true);
     final dio = ref.read(dioProvider);
+    final storedBaseUrl = await ref.read(tokenStorageProvider).apiBaseUrl();
+    final activeApiUrl =
+        (storedBaseUrl != null && storedBaseUrl.trim().isNotEmpty)
+        ? storedBaseUrl
+        : ApiConstants.baseUrl;
     final failures = <String>[];
 
     try {
@@ -110,6 +118,19 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
       if (!mounted) return;
 
+      final hasSlotEndpoint404 = failures.any(
+        (entry) =>
+            entry.contains('/teacher-schedule-slots/') &&
+            entry.contains('(404)'),
+      );
+      final hasPublicationEndpoint404 = failures.any(
+        (entry) =>
+            entry.contains('/timetable-publications/') &&
+            entry.contains('(404)'),
+      );
+      final scheduleApiSupported =
+          !(hasSlotEndpoint404 || hasPublicationEndpoint404);
+
       setState(() {
         _teachers = results[0];
         _subjects = results[1];
@@ -117,6 +138,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         _assignments = results[3];
         _scheduleSlots = results[4];
         _timetablePublications = results[5];
+        _activeApiBaseUrl = activeApiUrl;
+        _scheduleApiSupported = scheduleApiSupported;
 
         final classIds = _classrooms.map((row) => _asInt(row['id'])).toSet();
         if (_selectedClassroom == null ||
@@ -150,6 +173,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         _showMessage(
           'Certaines routes planning sont indisponibles: ${endpoints.join(', ')}. '
           'Vérifiez l\'URL API (Connexion > Configuration API).',
+        );
+      }
+
+      if (!scheduleApiSupported && mounted) {
+        _showMessage(
+          'Votre backend ne supporte pas encore les créneaux horaires '
+          '(endpoint manquant). API active: $_activeApiBaseUrl',
         );
       }
     } catch (error) {
@@ -248,6 +278,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _publishSelectedClass({required bool lockAfterPublish}) async {
+    if (!_requireScheduleApiSupported('publication du planning')) {
+      return;
+    }
+
     final classId = _selectedClassroom;
     if (classId == null || classId <= 0) {
       _showMessage('Sélectionnez une classe.');
@@ -279,6 +313,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _setSelectedClassLock({required bool lock}) async {
+    if (!_requireScheduleApiSupported('verrouillage du planning')) {
+      return;
+    }
+
     final classId = _selectedClassroom;
     if (classId == null || classId <= 0) {
       _showMessage('Sélectionnez une classe.');
@@ -308,6 +346,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _unpublishSelectedClass() async {
+    if (!_requireScheduleApiSupported('retour en brouillon')) {
+      return;
+    }
+
     final classId = _selectedClassroom;
     if (classId == null || classId <= 0) {
       _showMessage('Sélectionnez une classe.');
@@ -346,6 +388,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     required String filename,
     Map<String, dynamic>? queryParameters,
   }) async {
+    if (!_requireScheduleApiSupported('export du planning')) {
+      return;
+    }
+
     setState(() => _saving = true);
     try {
       final response = await ref
@@ -400,6 +446,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _printSelectedClassPdfFromBackend() async {
+    if (!_requireScheduleApiSupported('impression PDF')) {
+      return;
+    }
+
     final classId = _selectedClassroom;
     if (classId == null || classId <= 0) {
       _showMessage('Sélectionnez une classe avant impression.');
@@ -429,6 +479,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _openDuplicateScheduleDialog() async {
+    if (!_requireScheduleApiSupported('duplication de planning')) {
+      return;
+    }
+
     if (_classrooms.length < 2) {
       _showMessage(
         'Au moins deux classes sont nécessaires pour la duplication.',
@@ -734,6 +788,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     Map<String, dynamic>? slot,
     int? forceClassroomId,
   }) async {
+    if (!_requireScheduleApiSupported('gestion des créneaux')) {
+      return;
+    }
+
     final classroomId = forceClassroomId ?? _selectedClassroom;
     if (classroomId == null || classroomId <= 0) {
       _showMessage('Sélectionnez une classe avant d\'ajouter un créneau.');
@@ -1086,6 +1144,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _deleteSlot(Map<String, dynamic> slot) async {
+    if (!_requireScheduleApiSupported('suppression de créneau')) {
+      return;
+    }
+
     final slotId = _asInt(slot['slotId'] ?? slot['id']);
     if (slotId <= 0) {
       _showMessage('Créneau invalide.');
@@ -1152,6 +1214,17 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  bool _requireScheduleApiSupported([String action = 'cette action']) {
+    if (_scheduleApiSupported) {
+      return true;
+    }
+    _showMessage(
+      'Action indisponible: backend planning non compatible pour $action. '
+      'API active: $_activeApiBaseUrl',
+    );
+    return false;
   }
 
   Widget _metricChip(String label, String value) {
@@ -1266,6 +1339,23 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (!_scheduleApiSupported) ...[
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: Text(
+                'Backend planning non compatible: les routes créneaux ne sont pas disponibles sur\n'
+                '$_activeApiBaseUrl\n'
+                'Configurez une API mise à jour via Connexion > Configuration API.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
           SegmentedButton<String>(
             segments: const [
               ButtonSegment<String>(
@@ -1319,21 +1409,30 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             children: [
               FilledButton.icon(
                 onPressed:
-                    (_saving || selectedClassId == null || selectedIsLocked)
+                    (_saving ||
+                        !_scheduleApiSupported ||
+                        selectedClassId == null ||
+                        selectedIsLocked)
                     ? null
                     : () => _openSlotDialog(forceClassroomId: selectedClassId),
                 icon: const Icon(Icons.add_circle_outline),
                 label: const Text('Ajouter créneau'),
               ),
               FilledButton.tonalIcon(
-                onPressed: (_saving || selectedClassId == null)
+                onPressed:
+                    (_saving ||
+                        !_scheduleApiSupported ||
+                        selectedClassId == null)
                     ? null
                     : _printSelectedClassPdfFromBackend,
                 icon: const Icon(Icons.picture_as_pdf),
                 label: const Text('Imprimer tableau PDF'),
               ),
               FilledButton.tonalIcon(
-                onPressed: (_saving || selectedClassId == null)
+                onPressed:
+                    (_saving ||
+                        !_scheduleApiSupported ||
+                        selectedClassId == null)
                     ? null
                     : _exportSelectedClassXlsx,
                 icon: const Icon(Icons.table_view_outlined),
@@ -1352,7 +1451,9 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 label: const Text('Actualiser'),
               ),
               FilledButton.tonalIcon(
-                onPressed: _saving ? null : _openDuplicateScheduleDialog,
+                onPressed: (_saving || !_scheduleApiSupported)
+                    ? null
+                    : _openDuplicateScheduleDialog,
                 icon: const Icon(Icons.copy_all_outlined),
                 label: const Text('Dupliquer planning'),
               ),
@@ -1364,12 +1465,16 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             runSpacing: 8,
             children: [
               OutlinedButton.icon(
-                onPressed: _saving ? null : _exportGlobalXlsx,
+                onPressed: (_saving || !_scheduleApiSupported)
+                    ? null
+                    : _exportGlobalXlsx,
                 icon: const Icon(Icons.dataset_outlined),
                 label: const Text('Export global XLSX'),
               ),
               OutlinedButton.icon(
-                onPressed: _saving ? null : _exportGlobalPdf,
+                onPressed: (_saving || !_scheduleApiSupported)
+                    ? null
+                    : _exportGlobalPdf,
                 icon: const Icon(Icons.picture_as_pdf_outlined),
                 label: const Text('Export global PDF'),
               ),
@@ -1383,6 +1488,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               FilledButton.tonalIcon(
                 onPressed:
                     (_saving ||
+                        !_scheduleApiSupported ||
                         selectedClassId == null ||
                         selectedAssignments.isEmpty)
                     ? null
@@ -1393,6 +1499,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               OutlinedButton.icon(
                 onPressed:
                     (_saving ||
+                        !_scheduleApiSupported ||
                         selectedClassId == null ||
                         selectedAssignments.isEmpty)
                     ? null
@@ -1402,7 +1509,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               ),
               OutlinedButton.icon(
                 onPressed:
-                    (_saving || selectedClassId == null || !selectedIsPublished)
+                    (_saving ||
+                        !_scheduleApiSupported ||
+                        selectedClassId == null ||
+                        !selectedIsPublished)
                     ? null
                     : () => _setSelectedClassLock(lock: !selectedIsLocked),
                 icon: Icon(
@@ -1414,7 +1524,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               ),
               OutlinedButton.icon(
                 onPressed:
-                    (_saving || selectedClassId == null || !selectedIsPublished)
+                    (_saving ||
+                        !_scheduleApiSupported ||
+                        selectedClassId == null ||
+                        !selectedIsPublished)
                     ? null
                     : _unpublishSelectedClass,
                 icon: const Icon(Icons.unpublished_outlined),
@@ -1656,7 +1769,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       Align(
                         alignment: Alignment.centerRight,
                         child: OutlinedButton.icon(
-                          onPressed: (_saving || classIsLocked)
+                          onPressed:
+                              (_saving ||
+                                  !_scheduleApiSupported ||
+                                  classIsLocked)
                               ? null
                               : () =>
                                     _openSlotDialog(forceClassroomId: classId),
@@ -2106,7 +2222,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             spacing: 6,
             children: [
               OutlinedButton.icon(
-                onPressed: (_saving || classLocked)
+                onPressed: (_saving || !_scheduleApiSupported || classLocked)
                     ? null
                     : () => _openSlotDialog(
                         slot: slot,
@@ -2116,7 +2232,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 label: const Text('Modifier'),
               ),
               OutlinedButton.icon(
-                onPressed: (_saving || classLocked)
+                onPressed: (_saving || !_scheduleApiSupported || classLocked)
                     ? null
                     : () => _deleteSlot(slot),
                 icon: const Icon(Icons.delete_outline, size: 16),
@@ -2201,7 +2317,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     children: [
                       IconButton(
                         tooltip: 'Modifier créneau',
-                        onPressed: (_saving || classLocked)
+                        onPressed:
+                            (_saving || !_scheduleApiSupported || classLocked)
                             ? null
                             : () => _openSlotDialog(
                                 slot: slots[i],
@@ -2217,7 +2334,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       ),
                       IconButton(
                         tooltip: 'Supprimer créneau',
-                        onPressed: (_saving || classLocked)
+                        onPressed:
+                            (_saving || !_scheduleApiSupported || classLocked)
                             ? null
                             : () => _deleteSlot(slots[i]),
                         icon: const Icon(Icons.delete_outline, size: 16),
