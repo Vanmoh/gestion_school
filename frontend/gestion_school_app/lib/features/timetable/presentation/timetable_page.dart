@@ -35,6 +35,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   String _mobileDayFilter = 'ALL';
   bool _scheduleApiSupported = true;
   String _activeApiBaseUrl = ApiConstants.baseUrl;
+  bool _usingCustomApiBaseUrl = false;
   bool _apiUrlResetAttempted = false;
 
   static const List<String> _dayOrder = [
@@ -197,6 +198,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         _scheduleSlots = results[4];
         _timetablePublications = results[5];
         _activeApiBaseUrl = activeApiUrl;
+        _usingCustomApiBaseUrl = hasStoredCustomApi;
         _scheduleApiSupported = scheduleApiSupported;
 
         final classIds = _classrooms.map((row) => _asInt(row['id'])).toSet();
@@ -1282,6 +1284,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _resetCustomApiUrlAndReload() async {
+    await ref.read(tokenStorageProvider).clearApiBaseUrl();
+    if (!mounted) return;
+    _showMessage('URL API personnalisée supprimée. Rechargement en cours...');
+    await _loadData();
+  }
+
   void _markScheduleApiUnsupportedFromError(Object error) {
     if (error is! DioException) {
       return;
@@ -1438,6 +1447,24 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 'Configurez une API mise à jour via Connexion > Configuration API.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _saving ? null : _loadData,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retester compatibilité API'),
+                ),
+                if (_usingCustomApiBaseUrl)
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _resetCustomApiUrlAndReload,
+                    icon: const Icon(Icons.settings_backup_restore_outlined),
+                    label: const Text('Réinitialiser URL API'),
+                  ),
+              ],
             ),
             const SizedBox(height: 10),
           ],
