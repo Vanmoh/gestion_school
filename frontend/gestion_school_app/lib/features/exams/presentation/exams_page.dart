@@ -14,6 +14,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
   DateTime _sessionStart = DateTime.now();
   DateTime _sessionEnd = DateTime.now().add(const Duration(days: 3));
   int? _selectedAcademicYear;
+  String _selectedSessionTerm = 'T1';
 
   DateTime _planningDate = DateTime.now();
   TimeOfDay _planningStart = const TimeOfDay(hour: 8, minute: 0);
@@ -205,6 +206,19 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     },
                   ),
                   const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    initialValue: _selectedSessionTerm,
+                    items: const [
+                      DropdownMenuItem(value: 'T1', child: Text('T1')),
+                      DropdownMenuItem(value: 'T2', child: Text('T2')),
+                      DropdownMenuItem(value: 'T3', child: Text('T3')),
+                    ],
+                    onChanged: (value) {
+                      setState(() => _selectedSessionTerm = value ?? 'T1');
+                    },
+                    decoration: const InputDecoration(labelText: 'Période'),
+                  ),
+                  const SizedBox(height: 8),
                   _datePickerTile(
                     label: 'Date début',
                     value: _sessionStart,
@@ -229,6 +243,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                                 .read(examMutationProvider.notifier)
                                 .createSession(
                                   title: _sessionTitleController.text.trim(),
+                                  term: _selectedSessionTerm,
                                   academicYear: academicYear,
                                   startDate: _apiDate(_sessionStart),
                                   endDate: _apiDate(_sessionEnd),
@@ -264,7 +279,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                             .map(
                               (s) => DropdownMenuItem<int>(
                                 value: s.id,
-                                child: Text('#${s.id} ${s.title}'),
+                                child: Text('#${s.id} [${s.term}] ${s.title}'),
                               ),
                             )
                             .toList(),
@@ -390,7 +405,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                             .map(
                               (s) => DropdownMenuItem<int>(
                                 value: s.id,
-                                child: Text('#${s.id} ${s.title}'),
+                                child: Text('#${s.id} [${s.term}] ${s.title}'),
                               ),
                             )
                             .toList(),
@@ -585,7 +600,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   .map(
                     (s) => Card(
                       child: ListTile(
-                        title: Text(s.title),
+                        title: Text('[${s.term}] ${s.title}'),
                         subtitle: Text('${s.startDate} → ${s.endDate}'),
                       ),
                     ),

@@ -1,6 +1,7 @@
 class ExamSessionItem {
   final int id;
   final String title;
+  final String term;
   final int academicYearId;
   final String startDate;
   final String endDate;
@@ -8,6 +9,7 @@ class ExamSessionItem {
   const ExamSessionItem({
     required this.id,
     required this.title,
+    required this.term,
     required this.academicYearId,
     required this.startDate,
     required this.endDate,

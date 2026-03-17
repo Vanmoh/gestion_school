@@ -60,6 +60,7 @@ class ExamMutationController extends StateNotifier<AsyncValue<void>> {
 
   Future<void> createSession({
     required String title,
+    required String term,
     required int academicYear,
     required String startDate,
     required String endDate,
@@ -70,6 +71,7 @@ class ExamMutationController extends StateNotifier<AsyncValue<void>> {
           .read(examsRepositoryProvider)
           .createSession(
             title: title,
+            term: term,
             academicYear: academicYear,
             startDate: startDate,
             endDate: endDate,

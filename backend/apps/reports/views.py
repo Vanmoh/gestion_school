@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 
 from django.conf import settings
-from django.db.models import Avg, Q
+from django.db.models import Avg
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -29,6 +29,7 @@ from apps.school.models import (
     TeacherAssignment,
 )
 from apps.school.serializers import AcademicYearSerializer, PaymentSerializer, StudentSerializer
+from apps.school.term_utils import normalize_term
 
 
 def _pdf_text(value) -> str:
@@ -756,6 +757,13 @@ class BulletinPdfView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, student_id: int, academic_year_id: int, term: str):
+        normalized_term = normalize_term(term)
+        if not normalized_term:
+            return Response(
+                {"detail": "Période invalide. Utilisez uniquement T1, T2 ou T3."},
+                status=400,
+            )
+
         student = get_object_or_404(
             Student.objects.select_related(
                 "user",
@@ -767,10 +775,6 @@ class BulletinPdfView(APIView):
         )
         _ensure_student_access(request.user, student)
 
-        term_values = _term_variants(term)
-        if not term_values:
-            term_values = [str(term or "").strip()]
-
         school_name = getattr(settings, "SCHOOL_NAME", "LYCEE TECHNIQUE OUMAR BAH")
         school_short = getattr(settings, "SCHOOL_SHORT", "LTOB")
         school_level = getattr(settings, "SCHOOL_LEVEL", "1er etage")
@@ -779,7 +783,7 @@ class BulletinPdfView(APIView):
 
         student_name = student.user.get_full_name().strip() or student.user.username
         class_name = student.classroom.name if student.classroom else "N/A"
-        period_label = _term_display_label(term)
+        period_label = normalized_term
         academic_year_name = (
             AcademicYear.objects.filter(id=academic_year_id)
             .values_list("name", flat=True)
@@ -790,7 +794,7 @@ class BulletinPdfView(APIView):
         student_grades_qs = Grade.objects.filter(
             student_id=student_id,
             academic_year_id=academic_year_id,
-            term__in=term_values,
+            term=normalized_term,
         ).select_related("subject")
 
         student_note_by_subject: dict[int, float] = {}
@@ -805,7 +809,7 @@ class BulletinPdfView(APIView):
             class_grades_qs = Grade.objects.filter(
                 classroom_id=classroom_id,
                 academic_year_id=academic_year_id,
-                term__in=term_values,
+                term=normalized_term,
             )
             subject_ids.update(
                 class_grades_qs.values_list("subject_id", flat=True)
@@ -834,24 +838,14 @@ class BulletinPdfView(APIView):
         student_exam_results_qs = ExamResult.objects.filter(
             student_id=student_id,
             session__academic_year_id=academic_year_id,
+            session__term=normalized_term,
         )
         subject_ids.update(
             student_exam_results_qs.values_list("subject_id", flat=True)
         )
 
         exam_note_by_subject: dict[int, float] = {}
-        exam_scope_qs = student_exam_results_qs
-        term_tokens = _exam_term_title_tokens(term)
-        if term_tokens:
-            title_query = Q()
-            for token in term_tokens:
-                title_query |= Q(session__title__icontains=token)
-
-            scoped_results = student_exam_results_qs.filter(title_query)
-            if scoped_results.exists():
-                exam_scope_qs = scoped_results
-
-        for exam_result in exam_scope_qs.order_by(
+        for exam_result in student_exam_results_qs.order_by(
             "subject_id",
             "-session__end_date",
             "-session__start_date",
