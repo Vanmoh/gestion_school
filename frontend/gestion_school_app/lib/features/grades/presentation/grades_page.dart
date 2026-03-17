@@ -168,51 +168,53 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     }
   }
 
-  Future<void> _createGrade({
-    required int studentId,
+  Future<Map<int, Map<String, dynamic>>> _fetchExistingGradesForDialog({
+    required int classroomId,
     required int subjectId,
-    required double value,
+    required int academicYearId,
+    required String term,
   }) async {
-    if (_isValidated) {
-      _showMessage('Période validée par la direction: saisie verrouillée.');
-      return;
-    }
+    final dio = ref.read(dioProvider);
+    final rowsByStudent = <int, Map<String, dynamic>>{};
 
-    if (_selectedClassroom == null ||
-        _selectedAcademicYear == null ||
-        _termController.text.trim().isEmpty) {
-      _showMessage('Sélectionnez classe, année et période avant la saisie.');
-      return;
-    }
+    int page = 1;
+    while (page <= 20) {
+      final response = await dio.get(
+        '/grades/',
+        queryParameters: {
+          'classroom': classroomId,
+          'academic_year': academicYearId,
+          'term': term,
+          'subject': subjectId,
+          'ordering': '-id',
+          'page': page,
+          'page_size': 200,
+        },
+      );
 
-    setState(() => _saving = true);
-
-    try {
-      await ref
-          .read(dioProvider)
-          .post(
-            '/grades/',
-            data: {
-              'student': studentId,
-              'subject': subjectId,
-              'classroom': _selectedClassroom,
-              'academic_year': _selectedAcademicYear,
-              'term': _currentTermOrDefault(),
-              'value': value,
-            },
-          );
-
-      if (!mounted) return;
-      _showMessage('Note enregistrée avec succès.');
-      await _loadData();
-    } catch (error) {
-      if (!mounted) return;
-      _showMessage('Erreur enregistrement note: $error');
-    } finally {
-      if (mounted) {
-        setState(() => _saving = false);
+      final payload = response.data;
+      final rows = _extractRows(payload);
+      for (final row in rows) {
+        final studentId = _asInt(row['student']);
+        if (studentId <= 0) {
+          continue;
+        }
+        rowsByStudent.putIfAbsent(studentId, () => row);
       }
+
+      if (payload is! Map<String, dynamic>) {
+        break;
+      }
+
+      final next = payload['next'];
+      if (next == null || next.toString().trim().isEmpty) {
+        break;
+      }
+
+      page += 1;
     }
+
+    return rowsByStudent;
   }
 
   Future<void> _openGradeEntryDialog() async {
@@ -228,110 +230,347 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       return;
     }
 
-    final studentsInClass = _studentsForClassroom(_selectedClassroom);
-    final studentOptions = studentsInClass.isNotEmpty
-        ? studentsInClass
-        : _students;
-
-    if (studentOptions.isEmpty || _subjects.isEmpty) {
+    if (_students.isEmpty || _subjects.isEmpty || _classrooms.isEmpty) {
       _showMessage('Aucun élève ou matière disponible pour la saisie.');
       return;
     }
 
-    final studentIds = studentOptions.map((row) => _asInt(row['id'])).toSet();
-    int selectedStudent = studentIds.contains(_selectedStudent)
-        ? (_selectedStudent ?? _asInt(studentOptions.first['id']))
-        : _asInt(studentOptions.first['id']);
+    int selectedClassroom =
+        _selectedClassroom ?? _asInt(_classrooms.first['id']);
+    int selectedSubject = _selectedSubject ?? _asInt(_subjects.first['id']);
+    List<Map<String, dynamic>> dialogStudents = _studentsForClassroom(
+      selectedClassroom,
+    );
+    final noteControllers = <int, TextEditingController>{};
+    Map<int, Map<String, dynamic>> existingByStudent = {};
+    bool loadingRows = false;
+    bool savingRows = false;
+    bool initialized = false;
+    String? dialogError;
+    int createdCount = 0;
+    int updatedCount = 0;
+    int skippedCount = 0;
 
-    final subjectIds = _subjects.map((row) => _asInt(row['id'])).toSet();
-    int selectedSubject = subjectIds.contains(_selectedSubject)
-        ? (_selectedSubject ?? _asInt(_subjects.first['id']))
-        : _asInt(_subjects.first['id']);
+    void disposeDialogControllers() {
+      for (final controller in noteControllers.values) {
+        controller.dispose();
+      }
+      noteControllers.clear();
+    }
 
-    final valueController = TextEditingController();
+    Future<void> loadDialogRows(StateSetter setDialogState) async {
+      setDialogState(() {
+        loadingRows = true;
+        dialogError = null;
+      });
+
+      try {
+        final term = _currentTermOrDefault();
+        final loadedStudents = _studentsForClassroom(selectedClassroom);
+        final loadedExisting = await _fetchExistingGradesForDialog(
+          classroomId: selectedClassroom,
+          subjectId: selectedSubject,
+          academicYearId: _selectedAcademicYear!,
+          term: term,
+        );
+
+        disposeDialogControllers();
+        for (final student in loadedStudents) {
+          final studentId = _asInt(student['id']);
+          final existing = loadedExisting[studentId];
+          final initialValue = (existing?['value'] ?? '').toString();
+          noteControllers[studentId] = TextEditingController(
+            text: initialValue,
+          );
+        }
+
+        setDialogState(() {
+          dialogStudents = loadedStudents;
+          existingByStudent = loadedExisting;
+          loadingRows = false;
+        });
+      } catch (error) {
+        setDialogState(() {
+          loadingRows = false;
+          dialogError = 'Erreur chargement élèves/notes: $error';
+        });
+      }
+    }
 
     final shouldSave = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
+            if (!initialized) {
+              initialized = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (dialogContext.mounted) {
+                  loadDialogRows(setDialogState);
+                }
+              });
+            }
+
             return AlertDialog(
-              title: const Text('Saisie de note'),
+              title: const Text('Saisie des notes par classe'),
               content: SizedBox(
-                width: 520,
+                width: 760,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'Classe ID ${_selectedClassroom ?? '-'} • Période ${_currentTermOrDefault()}',
+                      'Classe ID $selectedClassroom • Période ${_currentTermOrDefault()}',
                     ),
                     const SizedBox(height: 10),
-                    DropdownButtonFormField<int>(
-                      initialValue: selectedStudent,
-                      decoration: const InputDecoration(labelText: 'Élève'),
-                      items: studentOptions
-                          .map(
-                            (row) => DropdownMenuItem<int>(
-                              value: _asInt(row['id']),
-                              child: Text(
-                                '${row['matricule'] ?? ''} • ${(row['user_full_name'] ?? '').toString().trim()}',
-                              ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<int>(
+                            initialValue: selectedClassroom,
+                            decoration: const InputDecoration(
+                              labelText: 'Classe',
                             ),
-                          )
-                          .toList(),
-                      onChanged: (value) {
-                        if (value == null) return;
-                        setDialogState(() => selectedStudent = value);
-                      },
-                    ),
-                    const SizedBox(height: 10),
-                    DropdownButtonFormField<int>(
-                      initialValue: selectedSubject,
-                      decoration: const InputDecoration(labelText: 'Matière'),
-                      items: _subjects
-                          .map(
-                            (row) => DropdownMenuItem<int>(
-                              value: _asInt(row['id']),
-                              child: Text('${row['code']} - ${row['name']}'),
+                            items: _classrooms
+                                .map(
+                                  (row) => DropdownMenuItem<int>(
+                                    value: _asInt(row['id']),
+                                    child: Text('${row['name']}'),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: loadingRows || savingRows
+                                ? null
+                                : (value) {
+                                    if (value == null) return;
+                                    setDialogState(
+                                      () => selectedClassroom = value,
+                                    );
+                                    loadDialogRows(setDialogState);
+                                  },
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: DropdownButtonFormField<int>(
+                            initialValue: selectedSubject,
+                            decoration: const InputDecoration(
+                              labelText: 'Matière',
                             ),
-                          )
-                          .toList(),
-                      onChanged: (value) {
-                        if (value == null) return;
-                        setDialogState(() => selectedSubject = value);
-                      },
+                            items: _subjects
+                                .map(
+                                  (row) => DropdownMenuItem<int>(
+                                    value: _asInt(row['id']),
+                                    child: Text(
+                                      '${row['code']} - ${row['name']}',
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: loadingRows || savingRows
+                                ? null
+                                : (value) {
+                                    if (value == null) return;
+                                    setDialogState(
+                                      () => selectedSubject = value,
+                                    );
+                                    loadDialogRows(setDialogState);
+                                  },
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 10),
-                    TextField(
-                      controller: valueController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
+                    if (dialogError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          dialogError!,
+                          style: const TextStyle(color: Colors.redAccent),
+                        ),
                       ),
-                      decoration: const InputDecoration(labelText: 'Note / 20'),
-                    ),
+                    if (loadingRows)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 14),
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    else if (dialogStudents.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 14),
+                        child: Text('Aucun élève trouvé pour cette classe.'),
+                      )
+                    else
+                      Container(
+                        constraints: const BoxConstraints(maxHeight: 340),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.white24),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: dialogStudents.length,
+                          separatorBuilder: (_, _) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final student = dialogStudents[index];
+                            final studentId = _asInt(student['id']);
+                            final controller =
+                                noteControllers[studentId] ??
+                                TextEditingController();
+                            noteControllers[studentId] = controller;
+                            final existing = existingByStudent[studentId];
+
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      '${student['matricule'] ?? ''} • ${(student['user_full_name'] ?? '').toString().trim()}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (existing != null)
+                                    const Padding(
+                                      padding: EdgeInsets.only(right: 8),
+                                      child: Tooltip(
+                                        message: 'Note existante: modification',
+                                        child: Icon(
+                                          Icons.edit_note_outlined,
+                                          size: 18,
+                                          color: Colors.orangeAccent,
+                                        ),
+                                      ),
+                                    ),
+                                  SizedBox(
+                                    width: 120,
+                                    child: TextField(
+                                      controller: controller,
+                                      enabled: !savingRows,
+                                      keyboardType:
+                                          const TextInputType.numberWithOptions(
+                                            decimal: true,
+                                          ),
+                                      decoration: const InputDecoration(
+                                        isDense: true,
+                                        labelText: 'Note /20',
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
                   ],
                 ),
               ),
               actions: [
                 TextButton(
-                  onPressed: _saving
+                  onPressed: savingRows
                       ? null
                       : () => Navigator.of(dialogContext).pop(false),
                   child: const Text('Annuler'),
                 ),
                 FilledButton(
-                  onPressed: _saving
+                  onPressed: savingRows || loadingRows || dialogStudents.isEmpty
                       ? null
-                      : () {
-                          final value = double.tryParse(
-                            valueController.text.trim(),
-                          );
-                          if (value == null) {
-                            _showMessage('Entrez une note valide.');
+                      : () async {
+                          final term = _currentTermOrDefault();
+                          final academicYear = _selectedAcademicYear;
+                          if (academicYear == null) {
+                            setDialogState(() {
+                              dialogError =
+                                  'Année scolaire introuvable pour cet enregistrement.';
+                            });
                             return;
                           }
-                          Navigator.of(dialogContext).pop(true);
+
+                          for (final student in dialogStudents) {
+                            final studentId = _asInt(student['id']);
+                            final raw =
+                                noteControllers[studentId]?.text.trim() ?? '';
+                            if (raw.isEmpty) {
+                              continue;
+                            }
+                            final parsed = double.tryParse(
+                              raw.replaceAll(',', '.'),
+                            );
+                            if (parsed == null) {
+                              setDialogState(() {
+                                dialogError =
+                                    'Note invalide pour ${(student['user_full_name'] ?? student['matricule'] ?? 'un élève')}.';
+                              });
+                              return;
+                            }
+                          }
+
+                          setDialogState(() {
+                            savingRows = true;
+                            dialogError = null;
+                          });
+
+                          createdCount = 0;
+                          updatedCount = 0;
+                          skippedCount = 0;
+
+                          try {
+                            final dio = ref.read(dioProvider);
+
+                            for (final student in dialogStudents) {
+                              final studentId = _asInt(student['id']);
+                              final raw =
+                                  noteControllers[studentId]?.text.trim() ?? '';
+                              if (raw.isEmpty) {
+                                skippedCount += 1;
+                                continue;
+                              }
+
+                              final value = double.tryParse(
+                                raw.replaceAll(',', '.'),
+                              );
+                              if (value == null) {
+                                continue;
+                              }
+
+                              final existing = existingByStudent[studentId];
+                              if (existing != null) {
+                                final gradeId = _asInt(existing['id']);
+                                await dio.patch(
+                                  '/grades/$gradeId/',
+                                  data: {'value': value},
+                                );
+                                updatedCount += 1;
+                                continue;
+                              }
+
+                              await dio.post(
+                                '/grades/',
+                                data: {
+                                  'student': studentId,
+                                  'subject': selectedSubject,
+                                  'classroom': selectedClassroom,
+                                  'academic_year': academicYear,
+                                  'term': term,
+                                  'value': value,
+                                },
+                              );
+                              createdCount += 1;
+                            }
+
+                            if (dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop(true);
+                            }
+                          } catch (error) {
+                            setDialogState(() {
+                              savingRows = false;
+                              dialogError = 'Erreur enregistrement: $error';
+                            });
+                          }
                         },
                   child: const Text('Enregistrer'),
                 ),
@@ -342,28 +581,32 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       },
     );
 
-    if (shouldSave != true) {
-      valueController.dispose();
-      return;
-    }
+    disposeDialogControllers();
 
-    final parsedValue = double.tryParse(valueController.text.trim());
-    valueController.dispose();
-    if (parsedValue == null) {
-      _showMessage('Entrez une note valide.');
+    if (shouldSave != true) {
       return;
     }
 
     setState(() {
-      _selectedStudent = selectedStudent;
+      _selectedClassroom = selectedClassroom;
       _selectedSubject = selectedSubject;
+      final students = _studentsForClassroom(selectedClassroom);
+      if (students.isNotEmpty) {
+        _selectedStudent = _asInt(students.first['id']);
+      }
     });
 
-    await _createGrade(
-      studentId: selectedStudent,
-      subjectId: selectedSubject,
-      value: parsedValue,
-    );
+    await _refreshValidationStatus();
+    await _reloadGradesForCurrentFilters(showError: true);
+
+    final touched = createdCount + updatedCount;
+    if (touched > 0) {
+      _showMessage(
+        'Enregistrement terminé: $createdCount ajoutées, $updatedCount modifiées, $skippedCount ignorées.',
+      );
+    } else {
+      _showMessage('Aucune note enregistrée (champs vides).');
+    }
   }
 
   Future<void> _recalculateRanking() async {
@@ -1045,18 +1288,18 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     );
 
     final entryPanel = _sectionCard(
-      title: 'Saisie de note',
+      title: 'Saisie des notes',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            'La saisie se fait désormais dans une fenêtre flottante ouverte par le bouton ci-dessous.',
+            'La saisie se fait en lot: choisissez la classe et la matière, puis entrez les notes élève par élève sur la même ligne.',
           ),
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: (_saving || _isValidated) ? null : _openGradeEntryDialog,
             icon: const Icon(Icons.note_add_outlined),
-            label: const Text('Saisir une note'),
+            label: const Text('Saisir les notes'),
           ),
           const SizedBox(height: 8),
           if (_isValidated)
