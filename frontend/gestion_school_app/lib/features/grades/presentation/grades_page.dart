@@ -35,6 +35,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
   List<Map<String, dynamic>> _students = [];
   List<Map<String, dynamic>> _subjects = [];
+  List<Map<String, dynamic>> _teacherAssignments = [];
   List<Map<String, dynamic>> _classrooms = [];
   List<Map<String, dynamic>> _years = [];
   List<Map<String, dynamic>> _grades = [];
@@ -62,6 +63,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       final results = await Future.wait([
         dio.get('/students/'),
         dio.get('/subjects/'),
+        dio.get('/teacher-assignments/'),
         dio.get('/classrooms/'),
         dio.get('/academic-years/'),
       ]);
@@ -71,8 +73,9 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       setState(() {
         _students = _extractRows(results[0].data);
         _subjects = _extractRows(results[1].data);
-        _classrooms = _extractRows(results[2].data);
-        _years = _extractRows(results[3].data);
+        _teacherAssignments = _extractRows(results[2].data);
+        _classrooms = _extractRows(results[3].data);
+        _years = _extractRows(results[4].data);
         _termController.text = _currentTermOrDefault();
 
         _selectedClassroom ??= _classrooms.isNotEmpty
@@ -83,12 +86,13 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             : null;
 
         final classStudents = _studentsForClassroom(_selectedClassroom);
+        final classSubjects = _subjectsForClassroom(_selectedClassroom);
         _selectedStudent ??= classStudents.isNotEmpty
             ? _asInt(classStudents.first['id'])
             : (_students.isNotEmpty ? _asInt(_students.first['id']) : null);
-        _selectedSubject ??= _subjects.isNotEmpty
-            ? _asInt(_subjects.first['id'])
-            : null;
+        _selectedSubject ??= classSubjects.isNotEmpty
+            ? _asInt(classSubjects.first['id'])
+            : (_subjects.isNotEmpty ? _asInt(_subjects.first['id']) : null);
       });
 
       await _refreshValidationStatus();
@@ -237,7 +241,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
     int selectedClassroom =
         _selectedClassroom ?? _asInt(_classrooms.first['id']);
-    int selectedSubject = _selectedSubject ?? _asInt(_subjects.first['id']);
+    final initialSubjects = _subjectsForClassroom(selectedClassroom);
+    int selectedSubject = initialSubjects.isNotEmpty
+        ? _asInt(initialSubjects.first['id'])
+        : (_selectedSubject ?? _asInt(_subjects.first['id']));
     List<Map<String, dynamic>> dialogStudents = _studentsForClassroom(
       selectedClassroom,
     );
@@ -343,9 +350,18 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                 ? null
                                 : (value) {
                                     if (value == null) return;
-                                    setDialogState(
-                                      () => selectedClassroom = value,
-                                    );
+                                    setDialogState(() {
+                                      selectedClassroom = value;
+                                      final classSubjects =
+                                          _subjectsForClassroom(
+                                            selectedClassroom,
+                                          );
+                                      if (classSubjects.isNotEmpty) {
+                                        selectedSubject = _asInt(
+                                          classSubjects.first['id'],
+                                        );
+                                      }
+                                    });
                                     loadDialogRows(setDialogState);
                                   },
                           ),
@@ -357,7 +373,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                             decoration: const InputDecoration(
                               labelText: 'Matière',
                             ),
-                            items: _subjects
+                            items: _subjectsForClassroom(selectedClassroom)
                                 .map(
                                   (row) => DropdownMenuItem<int>(
                                     value: _asInt(row['id']),
@@ -482,10 +498,20 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                       : () async {
                           final term = _currentTermOrDefault();
                           final academicYear = _selectedAcademicYear;
+                          final classSubjects = _subjectsForClassroom(
+                            selectedClassroom,
+                          );
                           if (academicYear == null) {
                             setDialogState(() {
                               dialogError =
                                   'Année scolaire introuvable pour cet enregistrement.';
+                            });
+                            return;
+                          }
+                          if (classSubjects.isEmpty) {
+                            setDialogState(() {
+                              dialogError =
+                                  'Aucune matière attribuée à cette classe. Configurez les attributions enseignant/matière.';
                             });
                             return;
                           }
@@ -540,25 +566,47 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                               final existing = existingByStudent[studentId];
                               if (existing != null) {
                                 final gradeId = _asInt(existing['id']);
-                                await dio.patch(
-                                  '/grades/$gradeId/',
-                                  data: {'value': value},
-                                );
+                                try {
+                                  await dio.patch(
+                                    '/grades/$gradeId/',
+                                    data: {'value': value},
+                                  );
+                                } on DioException catch (dioError) {
+                                  final studentLabel =
+                                      (student['user_full_name'] ??
+                                              student['matricule'] ??
+                                              'Élève')
+                                          .toString();
+                                  throw Exception(
+                                    '$studentLabel: ${_extractDioErrorMessage(dioError)}',
+                                  );
+                                }
                                 updatedCount += 1;
                                 continue;
                               }
 
-                              await dio.post(
-                                '/grades/',
-                                data: {
-                                  'student': studentId,
-                                  'subject': selectedSubject,
-                                  'classroom': selectedClassroom,
-                                  'academic_year': academicYear,
-                                  'term': term,
-                                  'value': value,
-                                },
-                              );
+                              try {
+                                await dio.post(
+                                  '/grades/',
+                                  data: {
+                                    'student': studentId,
+                                    'subject': selectedSubject,
+                                    'classroom': selectedClassroom,
+                                    'academic_year': academicYear,
+                                    'term': term,
+                                    'value': value,
+                                  },
+                                );
+                              } on DioException catch (dioError) {
+                                final studentLabel =
+                                    (student['user_full_name'] ??
+                                            student['matricule'] ??
+                                            'Élève')
+                                        .toString();
+                                throw Exception(
+                                  '$studentLabel: ${_extractDioErrorMessage(dioError)}',
+                                );
+                              }
                               createdCount += 1;
                             }
 
@@ -568,7 +616,8 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                           } catch (error) {
                             setDialogState(() {
                               savingRows = false;
-                              dialogError = 'Erreur enregistrement: $error';
+                              dialogError =
+                                  'Erreur enregistrement: ${_extractFriendlyError(error)}';
                             });
                           }
                         },
@@ -1080,6 +1129,73 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     return _students
         .where((row) => _asInt(row['classroom']) == classroomId)
         .toList();
+  }
+
+  List<Map<String, dynamic>> _subjectsForClassroom(int? classroomId) {
+    if (classroomId == null || classroomId <= 0) {
+      return _subjects;
+    }
+
+    final assignedSubjectIds = _teacherAssignments
+        .where((row) => _asInt(row['classroom']) == classroomId)
+        .map((row) => _asInt(row['subject']))
+        .where((id) => id > 0)
+        .toSet();
+
+    if (assignedSubjectIds.isEmpty) {
+      return _subjects;
+    }
+
+    return _subjects
+        .where((row) => assignedSubjectIds.contains(_asInt(row['id'])))
+        .toList();
+  }
+
+  String _extractFriendlyError(Object error) {
+    if (error is DioException) {
+      return _extractDioErrorMessage(error);
+    }
+
+    final raw = error.toString();
+    if (raw.startsWith('Exception: ')) {
+      return raw.replaceFirst('Exception: ', '');
+    }
+    return raw;
+  }
+
+  String _extractDioErrorMessage(DioException error) {
+    final data = error.response?.data;
+
+    if (data is Map<String, dynamic>) {
+      final detail = data['detail']?.toString().trim() ?? '';
+      if (detail.isNotEmpty) {
+        return detail;
+      }
+
+      final parts = <String>[];
+      data.forEach((key, value) {
+        if (value is List && value.isNotEmpty) {
+          parts.add('$key: ${value.first}');
+          return;
+        }
+        final text = value?.toString().trim() ?? '';
+        if (text.isNotEmpty) {
+          parts.add('$key: $text');
+        }
+      });
+
+      if (parts.isNotEmpty) {
+        return parts.join(' | ');
+      }
+    }
+
+    if (data is String && data.trim().isNotEmpty) {
+      return data.trim();
+    }
+
+    return error.message?.trim().isNotEmpty == true
+        ? error.message!.trim()
+        : 'Erreur serveur';
   }
 
   Map<String, dynamic>? _findById(List<Map<String, dynamic>> rows, int id) {
