@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -31,7 +30,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
 
   int? _selectedStudentId;
   int? _selectedYearId;
-  String _term = '1';
+  String _term = 'T1';
   int? _selectedPaymentId;
   int? _selectedClassroomId;
   String _cardsLayoutMode = 'a4_6up';
@@ -192,11 +191,10 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
         options: Options(responseType: ResponseType.bytes),
       );
       final bytes = _toUint8List(response.data);
-      final file = File(
-        '${Directory.systemTemp.path}/paiements_export_${DateTime.now().millisecondsSinceEpoch}.xlsx',
-      );
-      await file.writeAsBytes(bytes, flush: true);
-      _showMessage('Export Excel enregistré: ${file.path}');
+      final fileName =
+          'paiements_export_${DateTime.now().millisecondsSinceEpoch}.xlsx';
+      await Printing.sharePdf(bytes: bytes, filename: fileName);
+      _showMessage('Export Excel lancé: $fileName');
     });
   }
 
@@ -331,12 +329,21 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
                   initialValue: _term,
                   decoration: const InputDecoration(labelText: 'Trimestre'),
                   items: const [
-                    DropdownMenuItem(value: '1', child: Text('Trimestre 1')),
-                    DropdownMenuItem(value: '2', child: Text('Trimestre 2')),
-                    DropdownMenuItem(value: '3', child: Text('Trimestre 3')),
+                    DropdownMenuItem(
+                      value: 'T1',
+                      child: Text('Trimestre 1 (T1)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'T2',
+                      child: Text('Trimestre 2 (T2)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'T3',
+                      child: Text('Trimestre 3 (T3)'),
+                    ),
                   ],
                   onChanged: (value) {
-                    setState(() => _term = value ?? '1');
+                    setState(() => _term = value ?? 'T1');
                   },
                 ),
               ),

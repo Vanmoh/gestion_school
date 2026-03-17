@@ -8,12 +8,14 @@ from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from fpdf import FPDF
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import IsAdminOrDirector, IsReadOnlyForParentStudent
+from .term_utils import normalize_term
 from .models import (
     AcademicYear,
     Announcement,
@@ -95,6 +97,12 @@ from .serializers import (
 
 class BaseModelViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsReadOnlyForParentStudent]
+
+
+class GradePagination(PageNumberPagination):
+    page_size = 100
+    page_size_query_param = "page_size"
+    max_page_size = 500
 
 
 class AcademicYearViewSet(BaseModelViewSet):
@@ -909,17 +917,63 @@ class StudentAcademicHistoryViewSet(BaseModelViewSet):
 
 
 class GradeViewSet(BaseModelViewSet):
-    queryset = Grade.objects.select_related("student", "subject", "classroom", "academic_year").all()
+    queryset = Grade.objects.select_related("student", "subject", "classroom", "academic_year").all().order_by("-id")
     serializer_class = GradeSerializer
-    filterset_fields = ["classroom", "academic_year", "term", "subject"]
+    pagination_class = GradePagination
+    filterset_fields = ["classroom", "academic_year", "term", "subject", "student"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        role = getattr(self.request.user, "role", "")
+
+        if role == UserRole.STUDENT:
+            return queryset.filter(student__user_id=self.request.user.id)
+        if role == UserRole.PARENT:
+            return queryset.filter(student__parent__user_id=self.request.user.id)
+        return queryset
+
+    @staticmethod
+    def _parse_positive_int(value):
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    @staticmethod
+    def _normalize_term_or_none(value):
+        return normalize_term(value)
+
+    @staticmethod
+    def _locked_term_message(prefix="Modification"):
+        return f"Cette période est validée par la direction. {prefix} interdite."
+
+    @staticmethod
+    def _value_changed(old_value, new_value):
+        if hasattr(old_value, "pk") and hasattr(new_value, "pk"):
+            return old_value.pk != new_value.pk
+        return old_value != new_value
+
+    def _immutable_fields_changed(self, instance, validated_data):
+        immutable_fields = ("student", "subject", "classroom", "academic_year", "term")
+        changed = []
+        for field in immutable_fields:
+            if field not in validated_data:
+                continue
+            old_value = getattr(instance, field)
+            new_value = validated_data[field]
+            if self._value_changed(old_value, new_value):
+                changed.append(field)
+        return changed
 
     def _is_term_validated(self, classroom_id, academic_year_id, term):
-        if not classroom_id or not academic_year_id or not term:
+        normalized_term = self._normalize_term_or_none(term)
+        if not classroom_id or not academic_year_id or not normalized_term:
             return False
         return GradeValidation.objects.filter(
             classroom_id=classroom_id,
             academic_year_id=academic_year_id,
-            term=term,
+            term=normalized_term,
             is_validated=True,
         ).exists()
 
@@ -930,7 +984,7 @@ class GradeViewSet(BaseModelViewSet):
         academic_year_id = serializer.validated_data.get("academic_year").id if serializer.validated_data.get("academic_year") else None
         term = serializer.validated_data.get("term")
         if self._is_term_validated(classroom_id, academic_year_id, term):
-            return Response({"detail": "Cette période est validée par la direction. Modification interdite."}, status=400)
+            return Response({"detail": self._locked_term_message()}, status=400)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=201, headers=headers)
@@ -938,15 +992,32 @@ class GradeViewSet(BaseModelViewSet):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
+
+        if self._is_term_validated(instance.classroom_id, instance.academic_year_id, instance.term):
+            return Response({"detail": self._locked_term_message()}, status=400)
+
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
+
+        immutable_changed = self._immutable_fields_changed(instance, serializer.validated_data)
+        if immutable_changed:
+            return Response(
+                {
+                    "detail": (
+                        "Les champs student, subject, classroom, academic_year et term "
+                        "sont immuables après création."
+                    ),
+                    "fields": immutable_changed,
+                },
+                status=400,
+            )
 
         classroom = serializer.validated_data.get("classroom", instance.classroom)
         academic_year = serializer.validated_data.get("academic_year", instance.academic_year)
         term = serializer.validated_data.get("term", instance.term)
 
         if self._is_term_validated(classroom.id, academic_year.id, term):
-            return Response({"detail": "Cette période est validée par la direction. Modification interdite."}, status=400)
+            return Response({"detail": self._locked_term_message()}, status=400)
 
         self.perform_update(serializer)
         return Response(serializer.data)
@@ -954,28 +1025,39 @@ class GradeViewSet(BaseModelViewSet):
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         if self._is_term_validated(instance.classroom_id, instance.academic_year_id, instance.term):
-            return Response({"detail": "Cette période est validée par la direction. Suppression interdite."}, status=400)
+            return Response({"detail": self._locked_term_message(prefix="Suppression")}, status=400)
         return super().destroy(request, *args, **kwargs)
 
     @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
     def recalculate_ranking(self, request):
-        classroom_id = request.data.get("classroom")
-        academic_year_id = request.data.get("academic_year")
-        term = request.data.get("term")
-        classroom = ClassRoom.objects.get(id=classroom_id)
-        academic_year = AcademicYear.objects.get(id=academic_year_id)
+        classroom_id = self._parse_positive_int(request.data.get("classroom"))
+        academic_year_id = self._parse_positive_int(request.data.get("academic_year"))
+        term = self._normalize_term_or_none(request.data.get("term"))
+
+        if not classroom_id or not academic_year_id or not term:
+            return Response(
+                {"detail": "classroom, academic_year et term (T1/T2/T3) sont requis."},
+                status=400,
+            )
+
+        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
+
+        if self._is_term_validated(classroom.id, academic_year.id, term):
+            return Response({"detail": self._locked_term_message(prefix="Recalcul")}, status=400)
+
         recalculate_term_ranking(classroom, academic_year, term)
         return Response({"detail": "Classement recalculé avec succès."})
 
     @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
     def validate_term(self, request):
-        classroom_id = request.data.get("classroom")
-        academic_year_id = request.data.get("academic_year")
-        term = request.data.get("term")
+        classroom_id = self._parse_positive_int(request.data.get("classroom"))
+        academic_year_id = self._parse_positive_int(request.data.get("academic_year"))
+        term = self._normalize_term_or_none(request.data.get("term"))
         notes = request.data.get("notes", "")
 
         if not classroom_id or not academic_year_id or not term:
-            return Response({"detail": "classroom, academic_year et term sont requis."}, status=400)
+            return Response({"detail": "classroom, academic_year et term (T1/T2/T3) sont requis."}, status=400)
 
         classroom = get_object_or_404(ClassRoom, id=classroom_id)
         academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
@@ -995,12 +1077,12 @@ class GradeViewSet(BaseModelViewSet):
 
     @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
     def unvalidate_term(self, request):
-        classroom_id = request.data.get("classroom")
-        academic_year_id = request.data.get("academic_year")
-        term = request.data.get("term")
+        classroom_id = self._parse_positive_int(request.data.get("classroom"))
+        academic_year_id = self._parse_positive_int(request.data.get("academic_year"))
+        term = self._normalize_term_or_none(request.data.get("term"))
 
         if not classroom_id or not academic_year_id or not term:
-            return Response({"detail": "classroom, academic_year et term sont requis."}, status=400)
+            return Response({"detail": "classroom, academic_year et term (T1/T2/T3) sont requis."}, status=400)
 
         classroom = get_object_or_404(ClassRoom, id=classroom_id)
         academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
@@ -1019,12 +1101,12 @@ class GradeViewSet(BaseModelViewSet):
 
     @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
     def validation_status(self, request):
-        classroom_id = request.query_params.get("classroom")
-        academic_year_id = request.query_params.get("academic_year")
-        term = request.query_params.get("term")
+        classroom_id = self._parse_positive_int(request.query_params.get("classroom"))
+        academic_year_id = self._parse_positive_int(request.query_params.get("academic_year"))
+        term = self._normalize_term_or_none(request.query_params.get("term"))
 
         if not classroom_id or not academic_year_id or not term:
-            return Response({"detail": "classroom, academic_year et term sont requis."}, status=400)
+            return Response({"detail": "classroom, academic_year et term (T1/T2/T3) sont requis."}, status=400)
 
         validation = GradeValidation.objects.filter(
             classroom_id=classroom_id,
@@ -1035,8 +1117,8 @@ class GradeViewSet(BaseModelViewSet):
         if not validation:
             return Response(
                 {
-                    "classroom": int(classroom_id),
-                    "academic_year": int(academic_year_id),
+                    "classroom": classroom_id,
+                    "academic_year": academic_year_id,
                     "term": term,
                     "is_validated": False,
                     "validated_by_name": "",

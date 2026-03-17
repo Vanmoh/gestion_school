@@ -1,5 +1,6 @@
 from decimal import Decimal
 from rest_framework import serializers
+from .term_utils import normalize_term
 from .models import (
     AcademicYear,
     Announcement,
@@ -332,6 +333,52 @@ class StudentAcademicHistorySerializer(serializers.ModelSerializer):
 
 
 class GradeSerializer(serializers.ModelSerializer):
+    TERM_ERROR_MESSAGE = "Période invalide. Utilisez uniquement T1, T2 ou T3."
+
+    def validate_term(self, value):
+        normalized = normalize_term(value)
+        if not normalized:
+            raise serializers.ValidationError(self.TERM_ERROR_MESSAGE)
+        return normalized
+
+    def validate_value(self, value):
+        numeric_value = Decimal(str(value))
+        if numeric_value < Decimal("0") or numeric_value > Decimal("20"):
+            raise serializers.ValidationError("La note doit être comprise entre 0 et 20.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        student = attrs.get("student") or getattr(self.instance, "student", None)
+        classroom = attrs.get("classroom") or getattr(self.instance, "classroom", None)
+        subject = attrs.get("subject") or getattr(self.instance, "subject", None)
+        academic_year = attrs.get("academic_year") or getattr(self.instance, "academic_year", None)
+
+        if student and classroom and student.classroom_id != classroom.id:
+            raise serializers.ValidationError(
+                {"student": "L'élève sélectionné n'appartient pas à la classe choisie."}
+            )
+
+        if classroom and academic_year and classroom.academic_year_id != academic_year.id:
+            raise serializers.ValidationError(
+                {
+                    "academic_year": (
+                        "L'année scolaire doit correspondre à l'année de la classe sélectionnée."
+                    )
+                }
+            )
+
+        if classroom and subject and not TeacherAssignment.objects.filter(
+            classroom=classroom,
+            subject=subject,
+        ).exists():
+            raise serializers.ValidationError(
+                {"subject": "Cette matière n'est pas attribuée à la classe sélectionnée."}
+            )
+
+        return attrs
+
     class Meta:
         model = Grade
         fields = "__all__"
@@ -346,6 +393,12 @@ class GradeValidationSerializer(serializers.ModelSerializer):
             return ""
         full_name = user.get_full_name().strip()
         return full_name or user.username
+
+    def validate_term(self, value):
+        normalized = normalize_term(value)
+        if not normalized:
+            raise serializers.ValidationError("Période invalide. Utilisez uniquement T1, T2 ou T3.")
+        return normalized
 
     class Meta:
         model = GradeValidation
@@ -588,6 +641,12 @@ class CanteenServiceSerializer(serializers.ModelSerializer):
 
 
 class ExamSessionSerializer(serializers.ModelSerializer):
+    def validate_term(self, value):
+        normalized = normalize_term(value)
+        if not normalized:
+            raise serializers.ValidationError("Période invalide. Utilisez uniquement T1, T2 ou T3.")
+        return normalized
+
     class Meta:
         model = ExamSession
         fields = "__all__"

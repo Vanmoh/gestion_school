@@ -1,8 +1,7 @@
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 from django.db import models
-from django.db.models import Avg
 from apps.common.models import TimeStampedModel
 
 
@@ -370,6 +369,7 @@ class CanteenService(TimeStampedModel):
 
 class ExamSession(TimeStampedModel):
     title = models.CharField(max_length=100)
+    term = models.CharField(max_length=2, default="T1")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="exam_sessions")
     start_date = models.DateField()
     end_date = models.DateField()
@@ -442,13 +442,28 @@ def recalculate_term_ranking(classroom: ClassRoom, academic_year: AcademicYear, 
     students = Student.objects.filter(classroom=classroom, is_archived=False)
     student_averages = []
     for student in students:
-        avg = Grade.objects.filter(
+        grades = Grade.objects.filter(
             student=student,
             classroom=classroom,
             academic_year=academic_year,
             term=term,
-        ).aggregate(value=Avg("value"))["value"] or Decimal("0")
-        student_averages.append((student, Decimal(str(avg))))
+        ).select_related("subject")
+
+        weighted_sum = Decimal("0")
+        coef_sum = Decimal("0")
+
+        for grade in grades:
+            coef = Decimal(str(grade.subject.coefficient or 0))
+            if coef <= 0:
+                continue
+            weighted_sum += Decimal(str(grade.value)) * coef
+            coef_sum += coef
+
+        average = Decimal("0")
+        if coef_sum > 0:
+            average = (weighted_sum / coef_sum).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        student_averages.append((student, average))
 
     sorted_students = sorted(student_averages, key=lambda row: row[1], reverse=True)
     for index, (student, average) in enumerate(sorted_students, start=1):

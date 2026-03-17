@@ -64,7 +64,6 @@ class _GradesPageState extends ConsumerState<GradesPage> {
         dio.get('/subjects/'),
         dio.get('/classrooms/'),
         dio.get('/academic-years/'),
-        dio.get('/grades/'),
       ]);
 
       if (!mounted) return;
@@ -74,7 +73,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
         _subjects = _extractRows(results[1].data);
         _classrooms = _extractRows(results[2].data);
         _years = _extractRows(results[3].data);
-        _grades = _extractRows(results[4].data);
+        _termController.text = _currentTermOrDefault();
 
         _selectedClassroom ??= _classrooms.isNotEmpty
             ? _asInt(_classrooms.first['id'])
@@ -93,6 +92,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       });
 
       await _refreshValidationStatus();
+      await _reloadGradesForCurrentFilters(showError: false);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -102,6 +102,69 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       if (mounted) {
         setState(() => _loading = false);
       }
+    }
+  }
+
+  String _currentTermOrDefault() {
+    final normalized = _normalizeTerm(_termController.text);
+    return normalized.isEmpty ? 'T1' : normalized;
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchAllGradesForCurrentFilters() async {
+    final classroom = _selectedClassroom;
+    final academicYear = _selectedAcademicYear;
+    final term = _currentTermOrDefault();
+
+    if (classroom == null || academicYear == null || term.isEmpty) {
+      return [];
+    }
+
+    final dio = ref.read(dioProvider);
+    final rows = <Map<String, dynamic>>[];
+
+    int page = 1;
+    while (page <= 50) {
+      final response = await dio.get(
+        '/grades/',
+        queryParameters: {
+          'classroom': classroom,
+          'academic_year': academicYear,
+          'term': term,
+          'ordering': '-id',
+          'page': page,
+          'page_size': 200,
+        },
+      );
+
+      final data = response.data;
+      rows.addAll(_extractRows(data));
+
+      if (data is! Map<String, dynamic>) {
+        break;
+      }
+
+      final next = data['next'];
+      if (next == null || next.toString().trim().isEmpty) {
+        break;
+      }
+
+      page += 1;
+    }
+
+    return rows;
+  }
+
+  Future<void> _reloadGradesForCurrentFilters({bool showError = true}) async {
+    try {
+      final rows = await _fetchAllGradesForCurrentFilters();
+      if (!mounted) return;
+      setState(() {
+        _grades = rows;
+        _notesPage = 1;
+      });
+    } catch (error) {
+      if (!mounted || !showError) return;
+      _showMessage('Erreur chargement notes filtrées: $error');
     }
   }
 
@@ -134,7 +197,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               'subject': subjectId,
               'classroom': _selectedClassroom,
               'academic_year': _selectedAcademicYear,
-              'term': _termController.text.trim(),
+              'term': _currentTermOrDefault(),
               'value': value,
             },
           );
@@ -201,7 +264,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'Classe ID ${_selectedClassroom ?? '-'} • Période ${_termController.text.trim()}',
+                      'Classe ID ${_selectedClassroom ?? '-'} • Période ${_currentTermOrDefault()}',
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<int>(
@@ -333,7 +396,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             data: {
               'classroom': _selectedClassroom,
               'academic_year': _selectedAcademicYear,
-              'term': _termController.text.trim(),
+              'term': _currentTermOrDefault(),
             },
           );
 
@@ -357,7 +420,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   Future<void> _printBulletin() async {
     final studentId = _selectedStudent;
     final yearId = _selectedAcademicYear;
-    final term = _termController.text.trim();
+    final term = _currentTermOrDefault();
 
     if (studentId == null || yearId == null || term.isEmpty) {
       _showMessage('Sélectionnez élève, année et période pour le bulletin.');
@@ -399,9 +462,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     final academicYearName =
         (_findById(_years, _selectedAcademicYear ?? 0)?['name'] ?? 'Toutes')
             .toString();
-    final period = _termController.text.trim().isEmpty
-        ? 'Toutes'
-        : _termController.text.trim();
+    final period = _currentTermOrDefault();
 
     setState(() => _saving = true);
     try {
@@ -463,9 +524,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     final academicYearName =
         (_findById(_years, _selectedAcademicYear ?? 0)?['name'] ?? 'Toutes')
             .toString();
-    final period = _termController.text.trim().isEmpty
-        ? 'Toutes'
-        : _termController.text.trim();
+    final period = _currentTermOrDefault();
 
     final tableRows = grades.map((grade) {
       final student = studentById[_asInt(grade['student'])];
@@ -686,7 +745,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   Future<void> _refreshValidationStatus() async {
     final classroom = _selectedClassroom;
     final academicYear = _selectedAcademicYear;
-    final term = _termController.text.trim();
+    final term = _currentTermOrDefault();
 
     if (classroom == null || academicYear == null || term.isEmpty) {
       if (mounted) setState(() => _validationStatus = null);
@@ -734,7 +793,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             data: {
               'classroom': _selectedClassroom,
               'academic_year': _selectedAcademicYear,
-              'term': _termController.text.trim(),
+              'term': _currentTermOrDefault(),
               if (validate) 'notes': _validationNotesController.text.trim(),
             },
           );
@@ -1026,6 +1085,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                 }
               });
               _refreshValidationStatus();
+              _reloadGradesForCurrentFilters();
             },
           ),
           const SizedBox(height: 10),
@@ -1046,17 +1106,25 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                 _notesPage = 1;
               });
               _refreshValidationStatus();
+              _reloadGradesForCurrentFilters();
             },
           ),
           const SizedBox(height: 10),
-          TextField(
-            controller: _termController,
-            decoration: const InputDecoration(
-              labelText: 'Periode (ex: T1, T2)',
-            ),
-            onChanged: (_) {
-              setState(() => _notesPage = 1);
+          DropdownButtonFormField<String>(
+            initialValue: _currentTermOrDefault(),
+            decoration: const InputDecoration(labelText: 'Période'),
+            items: const [
+              DropdownMenuItem(value: 'T1', child: Text('T1')),
+              DropdownMenuItem(value: 'T2', child: Text('T2')),
+              DropdownMenuItem(value: 'T3', child: Text('T3')),
+            ],
+            onChanged: (value) {
+              setState(() {
+                _termController.text = value ?? 'T1';
+                _notesPage = 1;
+              });
               _refreshValidationStatus();
+              _reloadGradesForCurrentFilters();
             },
           ),
           const SizedBox(height: 8),

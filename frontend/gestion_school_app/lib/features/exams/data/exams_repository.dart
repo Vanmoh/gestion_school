@@ -32,6 +32,7 @@ class ExamsRepository {
           (row) => ExamSessionItem(
             id: (row as Map<String, dynamic>)['id'] as int,
             title: row['title']?.toString() ?? '',
+            term: row['term']?.toString() ?? 'T1',
             academicYearId: row['academic_year'] as int,
             startDate: row['start_date']?.toString() ?? '',
             endDate: row['end_date']?.toString() ?? '',
@@ -159,6 +160,7 @@ class ExamsRepository {
 
   Future<void> createSession({
     required String title,
+    required String term,
     required int academicYear,
     required String startDate,
     required String endDate,
@@ -167,6 +169,7 @@ class ExamsRepository {
       '/exam-sessions/',
       data: {
         'title': title,
+        'term': term,
         'academic_year': academicYear,
         'start_date': startDate,
         'end_date': endDate,
