@@ -71,6 +71,26 @@ class SubjectSerializer(serializers.ModelSerializer):
 
 
 class TeacherSerializer(serializers.ModelSerializer):
+    user_full_name = serializers.SerializerMethodField(read_only=True)
+    user_first_name = serializers.SerializerMethodField(read_only=True)
+    user_last_name = serializers.SerializerMethodField(read_only=True)
+    user_username = serializers.SerializerMethodField(read_only=True)
+
+    def get_user_full_name(self, obj):
+        if not obj.user:
+            return ""
+        full_name = obj.user.get_full_name().strip()
+        return full_name or obj.user.username
+
+    def get_user_first_name(self, obj):
+        return obj.user.first_name if obj.user else ""
+
+    def get_user_last_name(self, obj):
+        return obj.user.last_name if obj.user else ""
+
+    def get_user_username(self, obj):
+        return obj.user.username if obj.user else ""
+
     class Meta:
         model = Teacher
         fields = "__all__"

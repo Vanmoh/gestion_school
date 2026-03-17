@@ -59,6 +59,9 @@ int _asInt(dynamic value) {
 
 String _teacherNameFromTeacherRow(Map<String, dynamic>? row) {
   if (row == null) return '';
+  final explicitFullName = (row['user_full_name'] ?? '').toString().trim();
+  if (explicitFullName.isNotEmpty) return explicitFullName;
+
   final firstName = (row['user_first_name'] ?? '').toString().trim();
   final lastName = (row['user_last_name'] ?? '').toString().trim();
   final fullName = '$firstName $lastName'.trim();
