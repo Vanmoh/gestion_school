@@ -88,6 +88,38 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
+  Future<bool?> _detectScheduleApiSupportFromSchema(Dio dio) async {
+    try {
+      final response = await dio.get(
+        '/schema/',
+        queryParameters: const {'format': 'json'},
+        options: Options(validateStatus: (status) => (status ?? 0) < 500),
+      );
+
+      final statusCode = response.statusCode ?? 0;
+      if (statusCode < 200 || statusCode >= 400) {
+        return null;
+      }
+
+      final data = response.data;
+      if (data is Map<String, dynamic>) {
+        final paths = data['paths'];
+        if (paths is Map) {
+          return paths.containsKey('/api/teacher-schedule-slots/') ||
+              paths.containsKey('/teacher-schedule-slots/');
+        }
+      }
+
+      final raw = data?.toString() ?? '';
+      if (raw.isNotEmpty) {
+        return raw.contains('teacher-schedule-slots');
+      }
+    } catch (_) {
+      // Ignore schema parsing failures and keep fallback heuristics.
+    }
+    return null;
+  }
+
   Future<void> _loadData() async {
     setState(() => _loading = true);
     final dio = ref.read(dioProvider);
@@ -128,8 +160,34 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             entry.contains('/timetable-publications/') &&
             entry.contains('(404)'),
       );
-      final scheduleApiSupported =
+      var scheduleApiSupported =
           !(hasSlotEndpoint404 || hasPublicationEndpoint404);
+
+      final schemaSupport = await _detectScheduleApiSupportFromSchema(dio);
+      if (schemaSupport != null) {
+        scheduleApiSupported = schemaSupport;
+      }
+
+      final hasStoredCustomApi =
+          storedBaseUrl != null && storedBaseUrl.trim().isNotEmpty;
+      final looksLikeLegacyPlanningApi =
+          hasSlotEndpoint404 &&
+          hasPublicationEndpoint404 &&
+          results[0].isNotEmpty &&
+          results[3].isNotEmpty;
+      if (looksLikeLegacyPlanningApi &&
+          hasStoredCustomApi &&
+          !_apiUrlResetAttempted) {
+        _apiUrlResetAttempted = true;
+        await ref.read(tokenStorageProvider).clearApiBaseUrl();
+        if (!mounted) return;
+        _showMessage(
+          'API personnalisée obsolète détectée pour le module planning. '
+          'Nouvelle tentative avec l\'URL API par défaut...',
+        );
+        await _loadData();
+        return;
+      }
 
       setState(() {
         _teachers = results[0];
@@ -306,6 +364,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await _loadData();
     } catch (error) {
       if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
       _showMessage('Erreur publication: ${_extractErrorMessage(error)}');
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -339,6 +398,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await _loadData();
     } catch (error) {
       if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
       _showMessage('Erreur verrouillage: ${_extractErrorMessage(error)}');
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -370,6 +430,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await _loadData();
     } catch (error) {
       if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
       _showMessage('Erreur retour brouillon: ${_extractErrorMessage(error)}');
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -409,6 +470,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       _showMessage('Export lancé: $filename');
     } catch (error) {
       if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
       _showMessage('Erreur export: ${_extractErrorMessage(error)}');
     } finally {
       if (mounted) {
@@ -470,6 +532,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await Printing.layoutPdf(onLayout: (_) async => bytes);
     } catch (error) {
       if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
       _showMessage('Erreur impression PDF: ${_extractErrorMessage(error)}');
     } finally {
       if (mounted) {
@@ -666,6 +729,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await _loadData();
     } catch (error) {
       if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
       _showMessage('Erreur duplication: ${_extractErrorMessage(error)}');
     } finally {
       if (mounted) {
@@ -1133,6 +1197,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await _loadData();
     } catch (error) {
       if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
       _showMessage(
         'Erreur enregistrement créneau: ${_extractErrorMessage(error)}',
       );
@@ -1199,6 +1264,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await _loadData();
     } catch (error) {
       if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
       _showMessage(
         'Erreur suppression créneau: ${_extractErrorMessage(error)}',
       );
@@ -1214,6 +1280,25 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _markScheduleApiUnsupportedFromError(Object error) {
+    if (error is! DioException) {
+      return;
+    }
+
+    final status = error.response?.statusCode;
+    final path = error.requestOptions.path;
+    final isSchedulePath =
+        path.contains('/teacher-schedule-slots/') ||
+        path.contains('/timetable-publications/');
+
+    if (status == 404 && isSchedulePath && _scheduleApiSupported && mounted) {
+      setState(() => _scheduleApiSupported = false);
+      _showMessage(
+        'API planning non disponible sur $_activeApiBaseUrl: $path (404).',
+      );
+    }
   }
 
   bool _requireScheduleApiSupported([String action = 'cette action']) {
