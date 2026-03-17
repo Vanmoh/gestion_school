@@ -83,9 +83,7 @@ class _StockPageState extends ConsumerState<StockPage> {
       });
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur chargement stock: $error')),
-      );
+      _showMessage('Erreur chargement stock: $error');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -100,18 +98,32 @@ class _StockPageState extends ConsumerState<StockPage> {
     try {
       await ref.read(dioProvider).post(endpoint, data: data);
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(success)));
+      _showMessage(success, isSuccess: true);
       await _loadData();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Erreur: $error')));
+      _showMessage('Erreur: $error');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
   }
 
   Future<void> _refreshStock() async {

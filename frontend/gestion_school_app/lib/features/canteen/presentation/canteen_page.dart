@@ -97,9 +97,7 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
       });
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur chargement cantine: $error')),
-      );
+      _showMessage('Erreur chargement cantine: $error');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -114,18 +112,32 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
     try {
       await ref.read(dioProvider).post(endpoint, data: data);
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(successMessage)));
+      _showMessage(successMessage, isSuccess: true);
       await _loadData();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Erreur: $error')));
+      _showMessage('Erreur: $error');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
   }
 
   Future<void> _refreshCanteen() async {

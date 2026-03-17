@@ -298,7 +298,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         'emploi_du_temps_${_slugify(className)}_${DateTime.now().millisecondsSinceEpoch}.csv';
 
     await Printing.sharePdf(bytes: bytes, filename: fileName);
-    _showMessage('Export Excel (CSV) lancé: $fileName');
+    _showMessage('Export Excel (CSV) lancé: $fileName', isSuccess: true);
   }
 
   Future<void> _refreshTimetable() async {
@@ -362,6 +362,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         lockAfterPublish
             ? 'Planning publié et verrouillé.'
             : 'Planning publié sans verrouillage.',
+        isSuccess: true,
       );
       await _loadData();
     } catch (error) {
@@ -396,7 +397,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           );
 
       if (!mounted) return;
-      _showMessage(lock ? 'Planning verrouillé.' : 'Planning déverrouillé.');
+      _showMessage(
+        lock ? 'Planning verrouillé.' : 'Planning déverrouillé.',
+        isSuccess: true,
+      );
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -428,7 +432,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           );
 
       if (!mounted) return;
-      _showMessage('Planning remis en brouillon.');
+      _showMessage('Planning remis en brouillon.', isSuccess: true);
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -469,7 +473,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await Printing.sharePdf(bytes: bytes, filename: filename);
 
       if (!mounted) return;
-      _showMessage('Export lancé: $filename');
+      _showMessage('Export lancé: $filename', isSuccess: true);
     } catch (error) {
       if (!mounted) return;
       _markScheduleApiUnsupportedFromError(error);
@@ -727,6 +731,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       _showMessage(
         'Duplication terminée: créés $created, mis à jour $updated, '
         'conflits $skippedConflicts, non mappés $skippedUnmapped.',
+        isSuccess: true,
       );
       await _loadData();
     } catch (error) {
@@ -1197,6 +1202,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       if (!mounted) return;
       _showMessage(
         isEdit ? 'Horaire modifié avec succès.' : 'Horaire ajouté avec succès.',
+        isSuccess: true,
       );
       await _loadData();
     } catch (error) {
@@ -1264,7 +1270,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     try {
       await ref.read(dioProvider).delete('/teacher-schedule-slots/$slotId/');
       if (!mounted) return;
-      _showMessage('Horaire supprimé.');
+      _showMessage('Horaire supprimé.', isSuccess: true);
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -1279,11 +1285,22 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
-  void _showMessage(String message) {
+  void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
   }
 
   Future<void> _resetCustomApiUrlAndReload() async {

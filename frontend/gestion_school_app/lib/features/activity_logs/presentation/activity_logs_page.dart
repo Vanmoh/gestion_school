@@ -144,7 +144,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
         '${Directory.systemTemp.path}/activity_logs_${DateTime.now().millisecondsSinceEpoch}.xlsx',
       );
       await file.writeAsBytes(bytes, flush: true);
-      _showMessage('Export Excel enregistré: ${file.path}');
+      _showMessage('Export Excel enregistré: ${file.path}', isSuccess: true);
     });
   }
 
@@ -173,11 +173,22 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
     }
   }
 
-  void _showMessage(String message) {
+  void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
   }
 
   Map<String, dynamic>? _selectedLog() {

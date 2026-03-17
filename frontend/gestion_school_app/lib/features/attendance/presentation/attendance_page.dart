@@ -27,6 +27,24 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     super.dispose();
   }
 
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     final studentsAsync = ref.watch(attendanceStudentsProvider);
@@ -37,13 +55,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     ref.listen<AsyncValue<void>>(attendanceMutationProvider, (prev, next) {
       if (prev?.isLoading == true && !next.isLoading && mounted) {
         if (next.hasError) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Erreur enregistrement: ${next.error}')),
-          );
+          _showMessage('Erreur enregistrement: ${next.error}');
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Absence/retard enregistré')),
-          );
+          _showMessage('Absence/retard enregistré', isSuccess: true);
           _reasonController.clear();
           setState(() {
             _isAbsent = true;

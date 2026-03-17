@@ -63,9 +63,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
       });
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur chargement discipline: $error')),
-      );
+      _showMessage('Erreur chargement discipline: $error');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -77,9 +75,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
     final description = _descriptionController.text.trim();
 
     if (studentId == null || category.isEmpty || description.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Complétez les champs obligatoires.')),
-      );
+      _showMessage('Complétez les champs obligatoires.');
       return;
     }
 
@@ -107,18 +103,32 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
       _severity = 'medium';
       _status = 'open';
       _parentNotified = false;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Incident disciplinaire enregistré.')),
-      );
+      _showMessage('Incident disciplinaire enregistré.', isSuccess: true);
       await _loadData();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur enregistrement incident: $error')),
-      );
+      _showMessage('Erreur enregistrement incident: $error');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
   }
 
   @override

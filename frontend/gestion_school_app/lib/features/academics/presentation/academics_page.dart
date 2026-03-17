@@ -1018,9 +1018,12 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(
+          message,
+          style: isSuccess ? const TextStyle(color: Colors.white) : null,
+        ),
         behavior: SnackBarBehavior.floating,
-        backgroundColor: isSuccess ? Colors.green.shade700 : null,
+        backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
       ),
     );
   }

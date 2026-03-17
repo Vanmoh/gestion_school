@@ -166,12 +166,19 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
 
   void _showMessage(String text, {bool isSuccess = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(text),
-        backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
-      ),
-    );
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            text,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+          backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
+        ),
+      );
   }
 
   Map<String, dynamic>? _findTeacherProfileByUserId(int userId) {

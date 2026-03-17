@@ -69,11 +69,7 @@ class _TeacherAttendancePageState extends ConsumerState<TeacherAttendancePage> {
       });
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Erreur chargement absences enseignants: $error'),
-        ),
-      );
+      _showMessage('Erreur chargement absences enseignants: $error');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -81,9 +77,7 @@ class _TeacherAttendancePageState extends ConsumerState<TeacherAttendancePage> {
 
   Future<void> _create() async {
     if (_selectedTeacherId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sélectionnez un enseignant.')),
-      );
+      _showMessage('Sélectionnez un enseignant.');
       return;
     }
 
@@ -109,18 +103,32 @@ class _TeacherAttendancePageState extends ConsumerState<TeacherAttendancePage> {
         _isAbsent = true;
         _isLate = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Absence enseignant enregistrée.')),
-      );
+      _showMessage('Absence enseignant enregistrée.', isSuccess: true);
       await _loadData();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Erreur enregistrement: $error')));
+      _showMessage('Erreur enregistrement: $error');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
   }
 
   @override

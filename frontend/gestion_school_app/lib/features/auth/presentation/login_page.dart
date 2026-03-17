@@ -49,9 +49,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           }
         },
         error: (error, _) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(_friendlyErrorMessage(error))));
+          _showMessage(_friendlyErrorMessage(error));
         },
       );
     });
@@ -496,6 +494,24 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     });
   }
 
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
+  }
+
   Future<void> _testApiConnection() async {
     setState(() => _testingApiConnection = true);
     final dio = ref.read(dioProvider);
@@ -509,21 +525,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       final status = response.statusCode ?? 0;
       final reachable = status > 0;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              reachable
-                  ? 'API joignable ($_activeApiUrl) • code $status'
-                  : 'API non joignable ($_activeApiUrl)',
-            ),
-          ),
+        _showMessage(
+          reachable
+              ? 'API joignable ($_activeApiUrl) • code $status'
+              : 'API non joignable ($_activeApiUrl)',
+          isSuccess: reachable,
         );
       }
     } on DioException catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('API non joignable: $_activeApiUrl')),
-        );
+        _showMessage('API non joignable: $_activeApiUrl');
       }
     } finally {
       if (mounted) {
@@ -580,12 +591,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 final normalized = _normalizeApiBaseUrl(controller.text);
                 if (normalized == null) {
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'URL invalide. Exemple: http://IP_DU_PC:8000/api',
-                        ),
-                      ),
+                    _showMessage(
+                      'URL invalide. Exemple: http://IP_DU_PC:8000/api',
                     );
                   }
                   return;
@@ -596,8 +603,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
                 if (mounted) {
                   Navigator.of(context).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('URL API enregistrée: $normalized')),
+                  _showMessage(
+                    'URL API enregistrée: $normalized',
+                    isSuccess: true,
                   );
                 }
               },

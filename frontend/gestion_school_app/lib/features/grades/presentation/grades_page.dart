@@ -652,6 +652,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     if (touched > 0) {
       _showMessage(
         'Enregistrement terminé: $createdCount ajoutées, $updatedCount modifiées, $skippedCount ignorées.',
+        isSuccess: true,
       );
     } else {
       _showMessage('Aucune note enregistrée (champs vides).');
@@ -693,9 +694,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Classement recalculé.')));
+      _showMessage('Classement recalculé.', isSuccess: true);
       await _refreshValidationStatus();
     } catch (error) {
       if (!mounted) return;
@@ -791,7 +790,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       await Printing.sharePdf(bytes: bytes, filename: fileName);
 
       if (!mounted) return;
-      _showMessage('Export Excel (CSV) lancé: $fileName');
+      _showMessage('Export Excel (CSV) lancé: $fileName', isSuccess: true);
     } catch (error) {
       if (!mounted) return;
       _showMessage('Erreur export Excel (CSV): $error');
@@ -970,7 +969,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           .patch('/grades/$gradeId/', data: {'value': parsedValue});
 
       if (!mounted) return;
-      _showMessage('Note modifiée avec succès.');
+      _showMessage('Note modifiée avec succès.', isSuccess: true);
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -1024,7 +1023,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       await ref.read(dioProvider).delete('/grades/$gradeId/');
 
       if (!mounted) return;
-      _showMessage('Note supprimée avec succès.');
+      _showMessage('Note supprimée avec succès.', isSuccess: true);
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -1091,14 +1090,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            validate
-                ? 'Période validée par la direction.'
-                : 'Validation retirée. Période réouverte.',
-          ),
-        ),
+      _showMessage(
+        validate
+            ? 'Période validée par la direction.'
+            : 'Validation retirée. Période réouverte.',
+        isSuccess: true,
       );
       await _refreshValidationStatus();
     } catch (error) {
@@ -1117,11 +1113,23 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     await _loadData();
   }
 
-  void _showMessage(String message) {
+  void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
   }
 
   List<Map<String, dynamic>> _studentsForClassroom(int? classroomId) {
