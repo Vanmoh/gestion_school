@@ -180,10 +180,11 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
     def _slot_short_label(cls, slot):
         assignment = slot.assignment
         subject_code = assignment.subject.code if assignment and assignment.subject else "MAT"
-        teacher_code = assignment.teacher.employee_code if assignment and assignment.teacher else "ENS"
+        teacher = assignment.teacher if assignment else None
+        teacher_label = cls._teacher_name(teacher) or (teacher.employee_code if teacher else "ENS")
         room = (slot.room or "").strip()
         room_label = f" [{room}]" if room else ""
-        return f"{subject_code} ({teacher_code}){room_label}"
+        return f"{subject_code} ({teacher_label}){room_label}"
 
     @classmethod
     def _sorted_ranges(cls, matrix):
@@ -676,7 +677,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
             [
                 "Code enseignant",
                 "Nom",
-                "Créneaux",
+                "Horaires",
                 "Classes",
                 "Lundi",
                 "Mardi",
@@ -720,7 +721,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
             ws["A1"].font = Font(size=13, bold=True)
             ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
 
-            headers = ["Créneau", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
+            headers = ["Horaire", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
             ws.append(headers)
             for index, header in enumerate(headers, start=1):
                 cell = ws.cell(row=2, column=index)
@@ -737,7 +738,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
             ranges = self._sorted_ranges(matrix)
 
             if not ranges:
-                ws.append(["Aucun créneau planifié", "", "", "", "", "", ""])
+                ws.append(["Aucun horaire planifié", "", "", "", "", "", ""])
             else:
                 for range_label in ranges:
                     day_map = matrix[range_label]
@@ -792,7 +793,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         def draw_headers():
             pdf.set_font("Helvetica", "B", 9)
             for header, width in zip(
-                ["Créneau", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"],
+                ["Horaire", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"],
                 col_widths,
             ):
                 pdf.cell(width, 8, self._pdf_text(header), border=1, align="C")
@@ -827,7 +828,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
 
             if not ranges:
                 pdf.set_font("Helvetica", "", 10)
-                pdf.cell(0, 8, self._pdf_text("Aucun créneau planifié"), ln=1)
+                pdf.cell(0, 8, self._pdf_text("Aucun horaire planifié"), ln=1)
                 continue
 
             for range_label in ranges:
