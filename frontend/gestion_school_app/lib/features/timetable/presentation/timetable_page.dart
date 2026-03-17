@@ -784,7 +784,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
       final label =
           '${_hhmm(slot['start_time'])}-${_hhmm(slot['end_time'])} • '
-          '${otherAssignment['subjectCode']} (${otherAssignment['teacherCode']})';
+          '${otherAssignment['subjectCode']} '
+          '(${_teacherDisplayLabel(otherAssignment['teacherName'], otherAssignment['teacherCode'])})';
 
       final otherClassId = _asInt(otherAssignment['classroom']);
       if (otherClassId == selectedClassId) {
@@ -972,7 +973,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                             (row) => DropdownMenuItem<int>(
                               value: _asInt(row['id']),
                               child: Text(
-                                '${row['subjectCode']} - ${row['subjectName']} • ${row['teacherCode']}',
+                                '${row['subjectCode']} - ${row['subjectName']} • '
+                                '${_teacherDisplayLabel(row['teacherName'], row['teacherCode'])}',
                               ),
                             ),
                           )
@@ -1814,7 +1816,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     cells: [
                       DataCell(
                         Text(
-                          '${row.teacherCode} - ${row.teacherName}',
+                          _teacherDisplayLabel(
+                            row.teacherName,
+                            row.teacherCode,
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -2004,6 +2009,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
       final teacherCode = (teacher?['employee_code'] ?? 'ENS-${row['teacher']}')
           .toString();
+      final teacherName = _teacherNameFromTeacherRow(teacher);
       final classroomName = (classroom?['name'] ?? 'Classe $classId')
           .toString();
       final subjectCode = (subject?['code'] ?? 'MAT').toString();
@@ -2013,6 +2019,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       map[assignmentId] = {
         ...row,
         'teacherCode': teacherCode,
+        'teacherName': teacherName,
         'classroomName': classroomName,
         'subjectCode': subjectCode,
         'subjectName': subjectName,
@@ -2065,6 +2072,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         'subjectCode': assignment['subjectCode'],
         'subjectName': assignment['subjectName'],
         'teacherCode': assignment['teacherCode'],
+        'teacherName': assignment['teacherName'],
         'coefficient': assignment['coefficient'],
       };
 
@@ -2119,9 +2127,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             (b['subjectCode'] ?? '').toString(),
           );
           if (byCode != 0) return byCode;
-          return (a['teacherCode'] ?? '').toString().compareTo(
-            (b['teacherCode'] ?? '').toString(),
-          );
+          return _teacherDisplayLabel(
+            a['teacherName'],
+            a['teacherCode'],
+          ).compareTo(_teacherDisplayLabel(b['teacherName'], b['teacherCode']));
         });
       }
     }
@@ -2150,6 +2159,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       final haystack = [
         (slot['subjectCode'] ?? '').toString(),
         (slot['subjectName'] ?? '').toString(),
+        (slot['teacherName'] ?? '').toString(),
         (slot['teacherCode'] ?? '').toString(),
         (slot['room'] ?? '').toString(),
         _slotRange(slot),
@@ -2326,7 +2336,9 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             ],
           ),
           const SizedBox(height: 3),
-          Text('Ens: ${slot['teacherCode']}'),
+          Text(
+            'Ens: ${_teacherDisplayLabel(slot['teacherName'], slot['teacherCode'])}',
+          ),
           if ((slot['room'] ?? '').toString().trim().isNotEmpty)
             Text('Salle: ${slot['room']}'),
           const SizedBox(height: 6),
@@ -2416,7 +2428,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Ens: ${slots[i]['teacherCode']}',
+                    'Ens: ${_teacherDisplayLabel(slots[i]['teacherName'], slots[i]['teacherCode'])}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   if ((slots[i]['room'] ?? '').toString().trim().isNotEmpty)
@@ -2482,8 +2494,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
   String _slotShortLabel(Map<String, dynamic> slot) {
     final room = (slot['room'] ?? '').toString().trim();
-    final base =
-        '${slot['subjectCode'] ?? 'MAT'} (${slot['teacherCode'] ?? 'ENS'})';
+    final teacherLabel = _teacherDisplayLabel(
+      slot['teacherName'],
+      slot['teacherCode'],
+    );
+    final base = '${slot['subjectCode'] ?? 'MAT'} ($teacherLabel)';
     if (room.isEmpty) return base;
     return '$base [$room]';
   }
@@ -2546,6 +2561,47 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       }
     }
     return 'Classe $classId';
+  }
+
+  String _teacherNameFromTeacherRow(Map<String, dynamic>? teacher) {
+    if (teacher == null) {
+      return '';
+    }
+
+    final explicitFullName = (teacher['user_full_name'] ?? '')
+        .toString()
+        .trim();
+    if (explicitFullName.isNotEmpty) {
+      return explicitFullName;
+    }
+
+    final firstName = (teacher['user_first_name'] ?? '').toString().trim();
+    final lastName = (teacher['user_last_name'] ?? '').toString().trim();
+    final fullName = '$firstName $lastName'.trim();
+    if (fullName.isNotEmpty) {
+      return fullName;
+    }
+
+    final username = (teacher['user_username'] ?? '').toString().trim();
+    if (username.isNotEmpty) {
+      return username;
+    }
+
+    return '';
+  }
+
+  String _teacherDisplayLabel(dynamic teacherName, dynamic teacherCode) {
+    final name = (teacherName ?? '').toString().trim();
+    if (name.isNotEmpty) {
+      return name;
+    }
+
+    final code = (teacherCode ?? '').toString().trim();
+    if (code.isNotEmpty) {
+      return code;
+    }
+
+    return 'Enseignant';
   }
 
   String _csvCell(dynamic value) {
