@@ -278,7 +278,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     buffer.writeln('Classe;${_csvCell(className)}');
     buffer.writeln('Genere le;${_csvCell(_dateTimeLabel(DateTime.now()))}');
     buffer.writeln('');
-    buffer.writeln('Créneau;Lundi;Mardi;Mercredi;Jeudi;Vendredi;Samedi');
+    buffer.writeln('Horaire;Lundi;Mardi;Mercredi;Jeudi;Vendredi;Samedi');
 
     for (final range in ranges) {
       final dayMap =
@@ -1788,7 +1788,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 ),
                 columns: const [
                   DataColumn(label: Text('Enseignant')),
-                  DataColumn(label: Text('Créneaux')),
+                  DataColumn(label: Text('Horaires')),
                   DataColumn(label: Text('Classes')),
                   DataColumn(label: Text('Lundi')),
                   DataColumn(label: Text('Mardi')),
@@ -2199,7 +2199,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           Theme.of(context).colorScheme.surfaceContainer,
         ),
         columns: [
-          const DataColumn(label: Text('Créneau')),
+          const DataColumn(label: Text('Horaire')),
           ...visibleDays.map(
             (dayCode) => DataColumn(label: Text(_dayLabel(dayCode))),
           ),
