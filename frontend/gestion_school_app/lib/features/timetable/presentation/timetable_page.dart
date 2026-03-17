@@ -238,7 +238,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
       if (!scheduleApiSupported && mounted) {
         _showMessage(
-          'Votre backend ne supporte pas encore les créneaux horaires '
+          'Votre backend ne supporte pas encore les horaires '
           '(endpoint manquant). API active: $_activeApiBaseUrl',
         );
       }
@@ -264,7 +264,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final classSlots = slotsByClass[classroomId] ?? <Map<String, dynamic>>[];
 
     if (classSlots.isEmpty) {
-      _showMessage('Aucun créneau planifié pour cette classe.');
+      _showMessage('Aucun horaire planifié pour cette classe.');
       return;
     }
 
@@ -653,7 +653,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       onChanged: (value) =>
                           setDialogState(() => overwrite = value),
                       title: const Text(
-                        'Remplacer les créneaux existants cible',
+                        'Remplacer les horaires existants cible',
                       ),
                     ),
                     SwitchListTile.adaptive(
@@ -855,13 +855,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     Map<String, dynamic>? slot,
     int? forceClassroomId,
   }) async {
-    if (!_requireScheduleApiSupported('gestion des créneaux')) {
+    if (!_requireScheduleApiSupported('gestion des horaires')) {
       return;
     }
 
     final classroomId = forceClassroomId ?? _selectedClassroom;
     if (classroomId == null || classroomId <= 0) {
-      _showMessage('Sélectionnez une classe avant d\'ajouter un créneau.');
+      _showMessage('Sélectionnez une classe avant d\'ajouter un horaire.');
       return;
     }
 
@@ -953,7 +953,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
             return AlertDialog(
               title: Text(
-                isEdit ? 'Modifier un créneau' : 'Ajouter un créneau',
+                isEdit ? 'Modifier un horaire' : 'Ajouter un horaire',
               ),
               content: SizedBox(
                 width: 520,
@@ -1112,7 +1112,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
                           if (dialogConflicts.isNotEmpty) {
                             _showMessage(
-                              'Conflits détectés. Ajustez le créneau avant validation.',
+                              'Conflits détectés. Ajustez l\'horaire avant validation.',
                             );
                             return;
                           }
@@ -1165,7 +1165,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       excludeSlotId: isEdit ? _asInt(slot['slotId'] ?? slot['id']) : null,
     );
     if (liveConflicts.isNotEmpty) {
-      _showMessage('Conflits détectés. Ajustez le créneau avant validation.');
+      _showMessage('Conflits détectés. Ajustez l\'horaire avant validation.');
       startController.dispose();
       endController.dispose();
       roomController.dispose();
@@ -1196,14 +1196,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
       if (!mounted) return;
       _showMessage(
-        isEdit ? 'Créneau modifié avec succès.' : 'Créneau ajouté avec succès.',
+        isEdit ? 'Horaire modifié avec succès.' : 'Horaire ajouté avec succès.',
       );
       await _loadData();
     } catch (error) {
       if (!mounted) return;
       _markScheduleApiUnsupportedFromError(error);
       _showMessage(
-        'Erreur enregistrement créneau: ${_extractErrorMessage(error)}',
+        'Erreur enregistrement horaire: ${_extractErrorMessage(error)}',
       );
     } finally {
       if (mounted) {
@@ -1213,13 +1213,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _deleteSlot(Map<String, dynamic> slot) async {
-    if (!_requireScheduleApiSupported('suppression de créneau')) {
+    if (!_requireScheduleApiSupported('suppression d\'horaire')) {
       return;
     }
 
     final slotId = _asInt(slot['slotId'] ?? slot['id']);
     if (slotId <= 0) {
-      _showMessage('Créneau invalide.');
+      _showMessage('Horaire invalide.');
       return;
     }
 
@@ -1235,7 +1235,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Supprimer le créneau'),
+          title: const Text('Supprimer l\'horaire'),
           content: Text(
             'Supprimer ${slot['subjectCode'] ?? 'cours'} '
             '(${_dayLabel((slot['day_of_week'] ?? '').toString())} ${_slotRange(slot)}) ?',
@@ -1264,13 +1264,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     try {
       await ref.read(dioProvider).delete('/teacher-schedule-slots/$slotId/');
       if (!mounted) return;
-      _showMessage('Créneau supprimé.');
+      _showMessage('Horaire supprimé.');
       await _loadData();
     } catch (error) {
       if (!mounted) return;
       _markScheduleApiUnsupportedFromError(error);
       _showMessage(
-        'Erreur suppression créneau: ${_extractErrorMessage(error)}',
+        'Erreur suppression horaire: ${_extractErrorMessage(error)}',
       );
     } finally {
       if (mounted) {
@@ -1444,7 +1444,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 border: Border.all(color: Colors.orange.shade200),
               ),
               child: Text(
-                'Backend planning non compatible: les routes créneaux ne sont pas disponibles sur\n'
+                'Backend planning non compatible: les routes horaires ne sont pas disponibles sur\n'
                 '$_activeApiBaseUrl\n'
                 'Configurez une API mise à jour via Connexion > Configuration API.',
                 style: Theme.of(context).textTheme.bodySmall,
@@ -1512,7 +1512,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               runSpacing: 8,
               children: [
                 _metricChip('Statut planning', selectedPublicationLabel),
-                _metricChip('Créneaux', '${selectedSlots.length}'),
+                _metricChip('Horaires', '${selectedSlots.length}'),
               ],
             ),
           ],
@@ -1530,7 +1530,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     ? null
                     : () => _openSlotDialog(forceClassroomId: selectedClassId),
                 icon: const Icon(Icons.add_circle_outline),
-                label: const Text('Ajouter créneau'),
+                label: const Text('Ajouter horaire'),
               ),
               FilledButton.tonalIcon(
                 onPressed:
@@ -1697,7 +1697,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       'Affectations classe',
                       '${selectedAssignments.length}',
                     ),
-                    _metricChip('Créneaux classe', '${selectedSlots.length}'),
+                    _metricChip('Horaires classe', '${selectedSlots.length}'),
                     _metricChip('Statut', selectedPublicationLabel),
                   ],
                 ),
@@ -1706,14 +1706,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   const Padding(
                     padding: EdgeInsets.only(bottom: 8),
                     child: Text(
-                      'Planning verrouillé: les modifications de créneaux sont temporairement bloquées.',
+                      'Planning verrouillé: les modifications d\'horaires sont temporairement bloquées.',
                     ),
                   ),
                 if (selectedAssignments.isEmpty)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 10),
                     child: Text(
-                      'Aucune affectation pour cette classe. Créez des affectations puis des créneaux.',
+                      'Aucune affectation pour cette classe. Créez des affectations puis des horaires.',
                     ),
                   )
                 else ...[
@@ -1879,7 +1879,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     },
                     title: Text(className),
                     subtitle: Text(
-                      '$publicationLabel • ${classSlots.length} créneau(x) • ${classAssignments.length} affectation(s)',
+                      '$publicationLabel • ${classSlots.length} horaire(s) • ${classAssignments.length} affectation(s)',
                     ),
                     childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                     children: [
@@ -1894,7 +1894,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                               : () =>
                                     _openSlotDialog(forceClassroomId: classId),
                           icon: const Icon(Icons.add),
-                          label: const Text('Ajouter créneau'),
+                          label: const Text('Ajouter horaire'),
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -1968,7 +1968,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 _metricChip('Matieres', '${_subjects.length}'),
                 _metricChip('Classes', '${_classrooms.length}'),
                 _metricChip('Affectations', '${_assignments.length}'),
-                _metricChip('Créneaux', '${_scheduleSlots.length}'),
+                _metricChip('Horaires', '${_scheduleSlots.length}'),
                 _metricChip('Classes planifiées', '$classesWithSlots'),
                 _metricChip('Classes publiées', '$classesPublished'),
                 _metricChip('Classes verrouillées', '$classesLocked'),
@@ -2170,7 +2170,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     if (filteredSlots.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 10),
-        child: Text('Aucun créneau ne correspond au filtre sélectionné.'),
+        child: Text('Aucun horaire ne correspond au filtre sélectionné.'),
       );
     }
 
@@ -2259,7 +2259,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     if (daysWithContent.isEmpty) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 10),
-        child: Text('Aucun créneau planifié.'),
+        child: Text('Aucun horaire planifié.'),
       );
     }
 
@@ -2440,7 +2440,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   Row(
                     children: [
                       IconButton(
-                        tooltip: 'Modifier créneau',
+                        tooltip: 'Modifier horaire',
                         onPressed:
                             (_saving || !_scheduleApiSupported || classLocked)
                             ? null
@@ -2457,7 +2457,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                         padding: EdgeInsets.zero,
                       ),
                       IconButton(
-                        tooltip: 'Supprimer créneau',
+                        tooltip: 'Supprimer horaire',
                         onPressed:
                             (_saving || !_scheduleApiSupported || classLocked)
                             ? null
