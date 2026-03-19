@@ -1,8 +1,21 @@
+
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 from django.db import models
 from apps.common.models import TimeStampedModel
+
+
+# Nouveau modèle pour la gestion multi-établissements
+class Etablissement(TimeStampedModel):
+    name = models.CharField(max_length=255, unique=True)
+    address = models.CharField(max_length=255, blank=True)
+    phone = models.CharField(max_length=30, blank=True)
+    email = models.EmailField(blank=True)
+    logo = models.ImageField(upload_to="etablissements/logos/", blank=True, null=True)
+
+    def __str__(self):
+        return self.name
 
 
 class AcademicYear(TimeStampedModel):
@@ -29,11 +42,13 @@ class Section(TimeStampedModel):
         return self.name
 
 
+
 class ClassRoom(TimeStampedModel):
     name = models.CharField(max_length=50)
     level = models.ForeignKey(Level, on_delete=models.PROTECT, related_name="classes")
     section = models.ForeignKey(Section, on_delete=models.PROTECT, related_name="classes")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="classes")
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="classes", null=True, blank=True)
 
     class Meta:
         unique_together = ("name", "level", "section", "academic_year")
@@ -56,6 +71,7 @@ class Teacher(TimeStampedModel):
     employee_code = models.CharField(max_length=30, unique=True)
     hire_date = models.DateField()
     salary_base = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="teachers", null=True, blank=True)
 
     def __str__(self):
         return self.user.get_full_name() or self.user.username
@@ -120,12 +136,15 @@ class TimetablePublication(TimeStampedModel):
         return f"{self.classroom.name}: {state}{lock_state}"
 
 
+
 class ParentProfile(TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="parent_profile")
     profession = models.CharField(max_length=120, blank=True)
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="parents", null=True, blank=True)
 
     def __str__(self):
         return self.user.get_full_name() or self.user.username
+
 
 
 class Student(TimeStampedModel):
@@ -137,6 +156,7 @@ class Student(TimeStampedModel):
     photo = models.ImageField(upload_to="students/", null=True, blank=True)
     enrollment_date = models.DateField(auto_now_add=True)
     is_archived = models.BooleanField(default=False)
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="students", null=True, blank=True)
 
     def save(self, *args, **kwargs):
         if not self.matricule:
@@ -271,6 +291,7 @@ class Payment(TimeStampedModel):
     method = models.CharField(max_length=50)
     reference = models.CharField(max_length=100, blank=True)
     received_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="received_payments")
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="payments", null=True, blank=True)
 
 
 class Expense(TimeStampedModel):
@@ -325,6 +346,7 @@ class Book(TimeStampedModel):
     isbn = models.CharField(max_length=30, unique=True)
     quantity_total = models.PositiveIntegerField(default=0)
     quantity_available = models.PositiveIntegerField(default=0)
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="books", null=True, blank=True)
 
 
 class Borrow(TimeStampedModel):
@@ -338,6 +360,7 @@ class Borrow(TimeStampedModel):
 
 class CanteenMenu(TimeStampedModel):
     menu_date = models.DateField()
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="canteen_menus", null=True, blank=True)
     name = models.CharField(max_length=150)
     description = models.TextField(blank=True)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)

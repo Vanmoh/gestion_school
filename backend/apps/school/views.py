@@ -121,8 +121,21 @@ class SectionViewSet(BaseModelViewSet):
 
 
 class ClassRoomViewSet(BaseModelViewSet):
-    queryset = ClassRoom.objects.select_related("level", "section", "academic_year").all()
+    queryset = ClassRoom.objects.all()
     serializer_class = ClassRoomSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = ClassRoom.objects.select_related("level", "section", "academic_year")
+        if hasattr(user, "role") and user.role == "super_admin":
+            return qs.all()
+        return qs.filter(etablissement=user.etablissement)
+
+    def perform_create(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
+
+    def perform_update(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
 
 
 class SubjectViewSet(BaseModelViewSet):
@@ -131,8 +144,24 @@ class SubjectViewSet(BaseModelViewSet):
 
 
 class TeacherViewSet(BaseModelViewSet):
-    queryset = Teacher.objects.select_related("user").all()
+    queryset = Teacher.objects.all()
     serializer_class = TeacherSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Teacher.objects.select_related("user")
+        # Super admin voit tout, sinon filtrer par établissement
+        if hasattr(user, "role") and user.role == "super_admin":
+            return qs.all()
+        return qs.filter(etablissement=user.etablissement)
+
+    def perform_create(self, serializer):
+        # Lier automatiquement à l'établissement de l'utilisateur
+        serializer.save(etablissement=self.request.user.etablissement)
+
+    def perform_update(self, serializer):
+        # Empêcher le changement d'établissement par update
+        serializer.save(etablissement=self.request.user.etablissement)
 
 
 class TeacherAssignmentViewSet(BaseModelViewSet):
@@ -877,12 +906,25 @@ class TimetablePublicationViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ParentProfileViewSet(BaseModelViewSet):
-    queryset = ParentProfile.objects.select_related("user").all()
+    queryset = ParentProfile.objects.all()
     serializer_class = ParentProfileSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = ParentProfile.objects.select_related("user")
+        if hasattr(user, "role") and user.role == "super_admin":
+            return qs.all()
+        return qs.filter(etablissement=user.etablissement)
+
+    def perform_create(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
+
+    def perform_update(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
 
 
 class StudentViewSet(BaseModelViewSet):
-    queryset = Student.objects.select_related("user", "classroom", "parent", "parent__user").all()
+    queryset = Student.objects.all()
     serializer_class = StudentSerializer
     filterset_fields = ["classroom", "is_archived", "parent", "user"]
     search_fields = ["matricule", "user__first_name", "user__last_name", "user__username"]
@@ -890,14 +932,22 @@ class StudentViewSet(BaseModelViewSet):
     ordering = ["-created_at"]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        role = getattr(self.request.user, "role", "")
-
+        user = self.request.user
+        qs = Student.objects.select_related("user", "classroom", "parent", "parent__user")
+        role = getattr(user, "role", "")
         if role == UserRole.STUDENT:
-            return queryset.filter(user_id=self.request.user.id)
+            return qs.filter(user_id=user.id)
         if role == UserRole.PARENT:
-            return queryset.filter(parent__user_id=self.request.user.id)
-        return queryset
+            return qs.filter(parent__user_id=user.id)
+        if hasattr(user, "role") and user.role == "super_admin":
+            return qs.all()
+        return qs.filter(etablissement=user.etablissement)
+
+    def perform_create(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
+
+    def perform_update(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
 
 
 class StudentAcademicHistoryViewSet(BaseModelViewSet):
@@ -1274,23 +1324,27 @@ class StudentFeeViewSet(BaseModelViewSet):
 
 
 class PaymentViewSet(BaseModelViewSet):
-    queryset = Payment.objects.select_related("fee", "fee__student", "fee__student__user", "received_by").all().order_by("-created_at")
+    queryset = Payment.objects.all()
     serializer_class = PaymentSerializer
     filterset_fields = ["fee", "fee__student", "method", "received_by"]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        role = getattr(self.request.user, "role", "")
-
+        user = self.request.user
+        qs = Payment.objects.select_related("fee", "fee__student", "fee__student__user", "received_by").order_by("-created_at")
+        role = getattr(user, "role", "")
         if role == UserRole.STUDENT:
-            return queryset.filter(fee__student__user_id=self.request.user.id)
+            return qs.filter(fee__student__user_id=user.id)
         if role == UserRole.PARENT:
-            return queryset.filter(fee__student__parent__user_id=self.request.user.id)
-        return queryset
+            return qs.filter(fee__student__parent__user_id=user.id)
+        if hasattr(user, "role") and user.role == "super_admin":
+            return qs.all()
+        return qs.filter(etablissement=user.etablissement)
 
     def perform_create(self, serializer):
-        # The cashier shown on the receipt must be the user who records the payment.
-        serializer.save(received_by=self.request.user)
+        serializer.save(etablissement=self.request.user.etablissement, received_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
 
 
 class ExpenseViewSet(BaseModelViewSet):
@@ -1322,6 +1376,19 @@ class BookViewSet(BaseModelViewSet):
     queryset = Book.objects.all()
     serializer_class = BookSerializer
 
+    def get_queryset(self):
+        user = self.request.user
+        qs = Book.objects.all()
+        if hasattr(user, "role") and user.role == "super_admin":
+            return qs.all()
+        return qs.filter(etablissement=user.etablissement)
+
+    def perform_create(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
+
+    def perform_update(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
+
 
 class BorrowViewSet(BaseModelViewSet):
     queryset = Borrow.objects.select_related("student", "book").all()
@@ -1329,9 +1396,22 @@ class BorrowViewSet(BaseModelViewSet):
 
 
 class CanteenMenuViewSet(BaseModelViewSet):
-    queryset = CanteenMenu.objects.all().order_by("-menu_date", "-id")
+    queryset = CanteenMenu.objects.all()
     serializer_class = CanteenMenuSerializer
     filterset_fields = ["menu_date", "is_active"]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = CanteenMenu.objects.all().order_by("-menu_date", "-id")
+        if hasattr(user, "role") and user.role == "super_admin":
+            return qs.all()
+        return qs.filter(etablissement=user.etablissement)
+
+    def perform_create(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
+
+    def perform_update(self, serializer):
+        serializer.save(etablissement=self.request.user.etablissement)
 
 
 class CanteenSubscriptionViewSet(BaseModelViewSet):

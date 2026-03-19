@@ -4,10 +4,6 @@ from pathlib import Path
 from django.conf import settings
 from django.http import HttpResponse
 from django.utils import timezone
-from fpdf import FPDF
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 
@@ -64,6 +60,9 @@ class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="export-excel")
     def export_excel(self, request):
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.utils import get_column_letter
         queryset = self.filter_queryset(self.get_queryset())[:5000]
 
         workbook = Workbook()
@@ -236,6 +235,7 @@ class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="export-pdf")
     def export_pdf(self, request):
+        from fpdf import FPDF
         queryset = self.filter_queryset(self.get_queryset())[:1000]
 
         school_name = getattr(settings, "SCHOOL_NAME", "LYCEE TECHNIQUE OUMAR BAH")

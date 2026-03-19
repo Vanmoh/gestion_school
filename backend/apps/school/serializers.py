@@ -60,6 +60,8 @@ class SectionSerializer(serializers.ModelSerializer):
 
 
 class ClassRoomSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = ClassRoom
         fields = "__all__"
@@ -71,11 +73,13 @@ class SubjectSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+
 class TeacherSerializer(serializers.ModelSerializer):
     user_full_name = serializers.SerializerMethodField(read_only=True)
     user_first_name = serializers.SerializerMethodField(read_only=True)
     user_last_name = serializers.SerializerMethodField(read_only=True)
     user_username = serializers.SerializerMethodField(read_only=True)
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
 
     def get_user_full_name(self, obj):
         if not obj.user:
@@ -251,12 +255,15 @@ class TimetablePublicationSerializer(serializers.ModelSerializer):
 
 
 class ParentProfileSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = ParentProfile
         fields = "__all__"
 
 
 class StudentSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
     user_full_name = serializers.SerializerMethodField(read_only=True)
     user_username = serializers.SerializerMethodField(read_only=True)
     user_first_name = serializers.SerializerMethodField(read_only=True)
@@ -583,6 +590,7 @@ class SmsProviderConfigSerializer(serializers.ModelSerializer):
 
 
 class BookSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
     class Meta:
         model = Book
         fields = "__all__"
@@ -595,6 +603,7 @@ class BorrowSerializer(serializers.ModelSerializer):
 
 
 class CanteenMenuSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
     class Meta:
         model = CanteenMenu
         fields = "__all__"

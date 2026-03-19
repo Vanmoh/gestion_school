@@ -11,7 +11,7 @@ def _csv_setting(name: str, default: str = "") -> list[str]:
     return [value.strip() for value in config(name, default=default).split(",") if value.strip()]
 
 SECRET_KEY = config("SECRET_KEY", default="change-me-in-production")
-DEBUG = config("DEBUG", cast=bool, default=False)
+DEBUG = True  # Forcé temporairement pour migration locale
 ALLOWED_HOSTS = _csv_setting("ALLOWED_HOSTS", default="*")
 
 DATABASE_URL = config("DATABASE_URL", default="").strip()
