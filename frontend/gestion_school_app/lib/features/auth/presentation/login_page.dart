@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dio/dio.dart';
+import 'package:provider/provider.dart';
 import '../../../core/constants/branding.dart';
 import '../../../core/constants/api_constants.dart';
+import '../../../core/constants/etablissement_api.dart';
 import '../../../core/network/api_client.dart';
+import '../../../models/etablissement.dart';
+import '../../../screens/etablissement_selection_screen.dart';
 import 'auth_controller.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -41,11 +45,45 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     final authState = ref.watch(authControllerProvider);
     final scheme = Theme.of(context).colorScheme;
 
-    ref.listen(authControllerProvider, (previous, next) {
+    ref.listen(authControllerProvider, (previous, next) async {
       next.whenOrNull(
-        data: (user) {
+        data: (user) async {
           if (user != null && mounted) {
-            Navigator.of(context).pushReplacementNamed(user.homeRoute);
+            // Récupérer les établissements de l'utilisateur
+            final dio = ref.read(dioProvider);
+            try {
+              final response = await dio.get(EtablissementApi.etablissements);
+              final List<dynamic> data = response.data as List<dynamic>;
+              final etablissements = data.map((e) => Etablissement.fromJson(e as Map<String, dynamic>)).toList();
+              final etabProvider = context.read<EtablissementProvider>();
+              etabProvider.setEtablissements(etablissements);
+              if (etablissements.length == 1) {
+                etabProvider.selectEtablissement(etablissements.first);
+                Navigator.of(context).pushReplacementNamed(user.homeRoute);
+              } else if (etablissements.length > 1) {
+                await showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (ctx) => Dialog(
+                    child: SizedBox(
+                      height: 420,
+                      width: 340,
+                      child: EtablissementSelectionScreen(
+                        onSelected: (etab) {
+                          etabProvider.selectEtablissement(etab);
+                          Navigator.of(ctx).pop();
+                          Navigator.of(context).pushReplacementNamed(user.homeRoute);
+                        },
+                      ),
+                    ),
+                  ),
+                );
+              } else {
+                _showMessage('Aucun établissement associé à ce compte.');
+              }
+            } catch (e) {
+              _showMessage('Erreur lors de la récupération des établissements.');
+            }
           }
         },
         error: (error, _) {

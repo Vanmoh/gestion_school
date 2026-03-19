@@ -1,3 +1,5 @@
+import 'models/etablissement.dart';
+import 'screens/etablissement_selection_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/constants/branding.dart';
@@ -192,11 +194,34 @@ class _RoleShell extends ConsumerWidget {
     final screenWidth = MediaQuery.sizeOf(context).width;
     final watermarkSize = (screenWidth * 0.095).clamp(34.0, 92.0).toDouble();
 
+    final etabProvider = ref.watch(etablissementProvider);
+    final etabName = etabProvider.selected?.name;
     return DefaultTabController(
       length: tabs.length,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(title),
+          title: Row(
+            children: [
+              Text(title),
+              if (etabName != null) ...[
+                const SizedBox(width: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: scheme.primary.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.school, size: 18),
+                      const SizedBox(width: 4),
+                      Text(etabName, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
           actions: [
             IconButton(
               onPressed: () {
@@ -871,22 +896,24 @@ class _AccountantShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return const _RoleShell(
-      title: '${SchoolBranding.appName} - Comptabilité',
-      tabs: [
-        Tab(text: 'Dashboard'),
-        Tab(text: 'Absences'),
-        Tab(text: 'Examens'),
-        Tab(text: 'Paiements'),
-        Tab(text: 'Rapports'),
-      ],
-      views: [
-        DashboardPage(),
-        AttendancePage(),
-        ExamsPage(),
-        PaymentsPage(),
-        ReportsPage(),
-      ],
+    return RequireEtablissementSelection(
+      child: const _RoleShell(
+        title: '${SchoolBranding.appName} - Comptabilité',
+        tabs: [
+          Tab(text: 'Dashboard'),
+          Tab(text: 'Absences'),
+          Tab(text: 'Examens'),
+          Tab(text: 'Paiements'),
+          Tab(text: 'Rapports'),
+        ],
+        views: [
+          DashboardPage(),
+          AttendancePage(),
+          ExamsPage(),
+          PaymentsPage(),
+          ReportsPage(),
+        ],
+      ),
     );
   }
 }
@@ -896,22 +923,24 @@ class _TeacherShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return const _RoleShell(
-      title: '${SchoolBranding.appName} - Enseignant',
-      tabs: [
-        Tab(text: 'Dashboard'),
-        Tab(text: 'Élèves'),
-        Tab(text: 'Absences'),
-        Tab(text: 'Examens'),
-        Tab(text: 'Rapports'),
-      ],
-      views: [
-        DashboardPage(),
-        StudentsPage(),
-        AttendancePage(),
-        ExamsPage(),
-        ReportsPage(),
-      ],
+    return RequireEtablissementSelection(
+      child: const _RoleShell(
+        title: '${SchoolBranding.appName} - Enseignant',
+        tabs: [
+          Tab(text: 'Dashboard'),
+          Tab(text: 'Élèves'),
+          Tab(text: 'Absences'),
+          Tab(text: 'Examens'),
+          Tab(text: 'Rapports'),
+        ],
+        views: [
+          DashboardPage(),
+          StudentsPage(),
+          AttendancePage(),
+          ExamsPage(),
+          ReportsPage(),
+        ],
+      ),
     );
   }
 }
@@ -921,14 +950,16 @@ class _SupervisorShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return const _RoleShell(
-      title: '${SchoolBranding.appName} - Surveillant',
-      tabs: [
-        Tab(text: 'Dashboard'),
-        Tab(text: 'Élèves'),
-        Tab(text: 'Absences'),
-      ],
-      views: [DashboardPage(), StudentsPage(), AttendancePage()],
+    return RequireEtablissementSelection(
+      child: const _RoleShell(
+        title: '${SchoolBranding.appName} - Surveillant',
+        tabs: [
+          Tab(text: 'Dashboard'),
+          Tab(text: 'Élèves'),
+          Tab(text: 'Absences'),
+        ],
+        views: [DashboardPage(), StudentsPage(), AttendancePage()],
+      ),
     );
   }
 }
@@ -940,10 +971,12 @@ class _ParentStudentShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return _RoleShell(
-      title: '${SchoolBranding.appName} - $roleLabel',
-      tabs: const [Tab(text: 'Rapports')],
-      views: const [ReportsPage()],
+    return RequireEtablissementSelection(
+      child: _RoleShell(
+        title: '${SchoolBranding.appName} - $roleLabel',
+        tabs: const [Tab(text: 'Rapports')],
+        views: const [ReportsPage()],
+      ),
     );
   }
 }
