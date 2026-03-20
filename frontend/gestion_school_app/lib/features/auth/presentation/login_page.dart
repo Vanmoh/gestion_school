@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dio/dio.dart';
-import 'package:provider/provider.dart';
 import '../../../core/constants/branding.dart';
 import '../../../core/constants/api_constants.dart';
 import '../../../core/constants/etablissement_api.dart';
@@ -55,7 +54,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               final response = await dio.get(EtablissementApi.etablissements);
               final List<dynamic> data = response.data as List<dynamic>;
               final etablissements = data.map((e) => Etablissement.fromJson(e as Map<String, dynamic>)).toList();
-              final etabProvider = context.read<EtablissementProvider>();
+              final etabProvider = ref.read(etablissementProvider);
               etabProvider.setEtablissements(etablissements);
               if (etablissements.length == 1) {
                 etabProvider.selectEtablissement(etablissements.first);

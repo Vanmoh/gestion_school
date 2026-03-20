@@ -1,6 +1,7 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-final etablissementProvider = ChangeNotifierProvider<EtablissementProvider>((ref) => EtablissementProvider());
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+final etablissementProvider = ChangeNotifierProvider<EtablissementProvider>((ref) => EtablissementProvider());
 
 class Etablissement {
   final int id;

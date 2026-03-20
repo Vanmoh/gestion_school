@@ -18,25 +18,14 @@ class EtablissementDetailsScreen extends StatelessWidget {
           children: [
             Text(etablissement.name, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
-            if (etablissement.description != null)
-              Text(etablissement.description!, style: const TextStyle(fontSize: 16)),
-            if (etablissement.address != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Row(
-                  children: [
-                    const Icon(Icons.location_on, size: 18, color: Colors.blueGrey),
-                    const SizedBox(width: 6),
-                    Text(etablissement.address!, style: const TextStyle(fontSize: 15, color: Colors.black54)),
-                  ],
-                ),
-              ),
-            if (etablissement.imageUrl != null)
+            if (etablissement.address != null && etablissement.address!.isNotEmpty)
+              Text(etablissement.address!, style: const TextStyle(fontSize: 16, color: Colors.black54)),
+            if (etablissement.logoUrl != null && etablissement.logoUrl!.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 16.0),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
-                  child: Image.network(etablissement.imageUrl!, height: 180, fit: BoxFit.cover),
+                  child: Image.network(etablissement.logoUrl!, height: 180, fit: BoxFit.cover),
                 ),
               ),
             // Ajoutez ici d'autres champs si besoin
