@@ -155,8 +155,10 @@ class GestionSchoolApp extends ConsumerWidget {
       scrollBehavior: const _AppScrollBehavior(),
       routes: {
         '/': (_) => const LoginPage(),
-        '/dashboard': (_) => const _AdminShell(),
-        '/home/admin': (_) => const _AdminShell(),
+        '/dashboard': (_) =>
+          const RequireEtablissementSelection(child: _AdminShell()),
+        '/home/admin': (_) =>
+          const RequireEtablissementSelection(child: _AdminShell()),
         '/home/accountant': (_) => const _AccountantShell(),
         '/home/teacher': (_) => const _TeacherShell(),
         '/home/supervisor': (_) => const _SupervisorShell(),
