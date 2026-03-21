@@ -17,15 +17,24 @@ class EtablissementSelector extends ConsumerWidget {
       return const Center(child: Text('Aucun établissement disponible.'));
     }
 
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: GridView.builder(
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          mainAxisSpacing: 16,
-          crossAxisSpacing: 16,
-          childAspectRatio: 1.6,
-        ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final crossAxisCount = width >= 720
+            ? 3
+            : width >= 480
+            ? 2
+            : 1;
+
+        return Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: GridView.builder(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              mainAxisSpacing: 16,
+              crossAxisSpacing: 16,
+              childAspectRatio: width < 480 ? 1.35 : 1.55,
+            ),
         itemCount: etablissements.length,
         itemBuilder: (context, index) {
           final etab = etablissements[index];
@@ -55,36 +64,40 @@ class EtablissementSelector extends ConsumerWidget {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      ElevatedButton.icon(
-                        icon: const Icon(Icons.person),
-                        label: const Text('Accéder'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).primaryColor,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size(90, 36),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.person),
+                          label: const Text('Accéder'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(context).primaryColor,
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size(0, 36),
+                          ),
+                          onPressed: () {
+                            ref.read(etablissementProvider).selectEtablissement(etab);
+                            onSelected(etab);
+                          },
                         ),
-                        onPressed: () {
-                          ref.read(etablissementProvider).selectEtablissement(etab);
-                          onSelected(etab);
-                        },
                       ),
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.add),
-                        label: const Text('Voir Détails'),
-                        style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(90, 36),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.info_outline),
+                          label: const Text('Détails'),
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size(0, 36),
+                          ),
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => EtablissementDetailsScreen(etablissement: etab),
+                              ),
+                            );
+                          },
                         ),
-                        onPressed: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => EtablissementDetailsScreen(etablissement: etab),
-                            ),
-                          );
-                        },
                       ),
                     ],
                   ),
@@ -93,7 +106,9 @@ class EtablissementSelector extends ConsumerWidget {
             ),
           );
         },
-      ),
+          ),
+        );
+      },
     );
   }
 }
