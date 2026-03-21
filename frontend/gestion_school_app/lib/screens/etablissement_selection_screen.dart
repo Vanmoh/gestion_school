@@ -17,7 +17,6 @@ class RequireEtablissementSelection extends ConsumerStatefulWidget {
 
 class _RequireEtablissementSelectionState
     extends ConsumerState<RequireEtablissementSelection> {
-  bool _dialogOpen = false;
   bool _loadingEtablissements = false;
   bool _didTryLoad = false;
 
@@ -35,8 +34,15 @@ class _RequireEtablissementSelectionState
       return;
     }
 
-    _didTryLoad = true;
-    _loadingEtablissements = true;
+    if (mounted) {
+      setState(() {
+        _didTryLoad = true;
+        _loadingEtablissements = true;
+      });
+    } else {
+      _didTryLoad = true;
+      _loadingEtablissements = true;
+    }
     try {
       final response = await ref.read(dioProvider).get(EtablissementApi.etablissements);
       final data = (response.data as List<dynamic>)
@@ -46,7 +52,13 @@ class _RequireEtablissementSelectionState
     } catch (_) {
       // Keep navigation usable even if API is temporarily unavailable.
     } finally {
-      _loadingEtablissements = false;
+      if (mounted) {
+        setState(() {
+          _loadingEtablissements = false;
+        });
+      } else {
+        _loadingEtablissements = false;
+      }
     }
   }
 
@@ -62,40 +74,39 @@ class _RequireEtablissementSelectionState
     }
 
     final etabProvider = ref.read(etablissementProvider);
-    if (_dialogOpen) {
-      return;
-    }
-
-    if (etabProvider.selected == null && etabProvider.etablissements.isNotEmpty) {
-      _dialogOpen = true;
-      await showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => Dialog.fullscreen(
-          child: EtablissementSelectionScreen(
-            onSelected: (etab) {
-              etabProvider.selectEtablissement(etab);
-              Navigator.of(ctx).pop();
-            },
-          ),
-        ),
-      );
-      _dialogOpen = false;
-
-      if (mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _checkEtab();
-        });
-      }
+    if (etabProvider.selected == null &&
+        etabProvider.etablissements.isEmpty &&
+        !_loadingEtablissements &&
+        !_didTryLoad) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _checkEtab();
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    ref.watch(etablissementProvider);
+    final etabProvider = ref.watch(etablissementProvider);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkEtab();
     });
+
+    if (etabProvider.selected == null) {
+      if (_loadingEtablissements && etabProvider.etablissements.isEmpty) {
+        return const Scaffold(
+          body: Center(child: CircularProgressIndicator()),
+        );
+      }
+
+      if (etabProvider.etablissements.isNotEmpty) {
+        return EtablissementSelectionScreen(
+          onSelected: (etab) {
+            ref.read(etablissementProvider).selectEtablissement(etab);
+          },
+        );
+      }
+    }
+
     return widget.child;
   }
 }
