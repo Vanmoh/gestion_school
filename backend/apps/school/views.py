@@ -27,6 +27,7 @@ from .models import (
     CanteenSubscription,
     ClassRoom,
     DisciplineIncident,
+    Etablissement,
     ExamPlanning,
     ExamInvigilation,
     ExamResult,
@@ -66,6 +67,7 @@ from .serializers import (
     CanteenSubscriptionSerializer,
     ClassRoomSerializer,
     DisciplineIncidentSerializer,
+    EtablissementSerializer,
     ExamPlanningSerializer,
     ExamInvigilationSerializer,
     ExamResultSerializer,
@@ -108,6 +110,12 @@ class GradePagination(PageNumberPagination):
 class AcademicYearViewSet(BaseModelViewSet):
     queryset = AcademicYear.objects.all().order_by("-id")
     serializer_class = AcademicYearSerializer
+
+
+class EtablissementViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Etablissement.objects.all().order_by('name')
+    serializer_class = EtablissementSerializer
+    permission_classes = [permissions.AllowAny]
 
 
 class LevelViewSet(BaseModelViewSet):

@@ -1,10 +1,72 @@
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/constants/etablissement_api.dart';
 import '../core/network/api_client.dart';
 import '../models/etablissement.dart';
 import '../widgets/etablissement_selector.dart';
+
+class PublicEtablissementEntryPage extends ConsumerStatefulWidget {
+  const PublicEtablissementEntryPage({super.key});
+
+  @override
+  ConsumerState<PublicEtablissementEntryPage> createState() =>
+      _PublicEtablissementEntryPageState();
+}
+
+class _PublicEtablissementEntryPageState
+    extends ConsumerState<PublicEtablissementEntryPage> {
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _bootstrap();
+    });
+  }
+
+  Future<void> _bootstrap() async {
+    final provider = ref.read(etablissementProvider);
+    await provider.hydrate();
+
+    try {
+      final response = await ref.read(dioProvider).get(EtablissementApi.etablissements);
+      final etablissements = (response.data as List<dynamic>)
+          .map((row) => Etablissement.fromJson(row as Map<String, dynamic>))
+          .toList();
+      provider.setEtablissements(etablissements);
+    } catch (_) {
+      // Keep the screen usable; an empty state will be shown if the API is down.
+    }
+
+    if (!mounted) {
+      return;
+    }
+    setState(() => _loading = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = ref.watch(etablissementProvider);
+
+    if (_loading && provider.etablissements.isEmpty) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    return EtablissementSelectionScreen(
+      onSelected: (etab) async {
+        await ref.read(etablissementProvider).selectEtablissement(etab);
+        if (!context.mounted) {
+          return;
+        }
+        Navigator.of(context).pushReplacementNamed('/login');
+      },
+    );
+  }
+}
 
 class RequireEtablissementSelection extends ConsumerStatefulWidget {
   final Widget child;
@@ -67,6 +129,7 @@ class _RequireEtablissementSelectionState
       return;
     }
 
+    await ref.read(etablissementProvider).hydrate();
     await _loadEtablissementsIfNeeded();
 
     if (!mounted) {
@@ -91,6 +154,10 @@ class _RequireEtablissementSelectionState
       _checkEtab();
     });
 
+    if (!etabProvider.hydrated) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     if (etabProvider.selected == null) {
       if (_loadingEtablissements && etabProvider.etablissements.isEmpty) {
         return const Scaffold(
@@ -100,8 +167,8 @@ class _RequireEtablissementSelectionState
 
       if (etabProvider.etablissements.isNotEmpty) {
         return EtablissementSelectionScreen(
-          onSelected: (etab) {
-            ref.read(etablissementProvider).selectEtablissement(etab);
+          onSelected: (etab) async {
+            await ref.read(etablissementProvider).selectEtablissement(etab);
           },
         );
       }
@@ -112,7 +179,7 @@ class _RequireEtablissementSelectionState
 }
 
 class EtablissementSelectionScreen extends ConsumerWidget {
-  final void Function(Etablissement) onSelected;
+  final FutureOr<void> Function(Etablissement) onSelected;
 
   const EtablissementSelectionScreen({Key? key, required this.onSelected}) : super(key: key);
 

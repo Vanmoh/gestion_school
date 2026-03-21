@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/etablissement.dart';
@@ -5,7 +7,7 @@ import '../models/etablissement.dart';
 import '../screens/etablissement_details_screen.dart';
 
 class EtablissementSelector extends ConsumerWidget {
-  final void Function(Etablissement) onSelected;
+  final FutureOr<void> Function(Etablissement) onSelected;
 
   const EtablissementSelector({Key? key, required this.onSelected}) : super(key: key);
 

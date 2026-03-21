@@ -1,3 +1,3 @@
 class EtablissementApi {
-  static const String etablissements = '/auth/users/etablissements/';
+  static const String etablissements = '/etablissements/';
 }

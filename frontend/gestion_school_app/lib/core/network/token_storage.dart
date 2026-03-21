@@ -6,6 +6,7 @@ class TokenStorage {
   static const _refreshKey = 'refresh_token';
   static const _userKey = 'cached_user';
   static const _apiBaseUrlKey = 'api_base_url';
+  static const _selectedEtablissementKey = 'selected_etablissement';
 
   Future<void> saveTokens({
     required String access,
@@ -19,6 +20,8 @@ class TokenStorage {
   Future<String?> refreshToken() => _storage.read(key: _refreshKey);
   Future<String?> cachedUser() => _storage.read(key: _userKey);
   Future<String?> apiBaseUrl() => _storage.read(key: _apiBaseUrlKey);
+  Future<String?> selectedEtablissement() =>
+      _storage.read(key: _selectedEtablissementKey);
 
   Future<void> saveCachedUser(String userJson) async {
     await _storage.write(key: _userKey, value: userJson);
@@ -28,8 +31,16 @@ class TokenStorage {
     await _storage.write(key: _apiBaseUrlKey, value: url);
   }
 
+  Future<void> saveSelectedEtablissement(String value) async {
+    await _storage.write(key: _selectedEtablissementKey, value: value);
+  }
+
   Future<void> clearApiBaseUrl() async {
     await _storage.delete(key: _apiBaseUrlKey);
+  }
+
+  Future<void> clearSelectedEtablissement() async {
+    await _storage.delete(key: _selectedEtablissementKey);
   }
 
   Future<void> clear() async {

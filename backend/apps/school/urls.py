@@ -12,6 +12,7 @@ from .views import (
     ClassRoomViewSet,
     DashboardViewSet,
     DisciplineIncidentViewSet,
+    EtablissementViewSet,
     ExamPlanningViewSet,
     ExamInvigilationViewSet,
     ExamResultViewSet,
@@ -40,6 +41,7 @@ from .views import (
 )
 
 router = DefaultRouter()
+router.register(r"etablissements", EtablissementViewSet, basename="etablissements")
 router.register(r"dashboard", DashboardViewSet, basename="dashboard")
 router.register(r"academic-years", AcademicYearViewSet)
 router.register(r"levels", LevelViewSet)

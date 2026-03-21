@@ -154,7 +154,8 @@ class GestionSchoolApp extends ConsumerWidget {
       themeMode: themeMode,
       scrollBehavior: const _AppScrollBehavior(),
       routes: {
-        '/': (_) => const LoginPage(),
+        '/': (_) => const PublicEtablissementEntryPage(),
+        '/login': (_) => const LoginPage(),
         '/dashboard': (_) =>
           const RequireEtablissementSelection(child: _AdminShell()),
         '/home/admin': (_) =>
@@ -244,7 +245,7 @@ class _RoleShell extends ConsumerWidget {
                 }
                 Navigator.of(
                   context,
-                ).pushNamedAndRemoveUntil('/', (route) => false);
+                ).pushNamedAndRemoveUntil('/login', (route) => false);
               },
               icon: const Icon(Icons.logout),
             ),
@@ -616,7 +617,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                 }
                 Navigator.of(
                   context,
-                ).pushNamedAndRemoveUntil('/', (route) => false);
+                ).pushNamedAndRemoveUntil('/login', (route) => false);
               },
               icon: const Icon(Icons.logout),
             ),
@@ -804,7 +805,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                                   return;
                                 }
                                 Navigator.of(context).pushNamedAndRemoveUntil(
-                                  '/',
+                                  '/login',
                                   (route) => false,
                                 );
                               },

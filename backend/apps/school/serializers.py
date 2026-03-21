@@ -12,6 +12,7 @@ from .models import (
     CanteenSubscription,
     ClassRoom,
     DisciplineIncident,
+    Etablissement,
     ExamPlanning,
     ExamInvigilation,
     ExamResult,
@@ -45,6 +46,22 @@ class AcademicYearSerializer(serializers.ModelSerializer):
     class Meta:
         model = AcademicYear
         fields = "__all__"
+
+
+class EtablissementSerializer(serializers.ModelSerializer):
+    logo = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Etablissement
+        fields = ['id', 'name', 'address', 'phone', 'email', 'logo']
+
+    def get_logo(self, obj):
+        request = self.context.get('request')
+        if not obj.logo:
+            return None
+        if request is None:
+            return obj.logo.url
+        return request.build_absolute_uri(obj.logo.url)
 
 
 class LevelSerializer(serializers.ModelSerializer):
