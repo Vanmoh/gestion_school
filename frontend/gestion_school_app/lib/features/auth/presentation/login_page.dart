@@ -48,7 +48,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       next.whenOrNull(
         data: (user) async {
           if (user != null && mounted) {
-            // Récupérer les établissements de l'utilisateur
+            // Récupérer les établissements de l'utilisateur sans bloquer l'accès.
             final dio = ref.read(dioProvider);
             try {
               final response = await dio.get(EtablissementApi.etablissements);
@@ -78,10 +78,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   ),
                 );
               } else {
+                Navigator.of(context).pushReplacementNamed(user.homeRoute);
                 _showMessage('Aucun établissement associé à ce compte.');
               }
             } catch (e) {
-              _showMessage('Erreur lors de la récupération des établissements.');
+              Navigator.of(context).pushReplacementNamed(user.homeRoute);
+              _showMessage(
+                'Connexion réussie, mais récupération des établissements indisponible pour le moment.',
+              );
             }
           }
         },
