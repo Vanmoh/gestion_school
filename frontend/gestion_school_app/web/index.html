@@ -33,6 +33,26 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <script>
+    // Clear stale Flutter service workers/caches from older deployments.
+    (function () {
+      if (!('serviceWorker' in navigator)) {
+        return;
+      }
+      navigator.serviceWorker.getRegistrations().then(function (registrations) {
+        for (const registration of registrations) {
+          registration.unregister();
+        }
+      });
+      if ('caches' in window) {
+        caches.keys().then(function (keys) {
+          for (const key of keys) {
+            caches.delete(key);
+          }
+        });
+      }
+    })();
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
