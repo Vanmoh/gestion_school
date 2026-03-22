@@ -21,13 +21,37 @@ class EtablissementSelector extends ConsumerWidget {
     return 'Établissement scolaire';
   }
 
+  List<Etablissement> _fallbackEtablissements() {
+    return [
+      Etablissement(
+        id: -101,
+        name: 'CTOB',
+        address: 'Collège Technique OBK',
+      ),
+      Etablissement(
+        id: -102,
+        name: 'LOBK',
+        address: 'Lycée OBK',
+      ),
+      Etablissement(
+        id: -103,
+        name: 'IFP-OBK',
+        address: 'Institut de Formation Professionnelle',
+      ),
+      Etablissement(
+        id: -104,
+        name: 'Complexe Scolaire',
+        address: 'École Maternelle & Primaire',
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final etablissements = ref.watch(etablissementProvider).etablissements;
-
-    if (etablissements.isEmpty) {
-      return const Center(child: Text('Aucun établissement disponible.'));
-    }
+    final displayEtablissements = etablissements.isNotEmpty
+        ? etablissements
+        : _fallbackEtablissements();
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -47,9 +71,9 @@ class EtablissementSelector extends ConsumerWidget {
               crossAxisSpacing: 18,
               childAspectRatio: width < 520 ? 1.08 : 1.34,
             ),
-            itemCount: etablissements.length,
+            itemCount: displayEtablissements.length,
             itemBuilder: (context, index) {
-              final etab = etablissements[index];
+              final etab = displayEtablissements[index];
               return Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(14),
