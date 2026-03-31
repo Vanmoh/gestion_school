@@ -10,14 +10,17 @@ HOST_IP=""
 
 usage() {
   cat <<'EOF'
-Usage: ./start_web_lan.sh [--ip=<LAN_IP>] [--web-port=<port>] [--api-port=<port>]
+Usage: ./start_web_lan.sh [--ip=<LAN_IP>] [--web-port=<port>] [--api-port=<port>] [--dev]
 
 Exemples:
   ./start_web_lan.sh
   ./start_web_lan.sh --ip=192.168.1.25
   ./start_web_lan.sh --web-port=8081 --api-port=8001
+  ./start_web_lan.sh --dev
 EOF
 }
+
+MODE="stable"
 
 for arg in "$@"; do
   case "$arg" in
@@ -29,6 +32,9 @@ for arg in "$@"; do
       ;;
     --api-port=*)
       API_PORT="${arg#*=}"
+      ;;
+    --dev)
+      MODE="dev"
       ;;
     -h|--help)
       usage
@@ -49,6 +55,11 @@ fi
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "Erreur: curl est requis pour vérifier l'API backend."
+  exit 1
+fi
+
+if [[ "$MODE" == "stable" ]] && ! command -v python3 >/dev/null 2>&1; then
+  echo "Erreur: python3 est requis pour servir build/web en mode stable."
   exit 1
 fi
 
@@ -85,8 +96,25 @@ echo "URL locale : http://127.0.0.1:${WEB_PORT}"
 echo "URL réseau : http://${HOST_IP}:${WEB_PORT}"
 echo "API utilisée: ${API_URL}"
 
-exec flutter run \
-  -d web-server \
-  --web-hostname=0.0.0.0 \
-  --web-port="$WEB_PORT" \
+if [[ "$MODE" == "dev" ]]; then
+  echo "Mode dev: flutter run web-server"
+  exec flutter run \
+    -d web-server \
+    --web-hostname=0.0.0.0 \
+    --web-port="$WEB_PORT" \
+    --dart-define="API_BASE_URL=${API_URL}"
+fi
+
+echo "Mode stable: build web puis serveur statique"
+flutter build web --release --no-wasm-dry-run \
   --dart-define="API_BASE_URL=${API_URL}"
+
+# Free the chosen web port if another process is listening.
+pids_on_port="$(lsof -tiTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null || true)"
+if [[ -n "$pids_on_port" ]]; then
+  echo "Port ${WEB_PORT} occupé: arrêt des PID ${pids_on_port}"
+  # shellcheck disable=SC2086
+  kill -9 $pids_on_port
+fi
+
+exec python3 -m http.server "$WEB_PORT" --bind 0.0.0.0 --directory build/web

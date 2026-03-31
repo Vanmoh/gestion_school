@@ -12,6 +12,10 @@ class IsAdminOrDirector(IsRole):
     allowed_roles = ["super_admin", "director"]
 
 
+class IsSuperAdmin(IsRole):
+    allowed_roles = ["super_admin"]
+
+
 class IsReadOnlyForParentStudent(BasePermission):
     message = "Les profils parent/élève sont en lecture seule sur cette ressource."
 

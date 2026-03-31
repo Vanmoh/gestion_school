@@ -10,6 +10,9 @@ final etablissementProvider = ChangeNotifierProvider<EtablissementProvider>(
   (ref) => EtablissementProvider(ref.read(tokenStorageProvider)),
 );
 
+// Changes once per app run to invalidate stale browser-cached logo URLs.
+final int _logoCacheBustToken = DateTime.now().millisecondsSinceEpoch;
+
 class Etablissement {
   final int id;
   final String name;
@@ -48,6 +51,20 @@ class Etablissement {
       'logo': logoUrl,
     };
   }
+
+  String? get logoUrlForDisplay {
+    final raw = logoUrl;
+    if (raw == null || raw.isEmpty) {
+      return raw;
+    }
+    final uri = Uri.tryParse(raw);
+    if (uri == null) {
+      return raw;
+    }
+    final queryParams = Map<String, String>.from(uri.queryParameters);
+    queryParams['v'] = _logoCacheBustToken.toString();
+    return uri.replace(queryParameters: queryParams).toString();
+  }
 }
 
 class EtablissementProvider extends ChangeNotifier {
@@ -63,7 +80,22 @@ class EtablissementProvider extends ChangeNotifier {
   bool get hydrated => _hydrated;
 
   void setEtablissements(List<Etablissement> etablissements) {
-    _etablissements = etablissements;
+    final deduped = <Etablissement>[];
+    final seen = <String>{};
+
+    for (final etab in etablissements) {
+      final idKey = 'id:${etab.id}';
+      final nameKey =
+          'name:${etab.name.trim().toLowerCase()}|addr:${(etab.address ?? '').trim().toLowerCase()}';
+      if (seen.contains(idKey) || seen.contains(nameKey)) {
+        continue;
+      }
+      seen.add(idKey);
+      seen.add(nameKey);
+      deduped.add(etab);
+    }
+
+    _etablissements = deduped;
     if (_selected != null) {
       for (final etablissement in etablissements) {
         if (etablissement.id == _selected!.id) {

@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 
 from django.conf import settings
-from django.db.models import Avg
+from django.db.models import Avg, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -20,6 +20,7 @@ from apps.accounts.models import UserRole
 from apps.school.models import (
     AcademicYear,
     ClassRoom,
+    Etablissement,
     ExamPlanning,
     ExamResult,
     Grade,
@@ -46,6 +47,35 @@ def _school_logo_path() -> str | None:
         path = Path(settings.BASE_DIR) / path
 
     return str(path) if path.exists() else None
+
+
+def _etablissement_logo_path(student: Student) -> str | None:
+    etablissement = getattr(student, "etablissement", None)
+    if etablissement is None and getattr(student, "classroom", None) is not None:
+        etablissement = getattr(student.classroom, "etablissement", None)
+    if etablissement is None:
+        return None
+
+    logo_field = getattr(etablissement, "logo", None)
+    if not logo_field:
+        return None
+
+    try:
+        direct_path = Path(getattr(logo_field, "path", "") or "")
+    except Exception:
+        direct_path = None
+
+    if direct_path and direct_path.exists():
+        return str(direct_path)
+
+    logo_name = str(getattr(logo_field, "name", "") or "").strip()
+    media_root = str(getattr(settings, "MEDIA_ROOT", "") or "").strip()
+    if logo_name and media_root:
+        candidate = Path(media_root) / logo_name
+        if candidate.exists():
+            return str(candidate)
+
+    return None
 
 
 def _school_signature_asset_path() -> str | None:
@@ -132,6 +162,31 @@ def _school_identity() -> dict[str, str]:
         "phone": getattr(settings, "SCHOOL_PHONE", ""),
         "city": getattr(settings, "SCHOOL_CITY", "DAKAR"),
     }
+
+
+def _school_identity_for_student(student: Student) -> dict[str, str]:
+    school = _school_identity()
+
+    etablissement = getattr(student, "etablissement", None)
+    if etablissement is None and getattr(student, "classroom", None) is not None:
+        etablissement = getattr(student.classroom, "etablissement", None)
+
+    if etablissement is None:
+        return school
+
+    etablissement_name = str(getattr(etablissement, "name", "") or "").strip()
+    etablissement_phone = str(getattr(etablissement, "phone", "") or "").strip()
+    etablissement_address = str(getattr(etablissement, "address", "") or "").strip()
+
+    if etablissement_name:
+        school["name"] = etablissement_name
+        school["short"] = etablissement_name[:16].upper()
+    if etablissement_phone:
+        school["phone"] = etablissement_phone
+    if etablissement_address:
+        school["level"] = etablissement_address
+
+    return school
 
 
 def _active_academic_year_label() -> str:
@@ -594,7 +649,56 @@ def _build_student_cards_pdf(
     return pdf
 
 
-def _allowed_students_queryset(user):
+def _requested_etablissement_id(request):
+    raw_value = request.headers.get("X-Etablissement-Id") or request.query_params.get("etablissement")
+    if raw_value in (None, ""):
+        return None
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _requested_etablissement_name(request):
+    raw_name = request.headers.get("X-Etablissement-Name") or request.query_params.get("etablissement_name")
+    if raw_name is None:
+        return None
+    cleaned = str(raw_name).strip()
+    return cleaned or None
+
+
+def _requested_etablissement(request):
+    requested_id = _requested_etablissement_id(request)
+    if requested_id:
+        etablissement = Etablissement.objects.filter(id=requested_id).first()
+        if etablissement:
+            return etablissement
+
+    requested_name = _requested_etablissement_name(request)
+    if not requested_name:
+        return None
+
+    etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+    if etablissement:
+        return etablissement
+
+    return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+
+def _effective_etablissement_id(request):
+    user = request.user
+    role = getattr(user, "role", "")
+
+    if role == UserRole.SUPER_ADMIN:
+        requested = _requested_etablissement(request)
+        return requested.id if requested else None
+
+    return getattr(user, "etablissement_id", None)
+
+
+def _allowed_students_queryset(request):
+    user = request.user
     queryset = Student.objects.select_related(
         "user",
         "classroom",
@@ -607,10 +711,18 @@ def _allowed_students_queryset(user):
         return queryset.filter(user_id=user.id)
     if role == UserRole.PARENT:
         return queryset.filter(parent__user_id=user.id)
-    return queryset
+
+    target_etablissement_id = _effective_etablissement_id(request)
+    if target_etablissement_id:
+        return queryset.filter(
+            Q(etablissement_id=target_etablissement_id)
+            | Q(etablissement__isnull=True, classroom__etablissement_id=target_etablissement_id)
+        )
+    return queryset.none()
 
 
-def _allowed_payments_queryset(user):
+def _allowed_payments_queryset(request):
+    user = request.user
     queryset = Payment.objects.select_related(
         "fee",
         "fee__student",
@@ -626,10 +738,21 @@ def _allowed_payments_queryset(user):
         return queryset.filter(fee__student__user_id=user.id)
     if role == UserRole.PARENT:
         return queryset.filter(fee__student__parent__user_id=user.id)
-    return queryset
+
+    target_etablissement_id = _effective_etablissement_id(request)
+    if target_etablissement_id:
+        return queryset.filter(
+            Q(fee__student__etablissement_id=target_etablissement_id)
+            | Q(
+                fee__student__etablissement__isnull=True,
+                fee__student__classroom__etablissement_id=target_etablissement_id,
+            )
+        )
+    return queryset.none()
 
 
-def _ensure_student_access(user, student: Student) -> None:
+def _ensure_student_access(request, student: Student) -> None:
+    user = request.user
     role = getattr(user, "role", "")
     if role == UserRole.STUDENT and student.user_id != user.id:
         raise PermissionDenied("Accès refusé à ce bulletin.")
@@ -639,8 +762,20 @@ def _ensure_student_access(user, student: Student) -> None:
         if parent_user_id != user.id:
             raise PermissionDenied("Accès refusé à ce bulletin.")
 
+    target_etablissement_id = _effective_etablissement_id(request)
+    student_etablissement_id = getattr(student, "etablissement_id", None)
+    if student_etablissement_id is None and getattr(student, "classroom", None) is not None:
+        student_etablissement_id = getattr(student.classroom, "etablissement_id", None)
 
-def _ensure_payment_access(user, payment: Payment) -> None:
+    if target_etablissement_id and student_etablissement_id and target_etablissement_id != student_etablissement_id:
+        raise PermissionDenied("Accès refusé à ce bulletin.")
+
+    if target_etablissement_id is None and role == UserRole.SUPER_ADMIN:
+        raise PermissionDenied("Selectionnez un etablissement actif.")
+
+
+def _ensure_payment_access(request, payment: Payment) -> None:
+    user = request.user
     role = getattr(user, "role", "")
     student = payment.fee.student if payment.fee else None
 
@@ -652,6 +787,16 @@ def _ensure_payment_access(user, payment: Payment) -> None:
         parent_user_id = student.parent.user_id if student and student.parent else None
         if parent_user_id != user.id:
             raise PermissionDenied("Accès refusé à ce reçu de paiement.")
+
+    if student is not None:
+        student_etablissement_id = getattr(student, "etablissement_id", None)
+        if student_etablissement_id is None and getattr(student, "classroom", None) is not None:
+            student_etablissement_id = getattr(student.classroom, "etablissement_id", None)
+        target_etablissement_id = _effective_etablissement_id(request)
+        if target_etablissement_id and student_etablissement_id and target_etablissement_id != student_etablissement_id:
+            raise PermissionDenied("Accès refusé à ce reçu de paiement.")
+        if target_etablissement_id is None and role == UserRole.SUPER_ADMIN:
+            raise PermissionDenied("Selectionnez un etablissement actif.")
 
 
 def _term_variants(term: str) -> list[str]:
@@ -732,16 +877,78 @@ def _format_coef_value(value: float | None) -> str:
     return text
 
 
+def _build_bulletin_rows(
+    *,
+    subjects,
+    student_note_by_subject: dict[int, float],
+    exam_note_by_subject: dict[int, float],
+    class_average_by_subject: dict[int, float],
+    conduite_note: float,
+    conduite_coef: float = 2.0,
+    conduite_moyenne_classe: float | None = None,
+):
+    weighted_sum = 0.0
+    coef_sum = 0.0
+    rows = [
+        {
+            "index": 1,
+            "subject": "Conduite",
+            "coef": conduite_coef,
+            "note_classe": conduite_note,
+            "note_examen": None,
+            "note_finale": conduite_note,
+            "moyenne_classe": conduite_moyenne_classe,
+            "points": round(conduite_note * conduite_coef, 2),
+        }
+    ]
+
+    weighted_sum += conduite_note * conduite_coef
+    coef_sum += conduite_coef
+
+    for index, subject in enumerate(subjects, start=2):
+        coef = float(subject.coefficient)
+        note_classe = student_note_by_subject.get(subject.id)
+        note_examen = exam_note_by_subject.get(subject.id)
+
+        if note_classe is not None and note_examen is not None:
+            note_finale = round((note_classe + note_examen) / 2.0, 2)
+        else:
+            note_finale = note_classe if note_classe is not None else note_examen
+
+        note_moyenne_classe = class_average_by_subject.get(subject.id)
+        points = round(note_finale * coef, 2) if note_finale is not None else None
+
+        if note_finale is not None and coef > 0:
+            weighted_sum += note_finale * coef
+            coef_sum += coef
+
+        rows.append(
+            {
+                "index": index,
+                "subject": subject.name,
+                "coef": coef,
+                "note_classe": note_classe,
+                "note_examen": note_examen,
+                "note_finale": note_finale,
+                "moyenne_classe": note_moyenne_classe,
+                "points": points,
+            }
+        )
+
+    average = round(weighted_sum / coef_sum, 2) if coef_sum else 0.0
+    return rows, average, coef_sum
+
+
 class ReportsContextView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        students = _allowed_students_queryset(request.user).order_by(
+        students = _allowed_students_queryset(request).order_by(
             "user__last_name",
             "user__first_name",
             "matricule",
         )
-        payments = _allowed_payments_queryset(request.user).order_by("-created_at")
+        payments = _allowed_payments_queryset(request).order_by("-created_at")
         years = AcademicYear.objects.all().order_by("-start_date", "-id")
 
         return Response(
@@ -773,13 +980,14 @@ class BulletinPdfView(APIView):
             ),
             id=student_id,
         )
-        _ensure_student_access(request.user, student)
+        _ensure_student_access(request, student)
 
-        school_name = getattr(settings, "SCHOOL_NAME", "LYCEE TECHNIQUE OUMAR BAH")
-        school_short = getattr(settings, "SCHOOL_SHORT", "LTOB")
-        school_level = getattr(settings, "SCHOOL_LEVEL", "1er etage")
-        school_phone = getattr(settings, "SCHOOL_PHONE", "")
-        logo_path = _school_logo_path()
+        school = _school_identity_for_student(student)
+        school_name = school["name"]
+        school_short = school["short"]
+        school_level = school["level"]
+        school_phone = school["phone"]
+        logo_path = _etablissement_logo_path(student) or _school_logo_path()
 
         student_name = student.user.get_full_name().strip() or student.user.username
         class_name = student.classroom.name if student.classroom else "N/A"
@@ -856,41 +1064,27 @@ class BulletinPdfView(APIView):
 
         subjects = Subject.objects.filter(id__in=subject_ids).order_by("name", "id")
 
-        weighted_sum = 0.0
-        coef_sum = 0.0
-        rows = []
-
-        for index, subject in enumerate(subjects, start=1):
-            coef = float(subject.coefficient)
-            note_classe = student_note_by_subject.get(subject.id)
-            note_examen = exam_note_by_subject.get(subject.id)
-
-            if note_classe is not None and note_examen is not None:
-                note_finale = round((note_classe + note_examen) / 2.0, 2)
-            else:
-                note_finale = note_classe if note_classe is not None else note_examen
-
-            note_moyenne_classe = class_average_by_subject.get(subject.id)
-            points = round(note_finale * coef, 2) if note_finale is not None else None
-
-            if note_finale is not None and coef > 0:
-                weighted_sum += note_finale * coef
-                coef_sum += coef
-
-            rows.append(
-                {
-                    "index": index,
-                    "subject": subject.name,
-                    "coef": coef,
-                    "note_classe": note_classe,
-                    "note_examen": note_examen,
-                    "note_finale": note_finale,
-                    "moyenne_classe": note_moyenne_classe,
-                    "points": points,
-                }
+        conduite_note = float(student.conduite if student.conduite is not None else 18)
+        conduite_coef = 2.0
+        conduite_moyenne_classe = None
+        if classroom_id:
+            conduite_moyenne_classe = (
+                Student.objects.filter(classroom_id=classroom_id)
+                .aggregate(avg_conduite=Avg("conduite"))
+                .get("avg_conduite")
             )
+            if conduite_moyenne_classe is not None:
+                conduite_moyenne_classe = float(conduite_moyenne_classe)
 
-        average = round(weighted_sum / coef_sum, 2) if coef_sum else 0.0
+        rows, average, coef_sum = _build_bulletin_rows(
+            subjects=subjects,
+            student_note_by_subject=student_note_by_subject,
+            exam_note_by_subject=exam_note_by_subject,
+            class_average_by_subject=class_average_by_subject,
+            conduite_note=conduite_note,
+            conduite_coef=conduite_coef,
+            conduite_moyenne_classe=conduite_moyenne_classe,
+        )
 
         if average >= 16:
             mention = "Tres bien"
@@ -944,6 +1138,7 @@ class BulletinPdfView(APIView):
             ("Eleve", student_name),
             ("Matricule", student.matricule),
             ("Classe", class_name),
+            ("Etablissement", school_name),
             ("Annee", academic_year_name),
             ("Periode", period_label),
         ]
@@ -1068,12 +1263,12 @@ class PaymentReceiptPdfView(APIView):
             "fee__academic_year",
             "received_by",
         ).get(id=payment_id)
-        _ensure_payment_access(request.user, payment)
-
-        school = _school_identity()
-        logo_path = _school_logo_path()
+        _ensure_payment_access(request, payment)
 
         student = payment.fee.student
+        school = _school_identity_for_student(student) if student else _school_identity()
+        logo_path = (_etablissement_logo_path(student) if student else None) or _school_logo_path()
+
         student_user = student.user if student else None
         student_name = student_user.get_full_name().strip() if student_user else ""
         student_name = student_name or (student_user.username if student_user else "")
@@ -1396,7 +1591,7 @@ class PaymentExcelExportView(APIView):
             cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border = thin_border
 
-        payments = _allowed_payments_queryset(request.user).order_by("-created_at")
+        payments = _allowed_payments_queryset(request).order_by("-created_at")
 
         row_index = header_row + 1
         total_amount = 0.0
@@ -1502,10 +1697,10 @@ class StudentCardPdfView(APIView):
             Student.objects.select_related("user", "classroom", "parent", "parent__user"),
             id=student_id,
         )
-        _ensure_student_access(request.user, student)
+        _ensure_student_access(request, student)
 
-        school = _school_identity()
-        logo_path = _school_logo_path()
+        school = _school_identity_for_student(student)
+        logo_path = _etablissement_logo_path(student) or _school_logo_path()
 
         pdf = FPDF(format=(148, 105))
         _add_student_card_page(pdf, student, school=school, logo_path=logo_path)
@@ -1521,6 +1716,12 @@ class ClassStudentCardsPdfView(APIView):
             raise PermissionDenied("Accès refusé aux cartes de classe.")
 
         classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        target_etablissement_id = _effective_etablissement_id(request)
+        if getattr(request.user, "role", "") == UserRole.SUPER_ADMIN and target_etablissement_id is None:
+            raise PermissionDenied("Selectionnez un etablissement actif.")
+        if target_etablissement_id and classroom.etablissement_id != target_etablissement_id:
+            raise PermissionDenied("Accès refusé aux cartes de cette classe.")
+
         include_archived = (
             str(request.query_params.get("include_archived", "false")).strip().lower()
             in {"1", "true", "yes"}
@@ -1545,8 +1746,8 @@ class ClassStudentCardsPdfView(APIView):
                 status=404,
             )
 
-        school = _school_identity()
-        logo_path = _school_logo_path()
+        school = _school_identity_for_student(students[0])
+        logo_path = _etablissement_logo_path(students[0]) or _school_logo_path()
         pdf = _build_student_cards_pdf(
             students,
             school=school,

@@ -8,6 +8,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
+import '../../../core/models/paginated_result.dart';
+import '../../../features/auth/presentation/auth_controller.dart';
+import '../../../models/etablissement.dart';
 import '../domain/student.dart';
 import 'students_controller.dart';
 
@@ -30,6 +33,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       'assets/images/str_signature.png';
   int _tableRowsPerPage = 15;
   int _tablePage = 1;
+  int _serverTotalStudents = 0;
+  bool _serverHasNext = false;
+  bool _serverHasPrevious = false;
+  int? _lastScopeEtablissementId;
 
   final _usernameController = TextEditingController();
   final _firstNameController = TextEditingController();
@@ -115,6 +122,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   @override
   void initState() {
     super.initState();
+    final authUser = ref.read(authControllerProvider).value;
+    final selectedEtablissement = ref.read(etablissementProvider).selected;
+    _lastScopeEtablissementId = authUser?.role == 'super_admin'
+        ? selectedEtablissement?.id
+        : authUser?.etablissementId;
     _loadBaseData();
   }
 
@@ -150,15 +162,30 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     try {
       final repository = ref.read(studentsRepositoryProvider);
       final results = await Future.wait([
-        repository.fetchStudents(),
+        repository.fetchStudentsPage(
+          page: _tablePage,
+          pageSize: _tableRowsPerPage,
+          search: _searchController.text.trim(),
+          classroomId: _classFilterId,
+          isArchived: _statusFilter == 'all'
+              ? null
+              : _statusFilter == 'archived',
+          ordering: _studentsOrdering(),
+        ),
         repository.fetchClassrooms(),
         repository.fetchParents(),
         repository.fetchAcademicYears(),
       ]);
 
+      final studentsPage = results[0] as PaginatedResult<Student>;
+
       if (!mounted) return;
       setState(() {
-        _students = results[0] as List<Student>;
+        _students = studentsPage.results;
+        _filteredStudents = studentsPage.results;
+        _serverTotalStudents = studentsPage.count;
+        _serverHasNext = studentsPage.hasNext;
+        _serverHasPrevious = studentsPage.hasPrevious;
         _classrooms = results[1] as List<Map<String, dynamic>>;
         _parents = results[2] as List<Map<String, dynamic>>;
         _years = results[3] as List<Map<String, dynamic>>;
@@ -185,25 +212,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     }
   }
 
-  void _applyFilters({
-    int? preferredStudentId,
-    bool resetVisibleCount = false,
-  }) {
-    final search = _searchController.text.trim().toLowerCase();
-    final filtered = _students.where((student) {
-      if (_statusFilter == 'active' && student.isArchived) return false;
-      if (_statusFilter == 'archived' && !student.isArchived) return false;
-      if (_classFilterId != null && student.classroomId != _classFilterId) {
-        return false;
-      }
-      if (search.isEmpty) return true;
-      final haystack =
-          '${student.fullName} ${student.matricule} ${student.classroomName} ${student.parentName}'
-              .toLowerCase();
-      return haystack.contains(search);
-    }).toList();
-
-    filtered.sort(_compareStudents);
+  void _applyFilters({int? preferredStudentId}) {
+    final filtered = _students.toList();
 
     final beforeId = _selectedStudent?.id;
     Student? nextSelected = _selectedStudent;
@@ -225,32 +235,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       nextSelected = filtered.first;
     }
     final selectedClassroomId = nextSelected?.classroomId;
-    final totalPages = filtered.isEmpty
-        ? 1
-        : ((filtered.length + _tableRowsPerPage - 1) ~/ _tableRowsPerPage);
-    var nextTablePage = resetVisibleCount ? 1 : _tablePage;
-    if (nextTablePage < 1) {
-      nextTablePage = 1;
-    }
-    if (nextSelected != null) {
-      final selectedIndex = filtered.indexWhere(
-        (s) => s.id == nextSelected!.id,
-      );
-      if (selectedIndex >= 0) {
-        final selectedPage = (selectedIndex ~/ _tableRowsPerPage) + 1;
-        if (resetVisibleCount) {
-          nextTablePage = selectedPage;
-        }
-      }
-    }
-    if (nextTablePage > totalPages) {
-      nextTablePage = totalPages;
-    }
 
     setState(() {
       _filteredStudents = filtered;
       _selectedStudent = nextSelected;
-      _tablePage = nextTablePage;
       _selectedClassroomUpdateId = nextSelected?.classroomId;
       _selectedParentUpdateId = nextSelected?.parentId;
       if (selectedClassroomId != null &&
@@ -275,14 +263,16 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 250), () {
       if (!mounted) return;
-      _applyFilters(resetVisibleCount: true);
+      setState(() => _tablePage = 1);
+      _loadBaseData(keepSelectedId: _selectedStudent?.id);
     });
   }
 
   void _clearSearch() {
     _searchDebounce?.cancel();
     _searchController.clear();
-    _applyFilters(resetVisibleCount: true);
+    setState(() => _tablePage = 1);
+    _loadBaseData(keepSelectedId: _selectedStudent?.id);
   }
 
   void _resetStudentsFilters() {
@@ -295,7 +285,17 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       _sortAscending = true;
       _tablePage = 1;
     });
-    _applyFilters(resetVisibleCount: true);
+    _loadBaseData(keepSelectedId: _selectedStudent?.id);
+  }
+
+  String _studentsOrdering() {
+    final field = switch (_sortBy) {
+      'matricule' => 'matricule',
+      'classroom' => 'classroom__name',
+      'status' => 'is_archived',
+      _ => 'user__last_name',
+    };
+    return _sortAscending ? field : '-$field';
   }
 
   Future<void> _pickProfilePhoto({required bool forRegistration}) async {
@@ -2510,13 +2510,29 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final authUser = ref.watch(authControllerProvider).value;
+    final selectedEtablissement = ref.watch(etablissementProvider).selected;
+    final scopedEtablissementId = authUser?.role == 'super_admin'
+        ? selectedEtablissement?.id
+        : authUser?.etablissementId;
+    if (_lastScopeEtablissementId != scopedEtablissementId) {
+      _lastScopeEtablissementId = scopedEtablissementId;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        _tablePage = 1;
+        _loadBaseData();
+      });
+    }
+
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final total = _students.length;
-    final active = _students.where((s) => !s.isArchived).length;
-    final archived = total - active;
+    final total = _serverTotalStudents;
+    final active = _filteredStudents.where((s) => !s.isArchived).length;
+    final archived = _filteredStudents.where((s) => s.isArchived).length;
     final newEnrolled = _newlyEnrolledCount();
     final activeYearLabel = _activeAcademicYearLabel();
     final colorScheme = Theme.of(context).colorScheme;
@@ -2525,9 +2541,19 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final refreshLabel = _lastStudentsRefreshAt == null
         ? 'Maj: -'
         : 'Maj: ${_refreshTimestampLabel(_lastStudentsRefreshAt!)}';
-    final activeRate = total == 0 ? 0 : ((active / total) * 100).round();
-    final archivedRate = total == 0 ? 0 : ((archived / total) * 100).round();
-    final activeShare = total == 0 ? 0.0 : active / total;
+    final scopeLabel = authUser?.role == 'super_admin'
+      ? (selectedEtablissement?.name ?? 'Aucun établissement actif')
+      : ((authUser?.etablissementName.isNotEmpty ?? false)
+          ? authUser!.etablissementName
+          : (selectedEtablissement?.name ?? 'Établissement utilisateur'));
+    final pageCount = _filteredStudents.length;
+    final activeRate = pageCount == 0
+        ? 0
+        : ((active / pageCount) * 100).round();
+    final archivedRate = pageCount == 0
+        ? 0
+        : ((archived / pageCount) * 100).round();
+    final activeShare = pageCount == 0 ? 0.0 : active / pageCount;
     final appliedFilters =
         (_searchController.text.trim().isNotEmpty ? 1 : 0) +
         (_classFilterId != null ? 1 : 0) +
@@ -2537,7 +2563,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final selectedClassLabel = _classFilterId == null
         ? 'Toutes classes'
         : _classroomName(_classFilterId!);
-    final totalFiltered = _filteredStudents.length;
+    final totalFiltered = _serverTotalStudents;
     final totalPages = totalFiltered == 0
         ? 1
         : ((totalFiltered + _tableRowsPerPage - 1) ~/ _tableRowsPerPage);
@@ -2545,10 +2571,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final startIndex = totalFiltered == 0
         ? 0
         : (currentPage - 1) * _tableRowsPerPage;
-    final endIndex = math.min(startIndex + _tableRowsPerPage, totalFiltered);
-    final visibleStudents = totalFiltered == 0
-        ? <Student>[]
-        : _filteredStudents.sublist(startIndex, endIndex);
+    final endIndex = math.min(
+      startIndex + _filteredStudents.length,
+      totalFiltered,
+    );
+    final visibleStudents = _filteredStudents;
 
     return ListView(
       padding: const EdgeInsets.all(18),
@@ -2613,6 +2640,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             _dashboardInfoChip(
                               icon: Icons.groups_2_outlined,
                               label: '$totalFiltered élèves visibles',
+                            ),
+                            _dashboardInfoChip(
+                              icon: Icons.apartment_outlined,
+                              label: scopeLabel,
+                              maxWidth: 320,
                             ),
                             _dashboardInfoChip(
                               icon: Icons.schedule_outlined,
@@ -2862,8 +2894,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 ),
                         ),
                         onChanged: _onSearchChanged,
-                        onSubmitted: (_) =>
-                            _applyFilters(resetVisibleCount: true),
+                        onSubmitted: (_) {
+                          setState(() => _tablePage = 1);
+                          _loadBaseData(keepSelectedId: _selectedStudent?.id);
+                        },
                       ),
                     ),
                     SizedBox(
@@ -2885,7 +2919,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         ],
                         onChanged: (value) {
                           setState(() => _classFilterId = value);
-                          _applyFilters(resetVisibleCount: true);
+                          setState(() => _tablePage = 1);
+                          _loadBaseData(keepSelectedId: _selectedStudent?.id);
                         },
                       ),
                     ),
@@ -2907,7 +2942,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         ],
                         onChanged: (value) {
                           setState(() => _statusFilter = value ?? 'active');
-                          _applyFilters(resetVisibleCount: true);
+                          setState(() => _tablePage = 1);
+                          _loadBaseData(keepSelectedId: _selectedStudent?.id);
                         },
                       ),
                     ),
@@ -2935,14 +2971,16 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         ],
                         onChanged: (value) {
                           setState(() => _sortBy = value ?? 'name');
-                          _applyFilters(resetVisibleCount: true);
+                          setState(() => _tablePage = 1);
+                          _loadBaseData(keepSelectedId: _selectedStudent?.id);
                         },
                       ),
                     ),
                     OutlinedButton.icon(
                       onPressed: () {
                         setState(() => _sortAscending = !_sortAscending);
-                        _applyFilters(resetVisibleCount: true);
+                        setState(() => _tablePage = 1);
+                        _loadBaseData(keepSelectedId: _selectedStudent?.id);
                       },
                       icon: Icon(
                         _sortAscending
@@ -2954,7 +2992,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     FilledButton.icon(
                       onPressed: _saving
                           ? null
-                          : () => _applyFilters(resetVisibleCount: true),
+                          : () {
+                              setState(() => _tablePage = 1);
+                              _loadBaseData(
+                                keepSelectedId: _selectedStudent?.id,
+                              );
+                            },
                       icon: const Icon(Icons.filter_alt_outlined),
                       label: const Text('Filtrer'),
                     ),
@@ -3009,7 +3052,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Tableau des élèves (${_filteredStudents.length})',
+                              'Tableau des élèves ($totalFiltered)',
                               style: textTheme.titleMedium,
                             ),
                             const SizedBox(height: 3),
@@ -3029,14 +3072,14 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                               Icons.verified_outlined,
                               size: 16,
                             ),
-                            label: Text('$active actifs'),
+                            label: Text('$active actifs (page)'),
                           ),
                           Chip(
                             avatar: const Icon(
                               Icons.archive_outlined,
                               size: 16,
                             ),
-                            label: Text('$archived archivés'),
+                            label: Text('$archived archivés (page)'),
                           ),
                           if (_selectedStudent != null)
                             Chip(
@@ -3285,23 +3328,35 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 _tableRowsPerPage = value;
                                 _tablePage = 1;
                               });
-                              _applyFilters(resetVisibleCount: true);
+                              _loadBaseData(
+                                keepSelectedId: _selectedStudent?.id,
+                              );
                             },
                           ),
                           const SizedBox(width: 8),
                           IconButton(
                             tooltip: 'Première page',
                             onPressed: currentPage > 1
-                                ? () => setState(() => _tablePage = 1)
+                                ? () {
+                                    setState(() => _tablePage = 1);
+                                    _loadBaseData(
+                                      keepSelectedId: _selectedStudent?.id,
+                                    );
+                                  }
                                 : null,
                             icon: const Icon(Icons.first_page),
                           ),
                           IconButton(
                             tooltip: 'Page précédente',
-                            onPressed: currentPage > 1
-                                ? () => setState(
-                                    () => _tablePage = currentPage - 1,
-                                  )
+                            onPressed: _serverHasPrevious
+                                ? () {
+                                    setState(
+                                      () => _tablePage = currentPage - 1,
+                                    );
+                                    _loadBaseData(
+                                      keepSelectedId: _selectedStudent?.id,
+                                    );
+                                  }
                                 : null,
                             icon: const Icon(Icons.chevron_left),
                           ),
@@ -3311,17 +3366,27 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           ),
                           IconButton(
                             tooltip: 'Page suivante',
-                            onPressed: currentPage < totalPages
-                                ? () => setState(
-                                    () => _tablePage = currentPage + 1,
-                                  )
+                            onPressed: _serverHasNext
+                                ? () {
+                                    setState(
+                                      () => _tablePage = currentPage + 1,
+                                    );
+                                    _loadBaseData(
+                                      keepSelectedId: _selectedStudent?.id,
+                                    );
+                                  }
                                 : null,
                             icon: const Icon(Icons.chevron_right),
                           ),
                           IconButton(
                             tooltip: 'Dernière page',
                             onPressed: currentPage < totalPages
-                                ? () => setState(() => _tablePage = totalPages)
+                                ? () {
+                                    setState(() => _tablePage = totalPages);
+                                    _loadBaseData(
+                                      keepSelectedId: _selectedStudent?.id,
+                                    );
+                                  }
                                 : null,
                             icon: const Icon(Icons.last_page),
                           ),
@@ -4577,34 +4642,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     return haystack.contains(query);
   }
 
-  int _compareStudents(Student a, Student b) {
-    int result;
-    switch (_sortBy) {
-      case 'matricule':
-        result = a.matricule.toLowerCase().compareTo(b.matricule.toLowerCase());
-        break;
-      case 'classroom':
-        result = a.classroomName.toLowerCase().compareTo(
-          b.classroomName.toLowerCase(),
-        );
-        if (result == 0) {
-          result = a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase());
-        }
-        break;
-      case 'status':
-        result = (a.isArchived ? 1 : 0).compareTo(b.isArchived ? 1 : 0);
-        if (result == 0) {
-          result = a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase());
-        }
-        break;
-      case 'name':
-      default:
-        result = a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase());
-        break;
-    }
-    return _sortAscending ? result : -result;
-  }
-
   String _classroomName(int classroomId) {
     for (final row in _classrooms) {
       if (_asInt(row['id']) == classroomId) {
@@ -4758,23 +4795,25 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     }
 
     final imageUrl = _resolveMediaUrl(normalized);
-    if (!mounted) return;
 
+    if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
         return Dialog(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 860, maxHeight: 700),
+            constraints: const BoxConstraints(maxWidth: 860, maxHeight: 760),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(title, style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 8),
+                  Text(title, style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 10),
                   Expanded(
                     child: InteractiveViewer(
+                      minScale: 0.8,
+                      maxScale: 5,
                       child: Image.network(
                         imageUrl,
                         fit: BoxFit.contain,

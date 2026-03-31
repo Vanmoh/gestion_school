@@ -2,12 +2,14 @@ from datetime import datetime
 from pathlib import Path
 
 from django.conf import settings
+from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 
 from apps.accounts.permissions import IsAdminOrDirector
+from apps.common.pagination import AuditLogPagination
 from .models import ActivityLog
 from .serializers import ActivityLogSerializer
 
@@ -31,14 +33,89 @@ def _school_logo_path() -> str | None:
 class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ActivityLog.objects.select_related("user").all()
     serializer_class = ActivityLogSerializer
+    pagination_class = AuditLogPagination
     permission_classes = [permissions.IsAuthenticated, IsAdminOrDirector]
-    filterset_fields = ["user", "role", "action", "method", "module", "success", "status_code"]
-    search_fields = ["action", "path", "target", "details", "user__username", "user__first_name", "user__last_name"]
+    filterset_fields = ["user", "etablissement", "role", "action", "method", "module", "success", "status_code"]
+    search_fields = [
+        "action",
+        "path",
+        "target",
+        "details",
+        "user__username",
+        "user__first_name",
+        "user__last_name",
+        "etablissement__name",
+    ]
     ordering_fields = ["created_at", "action", "status_code", "success", "method", "module"]
     ordering = ["-created_at"]
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        from apps.school.models import Etablissement
+
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
     def get_queryset(self):
         queryset = super().get_queryset()
+        user = self.request.user
+        role = getattr(user, "role", "")
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            queryset = queryset.filter(
+                Q(etablissement=requested_etablissement)
+                | Q(etablissement__isnull=True, user__etablissement=requested_etablissement)
+            )
+        elif self._has_requested_scope():
+            return queryset.none()
+        elif role != "super_admin":
+            user_etablissement = getattr(user, "etablissement", None)
+            if user_etablissement is None:
+                return queryset.none()
+            queryset = queryset.filter(
+                Q(etablissement=user_etablissement)
+                | Q(etablissement__isnull=True, user__etablissement=user_etablissement)
+            )
+
         date_from = self.request.query_params.get("date_from")
         date_to = self.request.query_params.get("date_to")
 

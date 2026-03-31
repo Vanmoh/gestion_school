@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
@@ -14,6 +16,8 @@ class PaymentsPage extends ConsumerStatefulWidget {
 }
 
 class _PaymentsPageState extends ConsumerState<PaymentsPage> {
+  static const List<int> _pageSizeOptions = [15, 25, 50, 100];
+
   final _formKey = GlobalKey<FormState>();
   final _searchController = TextEditingController();
   final _amountController = TextEditingController();
@@ -23,9 +27,14 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   int? _selectedFeeId;
   int? _selectedPaymentId;
   String _methodFilter = 'all';
+  int _currentPage = 1;
+  int _pageSize = 25;
+  String _searchTerm = '';
+  Timer? _searchDebounce;
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     _amountController.dispose();
     _methodController.dispose();
@@ -34,16 +43,33 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   }
 
   Future<void> _refreshPayments() async {
-    ref.invalidate(paymentsProvider);
+    final query = PaymentsPageQuery(
+      page: _currentPage,
+      pageSize: _pageSize,
+      search: _searchTerm,
+      method: _methodFilter == 'all' ? null : _methodFilter,
+    );
+    ref.invalidate(paymentsPaginatedProvider(query));
     ref.invalidate(feesProvider);
     try {
       await Future.wait([
-        ref.read(paymentsProvider.future),
+        ref.read(paymentsPaginatedProvider(query).future),
         ref.read(feesProvider.future),
       ]);
     } catch (_) {
       // Keep pull-to-refresh responsive even when API is temporarily unavailable.
     }
+  }
+
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      setState(() {
+        _searchTerm = value.trim();
+        _currentPage = 1;
+      });
+    });
   }
 
   void _showMessage(String text, {bool isSuccess = false}) {
@@ -91,20 +117,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   }
 
   List<PaymentItem> _filteredPayments(List<PaymentItem> payments) {
-    final query = _searchController.text.trim().toLowerCase();
-
-    final rows = payments.where((payment) {
-      if (_methodFilter != 'all' && payment.method != _methodFilter) {
-        return false;
-      }
-      if (query.isEmpty) {
-        return true;
-      }
-      final haystack =
-          '${payment.studentFullName} ${payment.studentMatricule} ${payment.method} ${payment.feeType} ${payment.reference}'
-              .toLowerCase();
-      return haystack.contains(query);
-    }).toList();
+    final rows = payments.toList();
 
     rows.sort((left, right) {
       final lDate = DateTime.tryParse(left.createdAt);
@@ -502,7 +515,13 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final paymentsAsync = ref.watch(paymentsProvider);
+    final query = PaymentsPageQuery(
+      page: _currentPage,
+      pageSize: _pageSize,
+      search: _searchTerm,
+      method: _methodFilter == 'all' ? null : _methodFilter,
+    );
+    final paymentsAsync = ref.watch(paymentsPaginatedProvider(query));
     final feesAsync = ref.watch(feesProvider);
     final mutationState = ref.watch(paymentMutationProvider);
     final isMutating = mutationState.isLoading;
@@ -601,7 +620,8 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
               ],
             ),
           ),
-          data: (payments) {
+          data: (pageData) {
+            final payments = pageData.results;
             final filteredPayments = _filteredPayments(payments);
             _syncSelectedPayment(filteredPayments);
             final selectedPayment = _selectedPayment(filteredPayments);
@@ -693,7 +713,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                           width: 290,
                           child: TextField(
                             controller: _searchController,
-                            onChanged: (_) => setState(() {}),
+                            onChanged: _onSearchChanged,
                             decoration: InputDecoration(
                               labelText: 'Recherche paiement',
                               prefixIcon: const Icon(Icons.search),
@@ -701,8 +721,12 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                   ? null
                                   : IconButton(
                                       onPressed: () {
+                                        _searchDebounce?.cancel();
                                         _searchController.clear();
-                                        setState(() {});
+                                        setState(() {
+                                          _searchTerm = '';
+                                          _currentPage = 1;
+                                        });
                                       },
                                       icon: const Icon(Icons.clear),
                                     ),
@@ -729,7 +753,10 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                 )
                                 .toList(),
                             onChanged: (value) {
-                              setState(() => _methodFilter = value ?? 'all');
+                              setState(() {
+                                _methodFilter = value ?? 'all';
+                                _currentPage = 1;
+                              });
                             },
                           ),
                         ),
@@ -737,8 +764,13 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                           onPressed: isMutating
                               ? null
                               : () {
+                                  _searchDebounce?.cancel();
                                   _searchController.clear();
-                                  setState(() => _methodFilter = 'all');
+                                  setState(() {
+                                    _methodFilter = 'all';
+                                    _searchTerm = '';
+                                    _currentPage = 1;
+                                  });
                                 },
                           icon: const Icon(Icons.filter_alt_off_outlined),
                           label: const Text('Reinitialiser'),
@@ -768,6 +800,13 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                             Text(
                               'Historique paiements (${filteredPayments.length})',
                               style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              pageData.count == 0
+                                  ? 'Aucun résultat'
+                                  : 'Page $_currentPage • ${payments.length} résultat(s) sur ${pageData.count}',
+                              style: Theme.of(context).textTheme.bodySmall,
                             ),
                             const SizedBox(height: 8),
                             if (filteredPayments.isEmpty)
@@ -927,6 +966,66 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                   );
                                 },
                               ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              alignment: WrapAlignment.spaceBetween,
+                              runSpacing: 8,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 6,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    const Text('Lignes/page:'),
+                                    DropdownButton<int>(
+                                      value: _pageSize,
+                                      items: _pageSizeOptions
+                                          .map(
+                                            (rows) => DropdownMenuItem<int>(
+                                              value: rows,
+                                              child: Text('$rows'),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (value) {
+                                        if (value == null ||
+                                            value == _pageSize) {
+                                          return;
+                                        }
+                                        setState(() {
+                                          _pageSize = value;
+                                          _currentPage = 1;
+                                        });
+                                      },
+                                    ),
+                                  ],
+                                ),
+                                Wrap(
+                                  spacing: 6,
+                                  children: [
+                                    IconButton(
+                                      tooltip: 'Page précédente',
+                                      onPressed: pageData.hasPrevious
+                                          ? () => setState(
+                                              () => _currentPage -= 1,
+                                            )
+                                          : null,
+                                      icon: const Icon(Icons.chevron_left),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Page suivante',
+                                      onPressed: pageData.hasNext
+                                          ? () => setState(
+                                              () => _currentPage += 1,
+                                            )
+                                          : null,
+                                      icon: const Icon(Icons.chevron_right),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ],
                         ),
                       );

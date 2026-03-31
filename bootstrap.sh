@@ -39,6 +39,11 @@ docker_compose() {
   "${DOCKER_CMD[@]}" compose "$@"
 }
 
+all_columns_exist() {
+  local checks_python="$1"
+  docker_compose exec -T backend python manage.py shell -c "$checks_python"
+}
+
 if ! docker_compose version >/dev/null 2>&1; then
   echo "Erreur: 'docker compose' n'est pas disponible."
   exit 1
@@ -65,7 +70,34 @@ if [[ "$ready" -ne 1 ]]; then
 fi
 
 log "Application des migrations..."
-docker_compose exec -T backend python manage.py migrate --noinput
+migrate_log_file="$(mktemp)"
+set +e
+docker_compose exec -T backend python manage.py migrate --noinput 2>&1 | tee "$migrate_log_file"
+migrate_rc=${PIPESTATUS[0]}
+set -e
+
+if [[ "$migrate_rc" -ne 0 ]]; then
+  if grep -q "Duplicate column name 'etablissement_id'" "$migrate_log_file"; then
+    log "Schéma existant détecté (colonnes etablissement_id déjà présentes), tentative de rattrapage des migrations..."
+
+    if [[ "$(all_columns_exist "from django.db import connection; cols={c.name for c in connection.introspection.get_table_description(connection.cursor(), 'common_activitylog')}; print('1' if 'etablissement_id' in cols else '0')")" == "1" ]]; then
+      docker_compose exec -T backend python manage.py migrate common 0003 --fake
+    fi
+
+    if [[ "$(all_columns_exist "from django.db import connection; cursor=connection.cursor(); needed=[('school_announcement','etablissement_id'),('school_notification','etablissement_id'),('school_smsproviderconfig','etablissement_id'),('school_supplier','etablissement_id'),('school_stockitem','etablissement_id')]; ok=True\nfor table,col in needed:\n    cols={c.name for c in connection.introspection.get_table_description(cursor, table)}\n    ok = ok and (col in cols)\nprint('1' if ok else '0')")" == "1" ]]; then
+      docker_compose exec -T backend python manage.py migrate school 0016 --fake
+    fi
+
+    docker_compose exec -T backend python manage.py migrate --noinput
+  else
+    echo "Erreur: échec des migrations."
+    cat "$migrate_log_file"
+    rm -f "$migrate_log_file"
+    exit 1
+  fi
+fi
+
+rm -f "$migrate_log_file"
 
 log "Injection des données de démonstration..."
 docker_compose exec -T backend python manage.py seed_demo_data

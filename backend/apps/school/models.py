@@ -113,6 +113,39 @@ class TeacherScheduleSlot(TimeStampedModel):
         )
 
 
+class TeacherAvailabilitySlot(TimeStampedModel):
+    teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="availability_slots")
+    etablissement = models.ForeignKey(
+        "Etablissement",
+        on_delete=models.PROTECT,
+        related_name="teacher_availability_slots",
+        null=True,
+        blank=True,
+    )
+    day_of_week = models.CharField(max_length=3, choices=WeekDay.choices)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    class Meta:
+        unique_together = ("etablissement", "day_of_week", "start_time", "end_time")
+        ordering = ("day_of_week", "start_time", "end_time", "id")
+        indexes = [
+            models.Index(
+                fields=["etablissement", "day_of_week", "start_time", "end_time"],
+                name="teacheravail_etab_day_time_idx",
+            ),
+            models.Index(fields=["teacher", "day_of_week"], name="teacheravail_teacher_day_idx"),
+        ]
+
+    def __str__(self):
+        teacher_name = self.teacher.user.get_full_name().strip() if self.teacher and self.teacher.user else ""
+        teacher_label = teacher_name or (self.teacher.employee_code if self.teacher else "Enseignant")
+        return (
+            f"{teacher_label} | {self.get_day_of_week_display()} "
+            f"{self.start_time.strftime('%H:%M')}-{self.end_time.strftime('%H:%M')}"
+        )
+
+
 class TimetablePublication(TimeStampedModel):
     classroom = models.OneToOneField(ClassRoom, on_delete=models.CASCADE, related_name="timetable_publication")
     is_published = models.BooleanField(default=False)
@@ -156,6 +189,7 @@ class Student(TimeStampedModel):
     photo = models.ImageField(upload_to="students/", null=True, blank=True)
     enrollment_date = models.DateField(auto_now_add=True)
     is_archived = models.BooleanField(default=False)
+    conduite = models.DecimalField(max_digits=4, decimal_places=2, default=18)
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="students", null=True, blank=True)
 
     def save(self, *args, **kwargs):
@@ -174,6 +208,15 @@ class Student(TimeStampedModel):
 
     def __str__(self):
         return f"{self.matricule} - {self.user.get_full_name()}"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["etablissement", "-created_at"], name="student_etab_created_idx"),
+            models.Index(fields=["classroom", "is_archived"], name="student_class_arch_idx"),
+            models.Index(fields=["parent"], name="student_parent_idx"),
+            models.Index(fields=["etablissement", "is_archived", "classroom"], name="student_etab_arch_class_idx"),
+            models.Index(fields=["enrollment_date"], name="student_enroll_date_idx"),
+        ]
 
 
 class StudentAcademicHistory(TimeStampedModel):
@@ -223,6 +266,12 @@ class Attendance(TimeStampedModel):
     reason = models.CharField(max_length=255, blank=True)
     proof = models.FileField(upload_to="attendance_proofs/", null=True, blank=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["student", "date"], name="attendance_student_date_idx"),
+            models.Index(fields=["date", "is_absent"], name="attendance_date_abs_idx"),
+        ]
+
 
 class TeacherAttendance(TimeStampedModel):
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="attendances")
@@ -231,6 +280,12 @@ class TeacherAttendance(TimeStampedModel):
     is_late = models.BooleanField(default=False)
     reason = models.CharField(max_length=255, blank=True)
     proof = models.FileField(upload_to="teacher_attendance_proofs/", null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["teacher", "date"], name="teachatt_teacher_date_idx"),
+            models.Index(fields=["date", "is_absent"], name="teachatt_date_abs_idx"),
+        ]
 
 
 class DisciplineSeverity(models.TextChoices):
@@ -261,6 +316,12 @@ class DisciplineIncident(TimeStampedModel):
         related_name="discipline_reports",
     )
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["student", "-incident_date"], name="discipline_student_date_idx"),
+            models.Index(fields=["status", "-incident_date"], name="discipline_status_date_idx"),
+        ]
+
 
 class FeeType(models.TextChoices):
     REGISTRATION = "registration", "Frais inscription"
@@ -284,6 +345,12 @@ class StudentFee(TimeStampedModel):
     def balance(self):
         return self.amount_due - self.amount_paid
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["student", "-due_date"], name="studentfee_student_due_idx"),
+            models.Index(fields=["academic_year", "-due_date"], name="studentfee_year_due_idx"),
+        ]
+
 
 class Payment(TimeStampedModel):
     fee = models.ForeignKey(StudentFee, on_delete=models.CASCADE, related_name="payments")
@@ -293,6 +360,13 @@ class Payment(TimeStampedModel):
     received_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="received_payments")
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="payments", null=True, blank=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["etablissement", "-created_at"], name="payment_etab_created_idx"),
+            models.Index(fields=["fee", "-created_at"], name="payment_fee_created_idx"),
+            models.Index(fields=["method"], name="payment_method_idx"),
+        ]
+
 
 class Expense(TimeStampedModel):
     label = models.CharField(max_length=120)
@@ -300,6 +374,12 @@ class Expense(TimeStampedModel):
     date = models.DateField()
     category = models.CharField(max_length=100)
     notes = models.TextField(blank=True)
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="expenses", null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["etablissement", "-date"], name="expense_etab_date_idx"),
+        ]
 
 
 class TeacherPayroll(TimeStampedModel):
@@ -311,6 +391,7 @@ class TeacherPayroll(TimeStampedModel):
 
 
 class Announcement(TimeStampedModel):
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="announcements", null=True, blank=True)
     title = models.CharField(max_length=150)
     message = models.TextField()
     audience = models.CharField(max_length=50, default="all")
@@ -324,6 +405,7 @@ class NotificationChannel(models.TextChoices):
 
 
 class Notification(TimeStampedModel):
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="notifications", null=True, blank=True)
     recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     channel = models.CharField(max_length=10, choices=NotificationChannel.choices)
     title = models.CharField(max_length=150)
@@ -333,6 +415,7 @@ class Notification(TimeStampedModel):
 
 
 class SmsProviderConfig(TimeStampedModel):
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="sms_provider_configs", null=True, blank=True)
     provider_name = models.CharField(max_length=100)
     api_url = models.URLField()
     api_token = models.CharField(max_length=255)
@@ -423,12 +506,14 @@ class ExamResult(TimeStampedModel):
 
 
 class Supplier(TimeStampedModel):
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="suppliers", null=True, blank=True)
     name = models.CharField(max_length=120)
     phone = models.CharField(max_length=30, blank=True)
     email = models.EmailField(blank=True)
 
 
 class StockItem(TimeStampedModel):
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="stock_items", null=True, blank=True)
     name = models.CharField(max_length=120)
     quantity = models.IntegerField(default=0)
     minimum_threshold = models.IntegerField(default=5)

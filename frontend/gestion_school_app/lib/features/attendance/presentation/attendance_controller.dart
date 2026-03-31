@@ -47,6 +47,7 @@ class AttendanceMutationController extends StateNotifier<AsyncValue<void>> {
     required bool isAbsent,
     required bool isLate,
     required String reason,
+    double? conduite,
   }) async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() {
@@ -58,6 +59,7 @@ class AttendanceMutationController extends StateNotifier<AsyncValue<void>> {
             isAbsent: isAbsent,
             isLate: isLate,
             reason: reason,
+            conduite: conduite,
           );
     });
 

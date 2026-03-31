@@ -34,6 +34,7 @@ from .views import (
     SmsProviderConfigViewSet,
     TeacherAttendanceViewSet,
     TeacherAssignmentViewSet,
+    TeacherAvailabilitySlotViewSet,
     TimetablePublicationViewSet,
     TeacherScheduleSlotViewSet,
     TeacherPayrollViewSet,
@@ -50,6 +51,7 @@ router.register(r"classrooms", ClassRoomViewSet)
 router.register(r"subjects", SubjectViewSet)
 router.register(r"teachers", TeacherViewSet)
 router.register(r"teacher-assignments", TeacherAssignmentViewSet)
+router.register(r"teacher-availability-slots", TeacherAvailabilitySlotViewSet, basename="teacher-availability-slots")
 router.register(r"teacher-schedule-slots", TeacherScheduleSlotViewSet)
 router.register(r"timetable-publications", TimetablePublicationViewSet, basename="timetable-publications")
 router.register(r"parents", ParentProfileViewSet)

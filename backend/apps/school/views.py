@@ -2,19 +2,22 @@ from datetime import datetime
 from io import BytesIO
 
 from django.db import transaction
-from django.db.models import Count, F, Q, Sum
+from django.db.models import Count, DecimalField, ExpressionWrapper, F, Q, Sum, Value
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from fpdf import FPDF
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from apps.accounts.models import UserRole
-from apps.accounts.permissions import IsAdminOrDirector, IsReadOnlyForParentStudent
+from apps.accounts.permissions import IsAdminOrDirector, IsReadOnlyForParentStudent, IsSuperAdmin
+from apps.common.pagination import StandardResultsSetPagination
 from .term_utils import normalize_term
 from .models import (
     AcademicYear,
@@ -51,6 +54,7 @@ from .models import (
     Teacher,
     TeacherAttendance,
     TeacherAssignment,
+    TeacherAvailabilitySlot,
     TeacherScheduleSlot,
     TimetablePublication,
     TeacherPayroll,
@@ -90,6 +94,7 @@ from .serializers import (
     SmsProviderConfigSerializer,
     TeacherAttendanceSerializer,
     TeacherAssignmentSerializer,
+    TeacherAvailabilitySlotSerializer,
     TeacherScheduleSlotSerializer,
     TimetablePublicationSerializer,
     TeacherPayrollSerializer,
@@ -99,6 +104,107 @@ from .serializers import (
 
 class BaseModelViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsReadOnlyForParentStudent]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+
+        user = request.user
+        if not user or not user.is_authenticated:
+            return
+
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN:
+            return
+
+        user_etablissement_id = getattr(user, "etablissement_id", None)
+        requested_param = request.query_params.get("etablissement")
+        if requested_param not in (None, ""):
+            try:
+                requested_id = int(requested_param)
+            except (TypeError, ValueError):
+                requested_id = None
+            if requested_id and user_etablissement_id and requested_id != user_etablissement_id:
+                raise ValidationError({"etablissement": "Acces refuse a un autre etablissement."})
+
+        # Ensure all subsequent per-view scope helpers receive the user-bound
+        # establishment for non-superadmin roles.
+        if user_etablissement_id:
+            request.META["HTTP_X_ETABLISSEMENT_ID"] = str(user_etablissement_id)
+            etab = getattr(user, "etablissement", None)
+            if etab and getattr(etab, "name", ""):
+                request.META["HTTP_X_ETABLISSEMENT_NAME"] = etab.name
+
+
+class EtablissementScopedModelViewSet(BaseModelViewSet):
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def _filter_by_scope(self, queryset, field_name="etablissement"):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            return queryset.filter(**{field_name: requested_etablissement})
+
+        if self._has_requested_scope():
+            return queryset.none()
+
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN:
+            return queryset
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return queryset.none()
+
+        return queryset.filter(**{field_name: user_etablissement})
 
 
 class GradePagination(PageNumberPagination):
@@ -112,10 +218,14 @@ class AcademicYearViewSet(BaseModelViewSet):
     serializer_class = AcademicYearSerializer
 
 
-class EtablissementViewSet(viewsets.ReadOnlyModelViewSet):
+class EtablissementViewSet(viewsets.ModelViewSet):
     queryset = Etablissement.objects.all().order_by('name')
     serializer_class = EtablissementSerializer
-    permission_classes = [permissions.AllowAny]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated(), IsSuperAdmin()]
 
 
 class LevelViewSet(BaseModelViewSet):
@@ -132,18 +242,86 @@ class ClassRoomViewSet(BaseModelViewSet):
     queryset = ClassRoom.objects.all()
     serializer_class = ClassRoomSerializer
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is not None:
+            return user_etablissement
+
+        if getattr(user, "role", None) == UserRole.TEACHER:
+            teacher_profile = Teacher.objects.select_related("etablissement").filter(user=user).first()
+            if teacher_profile:
+                return teacher_profile.etablissement
+
+        return None
+
     def get_queryset(self):
         user = self.request.user
         qs = ClassRoom.objects.select_related("level", "section", "academic_year")
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            qs = qs.filter(etablissement=requested_etablissement)
+        elif self._has_requested_scope():
+            return qs.none()
+
         if hasattr(user, "role") and user.role == "super_admin":
             return qs.all()
         return qs.filter(etablissement=user.etablissement)
 
     def perform_create(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        serializer.save(etablissement=self._resolve_target_etablissement())
 
     def perform_update(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        serializer.save(etablissement=self._resolve_target_etablissement())
 
 
 class SubjectViewSet(BaseModelViewSet):
@@ -155,26 +333,400 @@ class TeacherViewSet(BaseModelViewSet):
     queryset = Teacher.objects.all()
     serializer_class = TeacherSerializer
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is not None:
+            return user_etablissement
+
+        if getattr(user, "role", None) == UserRole.TEACHER:
+            teacher_profile = Teacher.objects.select_related("etablissement").filter(user=user).first()
+            if teacher_profile:
+                return teacher_profile.etablissement
+
+        return None
+
     def get_queryset(self):
         user = self.request.user
-        qs = Teacher.objects.select_related("user")
-        # Super admin voit tout, sinon filtrer par établissement
+        qs = Teacher.objects.select_related("user", "etablissement")
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            qs = qs.filter(etablissement=requested_etablissement)
+        elif self._has_requested_scope():
+            return qs.none()
+
         if hasattr(user, "role") and user.role == "super_admin":
             return qs.all()
         return qs.filter(etablissement=user.etablissement)
 
     def perform_create(self, serializer):
-        # Lier automatiquement à l'établissement de l'utilisateur
-        serializer.save(etablissement=self.request.user.etablissement)
+        target_etablissement = self._resolve_target_etablissement()
+        target_user = serializer.validated_data.get("user")
+
+        if target_user and target_etablissement and target_user.etablissement_id != target_etablissement.id:
+            target_user.etablissement = target_etablissement
+            target_user.save(update_fields=["etablissement"])
+
+        serializer.save(etablissement=target_etablissement)
 
     def perform_update(self, serializer):
-        # Empêcher le changement d'établissement par update
-        serializer.save(etablissement=self.request.user.etablissement)
+        target_etablissement = self._resolve_target_etablissement()
+        serializer.save(etablissement=target_etablissement)
 
 
 class TeacherAssignmentViewSet(BaseModelViewSet):
     queryset = TeacherAssignment.objects.select_related("teacher", "subject", "classroom").all()
     serializer_class = TeacherAssignmentSerializer
+
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = TeacherAssignment.objects.select_related(
+            "teacher", "subject", "classroom", "teacher__etablissement", "classroom__etablissement"
+        )
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            qs = qs.filter(classroom__etablissement=requested_etablissement)
+        elif self._has_requested_scope():
+            return qs.none()
+
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+
+        return qs.filter(classroom__etablissement=getattr(user, "etablissement", None))
+
+    def _validate_payload_etablissement(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        teacher = serializer.validated_data.get("teacher")
+        classroom = serializer.validated_data.get("classroom")
+
+        if target_etablissement is None:
+            return
+
+        if teacher and teacher.etablissement_id != target_etablissement.id:
+            raise ValidationError({"teacher": "L'enseignant n'appartient pas a l'etablissement actif."})
+
+        if classroom and classroom.etablissement_id != target_etablissement.id:
+            raise ValidationError({"classroom": "La classe n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        self._validate_payload_etablissement(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_payload_etablissement(serializer)
+        serializer.save()
+
+
+class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
+    DAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT"]
+    DAY_LABELS = {
+        "MON": "Lundi",
+        "TUE": "Mardi",
+        "WED": "Mercredi",
+        "THU": "Jeudi",
+        "FRI": "Vendredi",
+        "SAT": "Samedi",
+    }
+
+    queryset = TeacherAvailabilitySlot.objects.select_related(
+        "teacher",
+        "teacher__user",
+        "etablissement",
+    ).all()
+    serializer_class = TeacherAvailabilitySlotSerializer
+    filterset_fields = ["teacher", "day_of_week"]
+
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            qs = qs.filter(etablissement=requested_etablissement)
+        elif self._has_requested_scope():
+            return qs.none()
+        elif getattr(user, "role", None) != "super_admin":
+            target_etablissement = getattr(user, "etablissement", None)
+            if target_etablissement is None and getattr(user, "role", None) == UserRole.TEACHER:
+                teacher_profile = Teacher.objects.select_related("etablissement").filter(user=user).first()
+                if teacher_profile:
+                    target_etablissement = teacher_profile.etablissement
+
+            qs = qs.filter(etablissement=target_etablissement)
+
+        teacher_id = self.request.query_params.get("teacher")
+        if teacher_id:
+            qs = qs.filter(teacher_id=teacher_id)
+        return qs
+
+    def _resolve_teacher_for_request(self, serializer):
+        user = self.request.user
+        payload_teacher = serializer.validated_data.get("teacher")
+
+        if getattr(user, "role", None) == UserRole.TEACHER:
+            teacher_profile = Teacher.objects.filter(user=user).first()
+            if not teacher_profile:
+                raise ValidationError({"teacher": "Profil enseignant introuvable pour l'utilisateur connecté."})
+            return teacher_profile
+
+        if payload_teacher:
+            return payload_teacher
+
+        raise ValidationError({"teacher": "teacher est requis."})
+
+    def perform_create(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        teacher = self._resolve_teacher_for_request(serializer)
+
+        if target_etablissement and teacher.etablissement_id != target_etablissement.id:
+            raise ValidationError({"teacher": "Cet enseignant n'appartient pas à l'établissement actif."})
+
+        serializer.save(teacher=teacher, etablissement=target_etablissement or teacher.etablissement)
+
+    def perform_update(self, serializer):
+        if getattr(self.request.user, "role", None) == UserRole.TEACHER:
+            teacher_profile = Teacher.objects.filter(user=self.request.user).first()
+            if not teacher_profile:
+                raise ValidationError({"teacher": "Profil enseignant introuvable."})
+            serializer.save(teacher=teacher_profile, etablissement=teacher_profile.etablissement)
+            return
+
+        target_etablissement = self._resolve_target_etablissement()
+        teacher = serializer.validated_data.get("teacher") or getattr(serializer.instance, "teacher", None)
+        if target_etablissement and teacher and teacher.etablissement_id != target_etablissement.id:
+            raise ValidationError({"teacher": "Cet enseignant n'appartient pas à l'établissement actif."})
+        serializer.save(etablissement=target_etablissement or getattr(serializer.instance, "etablissement", None))
+
+    @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+    def grid(self, request):
+        try:
+            start_hour = int(request.query_params.get("start_hour", 7))
+            end_hour = int(request.query_params.get("end_hour", 18))
+            slot_minutes = int(request.query_params.get("slot_minutes", 60))
+        except (TypeError, ValueError):
+            return Response({"detail": "Paramètres horaires invalides."}, status=400)
+
+        if start_hour < 0 or end_hour > 24 or start_hour >= end_hour:
+            return Response({"detail": "Plage horaire invalide."}, status=400)
+        if slot_minutes <= 0 or slot_minutes > 180:
+            return Response({"detail": "slot_minutes invalide."}, status=400)
+
+        from datetime import time
+
+        slots = []
+        minute_cursor = start_hour * 60
+        end_minutes = end_hour * 60
+        while minute_cursor + slot_minutes <= end_minutes:
+            slot_start = time(hour=minute_cursor // 60, minute=minute_cursor % 60)
+            slot_end_minutes = minute_cursor + slot_minutes
+            slot_end = time(hour=slot_end_minutes // 60, minute=slot_end_minutes % 60)
+            slots.append((slot_start, slot_end))
+            minute_cursor += slot_minutes
+
+        declarations = list(self.get_queryset())
+        response_rows = []
+        for day_code in self.DAY_ORDER:
+            day_cells = []
+            day_declarations = [row for row in declarations if row.day_of_week == day_code]
+            for slot_start, slot_end in slots:
+                taken = None
+                for declaration in day_declarations:
+                    overlaps = declaration.start_time < slot_end and declaration.end_time > slot_start
+                    if overlaps:
+                        taken = declaration
+                        break
+
+                day_cells.append(
+                    {
+                        "day_of_week": day_code,
+                        "day_label": self.DAY_LABELS.get(day_code, day_code),
+                        "start_time": slot_start.strftime("%H:%M:%S"),
+                        "end_time": slot_end.strftime("%H:%M:%S"),
+                        "status": "indisponible" if taken else "disponible",
+                        "availability_id": taken.id if taken else None,
+                        "teacher": taken.teacher_id if taken else None,
+                        "teacher_name": self._teacher_name(taken.teacher) if taken else "",
+                    }
+                )
+
+            response_rows.append(
+                {
+                    "day_of_week": day_code,
+                    "day_label": self.DAY_LABELS.get(day_code, day_code),
+                    "cells": day_cells,
+                }
+            )
+
+        return Response(
+            {
+                "start_hour": start_hour,
+                "end_hour": end_hour,
+                "slot_minutes": slot_minutes,
+                "days": response_rows,
+            }
+        )
+
+    @staticmethod
+    def _teacher_name(teacher):
+        user = teacher.user if teacher else None
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
 
 
 class TeacherScheduleSlotViewSet(BaseModelViewSet):
@@ -196,6 +748,74 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
     ).all()
     serializer_class = TeacherScheduleSlotSerializer
     filterset_fields = ["assignment", "day_of_week"]
+
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def _scoped_classroom_queryset(self):
+        user = self.request.user
+        requested = self._requested_etablissement()
+        qs = ClassRoom.objects.select_related("etablissement")
+
+        if requested is not None:
+            return qs.filter(etablissement=requested)
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+        return qs.filter(etablissement=getattr(user, "etablissement", None))
+
+    def _get_scoped_classroom_or_404(self, classroom_id):
+        return get_object_or_404(self._scoped_classroom_queryset(), id=classroom_id)
 
     @staticmethod
     def _to_bool(raw_value, default=False):
@@ -394,8 +1014,40 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
             )
         return super().destroy(request, *args, **kwargs)
 
+    def _validate_assignment_scope(self, serializer):
+        assignment = serializer.validated_data.get("assignment")
+        if not assignment:
+            return
+
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement is None:
+            return
+
+        if assignment.classroom.etablissement_id != target_etablissement.id:
+            raise ValidationError({
+                "assignment": "Cette affectation n'appartient pas a l'etablissement actif."
+            })
+
+    def perform_create(self, serializer):
+        self._validate_assignment_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_assignment_scope(serializer)
+        serializer.save()
+
     def get_queryset(self):
         queryset = super().get_queryset()
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            queryset = queryset.filter(assignment__classroom__etablissement=requested_etablissement)
+        elif self._has_requested_scope():
+            return queryset.none()
+        elif getattr(user, "role", None) != "super_admin":
+            queryset = queryset.filter(assignment__classroom__etablissement=getattr(user, "etablissement", None))
+
         classroom = self.request.query_params.get("classroom")
         if classroom:
             queryset = queryset.filter(assignment__classroom_id=classroom)
@@ -407,7 +1059,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         if not classroom_id:
             return Response({"detail": "classroom est requis."}, status=400)
 
-        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
         return Response(self._publication_response(classroom))
 
     @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
@@ -416,7 +1068,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         if not classroom_id:
             return Response({"detail": "classroom est requis."}, status=400)
 
-        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
 
         lock_value = request.data.get("lock")
         if isinstance(lock_value, bool):
@@ -443,7 +1095,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         if not classroom_id:
             return Response({"detail": "classroom est requis."}, status=400)
 
-        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
         publication, _ = TimetablePublication.objects.get_or_create(classroom=classroom)
         publication.is_published = False
         publication.is_locked = False
@@ -460,7 +1112,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         if not classroom_id:
             return Response({"detail": "classroom est requis."}, status=400)
 
-        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
         publication, _ = TimetablePublication.objects.get_or_create(classroom=classroom)
 
         if not publication.is_published:
@@ -479,7 +1131,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         if not classroom_id:
             return Response({"detail": "classroom est requis."}, status=400)
 
-        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
         publication, _ = TimetablePublication.objects.get_or_create(classroom=classroom)
         publication.is_locked = False
         publication.save(update_fields=["is_locked", "updated_at"])
@@ -523,8 +1175,8 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
                 status=400,
             )
 
-        source_classroom = get_object_or_404(ClassRoom, id=source_classroom_id)
-        target_classroom = get_object_or_404(ClassRoom, id=target_classroom_id)
+        source_classroom = self._get_scoped_classroom_or_404(source_classroom_id)
+        target_classroom = self._get_scoped_classroom_or_404(target_classroom_id)
 
         publication = TimetablePublication.objects.filter(
             classroom=target_classroom,
@@ -704,12 +1356,12 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         classroom_id = self._parse_classroom_id(request)
 
         if classroom_id:
-            classrooms = list(ClassRoom.objects.filter(id=classroom_id).order_by("name"))
+            classrooms = list(self._scoped_classroom_queryset().filter(id=classroom_id).order_by("name"))
             if not classrooms:
                 return Response({"detail": "Classe introuvable."}, status=404)
             filename = f"planning_classe_{classroom_id}.xlsx"
         else:
-            classrooms = list(ClassRoom.objects.all().order_by("name"))
+            classrooms = list(self._scoped_classroom_queryset().order_by("name"))
             filename = "planning_global_multi_classes.xlsx"
 
         wb = Workbook()
@@ -822,12 +1474,12 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         classroom_id = self._parse_classroom_id(request)
 
         if classroom_id:
-            classrooms = list(ClassRoom.objects.filter(id=classroom_id).order_by("name"))
+            classrooms = list(self._scoped_classroom_queryset().filter(id=classroom_id).order_by("name"))
             if not classrooms:
                 return Response({"detail": "Classe introuvable."}, status=404)
             filename = f"planning_classe_{classroom_id}.pdf"
         else:
-            classrooms = list(ClassRoom.objects.all().order_by("name"))
+            classrooms = list(self._scoped_classroom_queryset().order_by("name"))
             filename = "planning_global_multi_classes.pdf"
 
         pdf = FPDF(orientation="L", unit="mm", format="A4")
@@ -912,32 +1564,263 @@ class TimetablePublicationViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     filterset_fields = ["classroom", "is_published", "is_locked"]
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            return qs.filter(classroom__etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return qs.none()
+
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+
+        return qs.filter(classroom__etablissement=getattr(user, "etablissement", None))
+
 
 class ParentProfileViewSet(BaseModelViewSet):
     queryset = ParentProfile.objects.all()
     serializer_class = ParentProfileSerializer
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
     def get_queryset(self):
         user = self.request.user
         qs = ParentProfile.objects.select_related("user")
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return qs.filter(etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return qs.none()
+
         if hasattr(user, "role") and user.role == "super_admin":
-            return qs.all()
-        return qs.filter(etablissement=user.etablissement)
+            user_etablissement = getattr(user, "etablissement", None)
+            if user_etablissement is not None:
+                return qs.filter(etablissement=user_etablissement)
+            return qs.none()
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return qs.none()
+        return qs.filter(etablissement=user_etablissement)
 
     def perform_create(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        user = self.request.user
+        target = self._requested_etablissement() if getattr(user, "role", None) == UserRole.SUPER_ADMIN else getattr(user, "etablissement", None)
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN and target is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        serializer.save(etablissement=target)
 
     def perform_update(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        user = self.request.user
+        target = self._requested_etablissement() if getattr(user, "role", None) == UserRole.SUPER_ADMIN else getattr(user, "etablissement", None)
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN and target is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        serializer.save(etablissement=target)
 
 
 class StudentViewSet(BaseModelViewSet):
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
-    filterset_fields = ["classroom", "is_archived", "parent", "user"]
-    search_fields = ["matricule", "user__first_name", "user__last_name", "user__username"]
-    ordering_fields = ["created_at", "matricule"]
+    pagination_class = StandardResultsSetPagination
+    filterset_fields = [
+        "classroom",
+        "is_archived",
+        "parent",
+        "user",
+        "etablissement",
+        "enrollment_date",
+        "created_at",
+    ]
+    search_fields = [
+        "matricule",
+        "user__first_name",
+        "user__last_name",
+        "user__username",
+        "classroom__name",
+        "parent__user__first_name",
+        "parent__user__last_name",
+    ]
+    ordering_fields = [
+        "created_at",
+        "matricule",
+        "enrollment_date",
+        "user__last_name",
+        "user__first_name",
+        "classroom__name",
+    ]
     ordering = ["-created_at"]
+
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin":
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def _validate_student_scope(self, serializer, instance=None):
+        classroom = serializer.validated_data.get("classroom") or (instance.classroom if instance else None)
+        parent = serializer.validated_data.get("parent") or (instance.parent if instance else None)
+        target_etablissement = self._resolve_target_etablissement()
+
+        if target_etablissement is None and classroom is not None:
+            target_etablissement = classroom.etablissement
+
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+
+        if target_etablissement is None:
+            return None
+
+        if classroom and classroom.etablissement_id != target_etablissement.id:
+            raise ValidationError({"classroom": "La classe n'appartient pas a l'etablissement actif."})
+
+        if parent and parent.etablissement_id != target_etablissement.id:
+            raise ValidationError({"parent": "Le parent n'appartient pas a l'etablissement actif."})
+
+        user_obj = serializer.validated_data.get("user") or (instance.user if instance else None)
+        if user_obj and user_obj.etablissement_id not in (None, target_etablissement.id):
+            raise ValidationError({"user": "Le compte utilisateur n'appartient pas a l'etablissement actif."})
+
+        if user_obj and user_obj.etablissement_id is None:
+            user_obj.etablissement = target_etablissement
+            user_obj.save(update_fields=["etablissement"])
+
+        return target_etablissement
 
     def get_queryset(self):
         user = self.request.user
@@ -947,15 +1830,35 @@ class StudentViewSet(BaseModelViewSet):
             return qs.filter(user_id=user.id)
         if role == UserRole.PARENT:
             return qs.filter(parent__user_id=user.id)
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return qs.filter(
+                Q(classroom__etablissement=requested_etablissement)
+                | Q(classroom__isnull=True, etablissement=requested_etablissement)
+            )
+
+        if self._has_requested_scope():
+            return qs.none()
+
         if hasattr(user, "role") and user.role == "super_admin":
-            return qs.all()
-        return qs.filter(etablissement=user.etablissement)
+            return qs.none()
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return qs.none()
+        return qs.filter(
+            Q(classroom__etablissement=user_etablissement)
+            | Q(classroom__isnull=True, etablissement=user_etablissement)
+        )
 
     def perform_create(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        target_etablissement = self._validate_student_scope(serializer)
+        serializer.save(etablissement=target_etablissement)
 
     def perform_update(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        target_etablissement = self._validate_student_scope(serializer, instance=serializer.instance)
+        serializer.save(etablissement=target_etablissement)
 
 
 class StudentAcademicHistoryViewSet(BaseModelViewSet):
@@ -963,15 +1866,73 @@ class StudentAcademicHistoryViewSet(BaseModelViewSet):
     serializer_class = StudentAcademicHistorySerializer
     filterset_fields = ["student", "academic_year", "classroom"]
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
     def get_queryset(self):
         queryset = super().get_queryset()
-        role = getattr(self.request.user, "role", "")
+        user = self.request.user
+        role = getattr(user, "role", "")
 
         if role == UserRole.STUDENT:
             return queryset.filter(student__user_id=self.request.user.id)
         if role == UserRole.PARENT:
             return queryset.filter(student__parent__user_id=self.request.user.id)
-        return queryset
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return queryset.filter(classroom__etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return queryset.none()
+
+        if role == UserRole.SUPER_ADMIN:
+            return queryset
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return queryset.none()
+        return queryset.filter(classroom__etablissement=user_etablissement)
 
 
 class GradeViewSet(BaseModelViewSet):
@@ -980,6 +1941,97 @@ class GradeViewSet(BaseModelViewSet):
     pagination_class = GradePagination
     filterset_fields = ["classroom", "academic_year", "term", "subject", "student"]
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def _scoped_classroom_queryset(self):
+        user = self.request.user
+        requested = self._requested_etablissement()
+        qs = ClassRoom.objects.select_related("etablissement")
+
+        if requested is not None:
+            return qs.filter(etablissement=requested)
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+        return qs.filter(etablissement=getattr(user, "etablissement", None))
+
+    def _get_scoped_classroom_or_404(self, classroom_id):
+        return get_object_or_404(self._scoped_classroom_queryset(), id=classroom_id)
+
+    def _validate_grade_scope(self, serializer, instance=None):
+        student = serializer.validated_data.get("student") or (instance.student if instance else None)
+        classroom = serializer.validated_data.get("classroom") or (instance.classroom if instance else None)
+
+        if not student or not classroom:
+            return
+
+        role = getattr(self.request.user, "role", "")
+        if role == UserRole.STUDENT and student.user_id != self.request.user.id:
+            raise ValidationError({"student": "Vous ne pouvez saisir que vos propres notes."})
+        if role == UserRole.PARENT:
+            if not student.parent or student.parent.user_id != self.request.user.id:
+                raise ValidationError({"student": "Vous ne pouvez saisir que les notes de vos enfants."})
+
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement is None:
+            return
+
+        if student.etablissement_id != target_etablissement.id:
+            raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
+        if classroom.etablissement_id != target_etablissement.id:
+            raise ValidationError({"classroom": "La classe n'appartient pas a l'etablissement actif."})
+
     def get_queryset(self):
         queryset = super().get_queryset()
         role = getattr(self.request.user, "role", "")
@@ -988,7 +2040,18 @@ class GradeViewSet(BaseModelViewSet):
             return queryset.filter(student__user_id=self.request.user.id)
         if role == UserRole.PARENT:
             return queryset.filter(student__parent__user_id=self.request.user.id)
-        return queryset
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return queryset.filter(classroom__etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return queryset.none()
+
+        if getattr(self.request.user, "role", None) == "super_admin":
+            return queryset
+
+        return queryset.filter(classroom__etablissement=getattr(self.request.user, "etablissement", None))
 
     @staticmethod
     def _parse_positive_int(value):
@@ -1038,6 +2101,7 @@ class GradeViewSet(BaseModelViewSet):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        self._validate_grade_scope(serializer)
         classroom_id = serializer.validated_data.get("classroom").id if serializer.validated_data.get("classroom") else None
         academic_year_id = serializer.validated_data.get("academic_year").id if serializer.validated_data.get("academic_year") else None
         term = serializer.validated_data.get("term")
@@ -1056,6 +2120,7 @@ class GradeViewSet(BaseModelViewSet):
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
+        self._validate_grade_scope(serializer, instance=instance)
 
         immutable_changed = self._immutable_fields_changed(instance, serializer.validated_data)
         if immutable_changed:
@@ -1098,7 +2163,7 @@ class GradeViewSet(BaseModelViewSet):
                 status=400,
             )
 
-        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
         academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
 
         if self._is_term_validated(classroom.id, academic_year.id, term):
@@ -1117,7 +2182,7 @@ class GradeViewSet(BaseModelViewSet):
         if not classroom_id or not academic_year_id or not term:
             return Response({"detail": "classroom, academic_year et term (T1/T2/T3) sont requis."}, status=400)
 
-        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
         academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
         validation, _ = GradeValidation.objects.update_or_create(
             classroom=classroom,
@@ -1142,7 +2207,7 @@ class GradeViewSet(BaseModelViewSet):
         if not classroom_id or not academic_year_id or not term:
             return Response({"detail": "classroom, academic_year et term (T1/T2/T3) sont requis."}, status=400)
 
-        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
         academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
         validation, _ = GradeValidation.objects.update_or_create(
             classroom=classroom,
@@ -1165,6 +2230,8 @@ class GradeViewSet(BaseModelViewSet):
 
         if not classroom_id or not academic_year_id or not term:
             return Response({"detail": "classroom, academic_year et term (T1/T2/T3) sont requis."}, status=400)
+
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
 
         validation = GradeValidation.objects.filter(
             classroom_id=classroom_id,
@@ -1194,6 +2261,58 @@ class AttendanceViewSet(BaseModelViewSet):
     serializer_class = AttendanceSerializer
     filterset_fields = ["date", "student", "is_absent", "is_late"]
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
     def get_queryset(self):
         queryset = super().get_queryset()
         role = getattr(self.request.user, "role", "")
@@ -1202,7 +2321,42 @@ class AttendanceViewSet(BaseModelViewSet):
             return queryset.filter(student__user_id=self.request.user.id)
         if role == UserRole.PARENT:
             return queryset.filter(student__parent__user_id=self.request.user.id)
-        return queryset
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return queryset.filter(student__etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return queryset.none()
+
+        if getattr(self.request.user, "role", None) == "super_admin":
+            return queryset
+
+        return queryset.filter(student__etablissement=getattr(self.request.user, "etablissement", None))
+
+    def _validate_student_scope(self, serializer):
+        student = serializer.validated_data.get("student")
+        if not student:
+            return
+
+        role = getattr(self.request.user, "role", "")
+        if role == UserRole.STUDENT and student.user_id != self.request.user.id:
+            raise ValidationError({"student": "Vous ne pouvez saisir que vos propres absences."})
+        if role == UserRole.PARENT and student.parent_id:
+            if student.parent.user_id != self.request.user.id:
+                raise ValidationError({"student": "Vous ne pouvez saisir que les absences de vos enfants."})
+
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement and student.etablissement_id != target_etablissement.id:
+            raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        self._validate_student_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_student_scope(serializer)
+        serializer.save()
 
     @action(detail=False, methods=["get"])
     def monthly_stats(self, request):
@@ -1254,6 +2408,98 @@ class TeacherAttendanceViewSet(BaseModelViewSet):
     serializer_class = TeacherAttendanceSerializer
     filterset_fields = ["date", "teacher", "is_absent", "is_late"]
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        role = getattr(self.request.user, "role", "")
+
+        if role == UserRole.TEACHER:
+            return queryset.filter(teacher__user_id=self.request.user.id)
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return queryset.filter(teacher__etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return queryset.none()
+
+        if getattr(self.request.user, "role", None) == "super_admin":
+            return queryset
+
+        return queryset.filter(teacher__etablissement=getattr(self.request.user, "etablissement", None))
+
+    def _validate_teacher_scope(self, serializer):
+        teacher = serializer.validated_data.get("teacher")
+        if not teacher:
+            return
+
+        role = getattr(self.request.user, "role", "")
+        if role == UserRole.TEACHER and teacher.user_id != self.request.user.id:
+            raise ValidationError({"teacher": "Vous ne pouvez saisir que vos propres absences."})
+
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement and teacher.etablissement_id != target_etablissement.id:
+            raise ValidationError({"teacher": "L'enseignant n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        self._validate_teacher_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_teacher_scope(serializer)
+        serializer.save()
+
     @action(detail=False, methods=["get"])
     def monthly_stats(self, request):
         month_value = request.query_params.get("month")
@@ -1304,6 +2550,58 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
     serializer_class = DisciplineIncidentSerializer
     filterset_fields = ["student", "severity", "status", "incident_date", "parent_notified"]
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
     def get_queryset(self):
         queryset = super().get_queryset()
         role = getattr(self.request.user, "role", "")
@@ -1312,29 +2610,232 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
             return queryset.filter(student__user_id=self.request.user.id)
         if role == UserRole.PARENT:
             return queryset.filter(student__parent__user_id=self.request.user.id)
-        return queryset
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return queryset.filter(student__etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return queryset.none()
+
+        if getattr(self.request.user, "role", None) == "super_admin":
+            return queryset
+
+        return queryset.filter(student__etablissement=getattr(self.request.user, "etablissement", None))
+
+    def _validate_scope(self, serializer):
+        student = serializer.validated_data.get("student")
+        if not student:
+            return
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement and student.etablissement_id != target_etablissement.id:
+            raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
 
 
 class StudentFeeViewSet(BaseModelViewSet):
     queryset = StudentFee.objects.select_related("student", "student__user", "academic_year").all().order_by("-due_date", "-id")
     serializer_class = StudentFeeSerializer
+    pagination_class = StandardResultsSetPagination
     filterset_fields = ["student", "academic_year", "fee_type"]
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def _validate_fee_scope(self, serializer, instance=None):
+        student = serializer.validated_data.get("student") or (instance.student if instance else None)
+        if not student:
+            return
+
+        role = getattr(self.request.user, "role", "")
+        if role == UserRole.STUDENT and student.user_id != self.request.user.id:
+            raise ValidationError({"student": "Vous ne pouvez creer/modifier que vos propres frais."})
+        if role == UserRole.PARENT and student.parent_id:
+            if student.parent.user_id != self.request.user.id:
+                raise ValidationError({"student": "Vous ne pouvez creer/modifier que les frais de vos enfants."})
+
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement and student.etablissement_id != target_etablissement.id:
+            raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
+
+    @staticmethod
+    def _with_financial_annotations(queryset):
+        paid_amount = Coalesce(
+            Sum("payments__amount"),
+            Value(0),
+            output_field=DecimalField(max_digits=12, decimal_places=2),
+        )
+        return queryset.annotate(
+            amount_paid_annotated=paid_amount,
+            balance_annotated=ExpressionWrapper(
+                F("amount_due") - paid_amount,
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
+        )
+
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = self._with_financial_annotations(super().get_queryset())
         role = getattr(self.request.user, "role", "")
 
         if role == UserRole.STUDENT:
             return queryset.filter(student__user_id=self.request.user.id)
         if role == UserRole.PARENT:
             return queryset.filter(student__parent__user_id=self.request.user.id)
-        return queryset
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return queryset.filter(student__etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return queryset.none()
+
+        if getattr(self.request.user, "role", None) == "super_admin":
+            return queryset
+
+        return queryset.filter(student__etablissement=getattr(self.request.user, "etablissement", None))
+
+    def perform_create(self, serializer):
+        self._validate_fee_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_fee_scope(serializer, instance=self.get_object())
+        serializer.save()
 
 
 class PaymentViewSet(BaseModelViewSet):
     queryset = Payment.objects.all()
     serializer_class = PaymentSerializer
+    pagination_class = StandardResultsSetPagination
     filterset_fields = ["fee", "fee__student", "method", "received_by"]
+    search_fields = [
+        "reference",
+        "method",
+        "fee__fee_type",
+        "fee__student__matricule",
+        "fee__student__user__first_name",
+        "fee__student__user__last_name",
+    ]
+    ordering_fields = ["created_at", "amount", "method"]
+    ordering = ["-created_at"]
+
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def _validate_payment_scope(self, serializer, instance=None):
+        fee = serializer.validated_data.get("fee") or (instance.fee if instance else None)
+        if not fee:
+            return
+
+        student = fee.student
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement and student.etablissement_id != target_etablissement.id:
+            raise ValidationError({"fee": "Le frais selectionne n'appartient pas a l'etablissement actif."})
 
     def get_queryset(self):
         user = self.request.user
@@ -1344,63 +2845,438 @@ class PaymentViewSet(BaseModelViewSet):
             return qs.filter(fee__student__user_id=user.id)
         if role == UserRole.PARENT:
             return qs.filter(fee__student__parent__user_id=user.id)
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return qs.filter(etablissement=requested_etablissement)
+        if self._has_requested_scope():
+            return qs.none()
         if hasattr(user, "role") and user.role == "super_admin":
             return qs.all()
         return qs.filter(etablissement=user.etablissement)
 
     def perform_create(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement, received_by=self.request.user)
+        self._validate_payment_scope(serializer)
+        serializer.save(
+            etablissement=self._resolve_target_etablissement(),
+            received_by=self.request.user,
+        )
 
     def perform_update(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        self._validate_payment_scope(serializer, instance=self.get_object())
+        serializer.save(etablissement=self._resolve_target_etablissement())
 
 
 class ExpenseViewSet(BaseModelViewSet):
     queryset = Expense.objects.all().order_by("-date")
     serializer_class = ExpenseSerializer
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            return qs.filter(etablissement=requested_etablissement)
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+        return qs.filter(etablissement=getattr(user, "etablissement", None))
+
+    def perform_create(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement is None:
+            raise ValidationError({"detail": "Etablissement actif requis pour creer une depense."})
+        serializer.save(etablissement=target_etablissement)
+
+    def perform_update(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement is None:
+            raise ValidationError({"detail": "Etablissement actif requis pour modifier une depense."})
+        serializer.save(etablissement=target_etablissement)
+
 
 class TeacherPayrollViewSet(BaseModelViewSet):
     queryset = TeacherPayroll.objects.select_related("teacher", "paid_by").all().order_by("-paid_on")
     serializer_class = TeacherPayrollSerializer
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
 
-class AnnouncementViewSet(BaseModelViewSet):
-    queryset = Announcement.objects.select_related("author").all().order_by("-created_at")
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def _validate_payroll_scope(self, serializer, instance=None):
+        teacher = serializer.validated_data.get("teacher") or (instance.teacher if instance else None)
+        if not teacher:
+            return
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement and teacher.etablissement_id != target_etablissement.id:
+            raise ValidationError({"teacher": "L'enseignant n'appartient pas a l'etablissement actif."})
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            return qs.filter(teacher__etablissement=requested_etablissement)
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+        return qs.filter(teacher__etablissement=getattr(user, "etablissement", None))
+
+    def perform_create(self, serializer):
+        self._validate_payroll_scope(serializer)
+        serializer.save(paid_by=self.request.user)
+
+    def perform_update(self, serializer):
+        self._validate_payroll_scope(serializer, instance=self.get_object())
+        serializer.save(paid_by=self.request.user)
+
+
+class AnnouncementViewSet(EtablissementScopedModelViewSet):
+    queryset = Announcement.objects.select_related("author", "etablissement").all().order_by("-created_at")
     serializer_class = AnnouncementSerializer
 
+    def get_queryset(self):
+        return self._filter_by_scope(super().get_queryset(), field_name="etablissement")
 
-class NotificationViewSet(BaseModelViewSet):
-    queryset = Notification.objects.select_related("recipient").all().order_by("-created_at")
+    def perform_create(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        serializer.save(author=self.request.user, etablissement=target_etablissement)
+
+    def perform_update(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        serializer.save(etablissement=target_etablissement)
+
+
+class NotificationViewSet(EtablissementScopedModelViewSet):
+    queryset = Notification.objects.select_related("recipient", "etablissement").all().order_by("-created_at")
     serializer_class = NotificationSerializer
 
+    def get_queryset(self):
+        return self._filter_by_scope(super().get_queryset(), field_name="etablissement")
 
-class SmsProviderConfigViewSet(BaseModelViewSet):
-    queryset = SmsProviderConfig.objects.all().order_by("-id")
+    def _validate_scope(self, serializer):
+        recipient = serializer.validated_data.get("recipient")
+        target_etablissement = self._resolve_target_etablissement()
+        if not recipient or not target_etablissement:
+            return
+        if recipient.etablissement_id not in (None, target_etablissement.id):
+            raise ValidationError({"recipient": "Le destinataire n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        self._validate_scope(serializer)
+        serializer.save(etablissement=target_etablissement)
+
+    def perform_update(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        self._validate_scope(serializer)
+        serializer.save(etablissement=target_etablissement)
+
+
+class SmsProviderConfigViewSet(EtablissementScopedModelViewSet):
+    queryset = SmsProviderConfig.objects.select_related("etablissement").all().order_by("-id")
     serializer_class = SmsProviderConfigSerializer
+
+    def get_queryset(self):
+        return self._filter_by_scope(super().get_queryset(), field_name="etablissement")
+
+    def perform_create(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        serializer.save(etablissement=target_etablissement)
+
+    def perform_update(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        serializer.save(etablissement=target_etablissement)
 
 
 class BookViewSet(BaseModelViewSet):
     queryset = Book.objects.all()
     serializer_class = BookSerializer
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested = self._requested_etablissement()
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN and requested:
+            return requested
+        return getattr(user, "etablissement", None)
+
     def get_queryset(self):
         user = self.request.user
         qs = Book.objects.all()
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return qs.filter(etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return qs.none()
+
         if hasattr(user, "role") and user.role == "super_admin":
             return qs.all()
-        return qs.filter(etablissement=user.etablissement)
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return qs.none()
+        return qs.filter(etablissement=user_etablissement)
 
     def perform_create(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        serializer.save(etablissement=self._resolve_target_etablissement())
 
     def perform_update(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        serializer.save(etablissement=self._resolve_target_etablissement())
 
 
 class BorrowViewSet(BaseModelViewSet):
     queryset = Borrow.objects.select_related("student", "book").all()
     serializer_class = BorrowSerializer
+
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        role = getattr(user, "role", "")
+
+        if role == UserRole.STUDENT:
+            return qs.filter(student__user_id=user.id)
+        if role == UserRole.PARENT:
+            return qs.filter(student__parent__user_id=user.id)
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return qs.filter(student__etablissement=requested_etablissement)
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+        return qs.filter(student__etablissement=getattr(user, "etablissement", None))
+
+    def _validate_scope(self, serializer):
+        student = serializer.validated_data.get("student")
+        book = serializer.validated_data.get("book")
+        if not student or not book:
+            return
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement and student.etablissement_id != target_etablissement.id:
+            raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
+        if target_etablissement and book.etablissement_id != target_etablissement.id:
+            raise ValidationError({"book": "Le livre n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
 
 
 class CanteenMenuViewSet(BaseModelViewSet):
@@ -1408,18 +3284,80 @@ class CanteenMenuViewSet(BaseModelViewSet):
     serializer_class = CanteenMenuSerializer
     filterset_fields = ["menu_date", "is_active"]
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested = self._requested_etablissement()
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN and requested:
+            return requested
+        return getattr(user, "etablissement", None)
+
     def get_queryset(self):
         user = self.request.user
         qs = CanteenMenu.objects.all().order_by("-menu_date", "-id")
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return qs.filter(etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return qs.none()
+
         if hasattr(user, "role") and user.role == "super_admin":
             return qs.all()
-        return qs.filter(etablissement=user.etablissement)
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return qs.none()
+        return qs.filter(etablissement=user_etablissement)
 
     def perform_create(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        serializer.save(etablissement=self._resolve_target_etablissement())
 
     def perform_update(self, serializer):
-        serializer.save(etablissement=self.request.user.etablissement)
+        serializer.save(etablissement=self._resolve_target_etablissement())
 
 
 class CanteenSubscriptionViewSet(BaseModelViewSet):
@@ -1427,11 +3365,188 @@ class CanteenSubscriptionViewSet(BaseModelViewSet):
     serializer_class = CanteenSubscriptionSerializer
     filterset_fields = ["student", "academic_year", "status"]
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        role = getattr(user, "role", "")
+
+        if role == UserRole.STUDENT:
+            return qs.filter(student__user_id=user.id)
+        if role == UserRole.PARENT:
+            return qs.filter(student__parent__user_id=user.id)
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return qs.filter(student__etablissement=requested_etablissement)
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+        return qs.filter(student__etablissement=getattr(user, "etablissement", None))
+
+    def _validate_scope(self, serializer):
+        student = serializer.validated_data.get("student")
+        if not student:
+            return
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement and student.etablissement_id != target_etablissement.id:
+            raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
 
 class CanteenServiceViewSet(BaseModelViewSet):
     queryset = CanteenService.objects.select_related("student", "student__user", "menu").all().order_by("-served_on", "-id")
     serializer_class = CanteenServiceSerializer
     filterset_fields = ["student", "menu", "served_on", "is_paid"]
+
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        role = getattr(user, "role", "")
+
+        if role == UserRole.STUDENT:
+            return qs.filter(student__user_id=user.id)
+        if role == UserRole.PARENT:
+            return qs.filter(student__parent__user_id=user.id)
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return qs.filter(student__etablissement=requested_etablissement)
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+        return qs.filter(student__etablissement=getattr(user, "etablissement", None))
+
+    def _validate_scope(self, serializer):
+        student = serializer.validated_data.get("student")
+        menu = serializer.validated_data.get("menu")
+        if not student or not menu:
+            return
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement and student.etablissement_id != target_etablissement.id:
+            raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
+        if target_etablissement and menu.etablissement_id != target_etablissement.id:
+            raise ValidationError({"menu": "Le menu n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
 
 
 class ExamSessionViewSet(BaseModelViewSet):
@@ -1443,26 +3558,229 @@ class ExamPlanningViewSet(BaseModelViewSet):
     queryset = ExamPlanning.objects.select_related("session", "classroom", "subject").all()
     serializer_class = ExamPlanningSerializer
 
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        return getattr(user, "etablissement", None)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            return qs.filter(classroom__etablissement=requested_etablissement)
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+        return qs.filter(classroom__etablissement=getattr(user, "etablissement", None))
+
+    def _validate_scope(self, serializer):
+        classroom = serializer.validated_data.get("classroom")
+        if not classroom:
+            return
+        target_etablissement = self._resolve_target_etablissement()
+        if target_etablissement and classroom.etablissement_id != target_etablissement.id:
+            raise ValidationError({"classroom": "La classe n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
 
 class ExamInvigilationViewSet(BaseModelViewSet):
     queryset = ExamInvigilation.objects.select_related("planning", "planning__session", "planning__classroom", "planning__subject", "supervisor").all().order_by("-created_at")
     serializer_class = ExamInvigilationSerializer
     filterset_fields = ["planning", "supervisor", "planning__session"]
 
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        requested_id = self.request.headers.get("X-Etablissement-Id") or self.request.query_params.get("etablissement")
+        if requested_id not in (None, ""):
+            try:
+                return qs.filter(planning__classroom__etablissement_id=int(requested_id))
+            except (TypeError, ValueError):
+                return qs.none()
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+        return qs.filter(planning__classroom__etablissement=getattr(user, "etablissement", None))
+
+    def _validate_scope(self, serializer):
+        planning = serializer.validated_data.get("planning")
+        if not planning:
+            return
+        user = self.request.user
+        requested_id = self.request.headers.get("X-Etablissement-Id") or self.request.query_params.get("etablissement")
+        target_id = None
+        if requested_id not in (None, "") and getattr(user, "role", None) == "super_admin":
+            try:
+                target_id = int(requested_id)
+            except (TypeError, ValueError):
+                target_id = None
+        if target_id is None:
+            target_id = getattr(user, "etablissement_id", None)
+        if target_id and planning.classroom.etablissement_id != target_id:
+            raise ValidationError({"planning": "Le planning n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
 
 class ExamResultViewSet(BaseModelViewSet):
     queryset = ExamResult.objects.select_related("session", "student", "subject").all()
     serializer_class = ExamResultSerializer
 
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        role = getattr(user, "role", "")
+        if role == UserRole.STUDENT:
+            return qs.filter(student__user_id=user.id)
+        if role == UserRole.PARENT:
+            return qs.filter(student__parent__user_id=user.id)
 
-class SupplierViewSet(BaseModelViewSet):
-    queryset = Supplier.objects.all()
+        requested_id = self.request.headers.get("X-Etablissement-Id") or self.request.query_params.get("etablissement")
+        if requested_id not in (None, ""):
+            try:
+                return qs.filter(student__etablissement_id=int(requested_id))
+            except (TypeError, ValueError):
+                return qs.none()
+        if getattr(user, "role", None) == "super_admin":
+            return qs
+        return qs.filter(student__etablissement=getattr(user, "etablissement", None))
+
+    def _validate_scope(self, serializer):
+        student = serializer.validated_data.get("student")
+        if not student:
+            return
+        user = self.request.user
+        requested_id = self.request.headers.get("X-Etablissement-Id") or self.request.query_params.get("etablissement")
+        target_id = None
+        if requested_id not in (None, "") and getattr(user, "role", None) == "super_admin":
+            try:
+                target_id = int(requested_id)
+            except (TypeError, ValueError):
+                target_id = None
+        if target_id is None:
+            target_id = getattr(user, "etablissement_id", None)
+        if target_id and student.etablissement_id != target_id:
+            raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_scope(serializer)
+        serializer.save()
+
+
+class SupplierViewSet(EtablissementScopedModelViewSet):
+    queryset = Supplier.objects.select_related("etablissement").all()
     serializer_class = SupplierSerializer
 
+    def get_queryset(self):
+        return self._filter_by_scope(super().get_queryset(), field_name="etablissement")
 
-class StockItemViewSet(BaseModelViewSet):
-    queryset = StockItem.objects.select_related("supplier").all()
+    def perform_create(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        serializer.save(etablissement=target_etablissement)
+
+    def perform_update(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        serializer.save(etablissement=target_etablissement)
+
+
+class StockItemViewSet(EtablissementScopedModelViewSet):
+    queryset = StockItem.objects.select_related("supplier", "etablissement").all()
     serializer_class = StockItemSerializer
+
+    def get_queryset(self):
+        return self._filter_by_scope(super().get_queryset(), field_name="etablissement")
+
+    def _validate_scope(self, serializer):
+        supplier = serializer.validated_data.get("supplier") or getattr(serializer.instance, "supplier", None)
+        target_etablissement = self._resolve_target_etablissement()
+        if not supplier or not target_etablissement:
+            return
+        if supplier.etablissement_id != target_etablissement.id:
+            raise ValidationError({"supplier": "Le fournisseur n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        self._validate_scope(serializer)
+        serializer.save(etablissement=target_etablissement)
+
+    def perform_update(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        self._validate_scope(serializer)
+        serializer.save(etablissement=target_etablissement)
 
     @action(detail=False, methods=["get"])
     def low_stock(self, request):
@@ -1472,19 +3790,190 @@ class StockItemViewSet(BaseModelViewSet):
 
 
 class StockMovementViewSet(BaseModelViewSet):
-    queryset = StockMovement.objects.select_related("item").all().order_by("-created_at")
+    queryset = StockMovement.objects.select_related("item", "item__etablissement").all().order_by("-created_at")
     serializer_class = StockMovementSerializer
+
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN and requested_etablissement:
+            return requested_etablissement
+        return getattr(user, "etablissement", None)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            return qs.filter(item__etablissement=requested_etablissement)
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN:
+            return qs
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return qs.none()
+        return qs.filter(item__etablissement=user_etablissement)
+
+    def _validate_scope(self, serializer):
+        item = serializer.validated_data.get("item") or getattr(serializer.instance, "item", None)
+        target_etablissement = self._resolve_target_etablissement()
+        if not item or not target_etablissement:
+            return
+        if item.etablissement_id != target_etablissement.id:
+            raise ValidationError({"item": "L'article n'appartient pas a l'etablissement actif."})
+
+    def perform_create(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        self._validate_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        target_etablissement = self._resolve_target_etablissement()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+        self._validate_scope(serializer)
+        serializer.save()
 
 
 class DashboardViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
+    @staticmethod
+    def _requested_etablissement_id(request):
+        raw_value = (
+            request.headers.get("X-Etablissement-Id")
+            or request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    @staticmethod
+    def _requested_etablissement_name(request):
+        raw_name = (
+            request.headers.get("X-Etablissement-Name")
+            or request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self, request):
+        requested_id = self._requested_etablissement_id(request)
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name(request)
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _resolve_dashboard_scope(self, request):
+        user = request.user
+        requested = self._requested_etablissement(request)
+        if getattr(user, "role", None) == "super_admin":
+            return requested
+        return getattr(user, "etablissement", None)
+
     def list(self, request):
         month_start = timezone.now().date().replace(day=1)
-        revenue = Payment.objects.filter(created_at__date__gte=month_start).aggregate(value=Sum("amount"))["value"] or 0
-        expenses = Expense.objects.filter(date__gte=month_start).aggregate(value=Sum("amount"))["value"] or 0
-        students = Student.objects.filter(is_archived=False).count()
-        absences = Attendance.objects.filter(is_absent=True, date__gte=month_start).count()
+        active_etablissement = self._resolve_dashboard_scope(request)
+        if getattr(request.user, "role", None) == UserRole.SUPER_ADMIN and active_etablissement is None:
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+
+        payment_qs = Payment.objects.filter(created_at__date__gte=month_start)
+        students_qs = Student.objects.filter(is_archived=False)
+        attendance_qs = Attendance.objects.filter(is_absent=True, date__gte=month_start)
+        classrooms_qs = ClassRoom.objects.all()
+        teachers_qs = Teacher.objects.all()
+
+        if active_etablissement is not None:
+            payment_qs = payment_qs.filter(etablissement=active_etablissement)
+            students_qs = students_qs.filter(etablissement=active_etablissement)
+            attendance_qs = attendance_qs.filter(student__etablissement=active_etablissement)
+            classrooms_qs = classrooms_qs.filter(etablissement=active_etablissement)
+            teachers_qs = teachers_qs.filter(etablissement=active_etablissement)
+
+        revenue = payment_qs.aggregate(value=Sum("amount"))["value"] or 0
+        expenses_qs = Expense.objects.filter(date__gte=month_start)
+        if active_etablissement is not None:
+            expenses_qs = expenses_qs.filter(etablissement=active_etablissement)
+        expenses = expenses_qs.aggregate(value=Sum("amount"))["value"] or 0
+        students = students_qs.count()
+        absences = attendance_qs.count()
+        classroom_count = classrooms_qs.count()
+        teacher_count = teachers_qs.count()
+
+        etablissement_payload = None
+        if active_etablissement is not None:
+            etablissement_payload = {
+                "id": active_etablissement.id,
+                "name": active_etablissement.name,
+                "address": active_etablissement.address,
+                "phone": active_etablissement.phone,
+                "email": active_etablissement.email,
+            }
+
         return Response(
             {
                 "students": students,
@@ -1492,5 +3981,8 @@ class DashboardViewSet(viewsets.ViewSet):
                 "monthly_expenses": expenses,
                 "monthly_profit": revenue - expenses,
                 "monthly_absences": absences,
+                "classrooms": classroom_count,
+                "teachers": teacher_count,
+                "active_etablissement": etablissement_payload,
             }
         )

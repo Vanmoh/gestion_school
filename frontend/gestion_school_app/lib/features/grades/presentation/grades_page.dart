@@ -10,6 +10,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../auth/presentation/auth_controller.dart';
 
 class GradesPage extends ConsumerStatefulWidget {
   const GradesPage({super.key});
@@ -40,6 +41,9 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   List<Map<String, dynamic>> _years = [];
   List<Map<String, dynamic>> _grades = [];
   Map<String, dynamic>? _validationStatus;
+  bool _isTeacherUser = false;
+  int? _loggedTeacherId;
+  Set<int> _allowedClassroomIds = <int>{};
 
   @override
   void initState() {
@@ -63,6 +67,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       final results = await Future.wait([
         dio.get('/students/'),
         dio.get('/subjects/'),
+        dio.get('/teachers/'),
         dio.get('/teacher-assignments/'),
         dio.get('/classrooms/'),
         dio.get('/academic-years/'),
@@ -70,17 +75,56 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
       if (!mounted) return;
 
+      final authUser = ref.read(authControllerProvider).value;
+      final isTeacherUser = authUser?.role == 'teacher';
+      final teachers = _extractRows(results[2].data);
+      final assignments = _extractRows(results[3].data);
+      final classrooms = _extractRows(results[4].data);
+      final years = _extractRows(results[5].data);
+
+      int? loggedTeacherId;
+      Set<int> allowedClassroomIds = <int>{};
+
+      if (isTeacherUser && authUser != null) {
+        final ownTeacher = teachers.firstWhere(
+          (row) => _asInt(row['user']) == authUser.id,
+          orElse: () => <String, dynamic>{},
+        );
+        final teacherId = _asInt(ownTeacher['id']);
+        if (teacherId > 0) {
+          loggedTeacherId = teacherId;
+          allowedClassroomIds = assignments
+              .where((row) => _asInt(row['teacher']) == teacherId)
+              .map((row) => _asInt(row['classroom']))
+              .where((id) => id > 0)
+              .toSet();
+        }
+      }
+
       setState(() {
         _students = _extractRows(results[0].data);
         _subjects = _extractRows(results[1].data);
-        _teacherAssignments = _extractRows(results[2].data);
-        _classrooms = _extractRows(results[3].data);
-        _years = _extractRows(results[4].data);
+        _teacherAssignments = assignments;
+        _classrooms = classrooms;
+        _years = years;
+        _isTeacherUser = isTeacherUser;
+        _loggedTeacherId = loggedTeacherId;
+        _allowedClassroomIds = allowedClassroomIds;
         _termController.text = _currentTermOrDefault();
 
-        _selectedClassroom ??= _classrooms.isNotEmpty
-            ? _asInt(_classrooms.first['id'])
-            : null;
+        final visibleClassrooms = _classroomsForCurrentRole();
+        final visibleClassroomIds = visibleClassrooms
+            .map((row) => _asInt(row['id']))
+            .where((id) => id > 0)
+            .toSet();
+
+        if (_selectedClassroom == null ||
+            !visibleClassroomIds.contains(_selectedClassroom)) {
+          _selectedClassroom = visibleClassrooms.isNotEmpty
+              ? _asInt(visibleClassrooms.first['id'])
+              : null;
+        }
+
         _selectedAcademicYear ??= _years.isNotEmpty
             ? _asInt(_years.first['id'])
             : null;
@@ -92,7 +136,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             : (_students.isNotEmpty ? _asInt(_students.first['id']) : null);
         _selectedSubject ??= classSubjects.isNotEmpty
             ? _asInt(classSubjects.first['id'])
-            : (_subjects.isNotEmpty ? _asInt(_subjects.first['id']) : null);
+            : null;
       });
 
       await _refreshValidationStatus();
@@ -178,6 +222,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     required int academicYearId,
     required String term,
   }) async {
+    if (subjectId <= 0 || classroomId <= 0 || academicYearId <= 0) {
+      return <int, Map<String, dynamic>>{};
+    }
+
     final dio = ref.read(dioProvider);
     final rowsByStudent = <int, Map<String, dynamic>>{};
 
@@ -234,17 +282,24 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       return;
     }
 
-    if (_students.isEmpty || _subjects.isEmpty || _classrooms.isEmpty) {
+    final visibleClassrooms = _classroomsForCurrentRole();
+    if (_students.isEmpty || visibleClassrooms.isEmpty) {
       _showMessage('Aucun élève ou matière disponible pour la saisie.');
       return;
     }
 
     int selectedClassroom =
-        _selectedClassroom ?? _asInt(_classrooms.first['id']);
+        _selectedClassroom ?? _asInt(visibleClassrooms.first['id']);
     final initialSubjects = _subjectsForClassroom(selectedClassroom);
+    if (initialSubjects.isEmpty) {
+      _showMessage(
+        'Aucune matière attribuée à cette classe. Configurez les attributions enseignant/matière.',
+      );
+      return;
+    }
     int selectedSubject = initialSubjects.isNotEmpty
         ? _asInt(initialSubjects.first['id'])
-        : (_selectedSubject ?? _asInt(_subjects.first['id']));
+        : 0;
     List<Map<String, dynamic>> dialogStudents = _studentsForClassroom(
       selectedClassroom,
     );
@@ -274,6 +329,31 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       try {
         final term = _currentTermOrDefault();
         final loadedStudents = _studentsForClassroom(selectedClassroom);
+
+        final classSubjects = _subjectsForClassroom(selectedClassroom);
+        final validSubjectIds = classSubjects
+            .map((row) => _asInt(row['id']))
+            .where((id) => id > 0)
+            .toSet();
+
+        if (validSubjectIds.isEmpty ||
+            !validSubjectIds.contains(selectedSubject)) {
+          disposeDialogControllers();
+          for (final student in loadedStudents) {
+            final studentId = _asInt(student['id']);
+            noteControllers[studentId] = TextEditingController(text: '');
+          }
+
+          setDialogState(() {
+            dialogStudents = loadedStudents;
+            existingByStudent = <int, Map<String, dynamic>>{};
+            loadingRows = false;
+            dialogError =
+                'Aucune matière attribuée à cette classe. Configurez les attributions enseignant/matière.';
+          });
+          return;
+        }
+
         final loadedExisting = await _fetchExistingGradesForDialog(
           classroomId: selectedClassroom,
           subjectId: selectedSubject,
@@ -296,10 +376,31 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           existingByStudent = loadedExisting;
           loadingRows = false;
         });
+      } on DioException catch (error) {
+        final classSubjects = _subjectsForClassroom(selectedClassroom);
+        final validSubjectIds = classSubjects
+            .map((row) => _asInt(row['id']))
+            .where((id) => id > 0)
+            .toSet();
+        final noSubjectAssigned =
+            validSubjectIds.isEmpty ||
+            !validSubjectIds.contains(selectedSubject);
+
+        setDialogState(() {
+          loadingRows = false;
+          if (noSubjectAssigned || error.response?.statusCode == 400) {
+            dialogError =
+                'Aucune matière attribuée à cette classe. Configurez les attributions enseignant/matière.';
+          } else {
+            dialogError =
+                'Erreur chargement élèves/notes: ${_extractDioErrorMessage(error)}';
+          }
+        });
       } catch (error) {
         setDialogState(() {
           loadingRows = false;
-          dialogError = 'Erreur chargement élèves/notes: $error';
+          dialogError =
+              'Erreur chargement élèves/notes: ${_extractFriendlyError(error)}';
         });
       }
     }
@@ -338,7 +439,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                             decoration: const InputDecoration(
                               labelText: 'Classe',
                             ),
-                            items: _classrooms
+                            items: _classroomsForCurrentRole()
                                 .map(
                                   (row) => DropdownMenuItem<int>(
                                     value: _asInt(row['id']),
@@ -360,6 +461,8 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                         selectedSubject = _asInt(
                                           classSubjects.first['id'],
                                         );
+                                      } else {
+                                        selectedSubject = 0;
                                       }
                                     });
                                     loadDialogRows(setDialogState);
@@ -369,7 +472,9 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: DropdownButtonFormField<int>(
-                            initialValue: selectedSubject,
+                            initialValue: selectedSubject > 0
+                                ? selectedSubject
+                                : null,
                             decoration: const InputDecoration(
                               labelText: 'Matière',
                             ),
@@ -386,7 +491,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                             onChanged: loadingRows || savingRows
                                 ? null
                                 : (value) {
-                                    if (value == null) return;
+                                    if (value == null || value <= 0) return;
                                     setDialogState(
                                       () => selectedSubject = value,
                                     );
@@ -1133,10 +1238,19 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   }
 
   List<Map<String, dynamic>> _studentsForClassroom(int? classroomId) {
-    if (classroomId == null || classroomId <= 0) return _students;
-    return _students
-        .where((row) => _asInt(row['classroom']) == classroomId)
-        .toList();
+    var pool = _students;
+
+    if (_isTeacherUser) {
+      if (_allowedClassroomIds.isEmpty) {
+        return const [];
+      }
+      pool = pool
+          .where((row) => _allowedClassroomIds.contains(_asInt(row['classroom'])))
+          .toList();
+    }
+
+    if (classroomId == null || classroomId <= 0) return pool;
+    return pool.where((row) => _asInt(row['classroom']) == classroomId).toList();
   }
 
   List<Map<String, dynamic>> _subjectsForClassroom(int? classroomId) {
@@ -1144,18 +1258,39 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       return _subjects;
     }
 
-    final assignedSubjectIds = _teacherAssignments
-        .where((row) => _asInt(row['classroom']) == classroomId)
+    final assignedRows = _teacherAssignments.where((row) {
+      if (_asInt(row['classroom']) != classroomId) {
+        return false;
+      }
+      if (_isTeacherUser && (_loggedTeacherId ?? 0) > 0) {
+        return _asInt(row['teacher']) == _loggedTeacherId;
+      }
+      return true;
+    });
+
+    final assignedSubjectIds = assignedRows
         .map((row) => _asInt(row['subject']))
         .where((id) => id > 0)
         .toSet();
 
     if (assignedSubjectIds.isEmpty) {
-      return _subjects;
+      return const [];
     }
 
     return _subjects
         .where((row) => assignedSubjectIds.contains(_asInt(row['id'])))
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _classroomsForCurrentRole() {
+    if (!_isTeacherUser) {
+      return _classrooms;
+    }
+    if (_allowedClassroomIds.isEmpty) {
+      return const [];
+    }
+    return _classrooms
+        .where((row) => _allowedClassroomIds.contains(_asInt(row['id'])))
         .toList();
   }
 
@@ -1291,6 +1426,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
+    final visibleClassrooms = _classroomsForCurrentRole();
     final studentsForSelectedClass = _studentsForClassroom(_selectedClassroom);
     final selectableStudents = studentsForSelectedClass.isNotEmpty
         ? studentsForSelectedClass
@@ -1434,7 +1570,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           DropdownButtonFormField<int>(
             initialValue: _selectedClassroom,
             decoration: const InputDecoration(labelText: 'Classe'),
-            items: _classrooms
+            items: visibleClassrooms
                 .map(
                   (c) => DropdownMenuItem<int>(
                     value: _asInt(c['id']),
@@ -1851,7 +1987,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               children: [
                 _metricChip('Eleves', '${_students.length}'),
                 _metricChip('Matieres', '${_subjects.length}'),
-                _metricChip('Classes', '${_classrooms.length}'),
+                _metricChip('Classes', '${visibleClassrooms.length}'),
                 _metricChip('Annees', '${_years.length}'),
                 _metricChip('Notes', '${_grades.length}'),
                 _metricChip('Validation', validationLabel),

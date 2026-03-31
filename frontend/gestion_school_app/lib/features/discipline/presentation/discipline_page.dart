@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../auth/presentation/auth_controller.dart';
 
 class DisciplinePage extends ConsumerStatefulWidget {
   const DisciplinePage({super.key});
@@ -48,18 +49,62 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
       final results = await Future.wait([
         dio.get('/students/'),
         dio.get('/discipline-incidents/'),
+        dio.get('/teachers/'),
+        dio.get('/teacher-assignments/'),
       ]);
 
       if (!mounted) return;
       final students = _extractRows(results[0].data);
       final incidents = _extractRows(results[1].data);
+      final teachers = _extractRows(results[2].data);
+      final assignments = _extractRows(results[3].data);
+
+      final authUser = ref.read(authControllerProvider).value;
+      final isTeacherUser = authUser?.role == 'teacher';
+
+      List<Map<String, dynamic>> scopedStudents = students;
+      List<Map<String, dynamic>> scopedIncidents = incidents;
+
+      if (isTeacherUser && authUser != null) {
+        final ownTeacher = teachers.firstWhere(
+          (row) => _asInt(row['user']) == authUser.id,
+          orElse: () => <String, dynamic>{},
+        );
+        final teacherId = _asInt(ownTeacher['id']);
+        final allowedClassroomIds = assignments
+            .where((row) => _asInt(row['teacher']) == teacherId)
+            .map((row) => _asInt(row['classroom']))
+            .where((id) => id > 0)
+            .toSet();
+
+        scopedStudents = students
+            .where(
+              (row) => allowedClassroomIds.contains(_asInt(row['classroom'])),
+            )
+            .toList();
+
+        final visibleStudentIds = scopedStudents
+            .map((row) => _asInt(row['id']))
+            .where((id) => id > 0)
+            .toSet();
+
+        scopedIncidents = incidents
+            .where((row) => visibleStudentIds.contains(_asInt(row['student'])))
+            .toList();
+      }
 
       setState(() {
-        _students = students;
-        _incidents = incidents;
-        _selectedStudentId ??= students.isNotEmpty
-            ? _asInt(students.first['id'])
-            : null;
+        _students = scopedStudents;
+        _incidents = scopedIncidents;
+        final validIds = scopedStudents
+            .map((row) => _asInt(row['id']))
+            .where((id) => id > 0)
+            .toSet();
+        if (_selectedStudentId == null || !validIds.contains(_selectedStudentId)) {
+          _selectedStudentId = scopedStudents.isNotEmpty
+              ? _asInt(scopedStudents.first['id'])
+              : null;
+        }
       });
     } catch (error) {
       if (!mounted) return;
@@ -138,6 +183,8 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
     }
 
     final studentById = {for (final s in _students) _asInt(s['id']): s};
+    final authUser = ref.watch(authControllerProvider).value;
+    final isTeacherUser = authUser?.role == 'teacher';
 
     return ListView(
       padding: const EdgeInsets.all(18),
@@ -148,6 +195,13 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
           'Suivi des incidents disciplinaires et des sanctions.',
           style: Theme.of(context).textTheme.bodyMedium,
         ),
+        if (isTeacherUser) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Affichage limité aux élèves de vos classes.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
         const SizedBox(height: 14),
         Card(
           child: Padding(

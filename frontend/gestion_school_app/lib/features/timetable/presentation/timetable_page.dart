@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
+import '../../auth/presentation/auth_controller.dart';
 import 'timetable_workload.dart';
 
 class TimetablePage extends ConsumerStatefulWidget {
@@ -37,6 +38,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   String _activeApiBaseUrl = ApiConstants.baseUrl;
   bool _usingCustomApiBaseUrl = false;
   bool _apiUrlResetAttempted = false;
+  bool _isTeacherUser = false;
+  int? _loggedTeacherId;
+  Set<int> _teacherAssignmentIds = <int>{};
+  Set<int> _teacherClassroomIds = <int>{};
 
   static const List<String> _dayOrder = [
     'MON',
@@ -151,6 +156,35 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
       if (!mounted) return;
 
+      final authUser = ref.read(authControllerProvider).value;
+      final isTeacherUser = authUser?.role == 'teacher';
+
+      int? loggedTeacherId;
+      Set<int> teacherAssignmentIds = <int>{};
+      Set<int> teacherClassroomIds = <int>{};
+
+      if (isTeacherUser && authUser != null) {
+        final ownTeacher = results[0].firstWhere(
+          (row) => _asInt(row['user']) == authUser.id,
+          orElse: () => <String, dynamic>{},
+        );
+        final teacherId = _asInt(ownTeacher['id']);
+        if (teacherId > 0) {
+          loggedTeacherId = teacherId;
+          final ownAssignments = results[3]
+              .where((row) => _asInt(row['teacher']) == teacherId)
+              .toList();
+          teacherAssignmentIds = ownAssignments
+              .map((row) => _asInt(row['id']))
+              .where((id) => id > 0)
+              .toSet();
+          teacherClassroomIds = ownAssignments
+              .map((row) => _asInt(row['classroom']))
+              .where((id) => id > 0)
+              .toSet();
+        }
+      }
+
       final hasSlotEndpoint404 = failures.any(
         (entry) =>
             entry.contains('/teacher-schedule-slots/') &&
@@ -200,12 +234,22 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         _activeApiBaseUrl = activeApiUrl;
         _usingCustomApiBaseUrl = hasStoredCustomApi;
         _scheduleApiSupported = scheduleApiSupported;
+        _isTeacherUser = isTeacherUser;
+        _loggedTeacherId = loggedTeacherId;
+        _teacherAssignmentIds = teacherAssignmentIds;
+        _teacherClassroomIds = teacherClassroomIds;
+        if (_isTeacherUser) {
+          _viewMode = 'teacher';
+        }
 
-        final classIds = _classrooms.map((row) => _asInt(row['id'])).toSet();
+        final classIds = _visibleClassrooms()
+            .map((row) => _asInt(row['id']))
+            .toSet();
         if (_selectedClassroom == null ||
             !classIds.contains(_selectedClassroom)) {
-          _selectedClassroom = _classrooms.isNotEmpty
-              ? _asInt(_classrooms.first['id'])
+          final visible = _visibleClassrooms();
+          _selectedClassroom = visible.isNotEmpty
+              ? _asInt(visible.first['id'])
               : null;
         }
       });
@@ -1407,18 +1451,19 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final assignmentsByClass = _assignmentsByClass(assignmentById);
     final slotsByClass = _slotsByClass(assignmentById);
     final publicationByClass = _publicationByClassroom();
+    final visibleClassrooms = _visibleClassrooms();
 
     final colorScheme = Theme.of(context).colorScheme;
-    final classesWithSlots = _classrooms
+    final classesWithSlots = visibleClassrooms
         .where((row) => (slotsByClass[_asInt(row['id'])] ?? []).isNotEmpty)
         .length;
-    final classesPublished = _classrooms
+    final classesPublished = visibleClassrooms
         .where(
           (row) =>
               _asBool(publicationByClass[_asInt(row['id'])]?['is_published']),
         )
         .length;
-    final classesLocked = _classrooms
+    final classesLocked = visibleClassrooms
         .where(
           (row) => _asBool(publicationByClass[_asInt(row['id'])]?['is_locked']),
         )
@@ -1426,12 +1471,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
     final selectedClassId = _selectedClassroom;
     final selectedClassName = _classNameById(selectedClassId);
-    final selectedAssignments = selectedClassId == null
-        ? <Map<String, dynamic>>[]
-        : (assignmentsByClass[selectedClassId] ?? <Map<String, dynamic>>[]);
-    final selectedSlots = selectedClassId == null
-        ? <Map<String, dynamic>>[]
-        : (slotsByClass[selectedClassId] ?? <Map<String, dynamic>>[]);
+    final selectedAssignments = _visibleAssignmentsForClass(
+      selectedClassId,
+      assignmentsByClass,
+    );
+    final selectedSlots = _visibleSlotsForClass(selectedClassId, slotsByClass);
     final selectedPublication = selectedClassId == null
         ? null
         : publicationByClass[selectedClassId];
@@ -1445,7 +1489,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       assignmentById: assignmentById,
       scheduleSlots: _scheduleSlots,
       classroomFilter: _teacherScope == 'selected' ? selectedClassId : null,
-    );
+    ).where((row) {
+      if (!_isTeacherUser || (_loggedTeacherId ?? 0) <= 0) {
+        return true;
+      }
+      return row.teacherId == _loggedTeacherId;
+    }).toList();
 
     final controlsPanel = _sectionCard(
       title: 'Filtres et actions',
@@ -1487,30 +1536,31 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             ),
             const SizedBox(height: 10),
           ],
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment<String>(
-                value: 'classroom',
-                label: Text('Par classe'),
-                icon: Icon(Icons.grid_view_outlined),
-              ),
-              ButtonSegment<String>(
-                value: 'teacher',
-                label: Text('Par enseignant'),
-                icon: Icon(Icons.badge_outlined),
-              ),
-            ],
-            selected: {_viewMode},
-            onSelectionChanged: (values) {
-              final next = values.first;
-              setState(() => _viewMode = next);
-            },
-          ),
+          if (!_isTeacherUser)
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment<String>(
+                  value: 'classroom',
+                  label: Text('Par classe'),
+                  icon: Icon(Icons.grid_view_outlined),
+                ),
+                ButtonSegment<String>(
+                  value: 'teacher',
+                  label: Text('Par enseignant'),
+                  icon: Icon(Icons.badge_outlined),
+                ),
+              ],
+              selected: {_viewMode},
+              onSelectionChanged: (values) {
+                final next = values.first;
+                setState(() => _viewMode = next);
+              },
+            ),
           const SizedBox(height: 10),
           DropdownButtonFormField<int>(
             initialValue: _selectedClassroom,
             decoration: const InputDecoration(labelText: 'Classe'),
-            items: _classrooms
+            items: visibleClassrooms
                 .map(
                   (row) => DropdownMenuItem<int>(
                     value: _asInt(row['id']),
@@ -1538,17 +1588,18 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              FilledButton.icon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null ||
-                        selectedIsLocked)
-                    ? null
-                    : () => _openSlotDialog(forceClassroomId: selectedClassId),
-                icon: const Icon(Icons.add_circle_outline),
-                label: const Text('Ajouter horaire'),
-              ),
+              if (!_isTeacherUser)
+                FilledButton.icon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          selectedIsLocked)
+                      ? null
+                      : () => _openSlotDialog(forceClassroomId: selectedClassId),
+                  icon: const Icon(Icons.add_circle_outline),
+                  label: const Text('Ajouter horaire'),
+                ),
               FilledButton.tonalIcon(
                 onPressed:
                     (_saving ||
@@ -1559,16 +1610,17 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 icon: const Icon(Icons.picture_as_pdf),
                 label: const Text('Imprimer tableau PDF'),
               ),
-              FilledButton.tonalIcon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null)
-                    ? null
-                    : _exportSelectedClassXlsx,
-                icon: const Icon(Icons.table_view_outlined),
-                label: const Text('Exporter XLSX classe'),
-              ),
+              if (!_isTeacherUser)
+                FilledButton.tonalIcon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null)
+                      ? null
+                      : _exportSelectedClassXlsx,
+                  icon: const Icon(Icons.table_view_outlined),
+                  label: const Text('Exporter XLSX classe'),
+                ),
               FilledButton.tonalIcon(
                 onPressed: (_saving || selectedClassId == null)
                     ? null
@@ -1581,91 +1633,96 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 icon: const Icon(Icons.refresh),
                 label: const Text('Actualiser'),
               ),
-              FilledButton.tonalIcon(
-                onPressed: (_saving || !_scheduleApiSupported)
-                    ? null
-                    : _openDuplicateScheduleDialog,
-                icon: const Icon(Icons.copy_all_outlined),
-                label: const Text('Dupliquer planning'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              OutlinedButton.icon(
-                onPressed: (_saving || !_scheduleApiSupported)
-                    ? null
-                    : _exportGlobalXlsx,
-                icon: const Icon(Icons.dataset_outlined),
-                label: const Text('Export global XLSX'),
-              ),
-              OutlinedButton.icon(
-                onPressed: (_saving || !_scheduleApiSupported)
-                    ? null
-                    : _exportGlobalPdf,
-                icon: const Icon(Icons.picture_as_pdf_outlined),
-                label: const Text('Export global PDF'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.tonalIcon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null ||
-                        selectedAssignments.isEmpty)
-                    ? null
-                    : () => _publishSelectedClass(lockAfterPublish: true),
-                icon: const Icon(Icons.publish),
-                label: const Text('Publier + verrouiller'),
-              ),
-              OutlinedButton.icon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null ||
-                        selectedAssignments.isEmpty)
-                    ? null
-                    : () => _publishSelectedClass(lockAfterPublish: false),
-                icon: const Icon(Icons.cloud_upload_outlined),
-                label: const Text('Publier sans verrou'),
-              ),
-              OutlinedButton.icon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null ||
-                        !selectedIsPublished)
-                    ? null
-                    : () => _setSelectedClassLock(lock: !selectedIsLocked),
-                icon: Icon(
-                  selectedIsLocked
-                      ? Icons.lock_open_outlined
-                      : Icons.lock_outline,
+              if (!_isTeacherUser)
+                FilledButton.tonalIcon(
+                  onPressed: (_saving || !_scheduleApiSupported)
+                      ? null
+                      : _openDuplicateScheduleDialog,
+                  icon: const Icon(Icons.copy_all_outlined),
+                  label: const Text('Dupliquer planning'),
                 ),
-                label: Text(selectedIsLocked ? 'Déverrouiller' : 'Verrouiller'),
-              ),
-              OutlinedButton.icon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null ||
-                        !selectedIsPublished)
-                    ? null
-                    : _unpublishSelectedClass,
-                icon: const Icon(Icons.unpublished_outlined),
-                label: const Text('Repasser brouillon'),
-              ),
             ],
           ),
+          if (!_isTeacherUser) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: (_saving || !_scheduleApiSupported)
+                      ? null
+                      : _exportGlobalXlsx,
+                  icon: const Icon(Icons.dataset_outlined),
+                  label: const Text('Export global XLSX'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: (_saving || !_scheduleApiSupported)
+                      ? null
+                      : _exportGlobalPdf,
+                  icon: const Icon(Icons.picture_as_pdf_outlined),
+                  label: const Text('Export global PDF'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          selectedAssignments.isEmpty)
+                      ? null
+                      : () => _publishSelectedClass(lockAfterPublish: true),
+                  icon: const Icon(Icons.publish),
+                  label: const Text('Publier + verrouiller'),
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          selectedAssignments.isEmpty)
+                      ? null
+                      : () => _publishSelectedClass(lockAfterPublish: false),
+                  icon: const Icon(Icons.cloud_upload_outlined),
+                  label: const Text('Publier sans verrou'),
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          !selectedIsPublished)
+                      ? null
+                      : () => _setSelectedClassLock(lock: !selectedIsLocked),
+                  icon: Icon(
+                    selectedIsLocked
+                        ? Icons.lock_open_outlined
+                        : Icons.lock_outline,
+                  ),
+                  label: Text(
+                    selectedIsLocked ? 'Déverrouiller' : 'Verrouiller',
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          !selectedIsPublished)
+                      ? null
+                      : _unpublishSelectedClass,
+                  icon: const Icon(Icons.unpublished_outlined),
+                  label: const Text('Repasser brouillon'),
+                ),
+              ],
+            ),
+          ],
           if (_viewMode == 'teacher') ...[
             const SizedBox(height: 10),
             SegmentedButton<String>(
@@ -1682,9 +1739,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 ),
               ],
               selected: {_teacherScope},
-              onSelectionChanged: (values) {
-                setState(() => _teacherScope = values.first);
-              },
+              onSelectionChanged: _isTeacherUser
+                  ? null
+                  : (values) {
+                      setState(() => _teacherScope = values.first);
+                    },
             ),
             const SizedBox(height: 6),
             Text(
@@ -2068,6 +2127,51 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
 
     return grouped;
+  }
+
+  List<Map<String, dynamic>> _visibleClassrooms() {
+    if (!_isTeacherUser) {
+      return _classrooms;
+    }
+    if (_teacherClassroomIds.isEmpty) {
+      return const [];
+    }
+    return _classrooms
+        .where((row) => _teacherClassroomIds.contains(_asInt(row['id'])))
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _visibleAssignmentsForClass(
+    int? classId,
+    Map<int, List<Map<String, dynamic>>> assignmentsByClass,
+  ) {
+    final rows = classId == null
+        ? <Map<String, dynamic>>[]
+        : (assignmentsByClass[classId] ?? <Map<String, dynamic>>[]);
+    if (!_isTeacherUser || (_loggedTeacherId ?? 0) <= 0) {
+      return rows;
+    }
+    return rows
+        .where((row) => _asInt(row['teacher']) == _loggedTeacherId)
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _visibleSlotsForClass(
+    int? classId,
+    Map<int, List<Map<String, dynamic>>> slotsByClass,
+  ) {
+    final rows = classId == null
+        ? <Map<String, dynamic>>[]
+        : (slotsByClass[classId] ?? <Map<String, dynamic>>[]);
+    if (!_isTeacherUser) {
+      return rows;
+    }
+    if (_teacherAssignmentIds.isEmpty) {
+      return const [];
+    }
+    return rows
+        .where((row) => _teacherAssignmentIds.contains(_asInt(row['assignment'])))
+        .toList();
   }
 
   Map<int, List<Map<String, dynamic>>> _slotsByClass(

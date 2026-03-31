@@ -92,7 +92,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       const Text(
                         'Choisissez d\'abord un établissement',
                         textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       const SizedBox(height: 10),
                       const Text(
@@ -102,7 +105,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       const SizedBox(height: 20),
                       FilledButton.icon(
                         onPressed: () {
-                          Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+                          Navigator.of(
+                            context,
+                          ).pushNamedAndRemoveUntil('/', (route) => false);
                         },
                         icon: const Icon(Icons.arrow_back),
                         label: const Text('Choisir un établissement'),
@@ -211,9 +216,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                     IconButton(
                                       tooltip: 'Choisir un autre établissement',
                                       onPressed: () {
-                                        Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+                                        Navigator.of(
+                                          context,
+                                        ).pushNamedAndRemoveUntil(
+                                          '/',
+                                          (route) => false,
+                                        );
                                       },
-                                      icon: const Icon(Icons.swap_horiz_rounded),
+                                      icon: const Icon(
+                                        Icons.swap_horiz_rounded,
+                                      ),
                                     ),
                                     IconButton(
                                       tooltip: 'Configurer URL API',
@@ -225,10 +237,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                   ],
                                 ),
                                 const SizedBox(height: 18),
-                                if (selectedEtablissement.logoUrl != null &&
-                                    selectedEtablissement.logoUrl!.isNotEmpty)
+                                if (selectedEtablissement.logoUrlForDisplay !=
+                                        null &&
+                                    selectedEtablissement
+                                        .logoUrlForDisplay!
+                                        .isNotEmpty)
                                   Image.network(
-                                    selectedEtablissement.logoUrl!,
+                                    selectedEtablissement.logoUrlForDisplay!,
                                     height: 190,
                                     fit: BoxFit.contain,
                                     alignment: Alignment.centerLeft,
@@ -533,10 +548,17 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                       const SizedBox(height: 8),
                                       TextButton.icon(
                                         onPressed: () {
-                                          Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+                                          Navigator.of(
+                                            context,
+                                          ).pushNamedAndRemoveUntil(
+                                            '/',
+                                            (route) => false,
+                                          );
                                         },
                                         icon: const Icon(Icons.arrow_back),
-                                        label: const Text('Changer d\'établissement'),
+                                        label: const Text(
+                                          'Changer d\'établissement',
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -642,7 +664,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
     await showDialog<void>(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         return AlertDialog(
           title: const Text('Configuration API'),
           content: SizedBox(
@@ -661,14 +683,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 const SizedBox(height: 10),
                 Text(
                   'Exemple: http://IP_DU_PC:8000/api',
-                  style: Theme.of(context).textTheme.bodySmall,
+                  style: Theme.of(dialogContext).textTheme.bodySmall,
                 ),
               ],
             ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('Annuler'),
             ),
             FilledButton(
@@ -686,13 +708,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 await tokenStorage.saveApiBaseUrl(normalized);
                 await _loadActiveApiUrl();
 
-                if (mounted) {
-                  Navigator.of(context).pop();
-                  _showMessage(
-                    'URL API enregistrée: $normalized',
-                    isSuccess: true,
-                  );
+                if (!dialogContext.mounted || !mounted) {
+                  return;
                 }
+                Navigator.of(dialogContext).pop();
+                _showMessage(
+                  'URL API enregistrée: $normalized',
+                  isSuccess: true,
+                );
               },
               child: const Text('Enregistrer'),
             ),

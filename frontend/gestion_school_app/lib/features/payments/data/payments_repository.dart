@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 
 import '../../../core/constants/api_constants.dart';
+import '../../../core/models/paginated_result.dart';
 import '../domain/payment.dart';
 import '../domain/student_fee.dart';
 
@@ -28,11 +29,24 @@ class PaymentsRepository {
     return [];
   }
 
-  Future<List<PaymentItem>> fetchPayments() async {
-    final response = await dio.get('/payments/');
+  Future<PaginatedResult<PaymentItem>> fetchPaymentsPage({
+    int page = 1,
+    int pageSize = 25,
+    String search = '',
+    String? method,
+  }) async {
+    final query = <String, dynamic>{
+      'page': page,
+      'page_size': pageSize,
+      if (search.trim().isNotEmpty) 'search': search.trim(),
+      if (method != null && method.trim().isNotEmpty) 'method': method,
+      'ordering': '-created_at',
+    };
+
+    final response = await dio.get('/payments/', queryParameters: query);
     final rows = _extractRows(response.data);
 
-    return rows.map((row) {
+    final mapped = rows.map((row) {
       final map = row as Map<String, dynamic>;
       return PaymentItem(
         id: map['id'] as int,
@@ -46,10 +60,35 @@ class PaymentsRepository {
         createdAt: map['created_at']?.toString() ?? '',
       );
     }).toList();
+
+    final payload = response.data;
+    if (payload is Map<String, dynamic>) {
+      return PaginatedResult<PaymentItem>(
+        count: payload['count'] as int? ?? mapped.length,
+        next: payload['next']?.toString(),
+        previous: payload['previous']?.toString(),
+        results: mapped,
+      );
+    }
+
+    return PaginatedResult<PaymentItem>(
+      count: mapped.length,
+      next: null,
+      previous: null,
+      results: mapped,
+    );
+  }
+
+  Future<List<PaymentItem>> fetchPayments() async {
+    final page = await fetchPaymentsPage(page: 1, pageSize: 120);
+    return page.results;
   }
 
   Future<List<StudentFeeItem>> fetchFees() async {
-    final response = await dio.get('/fees/');
+    final response = await dio.get(
+      '/fees/',
+      queryParameters: {'page_size': 120},
+    );
     final rows = _extractRows(response.data);
 
     return rows.map((row) {

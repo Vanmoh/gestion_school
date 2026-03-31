@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -27,25 +28,47 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
   String _ordering = '-created_at';
   DateTime? _dateFrom;
   DateTime? _dateTo;
+  Timer? _searchDebounce;
+  CancelToken? _loadCancelToken;
 
   @override
   void initState() {
     super.initState();
+    _searchController.addListener(_onSearchChanged);
     _loadData();
   }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _loadCancelToken?.cancel();
+    _searchController.removeListener(_onSearchChanged);
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _onSearchChanged() {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      _loadData();
+    });
   }
 
   Future<void> _loadData() async {
     setState(() => _loading = true);
     try {
+      _loadCancelToken?.cancel();
+      final cancelToken = CancelToken();
+      _loadCancelToken = cancelToken;
+
       final response = await ref
           .read(dioProvider)
-          .get('/activity-logs/', queryParameters: _query());
+          .get(
+            '/activity-logs/',
+            queryParameters: _query(),
+            cancelToken: cancelToken,
+          );
 
       final rows = _extractRows(response.data);
       if (!mounted) return;
@@ -61,6 +84,14 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
           _selectedLogKey = rows.isNotEmpty ? _logKey(rows.first) : null;
         }
       });
+    } on DioException catch (error) {
+      if (CancelToken.isCancel(error)) {
+        return;
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erreur chargement logs: $error')));
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -72,7 +103,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
   }
 
   Map<String, dynamic> _query() {
-    final query = <String, dynamic>{};
+    final query = <String, dynamic>{'page_size': 80};
     if (_searchController.text.trim().isNotEmpty) {
       query['search'] = _searchController.text.trim();
     }
@@ -481,6 +512,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                     ],
                     onChanged: (value) {
                       setState(() => _methodFilter = value ?? '');
+                      _loadData();
                     },
                   ),
                 ),
@@ -496,6 +528,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                     ],
                     onChanged: (value) {
                       setState(() => _successFilter = value ?? '');
+                      _loadData();
                     },
                   ),
                 ),
@@ -532,6 +565,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                     ],
                     onChanged: (value) {
                       setState(() => _ordering = value ?? '-created_at');
+                      _loadData();
                     },
                   ),
                 ),

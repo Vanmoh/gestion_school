@@ -7,6 +7,7 @@ class AttendanceItem {
   final bool isAbsent;
   final bool isLate;
   final String reason;
+  final double conduite;
 
   const AttendanceItem({
     required this.id,
@@ -17,5 +18,6 @@ class AttendanceItem {
     required this.isAbsent,
     required this.isLate,
     required this.reason,
+    required this.conduite,
   });
 }

@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/models/paginated_result.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/providers/provider_cache.dart';
 import '../data/payments_repository.dart';
 import '../domain/payment.dart';
 import '../domain/student_fee.dart';
@@ -9,11 +11,59 @@ final paymentsRepositoryProvider = Provider<PaymentsRepository>((ref) {
   return PaymentsRepository(ref.read(dioProvider));
 });
 
-final paymentsProvider = FutureProvider<List<PaymentItem>>((ref) async {
+final paymentsProvider = FutureProvider.autoDispose<List<PaymentItem>>((
+  ref,
+) async {
+  ref.cacheFor(const Duration(minutes: 3));
   return ref.read(paymentsRepositoryProvider).fetchPayments();
 });
 
-final feesProvider = FutureProvider<List<StudentFeeItem>>((ref) async {
+class PaymentsPageQuery {
+  final int page;
+  final int pageSize;
+  final String search;
+  final String? method;
+
+  const PaymentsPageQuery({
+    required this.page,
+    required this.pageSize,
+    this.search = '',
+    this.method,
+  });
+
+  @override
+  bool operator ==(Object other) {
+    return other is PaymentsPageQuery &&
+        other.page == page &&
+        other.pageSize == pageSize &&
+        other.search == search &&
+        other.method == method;
+  }
+
+  @override
+  int get hashCode => Object.hash(page, pageSize, search, method);
+}
+
+final paymentsPaginatedProvider = FutureProvider.autoDispose
+    .family<PaginatedResult<PaymentItem>, PaymentsPageQuery>((
+      ref,
+      query,
+    ) async {
+      ref.cacheFor(const Duration(minutes: 3));
+      return ref
+          .read(paymentsRepositoryProvider)
+          .fetchPaymentsPage(
+            page: query.page,
+            pageSize: query.pageSize,
+            search: query.search,
+            method: query.method,
+          );
+    });
+
+final feesProvider = FutureProvider.autoDispose<List<StudentFeeItem>>((
+  ref,
+) async {
+  ref.cacheFor(const Duration(minutes: 3));
   return ref.read(paymentsRepositoryProvider).fetchFees();
 });
 
@@ -47,6 +97,7 @@ class PaymentMutationController extends StateNotifier<AsyncValue<void>> {
 
     if (!state.hasError) {
       ref.invalidate(paymentsProvider);
+      ref.invalidate(paymentsPaginatedProvider);
       ref.invalidate(feesProvider);
     }
   }
@@ -73,6 +124,7 @@ class PaymentMutationController extends StateNotifier<AsyncValue<void>> {
 
     if (!state.hasError) {
       ref.invalidate(paymentsProvider);
+      ref.invalidate(paymentsPaginatedProvider);
       ref.invalidate(feesProvider);
     }
   }
@@ -85,6 +137,7 @@ class PaymentMutationController extends StateNotifier<AsyncValue<void>> {
 
     if (!state.hasError) {
       ref.invalidate(paymentsProvider);
+      ref.invalidate(paymentsPaginatedProvider);
       ref.invalidate(feesProvider);
     }
   }

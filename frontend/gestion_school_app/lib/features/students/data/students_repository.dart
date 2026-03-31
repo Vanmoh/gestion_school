@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'dart:typed_data';
+import '../../../core/models/paginated_result.dart';
 import '../domain/student.dart';
 
 class StudentsRepository {
@@ -10,16 +11,55 @@ class StudentsRepository {
     String search = '',
     int? classroomId,
     bool? isArchived,
+    String ordering = '-created_at',
+  }) async {
+    final page = await fetchStudentsPage(
+      search: search,
+      classroomId: classroomId,
+      isArchived: isArchived,
+      ordering: ordering,
+      page: 1,
+      pageSize: 120,
+    );
+    return page.results;
+  }
+
+  Future<PaginatedResult<Student>> fetchStudentsPage({
+    String search = '',
+    int? classroomId,
+    bool? isArchived,
+    String ordering = '-created_at',
+    int page = 1,
+    int pageSize = 25,
   }) async {
     final query = <String, dynamic>{};
     if (search.trim().isNotEmpty) query['search'] = search.trim();
     if (classroomId != null) query['classroom'] = classroomId;
     if (isArchived != null) query['is_archived'] = isArchived;
-    query['ordering'] = '-created_at';
+    query['ordering'] = ordering;
+    query['page'] = page;
+    query['page_size'] = pageSize;
 
     final response = await dio.get('/students/', queryParameters: query);
     final rows = _extractRows(response.data);
-    return rows.map(_toStudent).toList();
+    final mapped = rows.map(_toStudent).toList();
+
+    final payload = response.data;
+    if (payload is Map<String, dynamic>) {
+      return PaginatedResult<Student>(
+        count: payload['count'] as int? ?? mapped.length,
+        next: payload['next']?.toString(),
+        previous: payload['previous']?.toString(),
+        results: mapped,
+      );
+    }
+
+    return PaginatedResult<Student>(
+      count: mapped.length,
+      next: null,
+      previous: null,
+      results: mapped,
+    );
   }
 
   Future<List<Map<String, dynamic>>> fetchClassrooms() async {

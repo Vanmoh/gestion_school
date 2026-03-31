@@ -9,6 +9,8 @@ class DashboardRepository {
   Future<DashboardStats> fetchStats() async {
     final response = await dio.get('/dashboard/');
     final data = response.data as Map<String, dynamic>;
+    final activeEtablissement =
+        data['active_etablissement'] as Map<String, dynamic>?;
 
     double toDouble(dynamic value) {
       if (value is num) {
@@ -23,6 +25,13 @@ class DashboardRepository {
       monthlyExpenses: toDouble(data['monthly_expenses']),
       monthlyProfit: toDouble(data['monthly_profit']),
       monthlyAbsences: (data['monthly_absences'] as num?)?.toInt() ?? 0,
+      classrooms: (data['classrooms'] as num?)?.toInt() ?? 0,
+      teachers: (data['teachers'] as num?)?.toInt() ?? 0,
+      activeEtablissementId: (activeEtablissement?['id'] as num?)?.toInt(),
+      activeEtablissementName: activeEtablissement?['name']?.toString(),
+      activeEtablissementAddress: activeEtablissement?['address']?.toString(),
+      activeEtablissementPhone: activeEtablissement?['phone']?.toString(),
+      activeEtablissementEmail: activeEtablissement?['email']?.toString(),
     );
   }
 }

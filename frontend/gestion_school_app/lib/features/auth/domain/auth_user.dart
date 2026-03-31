@@ -3,12 +3,16 @@ class AuthUser {
   final String username;
   final String fullName;
   final String role;
+  final int? etablissementId;
+  final String etablissementName;
 
   const AuthUser({
     required this.id,
     required this.username,
     required this.fullName,
     required this.role,
+    this.etablissementId,
+    this.etablissementName = '',
   });
 
   String get homeRoute {
