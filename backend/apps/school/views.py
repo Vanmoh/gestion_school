@@ -1,6 +1,8 @@
 from datetime import datetime
 from io import BytesIO
+import os
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Q, Sum, Value
 from django.db.models.functions import Coalesce
@@ -11,9 +13,14 @@ from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from fpdf import FPDF
 from openpyxl import Workbook
+try:
+    from openpyxl.drawing.image import Image as XLImage
+except Exception:  # pragma: no cover - optional dependency in some environments
+    XLImage = None
 from openpyxl.styles import Alignment, Font, PatternFill
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import IsAdminOrDirector, IsReadOnlyForParentStudent, IsSuperAdmin
@@ -221,6 +228,7 @@ class AcademicYearViewSet(BaseModelViewSet):
 class EtablissementViewSet(viewsets.ModelViewSet):
     queryset = Etablissement.objects.all().order_by('name')
     serializer_class = EtablissementSerializer
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
@@ -883,6 +891,63 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         return cleaned[:31]
 
     @staticmethod
+    def _etablissement_logo_path(etablissement):
+        if not etablissement:
+            return None
+
+        logo_field = getattr(etablissement, "logo", None)
+        if not logo_field:
+            return None
+
+        direct_path = str(getattr(logo_field, "path", "") or "").strip()
+        if direct_path and os.path.exists(direct_path):
+            return direct_path
+
+        logo_name = str(getattr(logo_field, "name", "") or "").strip()
+        media_root = str(getattr(settings, "MEDIA_ROOT", "") or "").strip()
+        if logo_name and media_root:
+            candidate = os.path.join(media_root, logo_name)
+            if os.path.exists(candidate):
+                return candidate
+
+        return None
+
+    def _etablissement_meta_lines(self, classroom):
+        etablissement = getattr(classroom, "etablissement", None)
+        if not etablissement:
+            etablissement = self._requested_etablissement() or self._resolve_target_etablissement()
+
+        # Some legacy classes may not yet be linked to an etablissement;
+        # in that case, keep the active scope name visible in exports.
+        if not etablissement:
+            requested_name = self._requested_etablissement_name()
+            if requested_name:
+                return {
+                    "name": requested_name,
+                    "details": "",
+                }
+
+        if not etablissement:
+            return {
+                "name": "Etablissement non defini",
+                "details": "",
+            }
+
+        details = []
+        if etablissement.address:
+            details.append(etablissement.address)
+        if etablissement.phone:
+            details.append(f"Tel: {etablissement.phone}")
+        if etablissement.email:
+            details.append(etablissement.email)
+
+        return {
+            "name": etablissement.name,
+            "details": " | ".join(details),
+            "logo_path": self._etablissement_logo_path(etablissement),
+        }
+
+    @staticmethod
     def _teacher_name(teacher):
         user = teacher.user if teacher else None
         if not user:
@@ -1413,15 +1478,43 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
 
         for classroom in classrooms:
             ws = wb.create_sheet(self._sheet_title(classroom.name))
+            etab_meta = self._etablissement_meta_lines(classroom)
             ws.merge_cells("A1:G1")
-            ws["A1"] = f"Emploi du temps - {classroom.name}"
+            ws["A1"] = f"{etab_meta['name']} - Emploi du temps"
             ws["A1"].font = Font(size=13, bold=True)
             ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+
+            ws.merge_cells("A2:G2")
+            ws["A2"] = f"Classe: {classroom.name}"
+            ws["A2"].font = Font(size=11, bold=True)
+            ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
+
+            ws.merge_cells("A3:G3")
+            generated_label = f"Genere le {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"
+            ws["A3"] = (
+                f"{etab_meta['details']} | {generated_label}"
+                if etab_meta["details"]
+                else generated_label
+            )
+            ws["A3"].alignment = Alignment(horizontal="center", vertical="center")
+
+            ws.row_dimensions[1].height = 24
+            ws.row_dimensions[2].height = 20
+            ws.row_dimensions[3].height = 18
+
+            if XLImage and etab_meta.get("logo_path"):
+                try:
+                    logo = XLImage(etab_meta["logo_path"])
+                    logo.width = 46
+                    logo.height = 46
+                    ws.add_image(logo, "G1")
+                except Exception:
+                    pass
 
             headers = ["Horaire", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"]
             ws.append(headers)
             for index, header in enumerate(headers, start=1):
-                cell = ws.cell(row=2, column=index)
+                cell = ws.cell(row=4, column=index)
                 cell.value = header
                 cell.font = Font(bold=True)
                 cell.fill = header_fill
@@ -1455,7 +1548,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
             for col in ["B", "C", "D", "E", "F", "G"]:
                 ws.column_dimensions[col].width = 28
 
-            for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=1, max_col=7):
+            for row in ws.iter_rows(min_row=5, max_row=ws.max_row, min_col=1, max_col=7):
                 for cell in row:
                     cell.alignment = Alignment(vertical="top", wrap_text=True)
 
@@ -1503,16 +1596,39 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
             )
             matrix = self._build_class_matrix(class_slots)
             ranges = self._sorted_ranges(matrix)
+            etab_meta = self._etablissement_meta_lines(classroom)
 
             pdf.add_page()
+            title_x = 10
+            logo_path = etab_meta.get("logo_path")
+            if logo_path:
+                try:
+                    pdf.image(logo_path, x=10, y=8, w=15)
+                    title_x = 28
+                except Exception:
+                    title_x = 10
+
             pdf.set_font("Helvetica", "B", 14)
+            pdf.set_x(title_x)
             pdf.cell(
                 0,
                 8,
-                self._pdf_text(f"Emploi du temps - {classroom.name}"),
+                self._pdf_text(f"{etab_meta['name']} - Emploi du temps"),
+                ln=1,
+            )
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_x(title_x)
+            pdf.cell(
+                0,
+                6,
+                self._pdf_text(f"Classe: {classroom.name}"),
                 ln=1,
             )
             pdf.set_font("Helvetica", "", 9)
+            if etab_meta["details"]:
+                pdf.set_x(title_x)
+                pdf.cell(0, 6, self._pdf_text(etab_meta["details"]), ln=1)
+            pdf.set_x(title_x)
             pdf.cell(
                 0,
                 6,

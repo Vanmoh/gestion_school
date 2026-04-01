@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
+import '../../../models/etablissement.dart';
 import '../../auth/presentation/auth_controller.dart';
 import 'timetable_workload.dart';
 
@@ -505,11 +506,22 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
     setState(() => _saving = true);
     try {
+      final selectedEtablissement = ref.read(etablissementProvider).selected;
+      final scopedQueryParameters = <String, dynamic>{
+        if (queryParameters != null) ...queryParameters,
+        if (selectedEtablissement?.id != null)
+          'etablissement': selectedEtablissement!.id,
+        if ((selectedEtablissement?.name ?? '').trim().isNotEmpty)
+          'etablissement_name': selectedEtablissement!.name.trim(),
+      };
+
       final response = await ref
           .read(dioProvider)
           .get(
             endpoint,
-            queryParameters: queryParameters,
+            queryParameters: scopedQueryParameters.isEmpty
+                ? null
+                : scopedQueryParameters,
             options: Options(responseType: ResponseType.bytes),
           );
 
@@ -570,11 +582,20 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
     setState(() => _saving = true);
     try {
+      final selectedEtablissement = ref.read(etablissementProvider).selected;
+      final queryParameters = <String, dynamic>{
+        'classroom': classId,
+        if (selectedEtablissement?.id != null)
+          'etablissement': selectedEtablissement!.id,
+        if ((selectedEtablissement?.name ?? '').trim().isNotEmpty)
+          'etablissement_name': selectedEtablissement!.name.trim(),
+      };
+
       final response = await ref
           .read(dioProvider)
           .get(
             '/teacher-schedule-slots/export_pdf/',
-            queryParameters: {'classroom': classId},
+            queryParameters: queryParameters,
             options: Options(responseType: ResponseType.bytes),
           );
 

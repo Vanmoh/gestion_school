@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../models/etablissement.dart';
 import '../../auth/presentation/auth_controller.dart';
 
 class EtablissementsPage extends ConsumerStatefulWidget {
@@ -53,6 +54,8 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         ..sort((a, b) =>
             (a['name'] ?? '').toString().toLowerCase().compareTo((b['name'] ?? '').toString().toLowerCase()));
 
+      await _syncEtablissementProvider(rows);
+
       if (!mounted) return;
       setState(() {
         _rows = rows;
@@ -66,6 +69,39 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
       if (mounted) {
         setState(() => _loading = false);
       }
+    }
+  }
+
+  Future<void> _syncEtablissementProvider(
+    List<Map<String, dynamic>> rows, {
+    int? preferSelectionId,
+    bool refreshAuthProfile = false,
+  }) async {
+    final provider = ref.read(etablissementProvider);
+    final currentSelectedId = provider.selected?.id;
+
+    final etablissements = <Etablissement>[];
+    for (final row in rows) {
+      try {
+        etablissements.add(Etablissement.fromJson(row));
+      } catch (_) {
+        // Ignore malformed rows and keep best-effort sync.
+      }
+    }
+    provider.setEtablissements(etablissements);
+
+    final targetId = preferSelectionId ?? currentSelectedId;
+    if (targetId != null) {
+      for (final etab in etablissements) {
+        if (etab.id == targetId) {
+          await provider.selectEtablissement(etab);
+          break;
+        }
+      }
+    }
+
+    if (refreshAuthProfile) {
+      await ref.read(authControllerProvider.notifier).restoreSession();
     }
   }
 
@@ -165,6 +201,12 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
 
     setState(() => _saving = true);
     try {
+      final accessToken = await ref.read(tokenStorageProvider).accessToken();
+      if (accessToken == null || accessToken.isEmpty) {
+        _showMessage('Session expiree. Reconnectez-vous puis reessayez.');
+        return;
+      }
+
       final data = FormData.fromMap({
         'name': name,
         'address': address,
@@ -177,16 +219,34 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
           ),
       });
 
+      final options = Options(
+        contentType: 'multipart/form-data',
+        headers: {'Authorization': 'Bearer $accessToken'},
+      );
+
+      int? savedId;
+
       if ((_selectedId ?? 0) > 0) {
-        await ref.read(dioProvider).patch('/etablissements/$_selectedId/', data: data);
+        final response = await ref
+            .read(dioProvider)
+            .patch('/etablissements/$_selectedId/', data: data, options: options);
+        savedId = _asInt((response.data as Map<String, dynamic>)['id']);
         _showMessage('Etablissement modifie avec succes.', isSuccess: true);
       } else {
-        await ref.read(dioProvider).post('/etablissements/', data: data);
+        final response = await ref
+            .read(dioProvider)
+            .post('/etablissements/', data: data, options: options);
+        savedId = _asInt((response.data as Map<String, dynamic>)['id']);
         _showMessage('Etablissement ajoute avec succes.', isSuccess: true);
       }
 
       _clearForm();
       await _loadData();
+      await _syncEtablissementProvider(
+        _rows,
+        preferSelectionId: savedId,
+        refreshAuthProfile: true,
+      );
     } on DioException catch (error) {
       _showMessage(_extractApiError(error));
     } catch (error) {
@@ -231,10 +291,22 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
 
     setState(() => _saving = true);
     try {
-      await ref.read(dioProvider).delete('/etablissements/$id/');
+      final accessToken = await ref.read(tokenStorageProvider).accessToken();
+      if (accessToken == null || accessToken.isEmpty) {
+        _showMessage('Session expiree. Reconnectez-vous puis reessayez.');
+        return;
+      }
+
+      await ref.read(dioProvider).delete(
+            '/etablissements/$id/',
+            options: Options(
+              headers: {'Authorization': 'Bearer $accessToken'},
+            ),
+          );
       _showMessage('Etablissement supprime.', isSuccess: true);
       _clearForm();
       await _loadData();
+      await _syncEtablissementProvider(_rows, refreshAuthProfile: true);
     } on DioException catch (error) {
       _showMessage(_extractApiError(error));
     } catch (error) {

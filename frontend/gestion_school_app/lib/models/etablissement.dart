@@ -11,7 +11,11 @@ final etablissementProvider = ChangeNotifierProvider<EtablissementProvider>(
 );
 
 // Changes once per app run to invalidate stale browser-cached logo URLs.
-final int _logoCacheBustToken = DateTime.now().millisecondsSinceEpoch;
+int _logoCacheBustToken = DateTime.now().millisecondsSinceEpoch;
+
+void _refreshLogoCacheBustToken() {
+  _logoCacheBustToken = DateTime.now().millisecondsSinceEpoch;
+}
 
 class Etablissement {
   final int id;
@@ -96,8 +100,9 @@ class EtablissementProvider extends ChangeNotifier {
     }
 
     _etablissements = deduped;
+    _refreshLogoCacheBustToken();
     if (_selected != null) {
-      for (final etablissement in etablissements) {
+      for (final etablissement in deduped) {
         if (etablissement.id == _selected!.id) {
           _selected = etablissement;
           break;
@@ -118,6 +123,7 @@ class EtablissementProvider extends ChangeNotifier {
         _selected = Etablissement.fromJson(
           jsonDecode(raw) as Map<String, dynamic>,
         );
+        _refreshLogoCacheBustToken();
       } catch (_) {
         _selected = null;
       }
@@ -128,12 +134,14 @@ class EtablissementProvider extends ChangeNotifier {
 
   Future<void> selectEtablissement(Etablissement etab) async {
     _selected = etab;
+    _refreshLogoCacheBustToken();
     await _tokenStorage.saveSelectedEtablissement(jsonEncode(etab.toJson()));
     notifyListeners();
   }
 
   Future<void> clearSelection() async {
     _selected = null;
+    _refreshLogoCacheBustToken();
     await _tokenStorage.clearSelectedEtablissement();
     notifyListeners();
   }
