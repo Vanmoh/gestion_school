@@ -2,6 +2,10 @@
 
 Application complète de gestion d’établissement scolaire multi-plateforme.
 
+## Liens Production
+- Lien de téléchargement des applications Gestion School (Mobile et Desktop Windows/Linux): `https://gestion-school-downloads.onrender.com`
+- API production: `https://gestion-school-jkzf.onrender.com/api`
+
 ## Stack
 - Frontend: Flutter (Web, Android, Windows)
 - Backend: Django REST Framework
