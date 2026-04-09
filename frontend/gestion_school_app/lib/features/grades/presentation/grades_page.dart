@@ -1562,12 +1562,18 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           content: const Text('Choisissez une action.'),
           actions: [
             TextButton.icon(
-              onPressed: () => Navigator.of(dialogContext).pop(),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _openGradeEntryDialog();
+              },
               icon: const Icon(Icons.assignment_outlined),
               label: const Text('Saisir note classe'),
             ),
             TextButton.icon(
-              onPressed: () => Navigator.of(dialogContext).pop(),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _openExamEntryDialog();
+              },
               icon: const Icon(Icons.fact_check_outlined),
               label: const Text('Saisir note examen'),
             ),
