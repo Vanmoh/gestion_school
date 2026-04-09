@@ -11,9 +11,26 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 def _csv_setting(name: str, default: str = "") -> list[str]:
     return [value.strip() for value in config(name, default=default).split(",") if value.strip()]
 
-SECRET_KEY = config("SECRET_KEY", default="change-me-in-production")
-DEBUG = True  # Forcé temporairement pour migration locale
-ALLOWED_HOSTS = _csv_setting("ALLOWED_HOSTS", default="*")
+DEBUG = config("DEBUG", cast=bool, default=True)
+
+_secret_key = config("SECRET_KEY", default="").strip()
+if _secret_key:
+    SECRET_KEY = _secret_key
+elif DEBUG:
+    SECRET_KEY = "dev-insecure-key-change-me"
+else:
+    raise ImproperlyConfigured(
+        "SECRET_KEY is required when DEBUG=False. "
+        "Set a strong SECRET_KEY in environment variables."
+    )
+
+_default_allowed_hosts = "localhost,127.0.0.1,0.0.0.0" if DEBUG else ""
+ALLOWED_HOSTS = _csv_setting("ALLOWED_HOSTS", default=_default_allowed_hosts)
+if not DEBUG and not ALLOWED_HOSTS:
+    raise ImproperlyConfigured(
+        "ALLOWED_HOSTS is required when DEBUG=False. "
+        "Set ALLOWED_HOSTS to your domain(s), separated by commas."
+    )
 
 DATABASE_URL = config("DATABASE_URL", default="").strip()
 DB_CONN_MAX_AGE = config("DB_CONN_MAX_AGE", cast=int, default=600)
@@ -118,13 +135,21 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-CORS_ALLOW_ALL_ORIGINS = config("CORS_ALLOW_ALL_ORIGINS", cast=bool, default=True)
+CORS_ALLOW_ALL_ORIGINS = config(
+    "CORS_ALLOW_ALL_ORIGINS", cast=bool, default=DEBUG
+)
 CORS_ALLOWED_ORIGINS = _csv_setting("CORS_ALLOWED_ORIGINS") if not CORS_ALLOW_ALL_ORIGINS else []
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-etablissement-id",
     "x-etablissement-name",
 ]
 CSRF_TRUSTED_ORIGINS = _csv_setting("CSRF_TRUSTED_ORIGINS")
+
+if not DEBUG and CORS_ALLOW_ALL_ORIGINS:
+    raise ImproperlyConfigured(
+        "CORS_ALLOW_ALL_ORIGINS must be False when DEBUG=False. "
+        "Configure CORS_ALLOWED_ORIGINS explicitly."
+    )
 
 USE_X_FORWARDED_HOST = config("USE_X_FORWARDED_HOST", cast=bool, default=True)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

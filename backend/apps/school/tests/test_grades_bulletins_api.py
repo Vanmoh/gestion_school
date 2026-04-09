@@ -435,6 +435,21 @@ class GradesAndBulletinsApiTests(APITestCase):
         self.assertEqual(coef_sum, 4.0)
         self.assertEqual(average, 15.0)
 
+    def test_bulletin_rows_compute_weighted_final_sum_per_subject(self):
+        rows, average, coef_sum = _build_bulletin_rows(
+            subjects=[self.subject_math],
+            student_note_by_subject={self.subject_math.id: 12.0},
+            exam_note_by_subject={self.subject_math.id: 14.0},
+            class_average_by_subject={self.subject_math.id: 13.0},
+            conduite_note=18.0,
+            conduite_coef=2.0,
+            conduite_moyenne_classe=17.0,
+        )
+
+        self.assertEqual(rows[1]["note_finale"], 52.0)
+        self.assertEqual(coef_sum, 6.0)
+        self.assertEqual(average, 14.67)
+
     def test_teacher_assignment_rejects_duplicate_subject_for_same_class(self):
         self.client.force_authenticate(self.admin_user)
 

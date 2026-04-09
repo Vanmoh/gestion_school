@@ -911,16 +911,24 @@ def _build_bulletin_rows(
         note_examen = exam_note_by_subject.get(subject.id)
 
         if note_classe is not None and note_examen is not None:
-            note_finale = round((note_classe + note_examen) / 2.0, 2)
+            note_finale = round((note_classe * coef) + (note_examen * coef), 2)
+            effective_coef = coef * 2
+        elif note_classe is not None:
+            note_finale = round(note_classe * coef, 2)
+            effective_coef = coef
+        elif note_examen is not None:
+            note_finale = round(note_examen * coef, 2)
+            effective_coef = coef
         else:
-            note_finale = note_classe if note_classe is not None else note_examen
+            note_finale = None
+            effective_coef = 0.0
 
         note_moyenne_classe = class_average_by_subject.get(subject.id)
-        points = round(note_finale * coef, 2) if note_finale is not None else None
+        points = note_finale
 
-        if note_finale is not None and coef > 0:
-            weighted_sum += note_finale * coef
-            coef_sum += coef
+        if note_finale is not None and effective_coef > 0:
+            weighted_sum += note_finale
+            coef_sum += effective_coef
 
         rows.append(
             {
@@ -982,273 +990,346 @@ class BulletinPdfView(APIView):
         )
         _ensure_student_access(request, student)
 
-        school = _school_identity_for_student(student)
-        school_name = school["name"]
-        school_short = school["short"]
-        school_level = school["level"]
-        school_phone = school["phone"]
-        logo_path = _etablissement_logo_path(student) or _school_logo_path()
-
-        student_name = student.user.get_full_name().strip() or student.user.username
-        class_name = student.classroom.name if student.classroom else "N/A"
-        period_label = normalized_term
-        academic_year_name = (
-            AcademicYear.objects.filter(id=academic_year_id)
-            .values_list("name", flat=True)
-            .first()
-            or str(academic_year_id)
-        )
-
-        student_grades_qs = Grade.objects.filter(
-            student_id=student_id,
+        payload = _build_bulletin_payload(
+            student=student,
             academic_year_id=academic_year_id,
-            term=normalized_term,
-        ).select_related("subject")
-
-        student_note_by_subject: dict[int, float] = {}
-        for grade in student_grades_qs.order_by("subject_id", "-created_at", "-id"):
-            student_note_by_subject.setdefault(grade.subject_id, float(grade.value))
-
-        classroom_id = student.classroom_id
-        subject_ids: set[int] = set(student_note_by_subject.keys())
-        class_average_by_subject: dict[int, float] = {}
-
-        if classroom_id:
-            class_grades_qs = Grade.objects.filter(
-                classroom_id=classroom_id,
-                academic_year_id=academic_year_id,
-                term=normalized_term,
-            )
-            subject_ids.update(
-                class_grades_qs.values_list("subject_id", flat=True)
-            )
-
-            class_avg_rows = class_grades_qs.values("subject_id").annotate(
-                avg_note=Avg("value")
-            )
-            class_average_by_subject = {
-                int(row["subject_id"]): float(row["avg_note"])
-                for row in class_avg_rows
-                if row.get("avg_note") is not None
-            }
-
-            subject_ids.update(
-                TeacherAssignment.objects.filter(classroom_id=classroom_id)
-                .values_list("subject_id", flat=True)
-            )
-            subject_ids.update(
-                ExamPlanning.objects.filter(
-                    classroom_id=classroom_id,
-                    session__academic_year_id=academic_year_id,
-                ).values_list("subject_id", flat=True)
-            )
-
-        student_exam_results_qs = ExamResult.objects.filter(
-            student_id=student_id,
-            session__academic_year_id=academic_year_id,
-            session__term=normalized_term,
+            normalized_term=normalized_term,
         )
-        subject_ids.update(
-            student_exam_results_qs.values_list("subject_id", flat=True)
-        )
-
-        exam_note_by_subject: dict[int, float] = {}
-        for exam_result in student_exam_results_qs.order_by(
-            "subject_id",
-            "-session__end_date",
-            "-session__start_date",
-            "-created_at",
-            "-id",
-        ):
-            exam_note_by_subject.setdefault(exam_result.subject_id, float(exam_result.score))
-
-        subjects = Subject.objects.filter(id__in=subject_ids).order_by("name", "id")
-
-        conduite_note = float(student.conduite if student.conduite is not None else 18)
-        conduite_coef = 2.0
-        conduite_moyenne_classe = None
-        if classroom_id:
-            conduite_moyenne_classe = (
-                Student.objects.filter(classroom_id=classroom_id)
-                .aggregate(avg_conduite=Avg("conduite"))
-                .get("avg_conduite")
-            )
-            if conduite_moyenne_classe is not None:
-                conduite_moyenne_classe = float(conduite_moyenne_classe)
-
-        rows, average, coef_sum = _build_bulletin_rows(
-            subjects=subjects,
-            student_note_by_subject=student_note_by_subject,
-            exam_note_by_subject=exam_note_by_subject,
-            class_average_by_subject=class_average_by_subject,
-            conduite_note=conduite_note,
-            conduite_coef=conduite_coef,
-            conduite_moyenne_classe=conduite_moyenne_classe,
-        )
-
-        if average >= 16:
-            mention = "Tres bien"
-        elif average >= 14:
-            mention = "Bien"
-        elif average >= 12:
-            mention = "Assez bien"
-        elif average >= 10:
-            mention = "Passable"
-        else:
-            mention = "Insuffisant"
 
         pdf = FPDF(orientation="L", format="A4")
+        pdf.set_auto_page_break(auto=False)
         pdf.add_page()
-        pdf.set_auto_page_break(auto=True, margin=12)
+        _render_bulletin_page(pdf, payload)
 
-        left_margin = 10
-        right_margin = pdf.w - 10
-
-        if logo_path:
-            try:
-                pdf.image(logo_path, x=left_margin, y=8, w=20)
-            except Exception:
-                pass
-
-        pdf.set_xy(34 if logo_path else left_margin, 8)
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(0, 7, _pdf_text(school_name), ln=True)
-
-        pdf.set_x(34 if logo_path else left_margin)
-        pdf.set_font("Helvetica", size=10)
-        header_line = f"{school_level} | Tel: {school_phone}" if school_phone else school_level
-        pdf.cell(0, 5, _pdf_text(header_line), ln=True)
-
-        pdf.set_x(34 if logo_path else left_margin)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(0, 5, _pdf_text(f"Application: {school_short} - GESTION SCHOOL"), ln=True)
-
-        top_line_y = max(pdf.get_y() + 2, 28)
-        pdf.set_draw_color(60, 60, 60)
-        pdf.line(left_margin, top_line_y, right_margin, top_line_y)
-        pdf.set_y(top_line_y + 4)
-
-        pdf.set_font("Helvetica", "B", 16)
-        pdf.cell(0, 9, _pdf_text("BULLETIN SCOLAIRE"), ln=True, align="C")
-        pdf.ln(1)
-
-        info_label_w = 28
-        info_value_w = 50
-        info_rows = [
-            ("Eleve", student_name),
-            ("Matricule", student.matricule),
-            ("Classe", class_name),
-            ("Etablissement", school_name),
-            ("Annee", academic_year_name),
-            ("Periode", period_label),
-        ]
-
-        for index, (label, value) in enumerate(info_rows):
-            if index % 2 == 0:
-                pdf.set_x(left_margin)
-            pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(info_label_w, 7, _pdf_text(label), border=1)
-            pdf.set_font("Helvetica", size=10)
-            pdf.cell(info_value_w, 7, _pdf_text(value)[:34], border=1)
-            if index % 2 == 1:
-                pdf.ln(7)
-        if len(info_rows) % 2 == 1:
-            pdf.ln(7)
-
-        table_columns = [
-            ("N", 12, "index"),
-            ("Matiere", 88, "subject"),
-            ("Coef", 20, "coef"),
-            ("Note classe", 28, "note_classe"),
-            ("Note examen", 28, "note_examen"),
-            ("Note finale", 28, "note_finale"),
-            ("Moy. classe", 28, "moyenne_classe"),
-            ("Points", 30, "points"),
-        ]
-        table_width = sum(column[1] for column in table_columns)
-        table_x = max(left_margin, (pdf.w - table_width) / 2)
-
-        def draw_table_header() -> None:
-            pdf.set_x(table_x)
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_fill_color(228, 234, 244)
-            for title, width, key in table_columns:
-                align = "L" if key == "subject" else "C"
-                pdf.cell(width, 8, _pdf_text(title), border=1, fill=True, align=align)
-            pdf.ln(8)
-
-        pdf.ln(3)
-        draw_table_header()
-
-        pdf.set_font("Helvetica", size=8.8)
-        if not rows:
-            pdf.set_x(table_x)
-            pdf.cell(
-                table_width,
-                8,
-                _pdf_text("Aucune note disponible pour cette periode."),
-                border=1,
-                align="C",
-            )
-            pdf.ln(8)
-        else:
-            for row in rows:
-                if pdf.get_y() > (pdf.h - 24):
-                    pdf.add_page()
-                    draw_table_header()
-                    pdf.set_font("Helvetica", size=8.8)
-
-                fill_row = row["index"] % 2 == 0
-                if fill_row:
-                    pdf.set_fill_color(248, 250, 253)
-
-                pdf.set_x(table_x)
-                pdf.cell(12, 7, _pdf_text(str(row["index"])), border=1, align="C", fill=fill_row)
-                pdf.cell(88, 7, _pdf_text(str(row["subject"])[:58]), border=1, fill=fill_row)
-                pdf.cell(20, 7, _pdf_text(_format_coef_value(row["coef"])), border=1, align="C", fill=fill_row)
-                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["note_classe"])), border=1, align="C", fill=fill_row)
-                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["note_examen"])), border=1, align="C", fill=fill_row)
-                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["note_finale"])), border=1, align="C", fill=fill_row)
-                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["moyenne_classe"])), border=1, align="C", fill=fill_row)
-                pdf.cell(30, 7, _pdf_text(_format_cell_value(row["points"])), border=1, align="C", fill=fill_row)
-                pdf.ln(7)
-
-        pdf.ln(4)
-        pdf.set_font("Helvetica", "B", 11)
-        pdf.cell(0, 6, _pdf_text(f"Moyenne generale ponderee: {average:.2f}/20"), ln=True)
-        pdf.cell(0, 6, _pdf_text(f"Total coefficients utilises: {_format_coef_value(coef_sum)}"), ln=True)
-        pdf.cell(0, 6, _pdf_text(f"Mention: {mention}"), ln=True)
-
-        pdf.ln(2)
-        pdf.set_font("Helvetica", size=9)
-        pdf.set_text_color(70, 70, 70)
-        pdf.multi_cell(
-            0,
-            5,
-            _pdf_text(
-                "Formule: Note finale = (Note classe + Note examen) / 2. "
-                "Si l'une des deux notes est absente, la note disponible est retenue."
-            ),
-        )
-        pdf.set_text_color(0, 0, 0)
-
-        signature_y = min(pdf.h - 16, pdf.get_y() + 8)
-        left_sig_x1 = left_margin + 5
-        left_sig_x2 = left_sig_x1 + 70
-        right_sig_x2 = right_margin - 5
-        right_sig_x1 = right_sig_x2 - 70
-
-        pdf.line(left_sig_x1, signature_y, left_sig_x2, signature_y)
-        pdf.line(right_sig_x1, signature_y, right_sig_x2, signature_y)
-        pdf.set_y(signature_y + 2)
-        pdf.set_font("Helvetica", size=9)
-        pdf.set_x(left_sig_x1)
-        pdf.cell(left_sig_x2 - left_sig_x1, 5, _pdf_text("Titulaire / Enseignant"), align="C")
-        pdf.set_x(right_sig_x1)
-        pdf.cell(right_sig_x2 - right_sig_x1, 5, _pdf_text("Direction"), align="C")
-
-        safe_term = str(period_label or term or "periode").replace("/", "-")
+        safe_term = str(payload["period_label"] or term or "periode").replace("/", "-")
         return pdf_output_response(pdf, f"bulletin_{student.matricule}_{safe_term}.pdf")
+
+
+def _build_bulletin_payload(*, student: Student, academic_year_id: int, normalized_term: str) -> dict:
+    school = _school_identity_for_student(student)
+    school_name = school["name"]
+    school_short = school["short"]
+    school_level = school["level"]
+    school_phone = school["phone"]
+    logo_path = _etablissement_logo_path(student) or _school_logo_path()
+
+    student_name = student.user.get_full_name().strip() or student.user.username
+    class_name = student.classroom.name if student.classroom else "N/A"
+    period_label = normalized_term
+    academic_year_name = (
+        AcademicYear.objects.filter(id=academic_year_id)
+        .values_list("name", flat=True)
+        .first()
+        or str(academic_year_id)
+    )
+
+    student_grades_qs = Grade.objects.filter(
+        student_id=student.id,
+        academic_year_id=academic_year_id,
+        term=normalized_term,
+    ).select_related("subject")
+
+    student_note_by_subject: dict[int, float] = {}
+    for grade in student_grades_qs.order_by("subject_id", "-created_at", "-id"):
+        student_note_by_subject.setdefault(grade.subject_id, float(grade.value))
+
+    classroom_id = student.classroom_id
+    subject_ids: set[int] = set(student_note_by_subject.keys())
+    class_average_by_subject: dict[int, float] = {}
+
+    if classroom_id:
+        class_grades_qs = Grade.objects.filter(
+            classroom_id=classroom_id,
+            academic_year_id=academic_year_id,
+            term=normalized_term,
+        )
+        subject_ids.update(class_grades_qs.values_list("subject_id", flat=True))
+
+        class_avg_rows = class_grades_qs.values("subject_id").annotate(avg_note=Avg("value"))
+        class_average_by_subject = {
+            int(row["subject_id"]): float(row["avg_note"])
+            for row in class_avg_rows
+            if row.get("avg_note") is not None
+        }
+
+        subject_ids.update(
+            TeacherAssignment.objects.filter(classroom_id=classroom_id).values_list("subject_id", flat=True)
+        )
+        subject_ids.update(
+            ExamPlanning.objects.filter(
+                classroom_id=classroom_id,
+                session__academic_year_id=academic_year_id,
+            ).values_list("subject_id", flat=True)
+        )
+
+    student_exam_results_qs = ExamResult.objects.filter(
+        student_id=student.id,
+        session__academic_year_id=academic_year_id,
+        session__term=normalized_term,
+    )
+    subject_ids.update(student_exam_results_qs.values_list("subject_id", flat=True))
+
+    exam_note_by_subject: dict[int, float] = {}
+    for exam_result in student_exam_results_qs.order_by(
+        "subject_id",
+        "-session__end_date",
+        "-session__start_date",
+        "-created_at",
+        "-id",
+    ):
+        exam_note_by_subject.setdefault(exam_result.subject_id, float(exam_result.score))
+
+    subjects = Subject.objects.filter(id__in=subject_ids).order_by("name", "id")
+
+    conduite_note = float(student.conduite if student.conduite is not None else 18)
+    conduite_coef = 2.0
+    conduite_moyenne_classe = None
+    if classroom_id:
+        conduite_moyenne_classe = (
+            Student.objects.filter(classroom_id=classroom_id)
+            .aggregate(avg_conduite=Avg("conduite"))
+            .get("avg_conduite")
+        )
+        if conduite_moyenne_classe is not None:
+            conduite_moyenne_classe = float(conduite_moyenne_classe)
+
+    rows, average, coef_sum = _build_bulletin_rows(
+        subjects=subjects,
+        student_note_by_subject=student_note_by_subject,
+        exam_note_by_subject=exam_note_by_subject,
+        class_average_by_subject=class_average_by_subject,
+        conduite_note=conduite_note,
+        conduite_coef=conduite_coef,
+        conduite_moyenne_classe=conduite_moyenne_classe,
+    )
+
+    if average >= 16:
+        mention = "Tres bien"
+    elif average >= 14:
+        mention = "Bien"
+    elif average >= 12:
+        mention = "Assez bien"
+    elif average >= 10:
+        mention = "Passable"
+    else:
+        mention = "Insuffisant"
+
+    return {
+        "logo_path": logo_path,
+        "school_name": school_name,
+        "school_short": school_short,
+        "school_level": school_level,
+        "school_phone": school_phone,
+        "student_name": student_name,
+        "student_matricule": student.matricule,
+        "class_name": class_name,
+        "academic_year_name": academic_year_name,
+        "period_label": period_label,
+        "rows": rows,
+        "average": average,
+        "coef_sum": coef_sum,
+        "mention": mention,
+    }
+
+
+def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
+    left_margin = 8
+    right_margin = pdf.w - 8
+
+    logo_path = payload["logo_path"]
+    if logo_path:
+        try:
+            pdf.image(logo_path, x=left_margin, y=6, w=17)
+        except Exception:
+            pass
+
+    title_x = 28 if logo_path else left_margin
+    pdf.set_xy(title_x, 6)
+    pdf.set_font("Helvetica", "B", 12.5)
+    pdf.cell(0, 5.5, _pdf_text(payload["school_name"]), ln=True)
+
+    pdf.set_x(title_x)
+    pdf.set_font("Helvetica", size=8.8)
+    header_line = (
+        f"{payload['school_level']} | Tel: {payload['school_phone']}"
+        if payload["school_phone"]
+        else payload["school_level"]
+    )
+    pdf.cell(0, 4.4, _pdf_text(header_line), ln=True)
+
+    pdf.set_x(title_x)
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.cell(
+        0,
+        4.4,
+        _pdf_text(f"Application: {payload['school_short']} - GESTION SCHOOL"),
+        ln=True,
+    )
+
+    top_line_y = max(pdf.get_y() + 1.5, 20)
+    pdf.set_draw_color(60, 60, 60)
+    pdf.line(left_margin, top_line_y, right_margin, top_line_y)
+    pdf.set_y(top_line_y + 1.8)
+
+    pdf.set_font("Helvetica", "B", 13.2)
+    pdf.cell(0, 6.0, _pdf_text("BULLETIN SCOLAIRE"), ln=True, align="C")
+
+    info_label_w = 22
+    info_value_w = 48
+    info_h = 5.6
+    info_rows = [
+        ("Eleve", payload["student_name"]),
+        ("Matricule", payload["student_matricule"]),
+        ("Classe", payload["class_name"]),
+        ("Etablissement", payload["school_name"]),
+        ("Annee", payload["academic_year_name"]),
+        ("Periode", payload["period_label"]),
+    ]
+
+    for index, (label, value) in enumerate(info_rows):
+        if index % 2 == 0:
+            pdf.set_x(left_margin)
+        pdf.set_font("Helvetica", "B", 8.6)
+        pdf.cell(info_label_w, info_h, _pdf_text(label), border=1)
+        pdf.set_font("Helvetica", size=8.3)
+        pdf.cell(info_value_w, info_h, _pdf_text(value)[:32], border=1)
+        if index % 2 == 1:
+            pdf.ln(info_h)
+
+    rows = payload["rows"]
+    table_columns = [
+        ("N", 10, "index"),
+        ("Matiere", 118, "subject"),
+        ("Coef", 18, "coef"),
+        ("Note classe", 31, "note_classe"),
+        ("Note examen", 31, "note_examen"),
+        ("Note finale", 31, "note_finale"),
+    ]
+    table_width = sum(column[1] for column in table_columns)
+    table_x = max(left_margin, (pdf.w - table_width) / 2)
+
+    table_y = pdf.get_y() + 2.4
+    summary_start_y = 172
+    header_h = 5.6
+    available_for_rows = max(26.0, summary_start_y - table_y - header_h)
+    row_count = max(len(rows), 1)
+    row_h = max(2.5, min(5.4, available_for_rows / row_count))
+    body_font_size = max(6.1, min(8.2, row_h + 2.0))
+    subject_max_len = max(24, min(78, int(78 * (row_h / 5.4))))
+
+    pdf.set_y(table_y)
+    pdf.set_x(table_x)
+    pdf.set_font("Helvetica", "B", 8.1)
+    pdf.set_fill_color(228, 234, 244)
+    for title, width, key in table_columns:
+        align = "L" if key == "subject" else "C"
+        pdf.cell(width, header_h, _pdf_text(title), border=1, fill=True, align=align)
+    pdf.ln(header_h)
+
+    pdf.set_font("Helvetica", size=body_font_size)
+    if not rows:
+        pdf.set_x(table_x)
+        pdf.cell(
+            table_width,
+            row_h,
+            _pdf_text("Aucune note disponible pour cette periode."),
+            border=1,
+            align="C",
+        )
+        pdf.ln(row_h)
+    else:
+        for row in rows:
+            fill_row = row["index"] % 2 == 0
+            if fill_row:
+                pdf.set_fill_color(248, 250, 253)
+            pdf.set_x(table_x)
+            pdf.cell(10, row_h, _pdf_text(str(row["index"])), border=1, align="C", fill=fill_row)
+            pdf.cell(118, row_h, _pdf_text(str(row["subject"])[:subject_max_len]), border=1, fill=fill_row)
+            pdf.cell(18, row_h, _pdf_text(_format_coef_value(row["coef"])), border=1, align="C", fill=fill_row)
+            pdf.cell(31, row_h, _pdf_text(_format_cell_value(row["note_classe"])), border=1, align="C", fill=fill_row)
+            pdf.cell(31, row_h, _pdf_text(_format_cell_value(row["note_examen"])), border=1, align="C", fill=fill_row)
+            pdf.cell(31, row_h, _pdf_text(_format_cell_value(row["note_finale"])), border=1, align="C", fill=fill_row)
+            pdf.ln(row_h)
+
+    pdf.set_y(summary_start_y)
+    pdf.set_font("Helvetica", "B", 9.2)
+    pdf.cell(0, 4.3, _pdf_text(f"Moyenne generale ponderee: {payload['average']:.2f}/20"), ln=True)
+    pdf.cell(0, 4.3, _pdf_text(f"Total coefficients utilises: {_format_coef_value(payload['coef_sum'])}"), ln=True)
+    pdf.cell(0, 4.3, _pdf_text(f"Mention: {payload['mention']}"), ln=True)
+
+    pdf.set_font("Helvetica", size=7.2)
+    pdf.set_text_color(70, 70, 70)
+    pdf.multi_cell(
+        0,
+        3.8,
+        _pdf_text(
+            "Formule: Note finale = (Note classe x Coef classe) + (Note examen x Coef examen). "
+            "Coef classe et coef examen sont egaux au coefficient de la matiere."
+        ),
+    )
+    pdf.set_text_color(0, 0, 0)
+
+    signature_y = 198
+    left_sig_x1 = left_margin + 12
+    left_sig_x2 = left_sig_x1 + 62
+    right_sig_x2 = right_margin - 12
+    right_sig_x1 = right_sig_x2 - 62
+
+    pdf.line(left_sig_x1, signature_y, left_sig_x2, signature_y)
+    pdf.line(right_sig_x1, signature_y, right_sig_x2, signature_y)
+    pdf.set_y(signature_y + 1.2)
+    pdf.set_font("Helvetica", size=7.8)
+    pdf.set_x(left_sig_x1)
+    pdf.cell(left_sig_x2 - left_sig_x1, 3.8, _pdf_text("Titulaire / Enseignant"), align="C")
+    pdf.set_x(right_sig_x1)
+    pdf.cell(right_sig_x2 - right_sig_x1, 3.8, _pdf_text("Direction"), align="C")
+
+
+class ClassBulletinsPdfView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, classroom_id: int, academic_year_id: int, term: str):
+        normalized_term = normalize_term(term)
+        if not normalized_term:
+            return Response(
+                {"detail": "Période invalide. Utilisez uniquement T1, T2 ou T3."},
+                status=400,
+            )
+
+        if getattr(request.user, "role", "") in {UserRole.PARENT, UserRole.STUDENT}:
+            raise PermissionDenied("Accès refusé aux bulletins de classe.")
+
+        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        target_etablissement_id = _effective_etablissement_id(request)
+        if getattr(request.user, "role", "") == UserRole.SUPER_ADMIN and target_etablissement_id is None:
+            raise PermissionDenied("Selectionnez un etablissement actif.")
+        if target_etablissement_id and classroom.etablissement_id != target_etablissement_id:
+            raise PermissionDenied("Accès refusé aux bulletins de cette classe.")
+
+        students = list(
+            _allowed_students_queryset(request)
+            .filter(classroom_id=classroom.id, is_archived=False)
+            .order_by("user__last_name", "user__first_name", "matricule")
+        )
+
+        if not students:
+            return Response({"detail": "Aucun élève trouvé pour cette classe."}, status=404)
+
+        pdf = FPDF(orientation="L", format="A4")
+        pdf.set_auto_page_break(auto=False)
+
+        for student in students:
+            payload = _build_bulletin_payload(
+                student=student,
+                academic_year_id=academic_year_id,
+                normalized_term=normalized_term,
+            )
+            pdf.add_page()
+            _render_bulletin_page(pdf, payload)
+
+        safe_term = str(normalized_term or term or "periode").replace("/", "-")
+        class_slug = str(classroom.name or f"classe_{classroom.id}").strip().replace(" ", "_")
+        return pdf_output_response(pdf, f"bulletins_{class_slug}_{safe_term}.pdf")
 
 
 class PaymentReceiptPdfView(APIView):

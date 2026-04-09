@@ -120,6 +120,40 @@ Exemple:
 ./build_apk.sh release --api-url=http://192.168.1.25:8000/api
 ```
 
+### 2.2) Web local sans cache (recommandé)
+Pour éviter définitivement le scénario "modifications non visibles" (cache navigateur ou service worker), utilise:
+
+```bash
+./start_web_lan.sh
+```
+
+Ce mode stable applique:
+- build web avec `--pwa-strategy=none` (pas de service worker)
+- serveur statique avec en-têtes `Cache-Control: no-store`
+- arrêt automatique du processus qui occupait déjà le port web
+
+Si tu veux explicitement garder le comportement PWA:
+
+```bash
+./start_web_lan.sh --pwa
+```
+
+### 2.3) Rebuild web complet en une commande
+Quand tu veux forcer un cycle complet (stop serveur web local + `flutter clean` + rebuild + relance), utilise:
+
+```bash
+./clean_web_lan.sh
+```
+
+Exemples:
+
+```bash
+./clean_web_lan.sh --web-port=8081
+./clean_web_lan.sh --ip=192.168.1.25
+./clean_web_lan.sh --dev
+./clean_web_lan.sh --pwa
+```
+
 ## JWT
 - Login: `POST /api/auth/login/`
 - Refresh: `POST /api/auth/refresh/`

@@ -1505,17 +1505,18 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final selectedPublicationLabel = _publicationLabel(selectedPublication);
     final isNarrow = MediaQuery.of(context).size.width < 980;
 
-    final teacherWorkloads = buildTeacherWorkloadRows(
-      teachers: _teachers,
-      assignmentById: assignmentById,
-      scheduleSlots: _scheduleSlots,
-      classroomFilter: _teacherScope == 'selected' ? selectedClassId : null,
-    ).where((row) {
-      if (!_isTeacherUser || (_loggedTeacherId ?? 0) <= 0) {
-        return true;
-      }
-      return row.teacherId == _loggedTeacherId;
-    }).toList();
+    final teacherWorkloads =
+        buildTeacherWorkloadRows(
+          teachers: _teachers,
+          assignmentById: assignmentById,
+          scheduleSlots: _scheduleSlots,
+          classroomFilter: _teacherScope == 'selected' ? selectedClassId : null,
+        ).where((row) {
+          if (!_isTeacherUser || (_loggedTeacherId ?? 0) <= 0) {
+            return true;
+          }
+          return row.teacherId == _loggedTeacherId;
+        }).toList();
 
     final controlsPanel = _sectionCard(
       title: 'Filtres et actions',
@@ -1617,7 +1618,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                           selectedClassId == null ||
                           selectedIsLocked)
                       ? null
-                      : () => _openSlotDialog(forceClassroomId: selectedClassId),
+                      : () =>
+                            _openSlotDialog(forceClassroomId: selectedClassId),
                   icon: const Icon(Icons.add_circle_outline),
                   label: const Text('Ajouter horaire'),
                 ),
@@ -2191,7 +2193,9 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       return const [];
     }
     return rows
-        .where((row) => _teacherAssignmentIds.contains(_asInt(row['assignment'])))
+        .where(
+          (row) => _teacherAssignmentIds.contains(_asInt(row['assignment'])),
+        )
         .toList();
   }
 

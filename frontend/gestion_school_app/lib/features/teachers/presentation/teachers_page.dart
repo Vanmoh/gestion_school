@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../auth/presentation/auth_controller.dart';
 
 class TeachersPage extends ConsumerStatefulWidget {
   const TeachersPage({super.key});
@@ -1137,17 +1138,791 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     searchController.dispose();
   }
 
-  Future<bool> _openCreateProfileDialog() async {
+  String _teacherUserSearchText(Map<String, dynamic> user) {
+    final username = (user['username'] ?? '').toString().toLowerCase();
+    final firstName = (user['first_name'] ?? '').toString().toLowerCase();
+    final lastName = (user['last_name'] ?? '').toString().toLowerCase();
+    final email = (user['email'] ?? '').toString().toLowerCase();
+    final phone = (user['phone'] ?? '').toString().toLowerCase();
+    final fullName = _fullNameFromUser(user).toLowerCase();
+    return '$fullName $username $firstName $lastName $email $phone';
+  }
+
+  Future<void> _showTeacherUserDialog(Map<String, dynamic> user) async {
+    final userId = _asInt(user['id']);
+    final profile = _findTeacherProfileByUserId(userId);
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Détails du compte enseignant'),
+          content: SizedBox(
+            width: 480,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _detailLine('Nom', _fullNameFromUser(user)),
+                _detailLine('Username', (user['username'] ?? '-').toString()),
+                _detailLine('Email', (user['email'] ?? '-').toString()),
+                _detailLine('Téléphone', (user['phone'] ?? '-').toString()),
+                _detailLine(
+                  'Profil enseignant',
+                  profile == null
+                      ? 'Non créé'
+                      : 'Créé (${(profile['employee_code'] ?? '-').toString()})',
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _editTeacherUserDialog(Map<String, dynamic> user) async {
+    final userId = _asInt(user['id']);
+    if (userId <= 0) {
+      _showMessage('Compte enseignant invalide.');
+      return;
+    }
+
+    final usernameController = TextEditingController(
+      text: (user['username'] ?? '').toString(),
+    );
+    final firstNameController = TextEditingController(
+      text: (user['first_name'] ?? '').toString(),
+    );
+    final lastNameController = TextEditingController(
+      text: (user['last_name'] ?? '').toString(),
+    );
+    final emailController = TextEditingController(
+      text: (user['email'] ?? '').toString(),
+    );
+    final phoneController = TextEditingController(
+      text: (user['phone'] ?? '').toString(),
+    );
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        var savingDialog = false;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Modifier compte enseignant'),
+              content: SizedBox(
+                width: 560,
+                child: SingleChildScrollView(
+                  child: Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: usernameController,
+                          enabled: !savingDialog,
+                          decoration: const InputDecoration(
+                            labelText: 'Username',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: emailController,
+                          enabled: !savingDialog,
+                          decoration: const InputDecoration(labelText: 'Email'),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: firstNameController,
+                          enabled: !savingDialog,
+                          decoration: const InputDecoration(
+                            labelText: 'Prénom',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: lastNameController,
+                          enabled: !savingDialog,
+                          decoration: const InputDecoration(labelText: 'Nom'),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: phoneController,
+                          enabled: !savingDialog,
+                          decoration: const InputDecoration(
+                            labelText: 'Téléphone',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: savingDialog
+                      ? null
+                      : () => Navigator.of(context).pop(false),
+                  child: const Text('Annuler'),
+                ),
+                FilledButton(
+                  onPressed: savingDialog
+                      ? null
+                      : () async {
+                          final username = usernameController.text.trim();
+                          final firstName = firstNameController.text.trim();
+                          final lastName = lastNameController.text.trim();
+                          final email = emailController.text.trim();
+                          final phone = phoneController.text.trim();
+
+                          if (username.isEmpty ||
+                              firstName.isEmpty ||
+                              lastName.isEmpty ||
+                              email.isEmpty) {
+                            _showMessage(
+                              'Username, prénom, nom et email sont obligatoires.',
+                            );
+                            return;
+                          }
+
+                          final authUser = ref
+                              .read(authControllerProvider)
+                              .value;
+                          final existingEtablissement = _asInt(
+                            user['etablissement'],
+                          );
+                          final targetEtablissement = existingEtablissement > 0
+                              ? existingEtablissement
+                              : (authUser?.etablissementId ?? 0);
+
+                          setDialogState(() => savingDialog = true);
+                          try {
+                            await ref
+                                .read(dioProvider)
+                                .patch(
+                                  '/auth/users/$userId/',
+                                  data: {
+                                    'username': username,
+                                    'first_name': firstName,
+                                    'last_name': lastName,
+                                    'email': email,
+                                    'phone': phone,
+                                    'role': 'teacher',
+                                    if (targetEtablissement > 0)
+                                      'etablissement': targetEtablissement,
+                                  },
+                                );
+                            if (context.mounted) {
+                              Navigator.of(context).pop(true);
+                            }
+                          } catch (error) {
+                            _showMessage('Erreur modification compte: $error');
+                            if (context.mounted) {
+                              setDialogState(() => savingDialog = false);
+                            }
+                          }
+                        },
+                  child: const Text('Enregistrer'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    usernameController.dispose();
+    firstNameController.dispose();
+    lastNameController.dispose();
+    emailController.dispose();
+    phoneController.dispose();
+
+    if (saved == true) {
+      await _loadData();
+      _showMessage('Compte enseignant modifié.', isSuccess: true);
+    }
+  }
+
+  Future<void> _deleteTeacherUser(Map<String, dynamic> user) async {
+    final userId = _asInt(user['id']);
+    if (userId <= 0) {
+      _showMessage('Compte enseignant invalide.');
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Supprimer compte enseignant'),
+          content: const Text(
+            'Confirmez-vous la suppression de ce compte enseignant ? Le profil et ses affectations associées seront également supprimés.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Supprimer'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      await ref.read(dioProvider).delete('/auth/users/$userId/');
+      if (!mounted) return;
+      _showMessage('Compte enseignant supprimé.', isSuccess: true);
+      await _loadData();
+    } catch (error) {
+      _showMessage('Erreur suppression compte: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<bool> _openCreateTeacherUserDialog() async {
+    final usernameController = TextEditingController();
+    final firstNameController = TextEditingController();
+    final lastNameController = TextEditingController();
+    final emailController = TextEditingController();
+    final phoneController = TextEditingController();
+    final passwordController = TextEditingController();
+    int? createdUserId;
+    String createdUsername = '';
+
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        var savingDialog = false;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Ajouter un compte enseignant'),
+              content: SizedBox(
+                width: 560,
+                child: SingleChildScrollView(
+                  child: Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: usernameController,
+                          enabled: !savingDialog,
+                          decoration: const InputDecoration(
+                            labelText: 'Username *',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: emailController,
+                          enabled: !savingDialog,
+                          decoration: const InputDecoration(
+                            labelText: 'Email *',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: firstNameController,
+                          enabled: !savingDialog,
+                          decoration: const InputDecoration(
+                            labelText: 'Prénom *',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: lastNameController,
+                          enabled: !savingDialog,
+                          decoration: const InputDecoration(labelText: 'Nom *'),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: phoneController,
+                          enabled: !savingDialog,
+                          decoration: const InputDecoration(
+                            labelText: 'Téléphone',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: passwordController,
+                          enabled: !savingDialog,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Mot de passe *',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: savingDialog
+                      ? null
+                      : () => Navigator.of(context).pop(false),
+                  child: const Text('Annuler'),
+                ),
+                FilledButton(
+                  onPressed: savingDialog
+                      ? null
+                      : () async {
+                          final username = usernameController.text.trim();
+                          createdUsername = username.toLowerCase();
+                          final firstName = firstNameController.text.trim();
+                          final lastName = lastNameController.text.trim();
+                          final email = emailController.text.trim();
+                          final phone = phoneController.text.trim();
+                          final password = passwordController.text;
+
+                          if (username.isEmpty ||
+                              firstName.isEmpty ||
+                              lastName.isEmpty ||
+                              email.isEmpty ||
+                              password.isEmpty) {
+                            _showMessage(
+                              'Complétez tous les champs obligatoires.',
+                            );
+                            return;
+                          }
+
+                          final authUser = ref
+                              .read(authControllerProvider)
+                              .value;
+
+                          setDialogState(() => savingDialog = true);
+                          try {
+                            final response = await ref
+                                .read(dioProvider)
+                                .post(
+                                  '/auth/register/',
+                                  data: {
+                                    'username': username,
+                                    'first_name': firstName,
+                                    'last_name': lastName,
+                                    'email': email,
+                                    'phone': phone,
+                                    'password': password,
+                                    'role': 'teacher',
+                                    if (authUser?.etablissementId != null)
+                                      'etablissement':
+                                          authUser!.etablissementId,
+                                  },
+                                );
+                            final payload = response.data;
+                            if (payload is Map<String, dynamic>) {
+                              createdUserId = _asInt(payload['id']);
+                            }
+                            if (context.mounted) {
+                              Navigator.of(context).pop(true);
+                            }
+                          } catch (error) {
+                            _showMessage('Erreur création compte: $error');
+                            if (context.mounted) {
+                              setDialogState(() => savingDialog = false);
+                            }
+                          }
+                        },
+                  child: const Text('Créer compte'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    usernameController.dispose();
+    firstNameController.dispose();
+    lastNameController.dispose();
+    emailController.dispose();
+    phoneController.dispose();
+    passwordController.dispose();
+
+    if (created == true) {
+      await _loadData();
+      if (!mounted) {
+        return true;
+      }
+      _showMessage('Compte enseignant créé.', isSuccess: true);
+
+      var targetUserId = (createdUserId != null && createdUserId! > 0)
+          ? createdUserId
+          : null;
+
+      if (targetUserId == null) {
+        final createdUser = _teacherUsers.firstWhere(
+          (u) =>
+              (u['username'] ?? '').toString().trim().toLowerCase() ==
+              createdUsername,
+          orElse: () => <String, dynamic>{},
+        );
+        final fallbackId = _asInt(createdUser['id']);
+        if (fallbackId > 0) {
+          targetUserId = fallbackId;
+        }
+      }
+
+      final createProfileNow = await showDialog<bool>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Créer le profil maintenant ?'),
+            content: const Text(
+              'Le compte enseignant est créé. Voulez-vous ouvrir directement la création du profil enseignant ?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Plus tard'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Créer profil'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (createProfileNow == true) {
+        await _openCreateProfileDialog(preferredUserId: targetUserId);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _handleTeacherUserMenuAction(
+    String action,
+    Map<String, dynamic> user,
+  ) async {
+    if (action == 'show') {
+      await _showTeacherUserDialog(user);
+      return;
+    }
+    if (action == 'edit') {
+      await _editTeacherUserDialog(user);
+      return;
+    }
+    if (action == 'delete') {
+      await _deleteTeacherUser(user);
+    }
+  }
+
+  Future<void> _openTeacherManagementDialog() async {
+    var currentPage = 1;
+    const pageSize = 6;
+    var searchQuery = '';
+    var sortBy = 'name';
+    var sortAscending = true;
+    final searchController = TextEditingController();
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final filteredUsers = _teacherUsers.where((user) {
+              if (searchQuery.isEmpty) {
+                return true;
+              }
+              return _teacherUserSearchText(user).contains(searchQuery);
+            }).toList();
+
+            filteredUsers.sort((a, b) {
+              int result;
+              if (sortBy == 'username') {
+                final left = (a['username'] ?? '').toString().toLowerCase();
+                final right = (b['username'] ?? '').toString().toLowerCase();
+                result = left.compareTo(right);
+              } else if (sortBy == 'email') {
+                final left = (a['email'] ?? '').toString().toLowerCase();
+                final right = (b['email'] ?? '').toString().toLowerCase();
+                result = left.compareTo(right);
+              } else {
+                final left = _fullNameFromUser(a).toLowerCase();
+                final right = _fullNameFromUser(b).toLowerCase();
+                result = left.compareTo(right);
+              }
+              return sortAscending ? result : -result;
+            });
+
+            final total = filteredUsers.length;
+            final totalPages = total == 0
+                ? 1
+                : ((total + pageSize - 1) ~/ pageSize);
+            if (currentPage > totalPages) {
+              currentPage = totalPages;
+            }
+            final start = (currentPage - 1) * pageSize;
+            final end = start + pageSize > total ? total : start + pageSize;
+            final pagedUsers = total == 0
+                ? <Map<String, dynamic>>[]
+                : filteredUsers.sublist(start, end);
+
+            return AlertDialog(
+              title: const Text('Gestion des comptes enseignants'),
+              content: SizedBox(
+                width: 860,
+                child: _teacherUsers.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 20),
+                        child: Text('Aucun compte enseignant disponible.'),
+                      )
+                    : SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                SizedBox(
+                                  width: 280,
+                                  child: TextField(
+                                    controller: searchController,
+                                    onChanged: (value) {
+                                      setDialogState(() {
+                                        searchQuery = value
+                                            .trim()
+                                            .toLowerCase();
+                                        currentPage = 1;
+                                      });
+                                    },
+                                    decoration: InputDecoration(
+                                      labelText: 'Recherche enseignant',
+                                      prefixIcon: const Icon(Icons.search),
+                                      suffixIcon: searchQuery.isEmpty
+                                          ? null
+                                          : IconButton(
+                                              onPressed: () {
+                                                searchController.clear();
+                                                setDialogState(() {
+                                                  searchQuery = '';
+                                                  currentPage = 1;
+                                                });
+                                              },
+                                              icon: const Icon(Icons.clear),
+                                            ),
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 220,
+                                  child: DropdownButtonFormField<String>(
+                                    initialValue: sortBy,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Trier par',
+                                    ),
+                                    items: const [
+                                      DropdownMenuItem(
+                                        value: 'name',
+                                        child: Text('Nom'),
+                                      ),
+                                      DropdownMenuItem(
+                                        value: 'username',
+                                        child: Text('Username'),
+                                      ),
+                                      DropdownMenuItem(
+                                        value: 'email',
+                                        child: Text('Email'),
+                                      ),
+                                    ],
+                                    onChanged: (value) {
+                                      if (value == null) {
+                                        return;
+                                      }
+                                      setDialogState(() {
+                                        sortBy = value;
+                                        currentPage = 1;
+                                      });
+                                    },
+                                  ),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: () {
+                                    setDialogState(() {
+                                      sortAscending = !sortAscending;
+                                      currentPage = 1;
+                                    });
+                                  },
+                                  icon: Icon(
+                                    sortAscending
+                                        ? Icons.arrow_upward_rounded
+                                        : Icons.arrow_downward_rounded,
+                                  ),
+                                  label: Text(
+                                    sortAscending ? 'Croissant' : 'Décroissant',
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            if (pagedUsers.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 16),
+                                child: Text('Aucun enseignant pour ce filtre.'),
+                              )
+                            else
+                              ...pagedUsers.map((user) {
+                                final userId = _asInt(user['id']);
+                                final profile = _findTeacherProfileByUserId(
+                                  userId,
+                                );
+                                final status = profile == null
+                                    ? 'Profil non créé'
+                                    : 'Profil créé';
+
+                                return ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                  ),
+                                  title: Text(_fullNameFromUser(user)),
+                                  subtitle: Text(
+                                    '${(user['username'] ?? '-').toString()}  •  ${(user['email'] ?? '-').toString()}  •  $status',
+                                  ),
+                                  trailing: PopupMenuButton<String>(
+                                    enabled: !_saving,
+                                    onSelected: (value) async {
+                                      await _handleTeacherUserMenuAction(
+                                        value,
+                                        user,
+                                      );
+                                      if (context.mounted) {
+                                        setDialogState(() {});
+                                      }
+                                    },
+                                    itemBuilder: (context) => const [
+                                      PopupMenuItem(
+                                        value: 'show',
+                                        child: Text('Afficher'),
+                                      ),
+                                      PopupMenuItem(
+                                        value: 'edit',
+                                        child: Text('Modifier'),
+                                      ),
+                                      PopupMenuItem(
+                                        value: 'delete',
+                                        child: Text('Supprimer'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                          ],
+                        ),
+                      ),
+              ),
+              actions: [
+                Text(
+                  'Page $currentPage / $totalPages',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                IconButton(
+                  tooltip: 'Page précédente',
+                  onPressed: currentPage > 1
+                      ? () => setDialogState(() => currentPage -= 1)
+                      : null,
+                  icon: const Icon(Icons.chevron_left_rounded),
+                ),
+                IconButton(
+                  tooltip: 'Page suivante',
+                  onPressed: currentPage < totalPages
+                      ? () => setDialogState(() => currentPage += 1)
+                      : null,
+                  icon: const Icon(Icons.chevron_right_rounded),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _saving
+                      ? null
+                      : () async {
+                          final created = await _openCreateTeacherUserDialog();
+                          if (created && context.mounted) {
+                            setDialogState(() {});
+                          }
+                        },
+                  icon: const Icon(Icons.person_add_alt_1_rounded),
+                  label: const Text('Ajouter un enseignant'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Fermer'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    searchController.dispose();
+  }
+
+  Future<bool> _openCreateProfileDialog({int? preferredUserId}) async {
     if (_teacherUsers.isEmpty) {
       _showMessage('Aucun compte enseignant disponible.');
       return false;
     }
 
     int? selectedUserId;
-    for (final user in _teacherUsers) {
-      if (_findTeacherProfileByUserId(_asInt(user['id'])) == null) {
-        selectedUserId = _asInt(user['id']);
-        break;
+    final preferredId = preferredUserId ?? 0;
+    if (preferredId > 0 && _findTeacherProfileByUserId(preferredId) == null) {
+      for (final user in _teacherUsers) {
+        if (_asInt(user['id']) == preferredId) {
+          selectedUserId = preferredId;
+          break;
+        }
+      }
+    }
+
+    if (selectedUserId == null) {
+      for (final user in _teacherUsers) {
+        if (_findTeacherProfileByUserId(_asInt(user['id'])) == null) {
+          selectedUserId = _asInt(user['id']);
+          break;
+        }
       }
     }
     selectedUserId ??= _asInt(_teacherUsers.first['id']);
@@ -1539,6 +2314,322 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     }
   }
 
+  Widget _buildTeachersKpiPanel({
+    required int usersCount,
+    required int profileCount,
+    required int pendingProfilesCount,
+  }) {
+    return _panelSurface(
+      context,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: [
+          _metricChip('Comptes enseignants', '$usersCount'),
+          _metricChip('Profils créés', '$profileCount'),
+          _metricChip('Profils à créer', '$pendingProfilesCount'),
+          _metricChip('Affectations', '${_assignments.length}'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTeachersManagementHub() {
+    return _panelSurface(
+      context,
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 10,
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            'Gestion centralisée via fenêtres dédiées',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _openTeacherManagementDialog,
+                icon: const Icon(Icons.groups_2_outlined),
+                label: const Text('Gérer enseignant'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _openProfileManagementDialog,
+                icon: const Icon(Icons.manage_accounts_outlined),
+                label: const Text('Gérer profils'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _openAssignmentManagementDialog,
+                icon: const Icon(Icons.tune_rounded),
+                label: const Text('Gérer affectations'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTeacherFocusPanel({
+    required Map<String, dynamic>? selectedUser,
+    required Map<String, dynamic>? selectedProfile,
+    required List<Map<String, dynamic>> selectedTeacherAssignments,
+    required ColorScheme colorScheme,
+  }) {
+    return _panelSurface(
+      context,
+      child: selectedUser == null
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Center(
+                child: Text(
+                  'Sélectionnez un enseignant dans Gérer profils.',
+                ),
+              ),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Fiche enseignant',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 8,
+                  children: [
+                    _metricChip('Nom', _fullNameFromUser(selectedUser)),
+                    _metricChip(
+                      'Username',
+                      (selectedUser['username'] ?? '-').toString(),
+                    ),
+                    _metricChip(
+                      'Email',
+                      (selectedUser['email'] ?? '-').toString(),
+                    ),
+                    _metricChip(
+                      'Téléphone',
+                      (selectedUser['phone'] ?? '-').toString(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (selectedProfile != null)
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surface,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                      ),
+                    ),
+                    child: Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        _metricChip(
+                          'Code employé',
+                          (selectedProfile['employee_code'] ?? '-').toString(),
+                        ),
+                        _metricChip(
+                          'Date embauche',
+                          (selectedProfile['hire_date'] ?? '-').toString(),
+                        ),
+                        _metricChip(
+                          'Salaire base',
+                          _formatMoney(selectedProfile['salary_base']),
+                        ),
+                        _metricChip(
+                          'Affectations',
+                          '${selectedTeacherAssignments.length}',
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF3E8),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFFFFD3AF)),
+                    ),
+                    child: const Text(
+                      'Ce compte enseignant n\'a pas encore de profil. Complétez la section ci-dessous.',
+                    ),
+                  ),
+                const SizedBox(height: 14),
+                _actionHeader(
+                  context,
+                  title: 'Mode action guidé',
+                  subtitle:
+                      'Etape 1: créer le profil, puis Etape 2: affecter la matière à la classe.',
+                ),
+                const SizedBox(height: 10),
+                _actionSection(
+                  context,
+                  step: 'Etape 1',
+                  title: 'Créer un profil enseignant',
+                  subtitle:
+                      'Choisissez un compte utilisateur enseignant puis complétez les informations RH.',
+                  child: Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      SizedBox(
+                        width: 280,
+                        child: DropdownButtonFormField<int>(
+                          initialValue: _selectedTeacherUserId,
+                          decoration: const InputDecoration(
+                            labelText: 'Compte enseignant',
+                          ),
+                          items: _teacherUsers
+                              .map(
+                                (u) => DropdownMenuItem<int>(
+                                  value: _asInt(u['id']),
+                                  child: Text(_teacherUserActionLabel(u)),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedTeacherUserId = value;
+                              final profile = value == null
+                                  ? null
+                                  : _findTeacherProfileByUserId(value);
+                              _selectedTeacherId = profile == null
+                                  ? null
+                                  : _asInt(profile['id']);
+                            });
+                          },
+                        ),
+                      ),
+                      SizedBox(
+                        width: 190,
+                        child: TextField(
+                          controller: _employeeCodeController,
+                          decoration: const InputDecoration(
+                            labelText: 'Code employé',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 170,
+                        child: TextField(
+                          controller: _salaryController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: 'Salaire de base',
+                          ),
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _saving ? null : _pickHireDate,
+                        icon: const Icon(Icons.calendar_month_outlined),
+                        label: Text(_apiDate(_hireDate)),
+                      ),
+                      FilledButton.icon(
+                        onPressed: _saving ? null : _createTeacherProfile,
+                        icon: const Icon(Icons.person_add_alt_1_rounded),
+                        label: const Text('Valider profil'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _actionSection(
+                  context,
+                  step: 'Etape 2',
+                  title: 'Créer une affectation',
+                  subtitle:
+                      'Affectez un enseignant profilé à une matière et une classe.',
+                  child: Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      SizedBox(
+                        width: 260,
+                        child: DropdownButtonFormField<int>(
+                          initialValue: _selectedTeacherId,
+                          decoration: const InputDecoration(
+                            labelText: 'Enseignant',
+                          ),
+                          items: _teachers
+                              .map(
+                                (t) => DropdownMenuItem<int>(
+                                  value: _asInt(t['id']),
+                                  child: Text(_teacherProfileLabel(t)),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            setState(() => _selectedTeacherId = value);
+                          },
+                        ),
+                      ),
+                      SizedBox(
+                        width: 240,
+                        child: DropdownButtonFormField<int>(
+                          initialValue: _selectedSubjectId,
+                          decoration: const InputDecoration(
+                            labelText: 'Matière',
+                          ),
+                          items: _subjects
+                              .map(
+                                (s) => DropdownMenuItem<int>(
+                                  value: _asInt(s['id']),
+                                  child: Text(
+                                    '${s['code'] ?? ''} - ${s['name'] ?? ''}',
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            setState(() => _selectedSubjectId = value);
+                          },
+                        ),
+                      ),
+                      SizedBox(
+                        width: 220,
+                        child: DropdownButtonFormField<int>(
+                          initialValue: _selectedClassroomId,
+                          decoration: const InputDecoration(
+                            labelText: 'Classe',
+                          ),
+                          items: _classrooms
+                              .map(
+                                (c) => DropdownMenuItem<int>(
+                                  value: _asInt(c['id']),
+                                  child: Text((c['name'] ?? '').toString()),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            setState(() => _selectedClassroomId = value);
+                          },
+                        ),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: _saving ? null : _createAssignment,
+                        icon: const Icon(Icons.link_outlined),
+                        label: const Text('Valider affectation'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -1595,309 +2686,19 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 16),
-          _panelSurface(
-            context,
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                _metricChip('Comptes enseignants', '$usersCount'),
-                _metricChip('Profils créés', '$profileCount'),
-                _metricChip('Profils à créer', '$pendingProfilesCount'),
-                _metricChip('Affectations', '${_assignments.length}'),
-              ],
-            ),
+          _buildTeachersKpiPanel(
+            usersCount: usersCount,
+            profileCount: profileCount,
+            pendingProfilesCount: pendingProfilesCount,
           ),
           const SizedBox(height: 14),
-          _panelSurface(
-            context,
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 10,
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text(
-                  'Gestion centralisée via fenêtres dédiées',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    OutlinedButton.icon(
-                      onPressed: _saving ? null : _openProfileManagementDialog,
-                      icon: const Icon(Icons.manage_accounts_outlined),
-                      label: const Text('Gérer profils'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _saving
-                          ? null
-                          : _openAssignmentManagementDialog,
-                      icon: const Icon(Icons.tune_rounded),
-                      label: const Text('Gérer affectations'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+          _buildTeachersManagementHub(),
           const SizedBox(height: 14),
-          _panelSurface(
-            context,
-            child: selectedUser == null
-                ? const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 18),
-                    child: Center(
-                      child: Text(
-                        'Sélectionnez un enseignant dans Gérer profils.',
-                      ),
-                    ),
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Fiche enseignant',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 8,
-                        children: [
-                          _metricChip('Nom', _fullNameFromUser(selectedUser)),
-                          _metricChip(
-                            'Username',
-                            (selectedUser['username'] ?? '-').toString(),
-                          ),
-                          _metricChip(
-                            'Email',
-                            (selectedUser['email'] ?? '-').toString(),
-                          ),
-                          _metricChip(
-                            'Téléphone',
-                            (selectedUser['phone'] ?? '-').toString(),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      if (selectedProfile != null)
-                        Container(
-                          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-                          decoration: BoxDecoration(
-                            color: colorScheme.surface,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: colorScheme.outlineVariant.withValues(
-                                alpha: 0.5,
-                              ),
-                            ),
-                          ),
-                          child: Wrap(
-                            spacing: 10,
-                            runSpacing: 8,
-                            children: [
-                              _metricChip(
-                                'Code employé',
-                                (selectedProfile['employee_code'] ?? '-')
-                                    .toString(),
-                              ),
-                              _metricChip(
-                                'Date embauche',
-                                (selectedProfile['hire_date'] ?? '-')
-                                    .toString(),
-                              ),
-                              _metricChip(
-                                'Salaire base',
-                                _formatMoney(selectedProfile['salary_base']),
-                              ),
-                              _metricChip(
-                                'Affectations',
-                                '${selectedTeacherAssignments.length}',
-                              ),
-                            ],
-                          ),
-                        )
-                      else
-                        Container(
-                          padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFF3E8),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: const Color(0xFFFFD3AF)),
-                          ),
-                          child: const Text(
-                            'Ce compte enseignant n\'a pas encore de profil. Complétez la section ci-dessous.',
-                          ),
-                        ),
-                      const SizedBox(height: 14),
-                      _actionHeader(
-                        context,
-                        title: 'Mode action guidé',
-                        subtitle:
-                            'Etape 1: créer le profil, puis Etape 2: affecter la matière à la classe.',
-                      ),
-                      const SizedBox(height: 10),
-                      _actionSection(
-                        context,
-                        step: 'Etape 1',
-                        title: 'Créer un profil enseignant',
-                        subtitle:
-                            'Choisissez un compte utilisateur enseignant puis complétez les informations RH.',
-                        child: Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            SizedBox(
-                              width: 280,
-                              child: DropdownButtonFormField<int>(
-                                initialValue: _selectedTeacherUserId,
-                                decoration: const InputDecoration(
-                                  labelText: 'Compte enseignant',
-                                ),
-                                items: _teacherUsers
-                                    .map(
-                                      (u) => DropdownMenuItem<int>(
-                                        value: _asInt(u['id']),
-                                        child: Text(_teacherUserActionLabel(u)),
-                                      ),
-                                    )
-                                    .toList(),
-                                onChanged: (value) {
-                                  setState(() {
-                                    _selectedTeacherUserId = value;
-                                    final profile = value == null
-                                        ? null
-                                        : _findTeacherProfileByUserId(value);
-                                    _selectedTeacherId = profile == null
-                                        ? null
-                                        : _asInt(profile['id']);
-                                  });
-                                },
-                              ),
-                            ),
-                            SizedBox(
-                              width: 190,
-                              child: TextField(
-                                controller: _employeeCodeController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Code employé',
-                                ),
-                              ),
-                            ),
-                            SizedBox(
-                              width: 170,
-                              child: TextField(
-                                controller: _salaryController,
-                                keyboardType:
-                                    const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                    ),
-                                decoration: const InputDecoration(
-                                  labelText: 'Salaire de base',
-                                ),
-                              ),
-                            ),
-                            OutlinedButton.icon(
-                              onPressed: _saving ? null : _pickHireDate,
-                              icon: const Icon(Icons.calendar_month_outlined),
-                              label: Text(_apiDate(_hireDate)),
-                            ),
-                            FilledButton.icon(
-                              onPressed: _saving ? null : _createTeacherProfile,
-                              icon: const Icon(Icons.person_add_alt_1_rounded),
-                              label: const Text('Valider profil'),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      _actionSection(
-                        context,
-                        step: 'Etape 2',
-                        title: 'Créer une affectation',
-                        subtitle:
-                            'Affectez un enseignant profilé à une matière et une classe.',
-                        child: Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            SizedBox(
-                              width: 260,
-                              child: DropdownButtonFormField<int>(
-                                initialValue: _selectedTeacherId,
-                                decoration: const InputDecoration(
-                                  labelText: 'Enseignant',
-                                ),
-                                items: _teachers
-                                    .map(
-                                      (t) => DropdownMenuItem<int>(
-                                        value: _asInt(t['id']),
-                                        child: Text(_teacherProfileLabel(t)),
-                                      ),
-                                    )
-                                    .toList(),
-                                onChanged: (value) {
-                                  setState(() => _selectedTeacherId = value);
-                                },
-                              ),
-                            ),
-                            SizedBox(
-                              width: 240,
-                              child: DropdownButtonFormField<int>(
-                                initialValue: _selectedSubjectId,
-                                decoration: const InputDecoration(
-                                  labelText: 'Matière',
-                                ),
-                                items: _subjects
-                                    .map(
-                                      (s) => DropdownMenuItem<int>(
-                                        value: _asInt(s['id']),
-                                        child: Text(
-                                          '${s['code'] ?? ''} - ${s['name'] ?? ''}',
-                                        ),
-                                      ),
-                                    )
-                                    .toList(),
-                                onChanged: (value) {
-                                  setState(() => _selectedSubjectId = value);
-                                },
-                              ),
-                            ),
-                            SizedBox(
-                              width: 220,
-                              child: DropdownButtonFormField<int>(
-                                initialValue: _selectedClassroomId,
-                                decoration: const InputDecoration(
-                                  labelText: 'Classe',
-                                ),
-                                items: _classrooms
-                                    .map(
-                                      (c) => DropdownMenuItem<int>(
-                                        value: _asInt(c['id']),
-                                        child: Text(
-                                          (c['name'] ?? '').toString(),
-                                        ),
-                                      ),
-                                    )
-                                    .toList(),
-                                onChanged: (value) {
-                                  setState(() => _selectedClassroomId = value);
-                                },
-                              ),
-                            ),
-                            FilledButton.tonalIcon(
-                              onPressed: _saving ? null : _createAssignment,
-                              icon: const Icon(Icons.link_outlined),
-                              label: const Text('Valider affectation'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+          _buildTeacherFocusPanel(
+            selectedUser: selectedUser,
+            selectedProfile: selectedProfile,
+            selectedTeacherAssignments: selectedTeacherAssignments,
+            colorScheme: colorScheme,
           ),
         ],
       ),

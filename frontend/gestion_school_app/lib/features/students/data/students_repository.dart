@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:typed_data';
 import '../../../core/models/paginated_result.dart';
 import '../domain/student.dart';
@@ -124,21 +125,19 @@ class StudentsRepository {
 
       Response<dynamic> studentResponse;
       if (hasPhoto) {
-        if (photoPath != null && photoPath.trim().isNotEmpty) {
-          payload['photo'] = await MultipartFile.fromFile(
-            photoPath,
-            filename:
-                photoFileName ??
-                'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
-          );
-        } else if (photoBytes != null && photoBytes.isNotEmpty) {
-          payload['photo'] = MultipartFile.fromBytes(
-            photoBytes,
-            filename:
-                photoFileName ??
-                'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
-          );
+        payload['photo'] = await _buildMultipartFile(
+          path: photoPath,
+          bytes: photoBytes,
+          fileName: photoFileName,
+          fallbackFileNamePrefix: 'photo',
+          defaultExtension: 'jpg',
+          fieldLabel: 'photo de profil',
+        );
+
+        if (payload['photo'] == null) {
+          throw Exception('Aucune photo valide fournie pour l\'inscription.');
         }
+
         studentResponse = await dio.post(
           '/students/',
           data: FormData.fromMap(payload),
@@ -216,27 +215,23 @@ class StudentsRepository {
     Uint8List? photoBytes,
     String? photoFileName,
   }) async {
-    final payload = <String, dynamic>{};
-    if (photoPath != null && photoPath.trim().isNotEmpty) {
-      payload['photo'] = await MultipartFile.fromFile(
-        photoPath,
-        filename:
-            photoFileName ??
-            'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
-      );
-    } else if (photoBytes != null && photoBytes.isNotEmpty) {
-      payload['photo'] = MultipartFile.fromBytes(
-        photoBytes,
-        filename:
-            photoFileName ??
-            'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
-      );
-    } else {
+    final multipartPhoto = await _buildMultipartFile(
+      path: photoPath,
+      bytes: photoBytes,
+      fileName: photoFileName,
+      fallbackFileNamePrefix: 'photo',
+      defaultExtension: 'jpg',
+      fieldLabel: 'photo de profil',
+    );
+
+    if (multipartPhoto == null) {
       throw Exception('Aucune photo sélectionnée.');
     }
 
-    final response = await dio.patch(
-      '/students/$studentId/',
+    final payload = <String, dynamic>{'photo': multipartPhoto};
+
+    final response = await dio.post(
+      '/students/$studentId/upload-photo/',
       data: FormData.fromMap(payload),
     );
     return _toStudent(Map<String, dynamic>.from(response.data as Map));
@@ -361,24 +356,17 @@ class StudentsRepository {
 
     final normalizedProofPath = proofPath?.trim() ?? '';
     final Response<dynamic> response;
-    if (normalizedProofPath.isNotEmpty) {
-      payload['proof'] = await MultipartFile.fromFile(
-        normalizedProofPath,
-        filename:
-            proofFileName ??
-            'justificatif_${DateTime.now().millisecondsSinceEpoch}',
-      );
-      response = await dio.post(
-        '/attendances/',
-        data: FormData.fromMap(payload),
-      );
-    } else if (proofBytes != null && proofBytes.isNotEmpty) {
-      payload['proof'] = MultipartFile.fromBytes(
-        proofBytes,
-        filename:
-            proofFileName ??
-            'justificatif_${DateTime.now().millisecondsSinceEpoch}.jpg',
-      );
+    final multipartProof = await _buildMultipartFile(
+      path: normalizedProofPath,
+      bytes: proofBytes,
+      fileName: proofFileName,
+      fallbackFileNamePrefix: 'justificatif',
+      defaultExtension: 'jpg',
+      fieldLabel: 'justificatif',
+    );
+
+    if (multipartProof != null) {
+      payload['proof'] = multipartProof;
       response = await dio.post(
         '/attendances/',
         data: FormData.fromMap(payload),
@@ -536,5 +524,41 @@ class StudentsRepository {
     final m = value.month.toString().padLeft(2, '0');
     final d = value.day.toString().padLeft(2, '0');
     return '$y-$m-$d';
+  }
+
+  Future<MultipartFile?> _buildMultipartFile({
+    String? path,
+    Uint8List? bytes,
+    String? fileName,
+    required String fallbackFileNamePrefix,
+    required String defaultExtension,
+    required String fieldLabel,
+  }) async {
+    if (bytes != null && bytes.isNotEmpty) {
+      return MultipartFile.fromBytes(
+        bytes,
+        filename: (fileName != null && fileName.trim().isNotEmpty)
+            ? fileName.trim()
+            : '${fallbackFileNamePrefix}_${DateTime.now().millisecondsSinceEpoch}.$defaultExtension',
+      );
+    }
+
+    final normalizedPath = path?.trim() ?? '';
+    if (normalizedPath.isEmpty) {
+      return null;
+    }
+
+    if (kIsWeb) {
+      throw Exception(
+        'Upload web impossible pour $fieldLabel: le fichier doit etre charge en bytes.',
+      );
+    }
+
+    return MultipartFile.fromFile(
+      normalizedPath,
+      filename: (fileName != null && fileName.trim().isNotEmpty)
+          ? fileName.trim()
+          : '${fallbackFileNamePrefix}_${DateTime.now().millisecondsSinceEpoch}.$defaultExtension',
+    );
   }
 }

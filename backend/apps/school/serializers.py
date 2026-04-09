@@ -523,6 +523,12 @@ class StudentAcademicHistorySerializer(serializers.ModelSerializer):
 
 class GradeSerializer(serializers.ModelSerializer):
     TERM_ERROR_MESSAGE = "Période invalide. Utilisez uniquement T1, T2 ou T3."
+    value = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
+    homework_scores = serializers.ListField(
+        child=serializers.DecimalField(max_digits=5, decimal_places=2),
+        required=False,
+        allow_empty=True,
+    )
 
     def validate_term(self, value):
         normalized = normalize_term(value)
@@ -536,8 +542,39 @@ class GradeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("La note doit être comprise entre 0 et 20.")
         return value
 
+    def validate_homework_scores(self, value):
+        if value is None:
+            return []
+
+        normalized = []
+        for raw in value:
+            numeric = Decimal(str(raw))
+            if numeric < Decimal("0") or numeric > Decimal("20"):
+                raise serializers.ValidationError(
+                    "Chaque note de devoir doit être comprise entre 0 et 20."
+                )
+            normalized.append(numeric.quantize(Decimal("0.01")))
+        return normalized
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
+
+        provided_homework_scores = attrs.get("homework_scores", None)
+        provided_value = attrs.get("value", None)
+
+        if self.instance is None and provided_homework_scores is None and provided_value is None:
+            raise serializers.ValidationError(
+                {"homework_scores": "Saisissez au moins une note de devoir ou une note de classe."}
+            )
+
+        if provided_homework_scores is not None:
+            if len(provided_homework_scores) == 0:
+                raise serializers.ValidationError(
+                    {"homework_scores": "Ajoutez au moins une note de devoir."}
+                )
+            average = sum(provided_homework_scores) / Decimal(len(provided_homework_scores))
+            attrs["value"] = average.quantize(Decimal("0.01"))
+            attrs["homework_scores"] = [str(score) for score in provided_homework_scores]
 
         student = attrs.get("student") or getattr(self.instance, "student", None)
         classroom = attrs.get("classroom") or getattr(self.instance, "classroom", None)
@@ -929,6 +966,43 @@ class ExamInvigilationSerializer(serializers.ModelSerializer):
 
 
 class ExamResultSerializer(serializers.ModelSerializer):
+    def validate_score(self, value):
+        numeric_value = Decimal(str(value))
+        if numeric_value < Decimal("0") or numeric_value > Decimal("20"):
+            raise serializers.ValidationError("La note d'examen doit être comprise entre 0 et 20.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        session = attrs.get("session") or getattr(self.instance, "session", None)
+        student = attrs.get("student") or getattr(self.instance, "student", None)
+        subject = attrs.get("subject") or getattr(self.instance, "subject", None)
+
+        if not session or not student or not subject:
+            return attrs
+
+        conflict_qs = ExamResult.objects.filter(
+            student=student,
+            subject=subject,
+            session__academic_year=session.academic_year,
+            session__term=session.term,
+        )
+        if self.instance:
+            conflict_qs = conflict_qs.exclude(pk=self.instance.pk)
+
+        if conflict_qs.exists():
+            raise serializers.ValidationError(
+                {
+                    "student": (
+                        "Une note d'examen existe déjà pour cet élève, cette matière, "
+                        "cette année et cette période."
+                    )
+                }
+            )
+
+        return attrs
+
     class Meta:
         model = ExamResult
         fields = "__all__"
