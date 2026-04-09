@@ -569,6 +569,27 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     );
   }
 
+  Future<Uint8List> _fetchTimetablePdfBytes({int? classroomId}) async {
+    final selectedEtablissement = ref.read(etablissementProvider).selected;
+    final queryParameters = <String, dynamic>{
+      if (classroomId != null && classroomId > 0) 'classroom': classroomId,
+      if (selectedEtablissement?.id != null)
+        'etablissement': selectedEtablissement!.id,
+      if ((selectedEtablissement?.name ?? '').trim().isNotEmpty)
+        'etablissement_name': selectedEtablissement!.name.trim(),
+    };
+
+    final response = await ref
+        .read(dioProvider)
+        .get(
+          '/teacher-schedule-slots/export_pdf/',
+          queryParameters: queryParameters,
+          options: Options(responseType: ResponseType.bytes),
+        );
+
+    return _toUint8List(response.data);
+  }
+
   Future<void> _printSelectedClassPdfFromBackend() async {
     if (!_requireScheduleApiSupported('impression PDF')) {
       return;
@@ -582,24 +603,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
     setState(() => _saving = true);
     try {
-      final selectedEtablissement = ref.read(etablissementProvider).selected;
-      final queryParameters = <String, dynamic>{
-        'classroom': classId,
-        if (selectedEtablissement?.id != null)
-          'etablissement': selectedEtablissement!.id,
-        if ((selectedEtablissement?.name ?? '').trim().isNotEmpty)
-          'etablissement_name': selectedEtablissement!.name.trim(),
-      };
-
-      final response = await ref
-          .read(dioProvider)
-          .get(
-            '/teacher-schedule-slots/export_pdf/',
-            queryParameters: queryParameters,
-            options: Options(responseType: ResponseType.bytes),
-          );
-
-      final bytes = _toUint8List(response.data);
+      final bytes = await _fetchTimetablePdfBytes(classroomId: classId);
       await Printing.layoutPdf(onLayout: (_) async => bytes);
     } catch (error) {
       if (!mounted) return;
@@ -610,6 +614,138 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         setState(() => _saving = false);
       }
     }
+  }
+
+  Future<void> _printGlobalPdfFromBackend() async {
+    if (!_requireScheduleApiSupported('impression globale PDF')) {
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final bytes = await _fetchTimetablePdfBytes();
+      await Printing.layoutPdf(onLayout: (_) async => bytes);
+    } catch (error) {
+      if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
+      _showMessage('Erreur impression globale PDF: ${_extractErrorMessage(error)}');
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<void> _openTimetablePrintFloatingWindow() async {
+    if (!_requireScheduleApiSupported('impression planning')) {
+      return;
+    }
+
+    final visibleClassrooms = _visibleClassrooms();
+
+    if (visibleClassrooms.isEmpty) {
+      _showMessage('Aucune classe disponible pour l\'impression.');
+      return;
+    }
+
+    int selectedClass = _selectedClassroom ?? _asInt(visibleClassrooms.first['id']);
+    if (!visibleClassrooms.any((row) => _asInt(row['id']) == selectedClass)) {
+      selectedClass = _asInt(visibleClassrooms.first['id']);
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: const Text('Impression emplois du temps'),
+              content: SizedBox(
+                width: 1180,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<int>(
+                            initialValue: selectedClass,
+                            decoration: const InputDecoration(
+                              labelText: 'Classe',
+                            ),
+                            items: visibleClassrooms
+                                .map(
+                                  (row) => DropdownMenuItem<int>(
+                                    value: _asInt(row['id']),
+                                    child: Text((row['name'] ?? '').toString()),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setDialogState(() => selectedClass = value);
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      constraints: const BoxConstraints(maxHeight: 460),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.outlineVariant.withValues(alpha: 0.65),
+                        ),
+                      ),
+                      child: PdfPreview(
+                        build: (_) async {
+                          return _fetchTimetablePdfBytes(
+                            classroomId: selectedClass,
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: _saving
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Fermer'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: _saving
+                      ? null
+                      : () async {
+                          setState(() => _selectedClassroom = selectedClass);
+                          await _printGlobalPdfFromBackend();
+                        },
+                  icon: const Icon(Icons.print_outlined),
+                  label: const Text('Imprimer global'),
+                ),
+                FilledButton.icon(
+                  onPressed: _saving
+                      ? null
+                      : () async {
+                          setState(() => _selectedClassroom = selectedClass);
+                          await _printSelectedClassPdfFromBackend();
+                        },
+                  icon: const Icon(Icons.print),
+                  label: const Text('Imprimer classe'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _openDuplicateScheduleDialog() async {
@@ -1283,6 +1419,491 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
+  Future<void> _openSlotBatchFloatingWindow({int? forceClassroomId}) async {
+    if (!_requireScheduleApiSupported('ajout en lot des horaires')) {
+      return;
+    }
+
+    final assignmentById = _assignmentById();
+    final assignmentsByClass = _assignmentsByClass(assignmentById);
+    final slotsByClass = _slotsByClass(assignmentById);
+    final visibleClassrooms = _visibleClassrooms();
+
+    if (visibleClassrooms.isEmpty) {
+      _showMessage('Aucune classe disponible.');
+      return;
+    }
+
+    int selectedClass = forceClassroomId ?? _selectedClassroom ?? _asInt(visibleClassrooms.first['id']);
+    if (!visibleClassrooms.any((row) => _asInt(row['id']) == selectedClass)) {
+      selectedClass = _asInt(visibleClassrooms.first['id']);
+    }
+
+    List<Map<String, dynamic>> classAssignments =
+        assignmentsByClass[selectedClass] ?? <Map<String, dynamic>>[];
+    if (classAssignments.isEmpty) {
+      _showMessage('Aucune affectation disponible pour cette classe.');
+      return;
+    }
+
+    int selectedAssignment = _asInt(classAssignments.first['id']);
+    final selectedCells = <String>{};
+    final roomController = TextEditingController();
+
+    const fallbackRanges = <String>[
+      '08:00-09:00',
+      '09:00-10:00',
+      '10:00-11:00',
+      '11:00-12:00',
+      '14:00-15:00',
+      '15:00-16:00',
+      '16:00-17:00',
+    ];
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            final screenSize = MediaQuery.sizeOf(dialogContext);
+            final dialogWidth = screenSize.width > 1200
+                ? 1080.0
+                : (screenSize.width * 0.94).clamp(320.0, 1080.0);
+            final dialogHeight = screenSize.height > 900
+                ? 820.0
+                : (screenSize.height * 0.88).clamp(520.0, 820.0);
+            final isLocked = _isClassLockedById(selectedClass);
+            final classSlots =
+                slotsByClass[selectedClass] ?? const <Map<String, dynamic>>[];
+            final existingRanges = classSlots
+                .map(_slotRange)
+                .where((range) => range.trim().isNotEmpty)
+                .toSet()
+                .toList()
+              ..sort((a, b) => _rangeStartMinutes(a).compareTo(_rangeStartMinutes(b)));
+            final presetRanges = existingRanges.isNotEmpty
+                ? existingRanges
+                : fallbackRanges;
+            final matrix = _classMatrix(classSlots);
+            classAssignments =
+                assignmentsByClass[selectedClass] ?? <Map<String, dynamic>>[];
+            if (classAssignments.isNotEmpty &&
+                !classAssignments.any(
+                  (row) => _asInt(row['id']) == selectedAssignment,
+                )) {
+              selectedAssignment = _asInt(classAssignments.first['id']);
+            }
+
+            return Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 20,
+              ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: dialogWidth,
+                  maxHeight: dialogHeight,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Ajouter des horaires par créneaux',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 14),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              DropdownButtonFormField<int>(
+                                initialValue: selectedClass,
+                                decoration: const InputDecoration(
+                                  labelText: 'Classe',
+                                ),
+                                items: visibleClassrooms
+                                    .map(
+                                      (row) => DropdownMenuItem<int>(
+                                        value: _asInt(row['id']),
+                                        child: Text(
+                                          (row['name'] ?? '').toString(),
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) {
+                                  if (value == null) return;
+                                  setDialogState(() {
+                                    selectedClass = value;
+                                    selectedCells.clear();
+                                  });
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              DropdownButtonFormField<int>(
+                                initialValue: selectedAssignment,
+                                decoration: const InputDecoration(
+                                  labelText: 'Affectation (matière / enseignant)',
+                                ),
+                                items: classAssignments
+                                    .map(
+                                      (row) => DropdownMenuItem<int>(
+                                        value: _asInt(row['id']),
+                                        child: Text(
+                                          '${row['subjectCode']} - ${row['subjectName']} • '
+                                          '${_teacherDisplayLabel(row['teacherName'], row['teacherCode'])}',
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) {
+                                  if (value == null) return;
+                                  setDialogState(
+                                    () => selectedAssignment = value,
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: roomController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Salle (optionnel)',
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                existingRanges.isNotEmpty
+                                    ? 'Créneaux de la classe: cliquez sur les cases libres à ajouter'
+                                    : 'Créneaux: cliquez sur les cases libres à ajouter',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                constraints: BoxConstraints(
+                                  maxHeight: dialogHeight - 290,
+                                ),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .outlineVariant,
+                                  ),
+                                ),
+                                child: SingleChildScrollView(
+                                  child: SingleChildScrollView(
+                                    scrollDirection: Axis.horizontal,
+                                    child: DataTable(
+                                      columnSpacing: 8,
+                                      horizontalMargin: 12,
+                                      dataRowMinHeight: 64,
+                                      dataRowMaxHeight: 96,
+                                      headingRowColor: WidgetStatePropertyAll(
+                                        Theme.of(context)
+                                            .colorScheme
+                                            .surfaceContainer,
+                                      ),
+                                      columns: [
+                                        const DataColumn(label: Text('Horaire')),
+                                        ..._dayOrder.map(
+                                          (dayCode) => DataColumn(
+                                            label: Text(_dayLabel(dayCode)),
+                                          ),
+                                        ),
+                                      ],
+                                      rows: presetRanges.map((range) {
+                                        final dayMap = matrix[range] ??
+                                            const <String, List<Map<String, dynamic>>>{};
+                                        return DataRow(
+                                          cells: [
+                                            DataCell(
+                                              SizedBox(
+                                                width: 88,
+                                                child: Text(range),
+                                              ),
+                                            ),
+                                            ..._dayOrder.map((dayCode) {
+                                              final cellKey = '$dayCode|$range';
+                                              final cellSlots = dayMap[dayCode] ??
+                                                  const <Map<String, dynamic>>[];
+                                              final occupied = cellSlots.isNotEmpty;
+                                              final selected = selectedCells
+                                                  .contains(cellKey);
+                                              final cardColor = occupied
+                                                  ? Theme.of(context)
+                                                      .colorScheme
+                                                      .surfaceContainerHighest
+                                                  : selected
+                                                  ? Theme.of(context)
+                                                      .colorScheme
+                                                      .primaryContainer
+                                                  : Theme.of(context)
+                                                      .colorScheme
+                                                      .surfaceContainerLowest;
+                                              final borderColor = selected
+                                                  ? Theme.of(context)
+                                                      .colorScheme
+                                                      .primary
+                                                  : Theme.of(context)
+                                                      .colorScheme
+                                                      .outlineVariant;
+
+                                              return DataCell(
+                                                InkWell(
+                                                  onTap: (occupied || isLocked)
+                                                      ? null
+                                                      : () {
+                                                          setDialogState(() {
+                                                            if (selected) {
+                                                              selectedCells.remove(cellKey);
+                                                            } else {
+                                                              selectedCells.add(cellKey);
+                                                            }
+                                                          });
+                                                        },
+                                                  child: Container(
+                                                    width: 116,
+                                                    padding: const EdgeInsets.all(8),
+                                                    decoration: BoxDecoration(
+                                                      color: cardColor,
+                                                      borderRadius:
+                                                          BorderRadius.circular(10),
+                                                      border: Border.all(
+                                                        color: borderColor,
+                                                      ),
+                                                    ),
+                                                    child: occupied
+                                                        ? Column(
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment.start,
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment.center,
+                                                            children: [
+                                                              Text(
+                                                                '${cellSlots.first['subjectCode'] ?? ''} - ${cellSlots.first['subjectName'] ?? ''}',
+                                                                maxLines: 2,
+                                                                overflow: TextOverflow.ellipsis,
+                                                                style: Theme.of(context)
+                                                                    .textTheme
+                                                                    .bodySmall
+                                                                    ?.copyWith(
+                                                                      fontWeight: FontWeight.w700,
+                                                                    ),
+                                                              ),
+                                                              const SizedBox(height: 4),
+                                                              Text(
+                                                                'Occupé',
+                                                                style: Theme.of(context)
+                                                                    .textTheme
+                                                                    .bodySmall,
+                                                              ),
+                                                            ],
+                                                          )
+                                                        : Column(
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment.start,
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment.center,
+                                                            children: [
+                                                              Row(
+                                                                children: [
+                                                                  Icon(
+                                                                    selected
+                                                                        ? Icons.check_circle
+                                                                        : Icons.add_circle_outline,
+                                                                    size: 17,
+                                                                  ),
+                                                                  const SizedBox(width: 6),
+                                                                  Expanded(
+                                                                    child: Text(
+                                                                      selected
+                                                                          ? 'Sélectionné'
+                                                                          : 'Disponible',
+                                                                      maxLines: 1,
+                                                                      overflow: TextOverflow.ellipsis,
+                                                                      style: Theme.of(context)
+                                                                          .textTheme
+                                                                          .bodySmall
+                                                                          ?.copyWith(
+                                                                            fontWeight: FontWeight.w700,
+                                                                          ),
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                              const SizedBox(height: 4),
+                                                              Text(
+                                                                selected
+                                                                    ? 'Cliquer pour retirer'
+                                                                    : 'Cliquer pour ajouter',
+                                                                maxLines: 2,
+                                                                overflow: TextOverflow.ellipsis,
+                                                                style: Theme.of(context)
+                                                                    .textTheme
+                                                                    .bodySmall,
+                                                              ),
+                                                            ],
+                                                          ),
+                                                  ),
+                                                ),
+                                              );
+                                            }),
+                                          ],
+                                        );
+                                      }).toList(),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                '${selectedCells.length} créneau(x) sélectionné(s)',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                              if (isLocked) ...[
+                                const SizedBox(height: 10),
+                                const Text(
+                                  'Planning verrouillé pour cette classe: ajoutez d\'abord un déverrouillage.',
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Divider(height: 1),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: _saving
+                                ? null
+                                : () => Navigator.of(dialogContext).pop(false),
+                            child: const Text('Annuler'),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            onPressed: (_saving || _isClassLockedById(selectedClass))
+                                ? null
+                                : () {
+                                    if (selectedCells.isEmpty) {
+                                      _showMessage('Sélectionnez au moins une case de créneau.');
+                                      return;
+                                    }
+                                    Navigator.of(dialogContext).pop(true);
+                                  },
+                            child: const Text('Ajouter les créneaux'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    final roomValue = roomController.text.trim();
+    roomController.dispose();
+
+    if (confirm != true) return;
+
+    if (_isClassLockedById(selectedClass)) {
+      _showMessage('Classe verrouillée: ajout impossible.');
+      return;
+    }
+
+    final selections = selectedCells.toList()
+      ..sort((a, b) {
+        final left = a.split('|');
+        final right = b.split('|');
+        final byDay = _dayIndex(left.first).compareTo(_dayIndex(right.first));
+        if (byDay != 0) return byDay;
+        return _rangeStartMinutes(left.last).compareTo(_rangeStartMinutes(right.last));
+      });
+
+    setState(() => _saving = true);
+    try {
+      final dio = ref.read(dioProvider);
+      var created = 0;
+      var skippedConflicts = 0;
+      var failed = 0;
+
+      for (final selection in selections) {
+        final parts = selection.split('|');
+        if (parts.length != 2) {
+          failed += 1;
+          continue;
+        }
+
+        final dayCode = parts.first;
+        final range = parts.last;
+        final rangeParts = range.split('-');
+        if (rangeParts.length != 2) {
+          failed += 1;
+          continue;
+        }
+
+        final start = _parseTimeOfDay(rangeParts[0].trim());
+        final end = _parseTimeOfDay(rangeParts[1].trim());
+        if (start == null || end == null) {
+          failed += 1;
+          continue;
+        }
+
+        final conflicts = _predictSlotConflicts(
+          assignmentId: selectedAssignment,
+          dayCode: dayCode,
+          start: start,
+          end: end,
+          room: roomValue,
+        );
+        if (conflicts.isNotEmpty) {
+          skippedConflicts += 1;
+          continue;
+        }
+
+        try {
+          await dio.post(
+            '/teacher-schedule-slots/',
+            data: {
+              'assignment': selectedAssignment,
+              'day_of_week': dayCode,
+              'start_time': _toApiTime(start),
+              'end_time': _toApiTime(end),
+              'room': roomValue,
+            },
+          );
+          created += 1;
+        } catch (_) {
+          failed += 1;
+        }
+      }
+
+      if (!mounted) return;
+      _showMessage(
+        'Ajout en lot terminé: créés $created, conflits ignorés $skippedConflicts, échecs $failed.',
+        isSuccess: created > 0,
+      );
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
+      _showMessage('Erreur ajout en lot: ${_extractErrorMessage(error)}');
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
   Future<void> _deleteSlot(Map<String, dynamic> slot) async {
     if (!_requireScheduleApiSupported('suppression d\'horaire')) {
       return;
@@ -1611,29 +2232,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             runSpacing: 8,
             children: [
               if (!_isTeacherUser)
-                FilledButton.icon(
-                  onPressed:
-                      (_saving ||
-                          !_scheduleApiSupported ||
-                          selectedClassId == null ||
-                          selectedIsLocked)
-                      ? null
-                      : () =>
-                            _openSlotDialog(forceClassroomId: selectedClassId),
-                  icon: const Icon(Icons.add_circle_outline),
-                  label: const Text('Ajouter horaire'),
-                ),
-              FilledButton.tonalIcon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null)
-                    ? null
-                    : _printSelectedClassPdfFromBackend,
-                icon: const Icon(Icons.picture_as_pdf),
-                label: const Text('Imprimer tableau PDF'),
-              ),
-              if (!_isTeacherUser)
                 FilledButton.tonalIcon(
                   onPressed:
                       (_saving ||
@@ -1665,6 +2263,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   label: const Text('Dupliquer planning'),
                 ),
             ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Actions rapides disponibles via les boutons flottants: ajout d\'horaire et impression PDF.',
+            style: Theme.of(context).textTheme.bodySmall,
           ),
           if (!_isTeacherUser) ...[
             const SizedBox(height: 10),
@@ -2014,79 +2617,117 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             ),
     );
 
-    return RefreshIndicator(
-      onRefresh: _refreshTimetable,
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(18),
-        children: [
-          Row(
+    return Stack(
+      children: [
+        RefreshIndicator(
+          onRefresh: _refreshTimetable,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 92),
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Emploi du temps',
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Vue pedagogique basee sur les affectations enseignants/matieres/classes.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _loadData,
+                    icon: const Icon(Icons.sync),
+                    label: const Text('Actualiser'),
+                  ),
+                ],
+              ),
+              if (_saving) ...[
+                const SizedBox(height: 8),
+                const LinearProgressIndicator(),
+              ],
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerLowest,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+                  ),
+                ),
+                child: Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
                   children: [
-                    Text(
-                      'Emploi du temps',
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Vue pedagogique basee sur les affectations enseignants/matieres/classes.',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
+                    _metricChip('Enseignants', '${_teachers.length}'),
+                    _metricChip('Matieres', '${_subjects.length}'),
+                    _metricChip('Classes', '${_classrooms.length}'),
+                    _metricChip('Affectations', '${_assignments.length}'),
+                    _metricChip('Horaires', '${_scheduleSlots.length}'),
+                    _metricChip('Classes planifiées', '$classesWithSlots'),
+                    _metricChip('Classes publiées', '$classesPublished'),
+                    _metricChip('Classes verrouillées', '$classesLocked'),
                   ],
                 ),
               ),
-              OutlinedButton.icon(
-                onPressed: _saving ? null : _loadData,
-                icon: const Icon(Icons.sync),
-                label: const Text('Actualiser'),
+              const SizedBox(height: 12),
+              controlsPanel,
+              if (_viewMode == 'classroom') ...[
+                const SizedBox(height: 12),
+                selectedClassPanel,
+                const SizedBox(height: 12),
+                perClassPanel,
+              ] else ...[
+                const SizedBox(height: 12),
+                teacherWorkloadPanel,
+              ],
+            ],
+          ),
+        ),
+        Positioned(
+          right: 20,
+          bottom: 20,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (!_isTeacherUser)
+                FloatingActionButton.extended(
+                  heroTag: 'fab_timetable_add_slot',
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          selectedIsLocked)
+                      ? null
+                      : () => _openSlotBatchFloatingWindow(
+                          forceClassroomId: selectedClassId,
+                        ),
+                  icon: const Icon(Icons.add_circle_outline),
+                  label: const Text('Ajouter horaire'),
+                ),
+              if (!_isTeacherUser) const SizedBox(height: 10),
+              FloatingActionButton.extended(
+                heroTag: 'fab_timetable_print_pdf',
+                onPressed:
+                    (_saving || !_scheduleApiSupported || selectedClassId == null)
+                    ? null
+                    : _openTimetablePrintFloatingWindow,
+                icon: const Icon(Icons.picture_as_pdf_outlined),
+                label: const Text('Imprimer tableau'),
               ),
             ],
           ),
-          if (_saving) ...[
-            const SizedBox(height: 8),
-            const LinearProgressIndicator(),
-          ],
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            decoration: BoxDecoration(
-              color: colorScheme.surfaceContainerLowest,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: colorScheme.outlineVariant.withValues(alpha: 0.55),
-              ),
-            ),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _metricChip('Enseignants', '${_teachers.length}'),
-                _metricChip('Matieres', '${_subjects.length}'),
-                _metricChip('Classes', '${_classrooms.length}'),
-                _metricChip('Affectations', '${_assignments.length}'),
-                _metricChip('Horaires', '${_scheduleSlots.length}'),
-                _metricChip('Classes planifiées', '$classesWithSlots'),
-                _metricChip('Classes publiées', '$classesPublished'),
-                _metricChip('Classes verrouillées', '$classesLocked'),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          controlsPanel,
-          if (_viewMode == 'classroom') ...[
-            const SizedBox(height: 12),
-            selectedClassPanel,
-            const SizedBox(height: 12),
-            perClassPanel,
-          ] else ...[
-            const SizedBox(height: 12),
-            teacherWorkloadPanel,
-          ],
-        ],
-      ),
+        ),
+      ],
     );
   }
 

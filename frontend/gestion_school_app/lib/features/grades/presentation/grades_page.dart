@@ -1471,6 +1471,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
         .read(dioProvider)
         .get(
           '/reports/bulletin/$studentId/$effectiveYearId/${Uri.encodeComponent(effectiveTerm)}/',
+          queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
           options: Options(responseType: ResponseType.bytes),
         );
 
@@ -1493,6 +1494,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
         .read(dioProvider)
         .get(
           '/reports/bulletins/class/$classroomId/$effectiveYearId/${Uri.encodeComponent(effectiveTerm)}/',
+          queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
           options: Options(responseType: ResponseType.bytes),
         );
 
@@ -1562,12 +1564,22 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           content: const Text('Choisissez une action.'),
           actions: [
             TextButton.icon(
-              onPressed: () => Navigator.of(dialogContext).pop(),
+              onPressed: (_saving || _isValidated)
+                  ? null
+                  : () {
+                      Navigator.of(dialogContext).pop();
+                      _openGradeEntryDialog();
+                    },
               icon: const Icon(Icons.assignment_outlined),
               label: const Text('Saisir note classe'),
             ),
             TextButton.icon(
-              onPressed: () => Navigator.of(dialogContext).pop(),
+              onPressed: (_saving || _isValidated)
+                  ? null
+                  : () {
+                      Navigator.of(dialogContext).pop();
+                      _openExamEntryDialog();
+                    },
               icon: const Icon(Icons.fact_check_outlined),
               label: const Text('Saisir note examen'),
             ),
@@ -2795,25 +2807,8 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             'La saisie se fait en lot: ajoutez des notes de devoir (D1, D2, D3...) puis la note de classe est calculée automatiquement.',
           ),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.icon(
-                onPressed: (_saving || _isValidated)
-                    ? null
-                    : _openGradeEntryDialog,
-                icon: const Icon(Icons.note_add_outlined),
-                label: const Text('Saisir note classe'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: (_saving || _isValidated)
-                    ? null
-                    : _openExamEntryDialog,
-                icon: const Icon(Icons.fact_check_outlined),
-                label: const Text('Saisir note examen'),
-              ),
-            ],
+          const Text(
+            'Utilisez le bouton flottant "Saisir notes" pour ouvrir la saisie note classe ou examen.',
           ),
           const SizedBox(height: 8),
           if (_isValidated)

@@ -877,6 +877,20 @@ def _format_coef_value(value: float | None) -> str:
     return text
 
 
+def _appreciation_from_score(value: float | None) -> str:
+    if value is None:
+        return "-"
+    if value >= 16:
+        return "Tres bien"
+    if value >= 14:
+        return "Bien"
+    if value >= 12:
+        return "Assez bien"
+    if value >= 10:
+        return "Passable"
+    return "Insuffisant"
+
+
 def _build_bulletin_rows(
     *,
     subjects,
@@ -897,6 +911,7 @@ def _build_bulletin_rows(
             "note_classe": conduite_note,
             "note_examen": None,
             "note_finale": conduite_note,
+            "appreciation": _appreciation_from_score(conduite_note),
             "moyenne_classe": conduite_moyenne_classe,
             "points": round(conduite_note * conduite_coef, 2),
         }
@@ -923,6 +938,12 @@ def _build_bulletin_rows(
             note_finale = None
             effective_coef = 0.0
 
+        appreciation_score = (
+            (note_finale / effective_coef)
+            if (note_finale is not None and effective_coef > 0)
+            else None
+        )
+
         note_moyenne_classe = class_average_by_subject.get(subject.id)
         points = note_finale
 
@@ -938,6 +959,7 @@ def _build_bulletin_rows(
                 "note_classe": note_classe,
                 "note_examen": note_examen,
                 "note_finale": note_finale,
+                "appreciation": _appreciation_from_score(appreciation_score),
                 "moyenne_classe": note_moyenne_classe,
                 "points": points,
             }
@@ -1199,11 +1221,12 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
     rows = payload["rows"]
     table_columns = [
         ("N", 10, "index"),
-        ("Matiere", 118, "subject"),
-        ("Coef", 18, "coef"),
-        ("Note classe", 31, "note_classe"),
-        ("Note examen", 31, "note_examen"),
-        ("Note finale", 31, "note_finale"),
+        ("Matiere", 96, "subject"),
+        ("Coef", 16, "coef"),
+        ("Note classe", 27, "note_classe"),
+        ("Note examen", 27, "note_examen"),
+        ("Note finale", 27, "note_finale"),
+        ("Appreciation", 42, "appreciation"),
     ]
     table_width = sum(column[1] for column in table_columns)
     table_x = max(left_margin, (pdf.w - table_width) / 2)
@@ -1244,11 +1267,12 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
                 pdf.set_fill_color(248, 250, 253)
             pdf.set_x(table_x)
             pdf.cell(10, row_h, _pdf_text(str(row["index"])), border=1, align="C", fill=fill_row)
-            pdf.cell(118, row_h, _pdf_text(str(row["subject"])[:subject_max_len]), border=1, fill=fill_row)
-            pdf.cell(18, row_h, _pdf_text(_format_coef_value(row["coef"])), border=1, align="C", fill=fill_row)
-            pdf.cell(31, row_h, _pdf_text(_format_cell_value(row["note_classe"])), border=1, align="C", fill=fill_row)
-            pdf.cell(31, row_h, _pdf_text(_format_cell_value(row["note_examen"])), border=1, align="C", fill=fill_row)
-            pdf.cell(31, row_h, _pdf_text(_format_cell_value(row["note_finale"])), border=1, align="C", fill=fill_row)
+            pdf.cell(96, row_h, _pdf_text(str(row["subject"])[:subject_max_len]), border=1, fill=fill_row)
+            pdf.cell(16, row_h, _pdf_text(_format_coef_value(row["coef"])), border=1, align="C", fill=fill_row)
+            pdf.cell(27, row_h, _pdf_text(_format_cell_value(row["note_classe"])), border=1, align="C", fill=fill_row)
+            pdf.cell(27, row_h, _pdf_text(_format_cell_value(row["note_examen"])), border=1, align="C", fill=fill_row)
+            pdf.cell(27, row_h, _pdf_text(_format_cell_value(row["note_finale"])), border=1, align="C", fill=fill_row)
+            pdf.cell(42, row_h, _pdf_text(str(row.get("appreciation") or "-")[:20]), border=1, align="C", fill=fill_row)
             pdf.ln(row_h)
 
     pdf.set_y(summary_start_y)
