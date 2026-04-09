@@ -31,13 +31,16 @@ final dioProvider = Provider<Dio>((ref) {
       baseUrl: ApiConstants.baseUrl,
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(seconds: 45),
-      headers: {'Content-Type': 'application/json'},
     ),
   );
 
   dio.interceptors.add(
     InterceptorsWrapper(
       onRequest: (options, handler) async {
+        if (options.data is FormData) {
+          options.contentType = Headers.multipartFormDataContentType;
+        }
+
         final values = await Future.wait<String?>([
           tokenStorage.apiBaseUrl(),
           tokenStorage.accessToken(),

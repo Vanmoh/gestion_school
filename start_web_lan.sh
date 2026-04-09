@@ -10,17 +10,19 @@ HOST_IP=""
 
 usage() {
   cat <<'EOF'
-Usage: ./start_web_lan.sh [--ip=<LAN_IP>] [--web-port=<port>] [--api-port=<port>] [--dev]
+Usage: ./start_web_lan.sh [--ip=<LAN_IP>] [--web-port=<port>] [--api-port=<port>] [--dev] [--pwa]
 
 Exemples:
   ./start_web_lan.sh
   ./start_web_lan.sh --ip=192.168.1.25
   ./start_web_lan.sh --web-port=8081 --api-port=8001
   ./start_web_lan.sh --dev
+  ./start_web_lan.sh --pwa
 EOF
 }
 
 MODE="stable"
+PWA_STRATEGY="none"
 
 for arg in "$@"; do
   case "$arg" in
@@ -35,6 +37,9 @@ for arg in "$@"; do
       ;;
     --dev)
       MODE="dev"
+      ;;
+    --pwa)
+      PWA_STRATEGY="offline-first"
       ;;
     -h|--help)
       usage
@@ -107,6 +112,7 @@ fi
 
 echo "Mode stable: build web puis serveur statique"
 flutter build web --release --no-wasm-dry-run \
+  --pwa-strategy="$PWA_STRATEGY" \
   --dart-define="API_BASE_URL=${API_URL}"
 
 # Free the chosen web port if another process is listening.
@@ -115,6 +121,14 @@ if [[ -n "$pids_on_port" ]]; then
   echo "Port ${WEB_PORT} occupé: arrêt des PID ${pids_on_port}"
   # shellcheck disable=SC2086
   kill -9 $pids_on_port
+fi
+
+if [[ "$PWA_STRATEGY" == "none" ]]; then
+  echo "Serveur anti-cache actif (headers no-store)"
+  exec python3 "$ROOT_DIR/tools/no_cache_static_server.py" \
+    --host 0.0.0.0 \
+    --port "$WEB_PORT" \
+    --directory build/web
 fi
 
 exec python3 -m http.server "$WEB_PORT" --bind 0.0.0.0 --directory build/web

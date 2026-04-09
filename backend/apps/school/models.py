@@ -233,7 +233,28 @@ class Grade(TimeStampedModel):
     classroom = models.ForeignKey(ClassRoom, on_delete=models.PROTECT, related_name="grades")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="grades")
     term = models.CharField(max_length=20)
+    homework_scores = models.JSONField(default=list, blank=True)
     value = models.DecimalField(max_digits=5, decimal_places=2)
+
+    def _normalized_homework_scores(self):
+        raw_scores = self.homework_scores if isinstance(self.homework_scores, list) else []
+        normalized = []
+        for item in raw_scores:
+            try:
+                numeric = Decimal(str(item))
+            except Exception:
+                continue
+            if numeric < Decimal("0") or numeric > Decimal("20"):
+                continue
+            normalized.append(numeric)
+        return normalized
+
+    def save(self, *args, **kwargs):
+        scores = self._normalized_homework_scores()
+        if scores:
+            average = sum(scores) / Decimal(len(scores))
+            self.value = average.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        super().save(*args, **kwargs)
 
     class Meta:
         unique_together = ("student", "subject", "classroom", "academic_year", "term")
@@ -503,6 +524,14 @@ class ExamResult(TimeStampedModel):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="exam_results")
     subject = models.ForeignKey(Subject, on_delete=models.PROTECT)
     score = models.DecimalField(max_digits=5, decimal_places=2)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "student", "subject"],
+                name="uniq_exam_result_session_student_subject",
+            )
+        ]
 
 
 class Supplier(TimeStampedModel):

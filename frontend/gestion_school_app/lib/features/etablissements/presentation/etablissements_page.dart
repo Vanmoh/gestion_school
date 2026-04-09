@@ -51,15 +51,19 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     try {
       final response = await ref.read(dioProvider).get('/etablissements/');
       final rows = _extractRows(response.data)
-        ..sort((a, b) =>
-            (a['name'] ?? '').toString().toLowerCase().compareTo((b['name'] ?? '').toString().toLowerCase()));
+        ..sort(
+          (a, b) => (a['name'] ?? '').toString().toLowerCase().compareTo(
+            (b['name'] ?? '').toString().toLowerCase(),
+          ),
+        );
 
       await _syncEtablissementProvider(rows);
 
       if (!mounted) return;
       setState(() {
         _rows = rows;
-        if (_selectedId != null && !_rows.any((row) => _asInt(row['id']) == _selectedId)) {
+        if (_selectedId != null &&
+            !_rows.any((row) => _asInt(row['id']) == _selectedId)) {
           _selectedId = null;
         }
       });
@@ -195,7 +199,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     final email = _emailController.text.trim();
 
     if (name.isEmpty || address.isEmpty || phone.isEmpty || email.isEmpty) {
-      _showMessage('Tous les champs sont obligatoires: nom, adresse, telephone, email.');
+      _showMessage(
+        'Tous les champs sont obligatoires: nom, adresse, telephone, email.',
+      );
       return;
     }
 
@@ -229,7 +235,11 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
       if ((_selectedId ?? 0) > 0) {
         final response = await ref
             .read(dioProvider)
-            .patch('/etablissements/$_selectedId/', data: data, options: options);
+            .patch(
+              '/etablissements/$_selectedId/',
+              data: data,
+              options: options,
+            );
         savedId = _asInt((response.data as Map<String, dynamic>)['id']);
         _showMessage('Etablissement modifie avec succes.', isSuccess: true);
       } else {
@@ -270,7 +280,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
       builder: (dialogContext) {
         return AlertDialog(
           title: const Text('Supprimer etablissement'),
-          content: const Text('Confirmez-vous la suppression de cet etablissement ?'),
+          content: const Text(
+            'Confirmez-vous la suppression de cet etablissement ?',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -297,11 +309,11 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         return;
       }
 
-      await ref.read(dioProvider).delete(
+      await ref
+          .read(dioProvider)
+          .delete(
             '/etablissements/$id/',
-            options: Options(
-              headers: {'Authorization': 'Bearer $accessToken'},
-            ),
+            options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
           );
       _showMessage('Etablissement supprime.', isSuccess: true);
       _clearForm();
@@ -339,8 +351,12 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final selected = _rows.where((row) => _asInt(row['id']) == _selectedId).toList();
-    final selectedName = selected.isNotEmpty ? (selected.first['name'] ?? '').toString() : '-';
+    final selected = _rows
+        .where((row) => _asInt(row['id']) == _selectedId)
+        .toList();
+    final selectedName = selected.isNotEmpty
+        ? (selected.first['name'] ?? '').toString()
+        : '-';
 
     return RefreshIndicator(
       onRefresh: _loadData,
@@ -382,7 +398,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                     width: 220,
                     child: TextField(
                       controller: _phoneController,
-                      decoration: const InputDecoration(labelText: 'Telephone *'),
+                      decoration: const InputDecoration(
+                        labelText: 'Telephone *',
+                      ),
                     ),
                   ),
                   SizedBox(
@@ -395,12 +413,18 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                   OutlinedButton.icon(
                     onPressed: _saving ? null : _pickLogo,
                     icon: const Icon(Icons.image_outlined),
-                    label: Text(_logoFileName == null ? 'Choisir logo' : 'Logo: $_logoFileName'),
+                    label: Text(
+                      _logoFileName == null
+                          ? 'Choisir logo'
+                          : 'Logo: $_logoFileName',
+                    ),
                   ),
                   FilledButton.icon(
                     onPressed: _saving ? null : _save,
                     icon: const Icon(Icons.save_outlined),
-                    label: Text((_selectedId ?? 0) > 0 ? 'Mettre a jour' : 'Ajouter'),
+                    label: Text(
+                      (_selectedId ?? 0) > 0 ? 'Mettre a jour' : 'Ajouter',
+                    ),
                   ),
                   OutlinedButton.icon(
                     onPressed: _saving ? null : _clearForm,
@@ -408,7 +432,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                     label: const Text('Vider'),
                   ),
                   OutlinedButton.icon(
-                    onPressed: (_saving || (_selectedId ?? 0) <= 0) ? null : _deleteSelected,
+                    onPressed: (_saving || (_selectedId ?? 0) <= 0)
+                        ? null
+                        : _deleteSelected,
                     icon: const Icon(Icons.delete_outline),
                     label: const Text('Supprimer'),
                   ),
@@ -418,10 +444,12 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
           ),
           const SizedBox(height: 12),
           if (_loading)
-            const Center(child: Padding(
-              padding: EdgeInsets.all(24),
-              child: CircularProgressIndicator(),
-            ))
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: CircularProgressIndicator(),
+              ),
+            )
           else
             Card(
               child: Padding(

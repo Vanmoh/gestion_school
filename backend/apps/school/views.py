@@ -1827,6 +1827,7 @@ class ParentProfileViewSet(BaseModelViewSet):
 class StudentViewSet(BaseModelViewSet):
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
     pagination_class = StandardResultsSetPagination
     filterset_fields = [
         "classroom",
@@ -1975,6 +1976,27 @@ class StudentViewSet(BaseModelViewSet):
     def perform_update(self, serializer):
         target_etablissement = self._validate_student_scope(serializer, instance=serializer.instance)
         serializer.save(etablissement=target_etablissement)
+
+    @action(
+        detail=True,
+        methods=["post", "patch"],
+        url_path="upload-photo",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def upload_photo(self, request, pk=None):
+        student = self.get_object()
+        uploaded_photo = request.FILES.get("photo") or request.data.get("photo")
+        if not uploaded_photo:
+            return Response({"photo": ["Aucune image fournie."]}, status=400)
+
+        serializer = self.get_serializer(
+            student,
+            data={"photo": uploaded_photo},
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save(etablissement=student.etablissement)
+        return Response(serializer.data)
 
 
 class StudentAcademicHistoryViewSet(BaseModelViewSet):
@@ -2143,7 +2165,9 @@ class GradeViewSet(BaseModelViewSet):
         if target_etablissement is None:
             return
 
-        if student.etablissement_id != target_etablissement.id:
+        student_etablissement_id = getattr(student, "etablissement_id", None)
+        classroom_etablissement_id = getattr(getattr(student, "classroom", None), "etablissement_id", None)
+        if student_etablissement_id != target_etablissement.id and classroom_etablissement_id != target_etablissement.id:
             raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
         if classroom.etablissement_id != target_etablissement.id:
             raise ValidationError({"classroom": "La classe n'appartient pas a l'etablissement actif."})
@@ -3837,7 +3861,9 @@ class ExamResultViewSet(BaseModelViewSet):
                 target_id = None
         if target_id is None:
             target_id = getattr(user, "etablissement_id", None)
-        if target_id and student.etablissement_id != target_id:
+        student_etablissement_id = getattr(student, "etablissement_id", None)
+        classroom_etablissement_id = getattr(getattr(student, "classroom", None), "etablissement_id", None)
+        if target_id and student_etablissement_id != target_id and classroom_etablissement_id != target_id:
             raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
 
     def perform_create(self, serializer):
