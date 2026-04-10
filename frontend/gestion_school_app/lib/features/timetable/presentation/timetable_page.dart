@@ -8,11 +8,8 @@ import 'package:printing/printing.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
-<<<<<<< HEAD
-=======
 import '../../../models/etablissement.dart';
 import '../../auth/presentation/auth_controller.dart';
->>>>>>> main
 import 'timetable_workload.dart';
 
 class TimetablePage extends ConsumerStatefulWidget {
@@ -42,13 +39,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   String _activeApiBaseUrl = ApiConstants.baseUrl;
   bool _usingCustomApiBaseUrl = false;
   bool _apiUrlResetAttempted = false;
-<<<<<<< HEAD
-=======
   bool _isTeacherUser = false;
   int? _loggedTeacherId;
   Set<int> _teacherAssignmentIds = <int>{};
   Set<int> _teacherClassroomIds = <int>{};
->>>>>>> main
 
   static const List<String> _dayOrder = [
     'MON',
@@ -163,8 +157,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
       if (!mounted) return;
 
-<<<<<<< HEAD
-=======
       final authUser = ref.read(authControllerProvider).value;
       final isTeacherUser = authUser?.role == 'teacher';
 
@@ -194,7 +186,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         }
       }
 
->>>>>>> main
       final hasSlotEndpoint404 = failures.any(
         (entry) =>
             entry.contains('/teacher-schedule-slots/') &&
@@ -244,14 +235,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         _activeApiBaseUrl = activeApiUrl;
         _usingCustomApiBaseUrl = hasStoredCustomApi;
         _scheduleApiSupported = scheduleApiSupported;
-<<<<<<< HEAD
-
-        final classIds = _classrooms.map((row) => _asInt(row['id'])).toSet();
-        if (_selectedClassroom == null ||
-            !classIds.contains(_selectedClassroom)) {
-          _selectedClassroom = _classrooms.isNotEmpty
-              ? _asInt(_classrooms.first['id'])
-=======
         _isTeacherUser = isTeacherUser;
         _loggedTeacherId = loggedTeacherId;
         _teacherAssignmentIds = teacherAssignmentIds;
@@ -268,7 +251,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           final visible = _visibleClassrooms();
           _selectedClassroom = visible.isNotEmpty
               ? _asInt(visible.first['id'])
->>>>>>> main
               : null;
         }
       });
@@ -361,11 +343,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         'emploi_du_temps_${_slugify(className)}_${DateTime.now().millisecondsSinceEpoch}.csv';
 
     await Printing.sharePdf(bytes: bytes, filename: fileName);
-<<<<<<< HEAD
-    _showMessage('Export Excel (CSV) lancé: $fileName');
-=======
     _showMessage('Export Excel (CSV) lancé: $fileName', isSuccess: true);
->>>>>>> main
   }
 
   Future<void> _refreshTimetable() async {
@@ -429,10 +407,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         lockAfterPublish
             ? 'Planning publié et verrouillé.'
             : 'Planning publié sans verrouillage.',
-<<<<<<< HEAD
-=======
         isSuccess: true,
->>>>>>> main
       );
       await _loadData();
     } catch (error) {
@@ -467,14 +442,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           );
 
       if (!mounted) return;
-<<<<<<< HEAD
-      _showMessage(lock ? 'Planning verrouillé.' : 'Planning déverrouillé.');
-=======
       _showMessage(
         lock ? 'Planning verrouillé.' : 'Planning déverrouillé.',
         isSuccess: true,
       );
->>>>>>> main
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -506,11 +477,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           );
 
       if (!mounted) return;
-<<<<<<< HEAD
-      _showMessage('Planning remis en brouillon.');
-=======
       _showMessage('Planning remis en brouillon.', isSuccess: true);
->>>>>>> main
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -539,8 +506,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
     setState(() => _saving = true);
     try {
-<<<<<<< HEAD
-=======
       final selectedEtablissement = ref.read(etablissementProvider).selected;
       final scopedQueryParameters = <String, dynamic>{
         if (queryParameters != null) ...queryParameters,
@@ -550,18 +515,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           'etablissement_name': selectedEtablissement!.name.trim(),
       };
 
->>>>>>> main
       final response = await ref
           .read(dioProvider)
           .get(
             endpoint,
-<<<<<<< HEAD
-            queryParameters: queryParameters,
-=======
             queryParameters: scopedQueryParameters.isEmpty
                 ? null
                 : scopedQueryParameters,
->>>>>>> main
             options: Options(responseType: ResponseType.bytes),
           );
 
@@ -569,11 +529,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await Printing.sharePdf(bytes: bytes, filename: filename);
 
       if (!mounted) return;
-<<<<<<< HEAD
-      _showMessage('Export lancé: $filename');
-=======
       _showMessage('Export lancé: $filename', isSuccess: true);
->>>>>>> main
     } catch (error) {
       if (!mounted) return;
       _markScheduleApiUnsupportedFromError(error);
@@ -613,8 +569,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     );
   }
 
-<<<<<<< HEAD
-=======
   Future<Uint8List> _fetchTimetablePdfBytes({int? classroomId}) async {
     final selectedEtablissement = ref.read(etablissementProvider).selected;
     final queryParameters = <String, dynamic>{
@@ -636,7 +590,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     return _toUint8List(response.data);
   }
 
->>>>>>> main
   Future<void> _printSelectedClassPdfFromBackend() async {
     if (!_requireScheduleApiSupported('impression PDF')) {
       return;
@@ -650,19 +603,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
     setState(() => _saving = true);
     try {
-<<<<<<< HEAD
-      final response = await ref
-          .read(dioProvider)
-          .get(
-            '/teacher-schedule-slots/export_pdf/',
-            queryParameters: {'classroom': classId},
-            options: Options(responseType: ResponseType.bytes),
-          );
-
-      final bytes = _toUint8List(response.data);
-=======
       final bytes = await _fetchTimetablePdfBytes(classroomId: classId);
->>>>>>> main
       await Printing.layoutPdf(onLayout: (_) async => bytes);
     } catch (error) {
       if (!mounted) return;
@@ -675,8 +616,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
-<<<<<<< HEAD
-=======
   Future<void> _printGlobalPdfFromBackend() async {
     if (!_requireScheduleApiSupported('impression globale PDF')) {
       return;
@@ -809,7 +748,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     );
   }
 
->>>>>>> main
   Future<void> _openDuplicateScheduleDialog() async {
     if (!_requireScheduleApiSupported('duplication de planning')) {
       return;
@@ -932,465 +870,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     ),
                   ],
                 ),
-<<<<<<< HEAD
-              ),
-              actions: [
-                TextButton(
-                  onPressed: _saving
-                      ? null
-                      : () => Navigator.of(dialogContext).pop(false),
-                  child: const Text('Annuler'),
-                ),
-                FilledButton(
-                  onPressed: _saving
-                      ? null
-                      : () {
-                          if (sourceClass == targetClass) {
-                            _showMessage(
-                              'La classe source et la classe cible doivent être différentes.',
-                            );
-                            return;
-                          }
-                          if (selectedDays.isEmpty) {
-                            _showMessage('Sélectionnez au moins un jour.');
-                            return;
-                          }
-                          Navigator.of(dialogContext).pop(true);
-                        },
-                  child: const Text('Dupliquer'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    if (confirm != true) {
-      return;
-    }
-
-    setState(() => _saving = true);
-    try {
-      final response = await ref
-          .read(dioProvider)
-          .post(
-            '/teacher-schedule-slots/duplicate_schedule/',
-            data: {
-              'source_classroom': sourceClass,
-              'target_classroom': targetClass,
-              'days': selectedDays.toList()..sort(),
-              'overwrite': overwrite,
-              'keep_room': keepRoom,
-            },
-          );
-
-      final payload = Map<String, dynamic>.from(response.data as Map);
-      final created = _asInt(payload['created']);
-      final updated = _asInt(payload['updated']);
-      final skippedConflicts = _asInt(payload['skipped_conflicts']);
-      final skippedUnmapped = _asInt(payload['skipped_unmapped']);
-
-      if (!mounted) return;
-      _showMessage(
-        'Duplication terminée: créés $created, mis à jour $updated, '
-        'conflits $skippedConflicts, non mappés $skippedUnmapped.',
-      );
-      await _loadData();
-    } catch (error) {
-      if (!mounted) return;
-      _markScheduleApiUnsupportedFromError(error);
-      _showMessage('Erreur duplication: ${_extractErrorMessage(error)}');
-    } finally {
-      if (mounted) {
-        setState(() => _saving = false);
-      }
-    }
-  }
-
-  List<String> _predictSlotConflicts({
-    required int assignmentId,
-    required String dayCode,
-    required TimeOfDay start,
-    required TimeOfDay end,
-    required String room,
-    int? excludeSlotId,
-  }) {
-    final assignmentById = _assignmentById();
-    final selected = assignmentById[assignmentId];
-    if (selected == null) return const <String>[];
-
-    final startMinutes = start.hour * 60 + start.minute;
-    final endMinutes = end.hour * 60 + end.minute;
-    final selectedClassId = _asInt(selected['classroom']);
-    final selectedTeacherId = _asInt(selected['teacher']);
-    final selectedRoom = room.trim().toLowerCase();
-
-    final messages = <String>{};
-    for (final slot in _scheduleSlots) {
-      final slotId = _asInt(slot['id']);
-      if (excludeSlotId != null && slotId == excludeSlotId) {
-        continue;
-      }
-
-      final slotDay = (slot['day_of_week'] ?? '').toString();
-      if (slotDay != dayCode) {
-        continue;
-      }
-
-      final slotStart = _timeToMinutes(slot['start_time']);
-      final slotEnd = _timeToMinutes(slot['end_time']);
-      final isOverlap = slotStart < endMinutes && slotEnd > startMinutes;
-      if (!isOverlap) {
-        continue;
-      }
-
-      final otherAssignment = assignmentById[_asInt(slot['assignment'])];
-      if (otherAssignment == null) {
-        continue;
-      }
-
-      final label =
-          '${_hhmm(slot['start_time'])}-${_hhmm(slot['end_time'])} • '
-          '${otherAssignment['subjectCode']} '
-          '(${_teacherDisplayLabel(otherAssignment['teacherName'], otherAssignment['teacherCode'])})';
-
-      final otherClassId = _asInt(otherAssignment['classroom']);
-      if (otherClassId == selectedClassId) {
-        messages.add('Conflit classe: $label');
-      }
-
-      final otherTeacherId = _asInt(otherAssignment['teacher']);
-      if (otherTeacherId == selectedTeacherId) {
-        messages.add('Conflit enseignant: $label');
-      }
-
-      final otherRoom = (slot['room'] ?? '').toString().trim().toLowerCase();
-      if (selectedRoom.isNotEmpty &&
-          otherRoom.isNotEmpty &&
-          selectedRoom == otherRoom) {
-        messages.add('Conflit salle: $label');
-      }
-    }
-
-    return messages.toList()..sort();
-  }
-
-  String _extractErrorMessage(Object error) {
-    if (error is DioException) {
-      final data = error.response?.data;
-      if (data is Map<String, dynamic>) {
-        final nonFieldErrors = data['non_field_errors'];
-        if (nonFieldErrors is List && nonFieldErrors.isNotEmpty) {
-          return nonFieldErrors.map((item) => item.toString()).join(' | ');
-        }
-
-        final detail = data['detail'];
-        if (detail != null && detail.toString().trim().isNotEmpty) {
-          return detail.toString();
-        }
-
-        for (final entry in data.entries) {
-          final value = entry.value;
-          if (value is List && value.isNotEmpty) {
-            return value.map((item) => item.toString()).join(' | ');
-          }
-          if (value is String && value.trim().isNotEmpty) {
-            return value;
-          }
-        }
-      }
-
-      final status = error.response?.statusCode;
-      if (status != null) {
-        final endpoint = error.requestOptions.path;
-        if (endpoint.trim().isNotEmpty) {
-          return 'HTTP $status sur $endpoint';
-        }
-        return 'HTTP $status';
-      }
-
-      final message = error.message;
-      if (message != null && message.trim().isNotEmpty) {
-        return message;
-      }
-    }
-
-    return error.toString();
-  }
-
-  Future<void> _openSlotDialog({
-    Map<String, dynamic>? slot,
-    int? forceClassroomId,
-  }) async {
-    if (!_requireScheduleApiSupported('gestion des horaires')) {
-      return;
-    }
-
-    final classroomId = forceClassroomId ?? _selectedClassroom;
-    if (classroomId == null || classroomId <= 0) {
-      _showMessage('Sélectionnez une classe avant d\'ajouter un horaire.');
-      return;
-    }
-
-    if (_isClassLockedById(classroomId)) {
-      _showMessage(
-        'Emploi du temps verrouillé pour cette classe. Déverrouillez avant modification.',
-      );
-      return;
-    }
-
-    final assignmentById = _assignmentById();
-    final assignmentsByClass = _assignmentsByClass(assignmentById);
-    final classAssignments =
-        assignmentsByClass[classroomId] ?? <Map<String, dynamic>>[];
-
-    if (classAssignments.isEmpty) {
-      _showMessage(
-        'Aucune affectation disponible pour cette classe. Créez d\'abord une affectation.',
-      );
-      return;
-    }
-
-    var selectedAssignment = _asInt(slot?['assignment']);
-    final assignmentIds = classAssignments
-        .map((row) => _asInt(row['id']))
-        .toSet();
-    if (selectedAssignment <= 0 ||
-        !assignmentIds.contains(selectedAssignment)) {
-      selectedAssignment = _asInt(classAssignments.first['id']);
-    }
-
-    var selectedDay = (slot?['day_of_week'] ?? _dayOrder.first).toString();
-    if (!_dayOrder.contains(selectedDay)) {
-      selectedDay = _dayOrder.first;
-    }
-
-    final startController = TextEditingController(
-      text: _hhmm(slot?['start_time']),
-    );
-    final endController = TextEditingController(text: _hhmm(slot?['end_time']));
-    final roomController = TextEditingController(
-      text: (slot?['room'] ?? '').toString(),
-    );
-    final isEdit = slot != null;
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        Future<void> pickTime(TextEditingController controller) async {
-          final parsed = _parseTimeOfDay(controller.text.trim());
-          final picked = await showTimePicker(
-            context: dialogContext,
-            initialTime: parsed ?? const TimeOfDay(hour: 8, minute: 0),
-          );
-          if (picked != null) {
-            controller.text = _formatTimeOfDay(picked);
-          }
-        }
-
-        return StatefulBuilder(
-          builder: (dialogContext, setDialogState) {
-            List<String> computeDialogConflicts() {
-              final start = _parseTimeOfDay(startController.text.trim());
-              final end = _parseTimeOfDay(endController.text.trim());
-              if (start == null || end == null) {
-                return const <String>[];
-              }
-
-              final startMinutes = start.hour * 60 + start.minute;
-              final endMinutes = end.hour * 60 + end.minute;
-              if (endMinutes <= startMinutes) {
-                return const <String>[];
-              }
-
-              final excludeSlotId = isEdit
-                  ? _asInt(slot['slotId'] ?? slot['id'])
-                  : null;
-              return _predictSlotConflicts(
-                assignmentId: selectedAssignment,
-                dayCode: selectedDay,
-                start: start,
-                end: end,
-                room: roomController.text.trim(),
-                excludeSlotId: excludeSlotId,
-              );
-            }
-
-            final dialogConflicts = computeDialogConflicts();
-
-            return AlertDialog(
-              title: Text(
-                isEdit ? 'Modifier un horaire' : 'Ajouter un horaire',
-              ),
-              content: SizedBox(
-                width: 520,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('Classe: ${_classNameById(classroomId)}'),
-                    const SizedBox(height: 10),
-                    DropdownButtonFormField<int>(
-                      initialValue: selectedAssignment,
-                      decoration: const InputDecoration(
-                        labelText: 'Affectation (matière / enseignant)',
-                      ),
-                      items: classAssignments
-                          .map(
-                            (row) => DropdownMenuItem<int>(
-                              value: _asInt(row['id']),
-                              child: Text(
-                                '${row['subjectCode']} - ${row['subjectName']} • '
-                                '${_teacherDisplayLabel(row['teacherName'], row['teacherCode'])}',
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) {
-                        if (value == null) return;
-                        setDialogState(() => selectedAssignment = value);
-                      },
-                    ),
-                    const SizedBox(height: 10),
-                    DropdownButtonFormField<String>(
-                      initialValue: selectedDay,
-                      decoration: const InputDecoration(labelText: 'Jour'),
-                      items: _dayOrder
-                          .map(
-                            (dayCode) => DropdownMenuItem<String>(
-                              value: dayCode,
-                              child: Text(_dayLabel(dayCode)),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) {
-                        if (value == null) return;
-                        setDialogState(() => selectedDay = value);
-                      },
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: startController,
-                            onChanged: (_) => setDialogState(() {}),
-                            decoration: InputDecoration(
-                              labelText: 'Heure début (HH:MM)',
-                              suffixIcon: IconButton(
-                                onPressed: () => pickTime(startController),
-                                icon: const Icon(Icons.access_time),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: TextField(
-                            controller: endController,
-                            onChanged: (_) => setDialogState(() {}),
-                            decoration: InputDecoration(
-                              labelText: 'Heure fin (HH:MM)',
-                              suffixIcon: IconButton(
-                                onPressed: () => pickTime(endController),
-                                icon: const Icon(Icons.access_time_filled),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: roomController,
-                      onChanged: (_) => setDialogState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Salle (optionnel)',
-                      ),
-                    ),
-                    if (dialogConflicts.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.shade50,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.orange.shade200),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Conflits détectés',
-                              style: Theme.of(context).textTheme.titleSmall
-                                  ?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                            const SizedBox(height: 4),
-                            ...dialogConflicts
-                                .take(5)
-                                .map(
-                                  (message) => Text(
-                                    '- $message',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall,
-                                  ),
-                                ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: _saving
-                      ? null
-                      : () => Navigator.of(dialogContext).pop(false),
-                  child: const Text('Annuler'),
-                ),
-                FilledButton(
-                  onPressed: _saving
-                      ? null
-                      : () {
-                          final start = _parseTimeOfDay(
-                            startController.text.trim(),
-                          );
-                          final end = _parseTimeOfDay(
-                            endController.text.trim(),
-                          );
-
-                          if (start == null || end == null) {
-                            _showMessage(
-                              'Heures invalides. Format attendu: HH:MM',
-                            );
-                            return;
-                          }
-
-                          final startMinutes = start.hour * 60 + start.minute;
-                          final endMinutes = end.hour * 60 + end.minute;
-                          if (endMinutes <= startMinutes) {
-                            _showMessage(
-                              'L\'heure de fin doit être après l\'heure de début.',
-                            );
-                            return;
-                          }
-
-                          if (dialogConflicts.isNotEmpty) {
-                            _showMessage(
-                              'Conflits détectés. Ajustez l\'horaire avant validation.',
-                            );
-                            return;
-                          }
-
-                          Navigator.of(dialogContext).pop(true);
-                        },
-                  child: Text(isEdit ? 'Modifier' : 'Ajouter'),
-                ),
-              ],
-=======
               ),
               actions: [
                 TextButton(
@@ -2325,79 +1804,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   ),
                 ),
               ),
->>>>>>> main
             );
           },
         );
       },
     );
 
-<<<<<<< HEAD
-    if (confirm != true) {
-      startController.dispose();
-      endController.dispose();
-      roomController.dispose();
-      return;
-    }
-
-    final start = _parseTimeOfDay(startController.text.trim());
-    final end = _parseTimeOfDay(endController.text.trim());
-
-    if (start == null || end == null) {
-      _showMessage('Heures invalides. Format attendu: HH:MM');
-      startController.dispose();
-      endController.dispose();
-      roomController.dispose();
-      return;
-    }
-
-    final startMinutes = start.hour * 60 + start.minute;
-    final endMinutes = end.hour * 60 + end.minute;
-    if (endMinutes <= startMinutes) {
-      _showMessage('L\'heure de fin doit être après l\'heure de début.');
-      startController.dispose();
-      endController.dispose();
-      roomController.dispose();
-      return;
-    }
-
-    final liveConflicts = _predictSlotConflicts(
-      assignmentId: selectedAssignment,
-      dayCode: selectedDay,
-      start: start,
-      end: end,
-      room: roomController.text.trim(),
-      excludeSlotId: isEdit ? _asInt(slot['slotId'] ?? slot['id']) : null,
-    );
-    if (liveConflicts.isNotEmpty) {
-      _showMessage('Conflits détectés. Ajustez l\'horaire avant validation.');
-      startController.dispose();
-      endController.dispose();
-      roomController.dispose();
-      return;
-    }
-
-    final payload = {
-      'assignment': selectedAssignment,
-      'day_of_week': selectedDay,
-      'start_time': _toApiTime(start),
-      'end_time': _toApiTime(end),
-      'room': roomController.text.trim(),
-    };
-
-    startController.dispose();
-    endController.dispose();
-    roomController.dispose();
-
-    setState(() => _saving = true);
-    try {
-      final dio = ref.read(dioProvider);
-      if (isEdit) {
-        final slotId = _asInt(slot['slotId'] ?? slot['id']);
-        await dio.patch('/teacher-schedule-slots/$slotId/', data: payload);
-      } else {
-        await dio.post('/teacher-schedule-slots/', data: payload);
-=======
     final roomValue = roomController.text.trim();
     roomController.dispose();
 
@@ -2473,29 +1885,18 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         } catch (_) {
           failed += 1;
         }
->>>>>>> main
       }
 
       if (!mounted) return;
       _showMessage(
-<<<<<<< HEAD
-        isEdit ? 'Horaire modifié avec succès.' : 'Horaire ajouté avec succès.',
-=======
         'Ajout en lot terminé: créés $created, conflits ignorés $skippedConflicts, échecs $failed.',
         isSuccess: created > 0,
->>>>>>> main
       );
       await _loadData();
     } catch (error) {
       if (!mounted) return;
       _markScheduleApiUnsupportedFromError(error);
-<<<<<<< HEAD
-      _showMessage(
-        'Erreur enregistrement horaire: ${_extractErrorMessage(error)}',
-      );
-=======
       _showMessage('Erreur ajout en lot: ${_extractErrorMessage(error)}');
->>>>>>> main
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -2555,11 +1956,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     try {
       await ref.read(dioProvider).delete('/teacher-schedule-slots/$slotId/');
       if (!mounted) return;
-<<<<<<< HEAD
-      _showMessage('Horaire supprimé.');
-=======
       _showMessage('Horaire supprimé.', isSuccess: true);
->>>>>>> main
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -2574,13 +1971,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
-<<<<<<< HEAD
-  void _showMessage(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-=======
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
 
@@ -2597,7 +1987,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           ),
         ),
       );
->>>>>>> main
   }
 
   Future<void> _resetCustomApiUrlAndReload() async {
@@ -2694,79 +2083,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             SizedBox(
               height: 460,
               child: Center(child: CircularProgressIndicator()),
-<<<<<<< HEAD
-            ),
-          ],
-        ),
-      );
-    }
-
-    final assignmentById = _assignmentById();
-    final assignmentsByClass = _assignmentsByClass(assignmentById);
-    final slotsByClass = _slotsByClass(assignmentById);
-    final publicationByClass = _publicationByClassroom();
-
-    final colorScheme = Theme.of(context).colorScheme;
-    final classesWithSlots = _classrooms
-        .where((row) => (slotsByClass[_asInt(row['id'])] ?? []).isNotEmpty)
-        .length;
-    final classesPublished = _classrooms
-        .where(
-          (row) =>
-              _asBool(publicationByClass[_asInt(row['id'])]?['is_published']),
-        )
-        .length;
-    final classesLocked = _classrooms
-        .where(
-          (row) => _asBool(publicationByClass[_asInt(row['id'])]?['is_locked']),
-        )
-        .length;
-
-    final selectedClassId = _selectedClassroom;
-    final selectedClassName = _classNameById(selectedClassId);
-    final selectedAssignments = selectedClassId == null
-        ? <Map<String, dynamic>>[]
-        : (assignmentsByClass[selectedClassId] ?? <Map<String, dynamic>>[]);
-    final selectedSlots = selectedClassId == null
-        ? <Map<String, dynamic>>[]
-        : (slotsByClass[selectedClassId] ?? <Map<String, dynamic>>[]);
-    final selectedPublication = selectedClassId == null
-        ? null
-        : publicationByClass[selectedClassId];
-    final selectedIsPublished = _asBool(selectedPublication?['is_published']);
-    final selectedIsLocked = _asBool(selectedPublication?['is_locked']);
-    final selectedPublicationLabel = _publicationLabel(selectedPublication);
-    final isNarrow = MediaQuery.of(context).size.width < 980;
-
-    final teacherWorkloads = buildTeacherWorkloadRows(
-      teachers: _teachers,
-      assignmentById: assignmentById,
-      scheduleSlots: _scheduleSlots,
-      classroomFilter: _teacherScope == 'selected' ? selectedClassId : null,
-    );
-
-    final controlsPanel = _sectionCard(
-      title: 'Filtres et actions',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (!_scheduleApiSupported) ...[
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.orange.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.orange.shade200),
-              ),
-              child: Text(
-                'Backend planning non compatible: les routes horaires ne sont pas disponibles sur\n'
-                '$_activeApiBaseUrl\n'
-                'Configurez une API mise à jour via Connexion > Configuration API.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-            const SizedBox(height: 8),
-=======
             ),
           ],
         ),
@@ -2976,207 +2292,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               ],
             ),
             const SizedBox(height: 10),
->>>>>>> main
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-<<<<<<< HEAD
-                OutlinedButton.icon(
-                  onPressed: _saving ? null : _loadData,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Retester compatibilité API'),
-                ),
-                if (_usingCustomApiBaseUrl)
-                  OutlinedButton.icon(
-                    onPressed: _saving ? null : _resetCustomApiUrlAndReload,
-                    icon: const Icon(Icons.settings_backup_restore_outlined),
-                    label: const Text('Réinitialiser URL API'),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-          ],
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment<String>(
-                value: 'classroom',
-                label: Text('Par classe'),
-                icon: Icon(Icons.grid_view_outlined),
-              ),
-              ButtonSegment<String>(
-                value: 'teacher',
-                label: Text('Par enseignant'),
-                icon: Icon(Icons.badge_outlined),
-              ),
-            ],
-            selected: {_viewMode},
-            onSelectionChanged: (values) {
-              final next = values.first;
-              setState(() => _viewMode = next);
-            },
-          ),
-          const SizedBox(height: 10),
-          DropdownButtonFormField<int>(
-            initialValue: _selectedClassroom,
-            decoration: const InputDecoration(labelText: 'Classe'),
-            items: _classrooms
-                .map(
-                  (row) => DropdownMenuItem<int>(
-                    value: _asInt(row['id']),
-                    child: Text('${row['name']}'),
-                  ),
-                )
-                .toList(),
-            onChanged: (value) {
-              setState(() => _selectedClassroom = value);
-            },
-          ),
-          if (selectedClassId != null) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _metricChip('Statut planning', selectedPublicationLabel),
-                _metricChip('Horaires', '${selectedSlots.length}'),
-              ],
-            ),
-          ],
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.icon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null ||
-                        selectedIsLocked)
-                    ? null
-                    : () => _openSlotDialog(forceClassroomId: selectedClassId),
-                icon: const Icon(Icons.add_circle_outline),
-                label: const Text('Ajouter horaire'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null)
-                    ? null
-                    : _printSelectedClassPdfFromBackend,
-                icon: const Icon(Icons.picture_as_pdf),
-                label: const Text('Imprimer tableau PDF'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null)
-                    ? null
-                    : _exportSelectedClassXlsx,
-                icon: const Icon(Icons.table_view_outlined),
-                label: const Text('Exporter XLSX classe'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: (_saving || selectedClassId == null)
-                    ? null
-                    : _exportCurrentClassCsv,
-                icon: const Icon(Icons.grid_on_outlined),
-                label: const Text('Exporter Excel (CSV)'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: _saving ? null : _loadData,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Actualiser'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: (_saving || !_scheduleApiSupported)
-                    ? null
-                    : _openDuplicateScheduleDialog,
-                icon: const Icon(Icons.copy_all_outlined),
-                label: const Text('Dupliquer planning'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              OutlinedButton.icon(
-                onPressed: (_saving || !_scheduleApiSupported)
-                    ? null
-                    : _exportGlobalXlsx,
-                icon: const Icon(Icons.dataset_outlined),
-                label: const Text('Export global XLSX'),
-              ),
-              OutlinedButton.icon(
-                onPressed: (_saving || !_scheduleApiSupported)
-                    ? null
-                    : _exportGlobalPdf,
-                icon: const Icon(Icons.picture_as_pdf_outlined),
-                label: const Text('Export global PDF'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.tonalIcon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null ||
-                        selectedAssignments.isEmpty)
-                    ? null
-                    : () => _publishSelectedClass(lockAfterPublish: true),
-                icon: const Icon(Icons.publish),
-                label: const Text('Publier + verrouiller'),
-              ),
-              OutlinedButton.icon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null ||
-                        selectedAssignments.isEmpty)
-                    ? null
-                    : () => _publishSelectedClass(lockAfterPublish: false),
-                icon: const Icon(Icons.cloud_upload_outlined),
-                label: const Text('Publier sans verrou'),
-              ),
-              OutlinedButton.icon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null ||
-                        !selectedIsPublished)
-                    ? null
-                    : () => _setSelectedClassLock(lock: !selectedIsLocked),
-                icon: Icon(
-                  selectedIsLocked
-                      ? Icons.lock_open_outlined
-                      : Icons.lock_outline,
-                ),
-                label: Text(selectedIsLocked ? 'Déverrouiller' : 'Verrouiller'),
-              ),
-              OutlinedButton.icon(
-                onPressed:
-                    (_saving ||
-                        !_scheduleApiSupported ||
-                        selectedClassId == null ||
-                        !selectedIsPublished)
-                    ? null
-                    : _unpublishSelectedClass,
-                icon: const Icon(Icons.unpublished_outlined),
-                label: const Text('Repasser brouillon'),
-              ),
-            ],
-          ),
-=======
                 FilledButton.tonalIcon(
                   onPressed:
                       (_saving ||
@@ -3230,7 +2349,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               ],
             ),
           ],
->>>>>>> main
           if (_viewMode == 'teacher') ...[
             const SizedBox(height: 10),
             SegmentedButton<String>(
@@ -3247,17 +2365,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 ),
               ],
               selected: {_teacherScope},
-<<<<<<< HEAD
-              onSelectionChanged: (values) {
-                setState(() => _teacherScope = values.first);
-              },
-=======
               onSelectionChanged: _isTeacherUser
                   ? null
                   : (values) {
                       setState(() => _teacherScope = values.first);
                     },
->>>>>>> main
             ),
             const SizedBox(height: 6),
             Text(
@@ -3282,7 +2394,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-<<<<<<< HEAD
                   children: [
                     _metricChip(
                       'Affectations classe',
@@ -3471,251 +2582,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     title: Text(className),
                     subtitle: Text(
                       '$publicationLabel • ${classSlots.length} horaire(s) • ${classAssignments.length} affectation(s)',
-                    ),
-                    childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                    children: [
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: OutlinedButton.icon(
-                          onPressed:
-                              (_saving ||
-                                  !_scheduleApiSupported ||
-                                  classIsLocked)
-                              ? null
-                              : () =>
-                                    _openSlotDialog(forceClassroomId: classId),
-                          icon: const Icon(Icons.add),
-                          label: const Text('Ajouter horaire'),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      if (classAssignments.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 8),
-                          child: Text('Aucune affectation pour cette classe.'),
-                        )
-                      else
-                        _buildClassWeeklyGrid(
-                          classId: classId,
-                          classSlots: classSlots,
-                        ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-    );
-
-    return RefreshIndicator(
-      onRefresh: _refreshTimetable,
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(18),
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Emploi du temps',
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Vue pedagogique basee sur les affectations enseignants/matieres/classes.',
-                      style: Theme.of(context).textTheme.bodyMedium,
-=======
-                  children: [
-                    _metricChip(
-                      'Affectations classe',
-                      '${selectedAssignments.length}',
-                    ),
-                    _metricChip('Horaires classe', '${selectedSlots.length}'),
-                    _metricChip('Statut', selectedPublicationLabel),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                if (selectedIsLocked)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      'Planning verrouillé: les modifications d\'horaires sont temporairement bloquées.',
-                    ),
-                  ),
-                if (selectedAssignments.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10),
-                    child: Text(
-                      'Aucune affectation pour cette classe. Créez des affectations puis des horaires.',
-                    ),
-                  )
-                else ...[
-                  TextField(
-                    controller: _slotsSearchController,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      labelText: 'Filtre rapide (matière, enseignant, salle)',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _slotsSearchController.text.trim().isEmpty
-                          ? null
-                          : IconButton(
-                              onPressed: () {
-                                _slotsSearchController.clear();
-                                setState(() {});
-                              },
-                              icon: const Icon(Icons.clear),
-                            ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      ChoiceChip(
-                        label: const Text('Tous jours'),
-                        selected: _mobileDayFilter == 'ALL',
-                        onSelected: (_) {
-                          setState(() => _mobileDayFilter = 'ALL');
-                        },
-                      ),
-                      ..._dayOrder.map(
-                        (dayCode) => ChoiceChip(
-                          label: Text(_dayLabel(dayCode)),
-                          selected: _mobileDayFilter == dayCode,
-                          onSelected: (_) {
-                            setState(() => _mobileDayFilter = dayCode);
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  _buildClassWeeklyGrid(
-                    classId: selectedClassId,
-                    classSlots: selectedSlots,
-                    dayFilter: _mobileDayFilter,
-                    searchTerm: _slotsSearchController.text,
-                    compact: isNarrow,
-                  ),
-                ],
-              ],
-            ),
-    );
-
-    final teacherWorkloadPanel = _sectionCard(
-      title: _teacherScope == 'selected'
-          ? 'Charge horaire - classe sélectionnée'
-          : 'Charge horaire - toutes classes',
-      child: teacherWorkloads.isEmpty
-          ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 18),
-              child: Text('Aucune charge disponible pour le filtre courant.'),
-            )
-          : SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                columnSpacing: 16,
-                headingRowColor: WidgetStatePropertyAll(
-                  Theme.of(context).colorScheme.surfaceContainer,
-                ),
-                columns: const [
-                  DataColumn(label: Text('Enseignant')),
-                  DataColumn(label: Text('Horaires')),
-                  DataColumn(label: Text('Classes')),
-                  DataColumn(label: Text('Lundi')),
-                  DataColumn(label: Text('Mardi')),
-                  DataColumn(label: Text('Mercredi')),
-                  DataColumn(label: Text('Jeudi')),
-                  DataColumn(label: Text('Vendredi')),
-                  DataColumn(label: Text('Samedi')),
-                  DataColumn(label: Text('Total h/sem.')),
-                  DataColumn(label: Text('Niveau')),
-                ],
-                rows: teacherWorkloads.map((row) {
-                  final levelColor = row.level == 'Surcharge'
-                      ? Colors.red
-                      : (row.level == 'A surveiller'
-                            ? Colors.orange
-                            : Colors.green);
-                  final perDay = row.perDayMinutes;
-
-                  String hours(String day) {
-                    final minutes = perDay[day] ?? 0;
-                    return (minutes / 60).toStringAsFixed(2);
-                  }
-
-                  return DataRow(
-                    cells: [
-                      DataCell(
-                        Text(
-                          _teacherDisplayLabel(
-                            row.teacherName,
-                            row.teacherCode,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      DataCell(Text('${row.slotCount}')),
-                      DataCell(Text('${row.classCount}')),
-                      DataCell(Text(hours('MON'))),
-                      DataCell(Text(hours('TUE'))),
-                      DataCell(Text(hours('WED'))),
-                      DataCell(Text(hours('THU'))),
-                      DataCell(Text(hours('FRI'))),
-                      DataCell(Text(hours('SAT'))),
-                      DataCell(Text(row.totalHours.toStringAsFixed(2))),
-                      DataCell(
-                        Text(
-                          row.level,
-                          style: TextStyle(
-                            color: levelColor,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                }).toList(),
-              ),
-            ),
-    );
-
-    final perClassPanel = _sectionCard(
-      title: 'Chaque classe a son emploi du temps',
-      child: _classrooms.isEmpty
-          ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 18),
-              child: Text('Aucune classe disponible.'),
-            )
-          : Column(
-              children: _classrooms.map((classroom) {
-                final classId = _asInt(classroom['id']);
-                final className = (classroom['name'] ?? 'Classe $classId')
-                    .toString();
-                final classAssignments =
-                    assignmentsByClass[classId] ?? <Map<String, dynamic>>[];
-                final classSlots =
-                    slotsByClass[classId] ?? <Map<String, dynamic>>[];
-                final publication = publicationByClass[classId];
-                final classIsLocked = _asBool(publication?['is_locked']);
-                final publicationLabel = _publicationLabel(publication);
-
-                return Card(
-                  child: ExpansionTile(
-                    initiallyExpanded: classId == _selectedClassroom,
-                    onExpansionChanged: (expanded) {
-                      if (expanded) {
-                        setState(() => _selectedClassroom = classId);
-                      }
-                    },
-                    title: Text(className),
-                    subtitle: Text(
-                      '$publicationLabel • ${classSlots.length} horaire(s) • ${classAssignments.length} affectation(s)',
->>>>>>> main
                     ),
                     childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                     children: [
@@ -3813,57 +2679,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   ],
                 ),
               ),
-<<<<<<< HEAD
-              OutlinedButton.icon(
-                onPressed: _saving ? null : _loadData,
-                icon: const Icon(Icons.sync),
-                label: const Text('Actualiser'),
-              ),
-            ],
-          ),
-          if (_saving) ...[
-            const SizedBox(height: 8),
-            const LinearProgressIndicator(),
-          ],
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            decoration: BoxDecoration(
-              color: colorScheme.surfaceContainerLowest,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: colorScheme.outlineVariant.withValues(alpha: 0.55),
-              ),
-            ),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _metricChip('Enseignants', '${_teachers.length}'),
-                _metricChip('Matieres', '${_subjects.length}'),
-                _metricChip('Classes', '${_classrooms.length}'),
-                _metricChip('Affectations', '${_assignments.length}'),
-                _metricChip('Horaires', '${_scheduleSlots.length}'),
-                _metricChip('Classes planifiées', '$classesWithSlots'),
-                _metricChip('Classes publiées', '$classesPublished'),
-                _metricChip('Classes verrouillées', '$classesLocked'),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          controlsPanel,
-          if (_viewMode == 'classroom') ...[
-            const SizedBox(height: 12),
-            selectedClassPanel,
-            const SizedBox(height: 12),
-            perClassPanel,
-          ] else ...[
-            const SizedBox(height: 12),
-            teacherWorkloadPanel,
-          ],
-        ],
-      ),
-=======
               const SizedBox(height: 12),
               controlsPanel,
               if (_viewMode == 'classroom') ...[
@@ -3913,7 +2728,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           ),
         ),
       ],
->>>>>>> main
     );
   }
 
@@ -3979,8 +2793,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     return grouped;
   }
 
-<<<<<<< HEAD
-=======
   List<Map<String, dynamic>> _visibleClassrooms() {
     if (!_isTeacherUser) {
       return _classrooms;
@@ -4028,7 +2840,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         .toList();
   }
 
->>>>>>> main
   Map<int, List<Map<String, dynamic>>> _slotsByClass(
     Map<int, Map<String, dynamic>> assignmentById,
   ) {
