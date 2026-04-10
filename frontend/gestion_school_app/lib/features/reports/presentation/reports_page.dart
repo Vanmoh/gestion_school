@@ -194,7 +194,11 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
       final fileName =
           'paiements_export_${DateTime.now().millisecondsSinceEpoch}.xlsx';
       await Printing.sharePdf(bytes: bytes, filename: fileName);
+<<<<<<< HEAD
+      _showMessage('Export Excel lancé: $fileName');
+=======
       _showMessage('Export Excel lancé: $fileName', isSuccess: true);
+>>>>>>> main
     });
   }
 
