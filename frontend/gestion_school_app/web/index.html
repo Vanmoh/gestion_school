@@ -33,6 +33,93 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <style>
+    #boot-status {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(180deg, #f3f7fb 0%, #e9f0f9 100%);
+      color: #123a64;
+      font-family: "Segoe UI", Tahoma, Verdana, sans-serif;
+      text-align: center;
+      padding: 20px;
+      z-index: 9999;
+    }
+
+    #boot-status .title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    #boot-status .message {
+      font-size: 15px;
+      max-width: 700px;
+      line-height: 1.45;
+      opacity: 0.92;
+    }
+
+    #boot-status.error .title {
+      color: #9f1d35;
+    }
+  </style>
+
+  <div id="boot-status" role="status" aria-live="polite">
+    <div class="title">Gestion School</div>
+    <div class="message">Chargement de l'application...</div>
+  </div>
+
+  <script>
+    (function () {
+      const statusEl = document.getElementById('boot-status');
+      const messageEl = statusEl ? statusEl.querySelector('.message') : null;
+
+      function showError(message) {
+        if (!statusEl || !messageEl) {
+          return;
+        }
+        statusEl.classList.add('error');
+        messageEl.textContent =
+          message || 'Une erreur de chargement est survenue. Rechargez la page (Ctrl+F5).';
+      }
+
+      // If Flutter does not mount anything after a while, show a clear message.
+      window.setTimeout(function () {
+        const mounted = document.querySelector('flt-glass-pane, flt-scene-host, canvas');
+        if (!mounted) {
+          showError('L application tarde a se charger. Verifiez la connexion puis rechargez (Ctrl+F5).');
+        }
+      }, 15000);
+
+      const mountWatcher = window.setInterval(function () {
+        const mounted = document.querySelector('flt-glass-pane, flt-scene-host, canvas');
+        if (mounted) {
+          window.clearInterval(mountWatcher);
+          if (statusEl) {
+            statusEl.remove();
+          }
+        }
+      }, 350);
+
+      window.addEventListener('error', function () {
+        showError('Le navigateur a bloque le demarrage de l application. Rechargez la page (Ctrl+F5).');
+      });
+
+      window.addEventListener('unhandledrejection', function () {
+        showError('Une erreur JavaScript est survenue au chargement. Rechargez la page (Ctrl+F5).');
+      });
+
+      window.__hideBootStatus = function () {
+        if (statusEl) {
+          statusEl.remove();
+        }
+      };
+    })();
+  </script>
+
   <script>
     // Clear stale Flutter service workers/caches from older deployments.
     (function () {
