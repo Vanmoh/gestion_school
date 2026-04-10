@@ -194,7 +194,11 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
       final fileName =
           'paiements_export_${DateTime.now().millisecondsSinceEpoch}.xlsx';
       await Printing.sharePdf(bytes: bytes, filename: fileName);
+<<<<<<< HEAD
       _showMessage('Export Excel lancé: $fileName');
+=======
+      _showMessage('Export Excel lancé: $fileName', isSuccess: true);
+>>>>>>> main
     });
   }
 
@@ -209,11 +213,22 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
     }
   }
 
-  void _showMessage(String message) {
+  void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
   }
 
   @override

@@ -1,6 +1,10 @@
 from decimal import Decimal
 from rest_framework import serializers
 from .term_utils import normalize_term
+<<<<<<< HEAD
+=======
+from apps.accounts.models import UserRole
+>>>>>>> main
 from .models import (
     AcademicYear,
     Announcement,
@@ -12,6 +16,7 @@ from .models import (
     CanteenSubscription,
     ClassRoom,
     DisciplineIncident,
+    Etablissement,
     ExamPlanning,
     ExamInvigilation,
     ExamResult,
@@ -35,6 +40,10 @@ from .models import (
     Teacher,
     TeacherAttendance,
     TeacherAssignment,
+<<<<<<< HEAD
+=======
+    TeacherAvailabilitySlot,
+>>>>>>> main
     TeacherScheduleSlot,
     TimetablePublication,
     TeacherPayroll,
@@ -45,6 +54,27 @@ class AcademicYearSerializer(serializers.ModelSerializer):
     class Meta:
         model = AcademicYear
         fields = "__all__"
+
+
+class EtablissementSerializer(serializers.ModelSerializer):
+    logo = serializers.ImageField(required=False, allow_null=True)
+
+    class Meta:
+        model = Etablissement
+        fields = ['id', 'name', 'address', 'phone', 'email', 'logo']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        if not instance.logo:
+            data["logo"] = None
+            return data
+
+        if request is None:
+            data["logo"] = instance.logo.url
+        else:
+            data["logo"] = request.build_absolute_uri(instance.logo.url)
+        return data
 
 
 class LevelSerializer(serializers.ModelSerializer):
@@ -60,6 +90,8 @@ class SectionSerializer(serializers.ModelSerializer):
 
 
 class ClassRoomSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = ClassRoom
         fields = "__all__"
@@ -71,11 +103,17 @@ class SubjectSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+
 class TeacherSerializer(serializers.ModelSerializer):
     user_full_name = serializers.SerializerMethodField(read_only=True)
     user_first_name = serializers.SerializerMethodField(read_only=True)
     user_last_name = serializers.SerializerMethodField(read_only=True)
     user_username = serializers.SerializerMethodField(read_only=True)
+<<<<<<< HEAD
+=======
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    etablissement_name = serializers.SerializerMethodField(read_only=True)
+>>>>>>> main
 
     def get_user_full_name(self, obj):
         if not obj.user:
@@ -92,12 +130,90 @@ class TeacherSerializer(serializers.ModelSerializer):
     def get_user_username(self, obj):
         return obj.user.username if obj.user else ""
 
+<<<<<<< HEAD
+=======
+    def get_etablissement_name(self, obj):
+        etablissement = obj.etablissement
+        return etablissement.name if etablissement else ""
+
+>>>>>>> main
     class Meta:
         model = Teacher
         fields = "__all__"
 
 
 class TeacherAssignmentSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.SerializerMethodField(read_only=True)
+    subject_name = serializers.SerializerMethodField(read_only=True)
+    subject_code = serializers.SerializerMethodField(read_only=True)
+    classroom_name = serializers.SerializerMethodField(read_only=True)
+    etablissement = serializers.SerializerMethodField(read_only=True)
+    etablissement_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_teacher_name(self, obj):
+        teacher = obj.teacher
+        if not teacher or not teacher.user:
+            return ""
+        full_name = teacher.user.get_full_name().strip()
+        return full_name or teacher.user.username
+
+    def get_subject_name(self, obj):
+        subject = obj.subject
+        return subject.name if subject else ""
+
+    def get_subject_code(self, obj):
+        subject = obj.subject
+        return subject.code if subject else ""
+
+    def get_classroom_name(self, obj):
+        classroom = obj.classroom
+        return classroom.name if classroom else ""
+
+    def get_etablissement(self, obj):
+        classroom = obj.classroom
+        return classroom.etablissement_id if classroom else None
+
+    def get_etablissement_name(self, obj):
+        classroom = obj.classroom
+        etablissement = classroom.etablissement if classroom else None
+        return etablissement.name if etablissement else ""
+
+    def validate(self, attrs):
+        teacher = attrs.get("teacher") or getattr(self.instance, "teacher", None)
+        subject = attrs.get("subject") or getattr(self.instance, "subject", None)
+        classroom = attrs.get("classroom") or getattr(self.instance, "classroom", None)
+
+        if not teacher or not subject or not classroom:
+            return attrs
+
+        if teacher.etablissement_id and classroom.etablissement_id:
+            if teacher.etablissement_id != classroom.etablissement_id:
+                raise serializers.ValidationError(
+                    {"teacher": "Cet enseignant n'appartient pas au même établissement que la classe."}
+                )
+
+        conflict_qs = TeacherAssignment.objects.filter(subject=subject, classroom=classroom)
+        if self.instance:
+            conflict_qs = conflict_qs.exclude(pk=self.instance.pk)
+
+        if conflict_qs.exists():
+            existing = conflict_qs.select_related("teacher", "teacher__user").first()
+            existing_label = "un autre enseignant"
+            if existing and existing.teacher and existing.teacher.user:
+                full_name = existing.teacher.user.get_full_name().strip()
+                existing_label = full_name or existing.teacher.user.username
+
+            raise serializers.ValidationError(
+                {
+                    "subject": (
+                        f"La matière '{subject.name}' est déjà affectée à la classe '{classroom.name}' "
+                        f"par {existing_label}."
+                    )
+                }
+            )
+
+        return attrs
+
     class Meta:
         model = TeacherAssignment
         fields = "__all__"
@@ -230,6 +346,81 @@ class TeacherScheduleSlotSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+<<<<<<< HEAD
+=======
+class TeacherAvailabilitySlotSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.SerializerMethodField(read_only=True)
+    etablissement_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_teacher_name(self, obj):
+        teacher = obj.teacher
+        if not teacher or not teacher.user:
+            return ""
+        full_name = teacher.user.get_full_name().strip()
+        return full_name or teacher.user.username
+
+    def get_etablissement_name(self, obj):
+        etablissement = obj.etablissement
+        return etablissement.name if etablissement else ""
+
+    def validate(self, attrs):
+        teacher = attrs.get("teacher") or getattr(self.instance, "teacher", None)
+        etablissement = attrs.get("etablissement") or getattr(self.instance, "etablissement", None)
+        day_of_week = attrs.get("day_of_week") or getattr(self.instance, "day_of_week", None)
+        start_time = attrs.get("start_time") or getattr(self.instance, "start_time", None)
+        end_time = attrs.get("end_time") or getattr(self.instance, "end_time", None)
+
+        if not teacher or not day_of_week or not start_time or not end_time:
+            return attrs
+
+        if end_time <= start_time:
+            raise serializers.ValidationError(
+                {"end_time": "L'heure de fin doit être après l'heure de début."}
+            )
+
+        teacher_etablissement = teacher.etablissement
+        if etablissement is None and teacher_etablissement is not None:
+            attrs["etablissement"] = teacher_etablissement
+            etablissement = teacher_etablissement
+
+        if teacher_etablissement and etablissement and teacher_etablissement.id != etablissement.id:
+            raise serializers.ValidationError(
+                {"teacher": "Cet enseignant n'appartient pas à l'établissement sélectionné."}
+            )
+
+        overlap_qs = TeacherAvailabilitySlot.objects.filter(
+            etablissement=etablissement,
+            day_of_week=day_of_week,
+            start_time__lt=end_time,
+            end_time__gt=start_time,
+        )
+        if self.instance:
+            overlap_qs = overlap_qs.exclude(pk=self.instance.pk)
+
+        if overlap_qs.exists():
+            taken_slot = overlap_qs.select_related("teacher", "teacher__user").first()
+            taken_label = "un autre enseignant"
+            if taken_slot and taken_slot.teacher and taken_slot.teacher.user:
+                full_name = taken_slot.teacher.user.get_full_name().strip()
+                taken_label = full_name or taken_slot.teacher.user.username
+
+            raise serializers.ValidationError(
+                {
+                    "non_field_errors": [
+                        "Ce créneau est déjà réservé et n'est plus disponible.",
+                        f"Réservé par: {taken_label}.",
+                    ]
+                }
+            )
+
+        return attrs
+
+    class Meta:
+        model = TeacherAvailabilitySlot
+        fields = "__all__"
+
+
+>>>>>>> main
 class TimetablePublicationSerializer(serializers.ModelSerializer):
     classroom_name = serializers.SerializerMethodField(read_only=True)
     published_by_name = serializers.SerializerMethodField(read_only=True)
@@ -251,12 +442,15 @@ class TimetablePublicationSerializer(serializers.ModelSerializer):
 
 
 class ParentProfileSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = ParentProfile
         fields = "__all__"
 
 
 class StudentSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
     user_full_name = serializers.SerializerMethodField(read_only=True)
     user_username = serializers.SerializerMethodField(read_only=True)
     user_first_name = serializers.SerializerMethodField(read_only=True)
@@ -302,6 +496,16 @@ class StudentSerializer(serializers.ModelSerializer):
         user = parent.user if parent else None
         return user.phone if user else ""
 
+    def validate(self, attrs):
+        if "conduite" in attrs:
+            request = self.context.get("request")
+            role = getattr(getattr(request, "user", None), "role", "")
+            if role not in {UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
+                raise serializers.ValidationError(
+                    {"conduite": "Seuls le surveillant et le super admin peuvent modifier la conduite."}
+                )
+        return attrs
+
     class Meta:
         model = Student
         fields = "__all__"
@@ -334,6 +538,15 @@ class StudentAcademicHistorySerializer(serializers.ModelSerializer):
 
 class GradeSerializer(serializers.ModelSerializer):
     TERM_ERROR_MESSAGE = "Période invalide. Utilisez uniquement T1, T2 ou T3."
+<<<<<<< HEAD
+=======
+    value = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
+    homework_scores = serializers.ListField(
+        child=serializers.DecimalField(max_digits=5, decimal_places=2),
+        required=False,
+        allow_empty=True,
+    )
+>>>>>>> main
 
     def validate_term(self, value):
         normalized = normalize_term(value)
@@ -347,9 +560,46 @@ class GradeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("La note doit être comprise entre 0 et 20.")
         return value
 
+<<<<<<< HEAD
     def validate(self, attrs):
         attrs = super().validate(attrs)
 
+=======
+    def validate_homework_scores(self, value):
+        if value is None:
+            return []
+
+        normalized = []
+        for raw in value:
+            numeric = Decimal(str(raw))
+            if numeric < Decimal("0") or numeric > Decimal("20"):
+                raise serializers.ValidationError(
+                    "Chaque note de devoir doit être comprise entre 0 et 20."
+                )
+            normalized.append(numeric.quantize(Decimal("0.01")))
+        return normalized
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        provided_homework_scores = attrs.get("homework_scores", None)
+        provided_value = attrs.get("value", None)
+
+        if self.instance is None and provided_homework_scores is None and provided_value is None:
+            raise serializers.ValidationError(
+                {"homework_scores": "Saisissez au moins une note de devoir ou une note de classe."}
+            )
+
+        if provided_homework_scores is not None:
+            if len(provided_homework_scores) == 0:
+                raise serializers.ValidationError(
+                    {"homework_scores": "Ajoutez au moins une note de devoir."}
+                )
+            average = sum(provided_homework_scores) / Decimal(len(provided_homework_scores))
+            attrs["value"] = average.quantize(Decimal("0.01"))
+            attrs["homework_scores"] = [str(score) for score in provided_homework_scores]
+
+>>>>>>> main
         student = attrs.get("student") or getattr(self.instance, "student", None)
         classroom = attrs.get("classroom") or getattr(self.instance, "classroom", None)
         subject = attrs.get("subject") or getattr(self.instance, "subject", None)
@@ -408,6 +658,13 @@ class GradeValidationSerializer(serializers.ModelSerializer):
 class AttendanceSerializer(serializers.ModelSerializer):
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
+    conduite = serializers.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        required=False,
+        min_value=Decimal("0"),
+        max_value=Decimal("20"),
+    )
 
     def get_student_full_name(self, obj):
         student = obj.student
@@ -423,6 +680,14 @@ class AttendanceSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         student = attrs.get("student") or getattr(self.instance, "student", None)
         attendance_date = attrs.get("date") or getattr(self.instance, "date", None)
+        request = self.context.get("request")
+
+        if "conduite" in attrs:
+            role = getattr(getattr(request, "user", None), "role", "")
+            if role not in {UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
+                raise serializers.ValidationError(
+                    {"conduite": "Seuls le surveillant et le super admin peuvent modifier la conduite."}
+                )
 
         if student and attendance_date:
             queryset = Attendance.objects.filter(student=student, date=attendance_date)
@@ -434,6 +699,31 @@ class AttendanceSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
+
+    def create(self, validated_data):
+        conduite = validated_data.pop("conduite", None)
+        attendance = super().create(validated_data)
+        self._save_conduite(attendance.student, conduite)
+        return attendance
+
+    def update(self, instance, validated_data):
+        conduite = validated_data.pop("conduite", None)
+        attendance = super().update(instance, validated_data)
+        self._save_conduite(attendance.student, conduite)
+        return attendance
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        student = getattr(instance, "student", None)
+        conduite_value = getattr(student, "conduite", Decimal("18")) if student else Decimal("18")
+        data["conduite"] = str(conduite_value)
+        return data
+
+    def _save_conduite(self, student, conduite):
+        if student is None or conduite is None:
+            return
+        student.conduite = conduite
+        student.save(update_fields=["conduite"])
 
     class Meta:
         model = Attendance
@@ -481,10 +771,22 @@ class DisciplineIncidentSerializer(serializers.ModelSerializer):
 
 
 class StudentFeeSerializer(serializers.ModelSerializer):
-    amount_paid = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    balance = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    amount_paid = serializers.SerializerMethodField(read_only=True)
+    balance = serializers.SerializerMethodField(read_only=True)
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
+
+    def get_amount_paid(self, obj):
+        annotated = getattr(obj, "amount_paid_annotated", None)
+        if annotated is not None:
+            return annotated
+        return obj.amount_paid
+
+    def get_balance(self, obj):
+        annotated = getattr(obj, "balance_annotated", None)
+        if annotated is not None:
+            return annotated
+        return obj.balance
 
     def get_student_full_name(self, obj):
         full_name = obj.student.user.get_full_name().strip() if obj.student and obj.student.user else ""
@@ -553,6 +855,8 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 
 class ExpenseSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = Expense
         fields = "__all__"
@@ -565,24 +869,31 @@ class TeacherPayrollSerializer(serializers.ModelSerializer):
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = Announcement
         fields = "__all__"
 
 
 class NotificationSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = Notification
         fields = "__all__"
 
 
 class SmsProviderConfigSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = SmsProviderConfig
         fields = "__all__"
 
 
 class BookSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
     class Meta:
         model = Book
         fields = "__all__"
@@ -595,6 +906,7 @@ class BorrowSerializer(serializers.ModelSerializer):
 
 
 class CanteenMenuSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
     class Meta:
         model = CanteenMenu
         fields = "__all__"
@@ -678,12 +990,51 @@ class ExamInvigilationSerializer(serializers.ModelSerializer):
 
 
 class ExamResultSerializer(serializers.ModelSerializer):
+    def validate_score(self, value):
+        numeric_value = Decimal(str(value))
+        if numeric_value < Decimal("0") or numeric_value > Decimal("20"):
+            raise serializers.ValidationError("La note d'examen doit être comprise entre 0 et 20.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        session = attrs.get("session") or getattr(self.instance, "session", None)
+        student = attrs.get("student") or getattr(self.instance, "student", None)
+        subject = attrs.get("subject") or getattr(self.instance, "subject", None)
+
+        if not session or not student or not subject:
+            return attrs
+
+        conflict_qs = ExamResult.objects.filter(
+            student=student,
+            subject=subject,
+            session__academic_year=session.academic_year,
+            session__term=session.term,
+        )
+        if self.instance:
+            conflict_qs = conflict_qs.exclude(pk=self.instance.pk)
+
+        if conflict_qs.exists():
+            raise serializers.ValidationError(
+                {
+                    "student": (
+                        "Une note d'examen existe déjà pour cet élève, cette matière, "
+                        "cette année et cette période."
+                    )
+                }
+            )
+
+        return attrs
+
     class Meta:
         model = ExamResult
         fields = "__all__"
 
 
 class SupplierSerializer(serializers.ModelSerializer):
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = Supplier
         fields = "__all__"
@@ -691,6 +1042,7 @@ class SupplierSerializer(serializers.ModelSerializer):
 
 class StockItemSerializer(serializers.ModelSerializer):
     is_low_stock = serializers.BooleanField(read_only=True)
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
         model = StockItem

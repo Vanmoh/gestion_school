@@ -12,10 +12,15 @@ class UserRole(models.TextChoices):
     STUDENT = "student", "Élève"
 
 
+
+from apps.school.models import Etablissement
+
 class User(AbstractUser):
     role = models.CharField(max_length=20, choices=UserRole.choices)
     phone = models.CharField(max_length=20, blank=True)
     profile_photo = models.ImageField(upload_to="profiles/", blank=True, null=True)
+    etablissement = models.ForeignKey(Etablissement, on_delete=models.PROTECT, related_name="users", null=True, blank=True)
+
 
     class Meta:
         db_table = "users"

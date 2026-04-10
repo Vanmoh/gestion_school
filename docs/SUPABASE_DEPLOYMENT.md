@@ -50,7 +50,7 @@ Base-toi sur:
 
 Tu peux aussi générer un bloc prêt à coller dans Render:
 
-`./prepare_supabase_render_env.sh --db-password='<DB_PASSWORD>' --api-domain='gestion-school-api.onrender.com' --web-domain='gestion-school-web.onrender.com' --output-file='backend/.env.render.local'`
+`./prepare_supabase_render_env.sh --db-password='<DB_PASSWORD>' --api-domain='gestion-school-jkzf.onrender.com' --web-domain='gestion-school-web.onrender.com' --output-file='backend/.env.render.local'`
 
 Variables essentielles:
 
@@ -91,7 +91,7 @@ Il crée:
 	- domaines réels (`ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS`).
 4. Déployer.
 
-> Si Render génère un domaine différent de `gestion-school-api.onrender.com`, mets à jour ces 3 variables avec le domaine réel.
+> Si Render génère un domaine différent de `gestion-school-jkzf.onrender.com`, mets à jour ces 3 variables avec le domaine réel.
 
 Le conteneur web exécute automatiquement migrations + collectstatic au démarrage.
 

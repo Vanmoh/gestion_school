@@ -97,12 +97,28 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
 
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
+<<<<<<< HEAD
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
       ),
     );
+=======
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+          backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
+        ),
+      );
+>>>>>>> main
   }
 
   Future<bool> _post(

@@ -12,6 +12,7 @@ from .views import (
     ClassRoomViewSet,
     DashboardViewSet,
     DisciplineIncidentViewSet,
+    EtablissementViewSet,
     ExamPlanningViewSet,
     ExamInvigilationViewSet,
     ExamResultViewSet,
@@ -33,6 +34,10 @@ from .views import (
     SmsProviderConfigViewSet,
     TeacherAttendanceViewSet,
     TeacherAssignmentViewSet,
+<<<<<<< HEAD
+=======
+    TeacherAvailabilitySlotViewSet,
+>>>>>>> main
     TimetablePublicationViewSet,
     TeacherScheduleSlotViewSet,
     TeacherPayrollViewSet,
@@ -40,6 +45,7 @@ from .views import (
 )
 
 router = DefaultRouter()
+router.register(r"etablissements", EtablissementViewSet, basename="etablissements")
 router.register(r"dashboard", DashboardViewSet, basename="dashboard")
 router.register(r"academic-years", AcademicYearViewSet)
 router.register(r"levels", LevelViewSet)
@@ -48,6 +54,10 @@ router.register(r"classrooms", ClassRoomViewSet)
 router.register(r"subjects", SubjectViewSet)
 router.register(r"teachers", TeacherViewSet)
 router.register(r"teacher-assignments", TeacherAssignmentViewSet)
+<<<<<<< HEAD
+=======
+router.register(r"teacher-availability-slots", TeacherAvailabilitySlotViewSet, basename="teacher-availability-slots")
+>>>>>>> main
 router.register(r"teacher-schedule-slots", TeacherScheduleSlotViewSet)
 router.register(r"timetable-publications", TimetablePublicationViewSet, basename="timetable-publications")
 router.register(r"parents", ParentProfileViewSet)

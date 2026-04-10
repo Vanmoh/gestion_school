@@ -48,6 +48,10 @@ class AttendanceRepository {
         isAbsent: map['is_absent'] as bool? ?? false,
         isLate: map['is_late'] as bool? ?? false,
         reason: map['reason']?.toString() ?? '',
+        conduite:
+            (map['conduite'] as num?)?.toDouble() ??
+            double.tryParse(map['conduite']?.toString() ?? '') ??
+            18,
       );
     }).toList();
   }
@@ -84,16 +88,17 @@ class AttendanceRepository {
     required bool isAbsent,
     required bool isLate,
     required String reason,
+    double? conduite,
   }) async {
-    await dio.post(
-      '/attendances/',
-      data: {
-        'student': studentId,
-        'date': date,
-        'is_absent': isAbsent,
-        'is_late': isLate,
-        'reason': reason,
-      },
-    );
+    final payload = {
+      'student': studentId,
+      'date': date,
+      'is_absent': isAbsent,
+      'is_late': isLate,
+      'reason': reason,
+      ...?(conduite == null ? null : {'conduite': conduite}),
+    };
+
+    await dio.post('/attendances/', data: payload);
   }
 }

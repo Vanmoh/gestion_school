@@ -1,6 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+<<<<<<< HEAD
+=======
+import '../../auth/presentation/auth_controller.dart';
+import '../../../models/etablissement.dart';
+>>>>>>> main
 import '../domain/user_account.dart';
 import 'users_controller.dart';
 
@@ -12,6 +19,8 @@ class UsersPage extends ConsumerStatefulWidget {
 }
 
 class _UsersPageState extends ConsumerState<UsersPage> {
+  static const List<int> _pageSizeOptions = [15, 25, 50, 100];
+
   final _formKey = GlobalKey<FormState>();
   final _searchController = TextEditingController();
   final _usernameController = TextEditingController();
@@ -24,6 +33,14 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   String _selectedRole = 'teacher';
   String _roleFilter = 'all';
   int? _selectedUserId;
+<<<<<<< HEAD
+=======
+  int? _selectedCreateEtablissementId;
+  int _currentPage = 1;
+  int _pageSize = 25;
+  String _searchTerm = '';
+  Timer? _searchDebounce;
+>>>>>>> main
 
   static const List<(String, String)> _roles = [
     ('super_admin', 'Super Admin'),
@@ -37,6 +54,10 @@ class _UsersPageState extends ConsumerState<UsersPage> {
 
   @override
   void dispose() {
+<<<<<<< HEAD
+=======
+    _searchDebounce?.cancel();
+>>>>>>> main
     _searchController.dispose();
     _usernameController.dispose();
     _firstNameController.dispose();
@@ -48,14 +69,27 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   }
 
   Future<void> _refreshUsers() async {
+<<<<<<< HEAD
     ref.invalidate(usersProvider);
     try {
       await ref.read(usersProvider.future);
+=======
+    final query = UsersPageQuery(
+      page: _currentPage,
+      pageSize: _pageSize,
+      search: _searchTerm,
+      role: _roleFilter == 'all' ? null : _roleFilter,
+    );
+    ref.invalidate(usersPaginatedProvider(query));
+    try {
+      await ref.read(usersPaginatedProvider(query).future);
+>>>>>>> main
     } catch (_) {
       // Keep pull-to-refresh responsive even when API fails.
     }
   }
 
+<<<<<<< HEAD
   void _showMessage(String text, {bool isSuccess = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -93,6 +127,75 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     }
   }
 
+=======
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      setState(() {
+        _searchTerm = value.trim();
+        _currentPage = 1;
+      });
+    });
+  }
+
+  void _showMessage(String text, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            text,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+          backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
+        ),
+      );
+  }
+
+  String _errorText(Object? error) {
+    if (error == null) {
+      return 'Erreur inconnue';
+    }
+    final text = error.toString().trim();
+    const prefix = 'Exception:';
+    if (text.startsWith(prefix)) {
+      return text.substring(prefix.length).trim();
+    }
+    return text;
+  }
+
+  String _roleLabel(String role) {
+    for (final item in _roles) {
+      if (item.$1 == role) {
+        return item.$2;
+      }
+    }
+    return role;
+  }
+
+  Color _roleColor(String role) {
+    switch (role) {
+      case 'super_admin':
+      case 'director':
+        return const Color(0xFF2D6FD6);
+      case 'accountant':
+        return const Color(0xFF2A8E58);
+      case 'teacher':
+      case 'supervisor':
+        return const Color(0xFF8B5CF6);
+      case 'parent':
+      case 'student':
+        return const Color(0xFFB9721B);
+      default:
+        return const Color(0xFF546172);
+    }
+  }
+
+>>>>>>> main
   String _userInitials(UserAccount user) {
     final parts = user.fullName
         .trim()
@@ -110,6 +213,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   }
 
   List<UserAccount> _filteredUsers(List<UserAccount> users) {
+<<<<<<< HEAD
     final query = _searchController.text.trim().toLowerCase();
 
     final rows = users.where((user) {
@@ -124,6 +228,9 @@ class _UsersPageState extends ConsumerState<UsersPage> {
               .toLowerCase();
       return haystack.contains(query);
     }).toList();
+=======
+    final rows = users.toList();
+>>>>>>> main
 
     rows.sort(
       (left, right) =>
@@ -170,6 +277,10 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     _passwordController.clear();
     _phoneController.clear();
     _selectedRole = 'teacher';
+<<<<<<< HEAD
+=======
+    _selectedCreateEtablissementId = null;
+>>>>>>> main
   }
 
   Future<void> _createUser() async {
@@ -177,6 +288,21 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       return;
     }
 
+<<<<<<< HEAD
+=======
+    final authUser = ref.read(authControllerProvider).value;
+    final selectedEtablissement = ref.read(etablissementProvider).selected;
+    final isSuperAdmin = authUser?.role == 'super_admin';
+    final etablissementId = isSuperAdmin
+        ? (_selectedCreateEtablissementId ?? selectedEtablissement?.id)
+        : selectedEtablissement?.id;
+
+    if (etablissementId == null) {
+      _showMessage('Aucun etablissement actif pour creer cet utilisateur.');
+      return;
+    }
+
+>>>>>>> main
     await ref
         .read(userMutationProvider.notifier)
         .createUser(
@@ -187,11 +313,19 @@ class _UsersPageState extends ConsumerState<UsersPage> {
           password: _passwordController.text,
           role: _selectedRole,
           phone: _phoneController.text.trim(),
+<<<<<<< HEAD
+=======
+          etablissementId: etablissementId,
+>>>>>>> main
         );
 
     final mutation = ref.read(userMutationProvider);
     if (mutation.hasError) {
+<<<<<<< HEAD
       _showMessage('Erreur creation utilisateur: ${mutation.error}');
+=======
+      _showMessage('Erreur creation utilisateur: ${_errorText(mutation.error)}');
+>>>>>>> main
       return;
     }
 
@@ -214,6 +348,15 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                 _detailRow('Nom complet', user.fullName),
                 _detailRow('Username', user.username),
                 _detailRow('Role', _roleLabel(user.role)),
+<<<<<<< HEAD
+=======
+                _detailRow(
+                  'Etablissement',
+                  user.etablissementName.trim().isEmpty
+                      ? '-'
+                      : user.etablissementName,
+                ),
+>>>>>>> main
                 _detailRow('Email', user.email.isEmpty ? '-' : user.email),
                 _detailRow('Telephone', user.phone.isEmpty ? '-' : user.phone),
                 _detailRow('ID', '${user.id}'),
@@ -239,6 +382,13 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     final emailController = TextEditingController(text: user.email);
     final phoneController = TextEditingController(text: user.phone);
     var editRole = user.role;
+<<<<<<< HEAD
+=======
+    final authUser = ref.read(authControllerProvider).value;
+    final selectedEtablissement = ref.read(etablissementProvider).selected;
+    final isSuperAdmin = authUser?.role == 'super_admin';
+    var editEtablissementId = user.etablissementId ?? selectedEtablissement?.id;
+>>>>>>> main
     var saving = false;
 
     final updated = await showDialog<bool>(
@@ -305,6 +455,39 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                           }
                         },
                       ),
+<<<<<<< HEAD
+=======
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<int>(
+                        initialValue: editEtablissementId,
+                        decoration: const InputDecoration(
+                          labelText: 'Etablissement',
+                        ),
+                        items: ref
+                            .read(etablissementProvider)
+                            .etablissements
+                            .map(
+                              (etab) => DropdownMenuItem<int>(
+                                value: etab.id,
+                                child: Text(etab.name),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: !isSuperAdmin
+                            ? null
+                            : (value) {
+                                setDialogState(
+                                  () => editEtablissementId = value,
+                                );
+                              },
+                        validator: (value) {
+                          if (value == null) {
+                            return 'Etablissement requis';
+                          }
+                          return null;
+                        },
+                      ),
+>>>>>>> main
                     ],
                   ),
                 ),
@@ -335,12 +518,22 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                 email: emailController.text.trim(),
                                 role: editRole,
                                 phone: phoneController.text.trim(),
+<<<<<<< HEAD
+=======
+                                etablissementId: isSuperAdmin
+                                    ? editEtablissementId
+                                    : selectedEtablissement?.id,
+>>>>>>> main
                               );
 
                           final mutation = ref.read(userMutationProvider);
                           if (mutation.hasError) {
                             _showMessage(
+<<<<<<< HEAD
                               'Erreur modification utilisateur: ${mutation.error}',
+=======
+                              'Erreur modification utilisateur: ${_errorText(mutation.error)}',
+>>>>>>> main
                             );
                             setDialogState(() => saving = false);
                             return;
@@ -408,7 +601,13 @@ class _UsersPageState extends ConsumerState<UsersPage> {
 
     final mutation = ref.read(userMutationProvider);
     if (mutation.hasError) {
+<<<<<<< HEAD
       _showMessage('Erreur suppression utilisateur: ${mutation.error}');
+=======
+      _showMessage(
+        'Erreur suppression utilisateur: ${_errorText(mutation.error)}',
+      );
+>>>>>>> main
       return;
     }
 
@@ -486,7 +685,22 @@ class _UsersPageState extends ConsumerState<UsersPage> {
 
   @override
   Widget build(BuildContext context) {
+<<<<<<< HEAD
     final usersAsync = ref.watch(usersProvider);
+=======
+    final authUser = ref.watch(authControllerProvider).value;
+    final selectedEtablissement = ref.watch(etablissementProvider).selected;
+    final allEtablissements = ref.watch(etablissementProvider).etablissements;
+    final isSuperAdmin = authUser?.role == 'super_admin';
+
+    final query = UsersPageQuery(
+      page: _currentPage,
+      pageSize: _pageSize,
+      search: _searchTerm,
+      role: _roleFilter == 'all' ? null : _roleFilter,
+    );
+    final usersAsync = ref.watch(usersPaginatedProvider(query));
+>>>>>>> main
     final mutationState = ref.watch(userMutationProvider);
     final isMutating = mutationState.isLoading;
     final colorScheme = Theme.of(context).colorScheme;
@@ -536,12 +750,25 @@ class _UsersPageState extends ConsumerState<UsersPage> {
           ],
         ),
       ),
+<<<<<<< HEAD
       data: (users) {
+=======
+      data: (pageData) {
+        final users = pageData.results;
+        final existingUsernames = users
+          .map((user) => user.username.trim().toLowerCase())
+          .where((username) => username.isNotEmpty)
+          .toSet();
+>>>>>>> main
         final filteredUsers = _filteredUsers(users);
         _syncSelectedUser(filteredUsers);
         final selectedUser = _currentSelectedUser(filteredUsers);
 
+<<<<<<< HEAD
         final totalUsers = users.length;
+=======
+        final totalUsers = pageData.count;
+>>>>>>> main
         final adminCount = users
             .where(
               (user) => user.role == 'super_admin' || user.role == 'director',
@@ -611,7 +838,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                       width: 290,
                       child: TextField(
                         controller: _searchController,
+<<<<<<< HEAD
                         onChanged: (_) => setState(() {}),
+=======
+                        onChanged: _onSearchChanged,
+>>>>>>> main
                         decoration: InputDecoration(
                           labelText: 'Recherche utilisateur',
                           prefixIcon: const Icon(Icons.search),
@@ -619,8 +850,17 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                               ? null
                               : IconButton(
                                   onPressed: () {
+<<<<<<< HEAD
                                     _searchController.clear();
                                     setState(() {});
+=======
+                                    _searchDebounce?.cancel();
+                                    _searchController.clear();
+                                    setState(() {
+                                      _searchTerm = '';
+                                      _currentPage = 1;
+                                    });
+>>>>>>> main
                                   },
                                   icon: const Icon(Icons.clear),
                                 ),
@@ -647,7 +887,14 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                           ),
                         ],
                         onChanged: (value) {
+<<<<<<< HEAD
                           setState(() => _roleFilter = value ?? 'all');
+=======
+                          setState(() {
+                            _roleFilter = value ?? 'all';
+                            _currentPage = 1;
+                          });
+>>>>>>> main
                         },
                       ),
                     ),
@@ -655,8 +902,18 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                       onPressed: isMutating
                           ? null
                           : () {
+<<<<<<< HEAD
                               _searchController.clear();
                               setState(() => _roleFilter = 'all');
+=======
+                              _searchDebounce?.cancel();
+                              _searchController.clear();
+                              setState(() {
+                                _roleFilter = 'all';
+                                _searchTerm = '';
+                                _currentPage = 1;
+                              });
+>>>>>>> main
                             },
                       icon: const Icon(Icons.filter_alt_off_outlined),
                       label: const Text('Reinitialiser'),
@@ -754,6 +1011,21 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                                   context,
                                                 ).textTheme.bodySmall,
                                               ),
+<<<<<<< HEAD
+=======
+                                              if (user.etablissementName
+                                                  .trim()
+                                                  .isNotEmpty)
+                                                Text(
+                                                  user.etablissementName,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: Theme.of(
+                                                    context,
+                                                  ).textTheme.labelSmall,
+                                                ),
+>>>>>>> main
                                             ],
                                           ),
                                         ),
@@ -797,6 +1069,64 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                               );
                             },
                           ),
+<<<<<<< HEAD
+=======
+                        const SizedBox(height: 8),
+                        Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(
+                              totalUsers == 0
+                                  ? 'Aucun utilisateur'
+                                  : 'Page $_currentPage • ${users.length} résultat(s) sur $totalUsers',
+                            ),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                const Text('Lignes/page:'),
+                                DropdownButton<int>(
+                                  value: _pageSize,
+                                  items: _pageSizeOptions
+                                      .map(
+                                        (rows) => DropdownMenuItem<int>(
+                                          value: rows,
+                                          child: Text('$rows'),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: (value) {
+                                    if (value == null || value == _pageSize) {
+                                      return;
+                                    }
+                                    setState(() {
+                                      _pageSize = value;
+                                      _currentPage = 1;
+                                    });
+                                  },
+                                ),
+                                IconButton(
+                                  tooltip: 'Page précédente',
+                                  onPressed: pageData.hasPrevious
+                                      ? () => setState(() => _currentPage -= 1)
+                                      : null,
+                                  icon: const Icon(Icons.chevron_left),
+                                ),
+                                IconButton(
+                                  tooltip: 'Page suivante',
+                                  onPressed: pageData.hasNext
+                                      ? () => setState(() => _currentPage += 1)
+                                      : null,
+                                  icon: const Icon(Icons.chevron_right),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+>>>>>>> main
                       ],
                     ),
                   );
@@ -850,6 +1180,15 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                     ? '-'
                                     : selectedUser.phone,
                               ),
+<<<<<<< HEAD
+=======
+                              _metricChip(
+                                'Etablissement',
+                                selectedUser.etablissementName.trim().isEmpty
+                                    ? '-'
+                                    : selectedUser.etablissementName,
+                              ),
+>>>>>>> main
                             ],
                           ),
                           const SizedBox(height: 10),
@@ -908,8 +1247,17 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                       ),
                                       validator: (value) =>
                                           (value == null ||
+<<<<<<< HEAD
                                               value.trim().isEmpty)
                                           ? 'Champ requis'
+=======
+                                            value.trim().isEmpty)
+                                          ? 'Champ requis'
+                                          : existingUsernames.contains(
+                                            value.trim().toLowerCase(),
+                                          )
+                                          ? 'Ce nom utilisateur existe deja'
+>>>>>>> main
                                           : null,
                                     ),
                                   ),
@@ -972,6 +1320,45 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                     ),
                                   ),
                                   SizedBox(
+<<<<<<< HEAD
+=======
+                                    width: 280,
+                                    child: DropdownButtonFormField<int>(
+                                      initialValue: isSuperAdmin
+                                          ? (_selectedCreateEtablissementId ??
+                                                selectedEtablissement?.id)
+                                          : selectedEtablissement?.id,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Etablissement',
+                                      ),
+                                      items: allEtablissements
+                                          .map(
+                                            (etab) => DropdownMenuItem<int>(
+                                              value: etab.id,
+                                              child: Text(etab.name),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: !isSuperAdmin
+                                          ? null
+                                          : (value) {
+                                              setState(() {
+                                                _selectedCreateEtablissementId =
+                                                    value;
+                                              });
+                                            },
+                                      validator: (value) {
+                                        if ((value ??
+                                                selectedEtablissement?.id) ==
+                                            null) {
+                                          return 'Etablissement requis';
+                                        }
+                                        return null;
+                                      },
+                                    ),
+                                  ),
+                                  SizedBox(
+>>>>>>> main
                                     width: 220,
                                     child: TextFormField(
                                       controller: _passwordController,
@@ -991,6 +1378,20 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                 ],
                               ),
                               const SizedBox(height: 12),
+<<<<<<< HEAD
+=======
+                              if (!isSuperAdmin &&
+                                  selectedEtablissement != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: Text(
+                                    'Les nouveaux comptes seront crees dans: ${selectedEtablissement.name}',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                ),
+>>>>>>> main
                               FilledButton.icon(
                                 onPressed: isMutating ? null : _createUser,
                                 icon: isMutating

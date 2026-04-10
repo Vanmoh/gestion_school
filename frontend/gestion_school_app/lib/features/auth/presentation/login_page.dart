@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import '../../../core/constants/branding.dart';
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
+import '../../../models/etablissement.dart';
 import 'auth_controller.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -31,6 +32,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   void initState() {
     super.initState();
     _loadActiveApiUrl();
+    Future.microtask(() => ref.read(etablissementProvider).hydrate());
     Future.microtask(
       () => ref.read(authControllerProvider.notifier).restoreSession(),
     );
@@ -39,9 +41,23 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authControllerProvider);
+    final etablissementState = ref.watch(etablissementProvider);
+    final selectedEtablissement = etablissementState.selected;
     final scheme = Theme.of(context).colorScheme;
 
-    ref.listen(authControllerProvider, (previous, next) {
+    final headerName = selectedEtablissement?.name ?? SchoolBranding.schoolName;
+    final headerSecondary =
+        (selectedEtablissement?.address != null &&
+            selectedEtablissement!.address!.trim().isNotEmpty)
+        ? selectedEtablissement.address!.trim()
+        : '${SchoolBranding.schoolShort} (${SchoolBranding.level})';
+    final contactLabel =
+        (selectedEtablissement?.phone != null &&
+            selectedEtablissement!.phone!.trim().isNotEmpty)
+        ? 'Tél: ${selectedEtablissement.phone!}'
+        : 'Tél: ${SchoolBranding.phone}';
+
+    ref.listen(authControllerProvider, (previous, next) async {
       next.whenOrNull(
         data: (user) {
           if (user != null && mounted) {
@@ -49,12 +65,62 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           }
         },
         error: (error, _) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(_friendlyErrorMessage(error))));
+          _showMessage(_friendlyErrorMessage(error));
         },
       );
     });
+
+    if (!etablissementState.hydrated) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    if (selectedEtablissement == null) {
+      return Scaffold(
+        body: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.school_outlined, size: 52),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Choisissez d\'abord un établissement',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      const Text(
+                        'La connexion s\'ouvre avec les informations de l\'établissement sélectionné.',
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 20),
+                      FilledButton.icon(
+                        onPressed: () {
+                          Navigator.of(
+                            context,
+                          ).pushNamedAndRemoveUntil('/', (route) => false);
+                        },
+                        icon: const Icon(Icons.arrow_back),
+                        label: const Text('Choisir un établissement'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       body: Stack(
@@ -101,7 +167,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               child: Align(
                 alignment: Alignment.center,
                 child: Text(
-                  SchoolBranding.schoolName,
+                  headerName,
                   style: Theme.of(context).textTheme.displayMedium?.copyWith(
                     fontWeight: FontWeight.w900,
                     letterSpacing: 12,
@@ -137,7 +203,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                     ),
                                     const SizedBox(width: 10),
                                     Text(
-                                      SchoolBranding.appName,
+                                      'Connexion ${selectedEtablissement.name}',
                                       style: Theme.of(context)
                                           .textTheme
                                           .headlineSmall
@@ -148,6 +214,20 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                     ),
                                     const SizedBox(width: 8),
                                     IconButton(
+                                      tooltip: 'Choisir un autre établissement',
+                                      onPressed: () {
+                                        Navigator.of(
+                                          context,
+                                        ).pushNamedAndRemoveUntil(
+                                          '/',
+                                          (route) => false,
+                                        );
+                                      },
+                                      icon: const Icon(
+                                        Icons.swap_horiz_rounded,
+                                      ),
+                                    ),
+                                    IconButton(
                                       tooltip: 'Configurer URL API',
                                       onPressed: _openApiSettingsDialog,
                                       icon: const Icon(
@@ -157,27 +237,37 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                   ],
                                 ),
                                 const SizedBox(height: 18),
-                                Image.asset(
-                                  'assets/images/logo_ecole.png',
-                                  height: 190,
-                                  fit: BoxFit.contain,
-                                  alignment: Alignment.centerLeft,
-                                  cacheWidth: 640,
-                                  filterQuality: FilterQuality.medium,
-                                  errorBuilder: (context, error, stackTrace) {
-                                    return Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: Icon(
-                                        Icons.account_balance_outlined,
-                                        size: 52,
-                                        color: scheme.primary,
-                                      ),
-                                    );
-                                  },
-                                ),
+                                if (selectedEtablissement.logoUrlForDisplay !=
+                                        null &&
+                                    selectedEtablissement
+                                        .logoUrlForDisplay!
+                                        .isNotEmpty)
+                                  Image.network(
+                                    selectedEtablissement.logoUrlForDisplay!,
+                                    height: 190,
+                                    fit: BoxFit.contain,
+                                    alignment: Alignment.centerLeft,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Image.asset(
+                                        SchoolBranding.logoAsset,
+                                        height: 190,
+                                        fit: BoxFit.contain,
+                                        alignment: Alignment.centerLeft,
+                                      );
+                                    },
+                                  )
+                                else
+                                  Image.asset(
+                                    SchoolBranding.logoAsset,
+                                    height: 190,
+                                    fit: BoxFit.contain,
+                                    alignment: Alignment.centerLeft,
+                                    cacheWidth: 640,
+                                    filterQuality: FilterQuality.medium,
+                                  ),
                                 const SizedBox(height: 20),
                                 Text(
-                                  '${SchoolBranding.schoolName}\n${SchoolBranding.schoolShort} (${SchoolBranding.level})',
+                                  headerName,
                                   style: Theme.of(context)
                                       .textTheme
                                       .headlineMedium
@@ -185,7 +275,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                 ),
                                 const SizedBox(height: 10),
                                 Text(
-                                  'Filières techniques et de gestion intégrées à une plateforme moderne.',
+                                  headerSecondary,
                                   style: Theme.of(
                                     context,
                                   ).textTheme.titleMedium,
@@ -213,7 +303,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                     _featurePill(
                                       context,
                                       icon: Icons.call_outlined,
-                                      label: 'Tél: ${SchoolBranding.phone}',
+                                      label: contactLabel,
                                     ),
                                   ],
                                 ),
@@ -290,7 +380,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                                   CrossAxisAlignment.start,
                                               children: [
                                                 Text(
-                                                  SchoolBranding.appName,
+                                                  selectedEtablissement.name,
                                                   style: Theme.of(context)
                                                       .textTheme
                                                       .headlineSmall
@@ -412,7 +502,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                       ),
                                       const SizedBox(height: 12),
                                       Text(
-                                        'Accès réservé aux utilisateurs autorisés • ${SchoolBranding.schoolShort}',
+                                        'Accès réservé aux utilisateurs autorisés • ${selectedEtablissement.name}',
                                         textAlign: TextAlign.center,
                                         style: Theme.of(context)
                                             .textTheme
@@ -453,6 +543,21 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                               ),
                                         label: const Text(
                                           'Tester connexion API',
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      TextButton.icon(
+                                        onPressed: () {
+                                          Navigator.of(
+                                            context,
+                                          ).pushNamedAndRemoveUntil(
+                                            '/',
+                                            (route) => false,
+                                          );
+                                        },
+                                        icon: const Icon(Icons.arrow_back),
+                                        label: const Text(
+                                          'Changer d\'établissement',
                                         ),
                                       ),
                                     ],
@@ -496,6 +601,24 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     });
   }
 
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
+  }
+
   Future<void> _testApiConnection() async {
     setState(() => _testingApiConnection = true);
     final dio = ref.read(dioProvider);
@@ -509,21 +632,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       final status = response.statusCode ?? 0;
       final reachable = status > 0;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              reachable
-                  ? 'API joignable ($_activeApiUrl) • code $status'
-                  : 'API non joignable ($_activeApiUrl)',
-            ),
-          ),
+        _showMessage(
+          reachable
+              ? 'API joignable ($_activeApiUrl) • code $status'
+              : 'API non joignable ($_activeApiUrl)',
+          isSuccess: reachable,
         );
       }
     } on DioException catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('API non joignable: $_activeApiUrl')),
-        );
+        _showMessage('API non joignable: $_activeApiUrl');
       }
     } finally {
       if (mounted) {
@@ -546,7 +664,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
     await showDialog<void>(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         return AlertDialog(
           title: const Text('Configuration API'),
           content: SizedBox(
@@ -565,14 +683,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 const SizedBox(height: 10),
                 Text(
                   'Exemple: http://IP_DU_PC:8000/api',
-                  style: Theme.of(context).textTheme.bodySmall,
+                  style: Theme.of(dialogContext).textTheme.bodySmall,
                 ),
               ],
             ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('Annuler'),
             ),
             FilledButton(
@@ -580,12 +698,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 final normalized = _normalizeApiBaseUrl(controller.text);
                 if (normalized == null) {
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'URL invalide. Exemple: http://IP_DU_PC:8000/api',
-                        ),
-                      ),
+                    _showMessage(
+                      'URL invalide. Exemple: http://IP_DU_PC:8000/api',
                     );
                   }
                   return;
@@ -594,12 +708,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 await tokenStorage.saveApiBaseUrl(normalized);
                 await _loadActiveApiUrl();
 
-                if (mounted) {
-                  Navigator.of(context).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('URL API enregistrée: $normalized')),
-                  );
+                if (!dialogContext.mounted || !mounted) {
+                  return;
                 }
+                Navigator.of(dialogContext).pop();
+                _showMessage(
+                  'URL API enregistrée: $normalized',
+                  isSuccess: true,
+                );
               },
               child: const Text('Enregistrer'),
             ),
