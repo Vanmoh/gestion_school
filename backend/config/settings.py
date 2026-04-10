@@ -138,18 +138,21 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 CORS_ALLOW_ALL_ORIGINS = config(
     "CORS_ALLOW_ALL_ORIGINS", cast=bool, default=DEBUG
 )
+
+# Never allow wildcard CORS in production even if the env var is misconfigured.
+if not DEBUG and CORS_ALLOW_ALL_ORIGINS:
+    CORS_ALLOW_ALL_ORIGINS = False
+
 CORS_ALLOWED_ORIGINS = _csv_setting("CORS_ALLOWED_ORIGINS") if not CORS_ALLOW_ALL_ORIGINS else []
+if not DEBUG and not CORS_ALLOW_ALL_ORIGINS and not CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS = [
+        config("WEB_APP_ORIGIN", default="https://gestion-school-web.onrender.com")
+    ]
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-etablissement-id",
     "x-etablissement-name",
 ]
 CSRF_TRUSTED_ORIGINS = _csv_setting("CSRF_TRUSTED_ORIGINS")
-
-if not DEBUG and CORS_ALLOW_ALL_ORIGINS:
-    raise ImproperlyConfigured(
-        "CORS_ALLOW_ALL_ORIGINS must be False when DEBUG=False. "
-        "Configure CORS_ALLOWED_ORIGINS explicitly."
-    )
 
 USE_X_FORWARDED_HOST = config("USE_X_FORWARDED_HOST", cast=bool, default=True)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
