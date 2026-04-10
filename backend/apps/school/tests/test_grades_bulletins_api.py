@@ -4,18 +4,12 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import User, UserRole
-<<<<<<< HEAD
-from apps.school.models import (
-    AcademicYear,
-    ClassRoom,
-=======
 from apps.reports.views import _build_bulletin_rows
 from apps.school.models import (
     AcademicYear,
     Attendance,
     ClassRoom,
     Etablissement,
->>>>>>> main
     Grade,
     GradeValidation,
     Level,
@@ -30,8 +24,6 @@ from apps.school.models import (
 
 class GradesAndBulletinsApiTests(APITestCase):
     def setUp(self):
-<<<<<<< HEAD
-=======
         self.etablissement_main = Etablissement.objects.create(
             name="LTOB",
             address="Centre-ville",
@@ -45,7 +37,6 @@ class GradesAndBulletinsApiTests(APITestCase):
             email="lobk@example.com",
         )
 
->>>>>>> main
         self.admin_user = User.objects.create_user(
             username="admin_grades",
             password="admin12345",
@@ -60,18 +51,13 @@ class GradesAndBulletinsApiTests(APITestCase):
             role=UserRole.TEACHER,
             first_name="Nina",
             last_name="Prof",
-<<<<<<< HEAD
-=======
             etablissement=self.etablissement_main,
->>>>>>> main
         )
         self.teacher = Teacher.objects.create(
             user=self.teacher_user,
             employee_code="ENS-GRADES-01",
             hire_date=date(2020, 9, 1),
             salary_base=1000,
-<<<<<<< HEAD
-=======
             etablissement=self.etablissement_main,
         )
 
@@ -107,7 +93,6 @@ class GradesAndBulletinsApiTests(APITestCase):
             first_name="Surv",
             last_name="Other",
             etablissement=self.etablissement_other,
->>>>>>> main
         )
 
         self.year = AcademicYear.objects.create(
@@ -124,20 +109,14 @@ class GradesAndBulletinsApiTests(APITestCase):
             level=self.level,
             section=self.section,
             academic_year=self.year,
-<<<<<<< HEAD
-=======
             etablissement=self.etablissement_main,
->>>>>>> main
         )
         self.class_b = ClassRoom.objects.create(
             name="5B",
             level=self.level,
             section=self.section,
             academic_year=self.year,
-<<<<<<< HEAD
-=======
             etablissement=self.etablissement_main,
->>>>>>> main
         )
 
         self.subject_math = Subject.objects.create(
@@ -167,17 +146,12 @@ class GradesAndBulletinsApiTests(APITestCase):
             role=UserRole.PARENT,
             first_name="Parent",
             last_name="One",
-<<<<<<< HEAD
-        )
-        self.parent_1 = ParentProfile.objects.create(user=self.parent_user_1)
-=======
             etablissement=self.etablissement_main,
         )
         self.parent_1 = ParentProfile.objects.create(
             user=self.parent_user_1,
             etablissement=self.etablissement_main,
         )
->>>>>>> main
 
         self.parent_user_2 = User.objects.create_user(
             username="parent_grade_2",
@@ -185,17 +159,12 @@ class GradesAndBulletinsApiTests(APITestCase):
             role=UserRole.PARENT,
             first_name="Parent",
             last_name="Two",
-<<<<<<< HEAD
-        )
-        self.parent_2 = ParentProfile.objects.create(user=self.parent_user_2)
-=======
             etablissement=self.etablissement_main,
         )
         self.parent_2 = ParentProfile.objects.create(
             user=self.parent_user_2,
             etablissement=self.etablissement_main,
         )
->>>>>>> main
 
         self.student_user_1 = User.objects.create_user(
             username="student_grade_1",
@@ -203,19 +172,13 @@ class GradesAndBulletinsApiTests(APITestCase):
             role=UserRole.STUDENT,
             first_name="Student",
             last_name="One",
-<<<<<<< HEAD
-=======
             etablissement=self.etablissement_main,
->>>>>>> main
         )
         self.student_1 = Student.objects.create(
             user=self.student_user_1,
             classroom=self.class_a,
             parent=self.parent_1,
-<<<<<<< HEAD
-=======
             etablissement=self.etablissement_main,
->>>>>>> main
         )
 
         self.student_user_2 = User.objects.create_user(
@@ -224,19 +187,13 @@ class GradesAndBulletinsApiTests(APITestCase):
             role=UserRole.STUDENT,
             first_name="Student",
             last_name="Two",
-<<<<<<< HEAD
-=======
             etablissement=self.etablissement_main,
->>>>>>> main
         )
         self.student_2 = Student.objects.create(
             user=self.student_user_2,
             classroom=self.class_a,
             parent=self.parent_2,
-<<<<<<< HEAD
-=======
             etablissement=self.etablissement_main,
->>>>>>> main
         )
 
         self.grade_1 = Grade.objects.create(
@@ -256,8 +213,6 @@ class GradesAndBulletinsApiTests(APITestCase):
             value=14,
         )
 
-<<<<<<< HEAD
-=======
     def test_student_conduite_defaults_to_18(self):
         self.assertEqual(float(self.student_1.conduite), 18.0)
 
@@ -306,7 +261,6 @@ class GradesAndBulletinsApiTests(APITestCase):
         self.student_1.refresh_from_db()
         self.assertEqual(str(self.student_1.conduite), "15.50")
 
->>>>>>> main
     def _results(self, response):
         data = response.data
         if isinstance(data, dict) and "results" in data:
@@ -460,8 +414,6 @@ class GradesAndBulletinsApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Période invalide", str(response.data.get("detail", "")))
-<<<<<<< HEAD
-=======
 
     def test_bulletin_rows_put_conduite_first_with_coef_2(self):
         rows, average, coef_sum = _build_bulletin_rows(
@@ -522,4 +474,3 @@ class GradesAndBulletinsApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
->>>>>>> main
