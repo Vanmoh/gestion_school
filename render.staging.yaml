@@ -38,6 +38,7 @@ services:
     name: gestion-school-staging-web
     env: docker
     plan: free
+    rootDir: frontend/gestion_school_app
     dockerfilePath: ./Dockerfile.web.staging
     autoDeploy: true
     branch: staging
