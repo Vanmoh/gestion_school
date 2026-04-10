@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../auth/presentation/auth_controller.dart';
+import '../../../models/etablissement.dart';
 import '../../../core/network/api_client.dart';
 
 class AcademicsPage extends ConsumerStatefulWidget {
@@ -36,6 +38,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
   List<Map<String, dynamic>> _sections = [];
   List<Map<String, dynamic>> _subjects = [];
   List<Map<String, dynamic>> _classrooms = [];
+  int? _loadedEtablissementId;
 
   @override
   void initState() {
@@ -60,12 +63,18 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
 
     try {
       final dio = ref.read(dioProvider);
+      final selectedEtablissement = ref.read(etablissementProvider).selected;
+      final selectedEtablissementId = selectedEtablissement?.id;
+      final classroomsEndpoint = selectedEtablissementId == null
+          ? '/classrooms/'
+          : '/classrooms/?etablissement=$selectedEtablissementId';
+
       final results = await Future.wait([
         dio.get('/academic-years/'),
         dio.get('/levels/'),
         dio.get('/sections/'),
         dio.get('/subjects/'),
-        dio.get('/classrooms/'),
+        dio.get(classroomsEndpoint),
       ]);
 
       if (!mounted) return;
@@ -76,6 +85,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
         _sections = _extractRows(results[2].data);
         _subjects = _extractRows(results[3].data);
         _classrooms = _extractRows(results[4].data);
+        _loadedEtablissementId = selectedEtablissementId;
 
         _selectedYearId ??= _years.isNotEmpty
             ? _asInt(_years.first['id'])
@@ -506,6 +516,13 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     return _openFloatingPanel(
       title: 'Créer une classe',
       contentBuilder: (panelContext, refreshPanel) {
+        final selectedEtablissement = ref.read(etablissementProvider).selected;
+        if (selectedEtablissement == null) {
+          return const Text(
+            'Sélectionne un établissement actif avant de créer une classe.',
+          );
+        }
+
         if (_years.isEmpty || _levels.isEmpty || _sections.isEmpty) {
           return const Text(
             'Crée d’abord au moins une année scolaire, un niveau et une section.',
@@ -599,12 +616,16 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                           return false;
                         }
 
-                        final success = await _post('/classrooms/', {
+                        final success = await _post(
+                          '/classrooms/?etablissement=${selectedEtablissement.id}',
+                          {
                           'name': name,
                           'academic_year': _selectedYearId,
                           'level': _selectedLevelId,
                           'section': _selectedSectionId,
-                        }, 'Classe créée');
+                          },
+                          'Classe créée pour ${selectedEtablissement.name}',
+                        );
                         if (success) {
                           _classNameController.clear();
                         }
@@ -622,6 +643,20 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final authUser = ref.watch(authControllerProvider).value;
+    final isSuperAdmin = authUser?.role == 'super_admin';
+    final selectedEtablissement = ref.watch(etablissementProvider).selected;
+    final etablissements = ref.watch(etablissementProvider).etablissements;
+    final selectedEtablissementId = selectedEtablissement?.id;
+
+    if (!_loading && _loadedEtablissementId != selectedEtablissementId) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _loadData();
+        }
+      });
+    }
+
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -698,6 +733,12 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                               maxWidth: 260,
                             ),
                             _dashboardInfoChip(
+                              icon: Icons.business_outlined,
+                              label:
+                                  'Établissement: ${selectedEtablissement?.name ?? 'Aucun'}',
+                              maxWidth: 320,
+                            ),
+                            _dashboardInfoChip(
                               icon: Icons.meeting_room_outlined,
                               label: '${_classrooms.length} classes',
                             ),
@@ -738,6 +779,51 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                             style: textTheme.bodySmall,
                           ),
                           const SizedBox(height: 10),
+                          if (isSuperAdmin) ...[
+                            DropdownButtonFormField<int?>(
+                              initialValue: selectedEtablissementId,
+                              decoration: const InputDecoration(
+                                labelText: 'Filtre établissement (classes)',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                              items: [
+                                const DropdownMenuItem<int?>(
+                                  value: null,
+                                  child: Text('Tous les établissements'),
+                                ),
+                                ...etablissements.map(
+                                  (etab) => DropdownMenuItem<int?>(
+                                    value: etab.id,
+                                    child: Text(etab.name),
+                                  ),
+                                ),
+                              ],
+                              onChanged: _saving
+                                  ? null
+                                  : (value) async {
+                                      if (value == null) {
+                                        await ref
+                                            .read(etablissementProvider)
+                                            .clearSelection();
+                                      } else {
+                                        final target = etablissements
+                                            .where((etab) => etab.id == value)
+                                            .cast<Etablissement?>()
+                                            .firstWhere(
+                                              (etab) => etab != null,
+                                              orElse: () => null,
+                                            );
+                                        if (target != null) {
+                                          await ref
+                                              .read(etablissementProvider)
+                                              .selectEtablissement(target);
+                                        }
+                                      }
+                                    },
+                            ),
+                            const SizedBox(height: 10),
+                          ],
                           Wrap(
                             spacing: 10,
                             runSpacing: 10,
@@ -830,7 +916,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                 Text('Résumé académique', style: textTheme.titleMedium),
                 const SizedBox(height: 4),
                 Text(
-                  'Aperçu des structures créées et dernières classes configurées.',
+                  'Années, niveaux, sections et matières sont globales. Les classes sont filtrées selon l’établissement actif.',
                   style: textTheme.bodySmall,
                 ),
                 const SizedBox(height: 10),
