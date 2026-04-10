@@ -17,6 +17,11 @@ class BackupRestorePage extends ConsumerStatefulWidget {
 }
 
 class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
+  static const List<String> _backupBases = <String>[
+    '/backup-archives',
+    '/common/backup-archives',
+  ];
+
   bool _loading = true;
   bool _busy = false;
   List<Map<String, dynamic>> _rows = [];
@@ -45,7 +50,9 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
   Future<void> _loadRows() async {
     setState(() => _loading = true);
     try {
-      final response = await ref.read(dioProvider).get('/backup-archives/');
+      final response = await _requestWithBackupFallback(
+        (base) => ref.read(dioProvider).get('$base/'),
+      );
       final data = response.data;
       final List<dynamic> raw =
           data is Map<String, dynamic> && data['results'] is List<dynamic>
@@ -77,7 +84,9 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
         payload['etablissement_id'] = selectedEtab.id;
       }
 
-      await ref.read(dioProvider).post('/backup-archives/', data: payload);
+      await _requestWithBackupFallback(
+        (base) => ref.read(dioProvider).post('$base/', data: payload),
+      );
       _showMessage('Sauvegarde créée avec succès.', isSuccess: true);
       await _loadRows();
     });
@@ -91,9 +100,11 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     }
 
     await _runBusyTask(() async {
-      final response = await ref.read(dioProvider).get(
-        '/backup-archives/$id/download/',
-        options: Options(responseType: ResponseType.bytes),
+      final response = await _requestWithBackupFallback(
+        (base) => ref.read(dioProvider).get(
+          '$base/$id/download/',
+          options: Options(responseType: ResponseType.bytes),
+        ),
       );
       final bytes = _toBytes(response.data);
       final fileName = (row['filename']?.toString().trim().isNotEmpty ?? false)
@@ -124,7 +135,9 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     }
 
     await _runBusyTask(() async {
-      await ref.read(dioProvider).post('/backup-archives/$id/restore/');
+      await _requestWithBackupFallback(
+        (base) => ref.read(dioProvider).post('$base/$id/restore/'),
+      );
       _showMessage('Restauration lancée en arrière-plan.', isSuccess: true);
       await _loadRows();
     });
@@ -161,10 +174,40 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
         ),
       });
 
-      await ref.read(dioProvider).post('/backup-archives/upload-restore/', data: data);
+      await _requestWithBackupFallback(
+        (base) => ref.read(dioProvider).post('$base/upload-restore/', data: data),
+      );
       _showMessage('Archive envoyée. Restauration lancée en arrière-plan.', isSuccess: true);
       await _loadRows();
     });
+  }
+
+  Future<Response<dynamic>> _requestWithBackupFallback(
+    Future<Response<dynamic>> Function(String base) request,
+  ) async {
+    DioException? last404;
+
+    for (final base in _backupBases) {
+      try {
+        return await request(base);
+      } on DioException catch (error) {
+        final statusCode = error.response?.statusCode;
+        if (statusCode == 404) {
+          last404 = error;
+          continue;
+        }
+        rethrow;
+      }
+    }
+
+    if (last404 != null) {
+      throw Exception(
+        'Endpoint backup introuvable sur l\'API active. '
+        'Vérifiez que le backend production est bien déployé.',
+      );
+    }
+
+    throw Exception('Aucune route backup disponible.');
   }
 
   Future<void> _runBusyTask(Future<void> Function() task) async {
