@@ -351,7 +351,13 @@ class ClassRoomViewSet(BaseModelViewSet):
 
         if hasattr(user, "role") and user.role == "super_admin":
             return qs.all()
-        return qs.filter(etablissement=user.etablissement)
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            # Legacy accounts may not yet be linked to an etablissement.
+            return qs
+
+        return qs.filter(etablissement=user_etablissement)
 
     def perform_create(self, serializer):
         serializer.save(etablissement=self._resolve_target_etablissement())
@@ -442,7 +448,12 @@ class TeacherViewSet(BaseModelViewSet):
 
         if hasattr(user, "role") and user.role == "super_admin":
             return qs.all()
-        return qs.filter(etablissement=user.etablissement)
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return qs
+
+        return qs.filter(etablissement=user_etablissement)
 
     def perform_create(self, serializer):
         target_etablissement = self._resolve_target_etablissement()
@@ -1271,7 +1282,11 @@ class ParentProfileViewSet(BaseModelViewSet):
         if getattr(user, "role", None) == "super_admin":
             return qs
 
-        return qs.filter(classroom__etablissement=getattr(user, "etablissement", None))
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return qs
+
+        return qs.filter(classroom__etablissement=user_etablissement)
 
     def _validate_payload_etablissement(self, serializer):
         target_etablissement = self._resolve_target_etablissement()
@@ -4573,7 +4588,12 @@ class ExamPlanningViewSet(BaseModelViewSet):
             return qs.none()
         if getattr(user, "role", None) == "super_admin":
             return qs
-        return qs.filter(classroom__etablissement=getattr(user, "etablissement", None))
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return qs
+
+        return qs.filter(classroom__etablissement=user_etablissement)
 
     def _validate_scope(self, serializer):
         classroom = serializer.validated_data.get("classroom")
