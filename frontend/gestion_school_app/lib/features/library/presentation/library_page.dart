@@ -162,8 +162,6 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     }
   }
 
-<<<<<<< HEAD
-=======
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
 
@@ -182,7 +180,6 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
       );
   }
 
->>>>>>> main
   Future<void> _refreshLibrary() async {
     await _loadData();
   }

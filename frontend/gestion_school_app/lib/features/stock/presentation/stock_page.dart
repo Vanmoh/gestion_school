@@ -108,8 +108,6 @@ class _StockPageState extends ConsumerState<StockPage> {
     }
   }
 
-<<<<<<< HEAD
-=======
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
 
@@ -128,7 +126,6 @@ class _StockPageState extends ConsumerState<StockPage> {
       );
   }
 
->>>>>>> main
   Future<void> _refreshStock() async {
     await _loadData();
   }

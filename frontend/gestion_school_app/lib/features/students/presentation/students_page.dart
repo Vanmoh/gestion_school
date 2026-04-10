@@ -2975,97 +2975,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                   'Absent: ${row['is_absent'] == true ? 'Oui' : 'Non'} • Retard: ${row['is_late'] == true ? 'Oui' : 'Non'} • Justificatif: ${hasProof ? 'Oui' : 'Non'}'
                                   '${hasProof ? '\nFichier: ${_fileNameFromPath(proofPath)}' : ''}',
                                 ),
-<<<<<<< HEAD
-                                OutlinedButton.icon(
-                                  onPressed: _saving
-                                      ? null
-                                      : () async {
-                                          final success =
-                                              await _quickPreviewStudentCard();
-                                          if (success) {
-                                            _showMessage(
-                                              'Aperçu rapide affiché.',
-                                              isSuccess: true,
-                                            );
-                                          }
-                                        },
-                                  icon: const Icon(Icons.visibility_outlined),
-                                  label: const Text('Aperçu rapide'),
-                                ),
-                                OutlinedButton.icon(
-                                  onPressed: _saving
-                                      ? null
-                                      : () async {
-                                          final success =
-                                              await _exportStudentCardPdf();
-                                          if (success) {
-                                            _showMessage(
-                                              'Carte élève exportée en PDF.',
-                                              isSuccess: true,
-                                            );
-                                          }
-                                        },
-                                  icon: const Icon(
-                                    Icons.picture_as_pdf_outlined,
-                                  ),
-                                  label: const Text('Exporter PDF'),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      if (_detailLoading)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 18),
-                          child: Center(child: CircularProgressIndicator()),
-                        )
-                      else ...[
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            _metricChip(
-                              'Historique académique',
-                              '${_history.length}',
-                            ),
-                            _metricChip(
-                              'Incidents ouverts',
-                              '${_incidents.where((i) => (i['status']?.toString() ?? '') != 'resolved').length}',
-                            ),
-                            _metricChip(
-                              'Absences',
-                              '${_attendances.where((a) => a['is_absent'] == true).length}',
-                            ),
-                            _metricChip(
-                              'Retards',
-                              '${_attendances.where((a) => a['is_late'] == true).length}',
-                            ),
-                            _metricChip(
-                              'Solde frais',
-                              _money(
-                                _fees.fold<double>(
-                                  0,
-                                  (sum, row) => sum + _toDouble(row['balance']),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Container(
-                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                          decoration: BoxDecoration(
-                            color: colorScheme.surfaceContainerLowest,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: colorScheme.outlineVariant.withValues(
-                                alpha: 0.5,
-                              ),
-                            ),
-                          ),
-=======
                                 isThreeLine: hasProof,
                               );
                             }).toList(),
@@ -3076,7 +2985,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       children: [
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
->>>>>>> main
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
