@@ -3,6 +3,7 @@ import hashlib
 import json
 import shutil
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from django.conf import settings
 from django.apps import apps
 from django.core import serializers
 from django.core.files.uploadedfile import UploadedFile
-from django.db import transaction
+from django.db import close_old_connections, transaction
 from django.db.models import Q
 from django.http import FileResponse, HttpResponse
 from django.utils import timezone
@@ -553,7 +554,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         )
         return backup
 
-    def _restore_from_archive(self, backup: BackupArchive, archive_path: Path):
+    def _restore_from_archive(self, backup: BackupArchive, archive_path: Path, actor=None):
         restore_notes = []
         with tempfile.TemporaryDirectory(prefix="restore_backup_") as tmp:
             tmp_path = Path(tmp)
@@ -583,11 +584,34 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                     shutil.copy2(src, dst)
                 restore_notes.append("Medias restaures.")
 
-        backup.restored_by = self.request.user
+        backup.restored_by = actor
         backup.restored_at = timezone.now()
         backup.restore_log = "\n".join(restore_notes) if restore_notes else "Restauration terminee."
         backup.status = BackupArchive.Status.COMPLETED
         backup.save(update_fields=["restored_by", "restored_at", "restore_log", "status", "updated_at"])
+
+    def _run_restore_in_background(self, backup_id: int, archive_path: str, actor_id: int | None):
+        def job():
+            close_old_connections()
+            try:
+                from apps.accounts.models import User
+
+                backup = BackupArchive.objects.get(pk=backup_id)
+                actor = User.objects.filter(pk=actor_id).first() if actor_id else None
+                self._restore_from_archive(backup, Path(archive_path), actor=actor)
+            except Exception as exc:
+                try:
+                    backup = BackupArchive.objects.get(pk=backup_id)
+                    backup.status = BackupArchive.Status.FAILED
+                    backup.restore_log = str(exc)
+                    backup.save(update_fields=["status", "restore_log", "updated_at"])
+                except Exception:
+                    pass
+            finally:
+                close_old_connections()
+
+        worker = threading.Thread(target=job, name=f"backup-restore-{backup_id}", daemon=True)
+        worker.start()
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -671,15 +695,17 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         if not archive_path.exists() or not archive_path.is_file():
             return Response({"detail": "Fichier backup introuvable."}, status=status.HTTP_404_NOT_FOUND)
 
-        try:
-            self._restore_from_archive(backup, archive_path)
-        except Exception as exc:
-            backup.status = BackupArchive.Status.FAILED
-            backup.restore_log = str(exc)
-            backup.save(update_fields=["status", "restore_log", "updated_at"])
-            return Response({"detail": f"Echec restauration: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        return Response(self.get_serializer(backup).data)
+        backup.status = BackupArchive.Status.RUNNING
+        backup.restore_log = "Restauration lancee en arriere-plan."
+        backup.save(update_fields=["status", "restore_log", "updated_at"])
+        self._run_restore_in_background(backup.id, str(archive_path), getattr(request.user, "id", None))
+        return Response(
+            {
+                "detail": "Restauration lancee en arriere-plan.",
+                "backup": self.get_serializer(backup).data,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @action(detail=False, methods=["post"], url_path="upload-restore")
     def upload_restore(self, request):
@@ -729,13 +755,13 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             notes=str(request.data.get("notes") or "").strip(),
             status=BackupArchive.Status.RUNNING,
         )
-
-        try:
-            self._restore_from_archive(backup, target)
-        except Exception as exc:
-            backup.status = BackupArchive.Status.FAILED
-            backup.restore_log = str(exc)
-            backup.save(update_fields=["status", "restore_log", "updated_at"])
-            return Response({"detail": f"Echec restauration: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        return Response(self.get_serializer(backup).data, status=status.HTTP_201_CREATED)
+        backup.restore_log = "Archive recue. Restauration lancee en arriere-plan."
+        backup.save(update_fields=["restore_log", "updated_at"])
+        self._run_restore_in_background(backup.id, str(target), getattr(request.user, "id", None))
+        return Response(
+            {
+                "detail": "Archive recue. Restauration lancee en arriere-plan.",
+                "backup": self.get_serializer(backup).data,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )

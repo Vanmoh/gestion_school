@@ -125,7 +125,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
 
     await _runBusyTask(() async {
       await ref.read(dioProvider).post('/backup-archives/$id/restore/');
-      _showMessage('Restauration terminée.', isSuccess: true);
+      _showMessage('Restauration lancée en arrière-plan.', isSuccess: true);
       await _loadRows();
     });
   }
@@ -162,7 +162,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       });
 
       await ref.read(dioProvider).post('/backup-archives/upload-restore/', data: data);
-      _showMessage('Upload et restauration terminés.', isSuccess: true);
+      _showMessage('Archive envoyée. Restauration lancée en arrière-plan.', isSuccess: true);
       await _loadRows();
     });
   }
