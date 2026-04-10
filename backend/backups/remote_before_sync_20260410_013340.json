@@ -1,0 +1,257 @@
+[
+{
+  "model": "common.activitylog",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-09T22:25:40.359Z",
+    "updated_at": "2026-03-09T22:25:40.360Z",
+    "user": null,
+    "etablissement": null,
+    "role": "",
+    "action": "CREATE_AUTH",
+    "method": "POST",
+    "path": "/api/auth/register/",
+    "module": "auth",
+    "target": "register",
+    "status_code": 401,
+    "success": false,
+    "ip_address": "217.64.103.81",
+    "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36",
+    "details": "payload masqué"
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-10T00:15:41.697Z",
+    "updated_at": "2026-03-10T00:15:41.697Z",
+    "user": 11,
+    "etablissement": null,
+    "role": "super_admin",
+    "action": "DELETE_AUTH",
+    "method": "DELETE",
+    "path": "/api/auth/users/13/",
+    "module": "auth",
+    "target": "users",
+    "status_code": 204,
+    "success": true,
+    "ip_address": "217.64.103.81",
+    "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36",
+    "details": ""
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-10T00:15:45.837Z",
+    "updated_at": "2026-03-10T00:15:45.837Z",
+    "user": 11,
+    "etablissement": null,
+    "role": "super_admin",
+    "action": "DELETE_AUTH",
+    "method": "DELETE",
+    "path": "/api/auth/users/14/",
+    "module": "auth",
+    "target": "users",
+    "status_code": 204,
+    "success": true,
+    "ip_address": "217.64.103.81",
+    "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36",
+    "details": ""
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-03-10T00:16:06.665Z",
+    "updated_at": "2026-03-10T00:16:06.665Z",
+    "user": 11,
+    "etablissement": null,
+    "role": "super_admin",
+    "action": "DELETE_AUTH",
+    "method": "DELETE",
+    "path": "/api/auth/users/15/",
+    "module": "auth",
+    "target": "users",
+    "status_code": 204,
+    "success": true,
+    "ip_address": "217.64.103.81",
+    "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36",
+    "details": ""
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 5,
+  "fields": {
+    "created_at": "2026-03-16T22:19:44.432Z",
+    "updated_at": "2026-03-16T22:19:44.432Z",
+    "user": null,
+    "etablissement": null,
+    "role": "",
+    "action": "CREATE_TEACHER-SCHEDULE-SLOTS",
+    "method": "POST",
+    "path": "/api/teacher-schedule-slots/",
+    "module": "teacher-schedule-slots",
+    "target": "",
+    "status_code": 404,
+    "success": false,
+    "ip_address": "41.73.102.194",
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    "details": "{\"assignment\":3,\"day_of_week\":\"MON\",\"start_time\":\"08:00:00\",\"end_time\":\"12:00:00\",\"room\":\"1\"}"
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 6,
+  "fields": {
+    "created_at": "2026-03-16T22:20:42.282Z",
+    "updated_at": "2026-03-16T22:20:42.282Z",
+    "user": null,
+    "etablissement": null,
+    "role": "",
+    "action": "CREATE_TEACHER-SCHEDULE-SLOTS",
+    "method": "POST",
+    "path": "/api/teacher-schedule-slots/",
+    "module": "teacher-schedule-slots",
+    "target": "",
+    "status_code": 404,
+    "success": false,
+    "ip_address": "41.73.102.194",
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    "details": "{\"assignment\":3,\"day_of_week\":\"MON\",\"start_time\":\"08:00:00\",\"end_time\":\"12:00:00\",\"room\":\"\"}"
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 7,
+  "fields": {
+    "created_at": "2026-03-17T01:06:22.400Z",
+    "updated_at": "2026-03-17T01:06:22.400Z",
+    "user": null,
+    "etablissement": null,
+    "role": "",
+    "action": "CREATE_TEACHER-SCHEDULE-SLOTS",
+    "method": "POST",
+    "path": "/api/teacher-schedule-slots/",
+    "module": "teacher-schedule-slots",
+    "target": "",
+    "status_code": 404,
+    "success": false,
+    "ip_address": "41.221.181.241",
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    "details": "{\"assignment\":3,\"day_of_week\":\"MON\",\"start_time\":\"08:00:00\",\"end_time\":\"12:00:00\",\"room\":\"1\"}"
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 8,
+  "fields": {
+    "created_at": "2026-03-17T01:09:26.097Z",
+    "updated_at": "2026-03-17T01:09:26.097Z",
+    "user": 1,
+    "etablissement": null,
+    "role": "super_admin",
+    "action": "DELETE_TEACHER-SCHEDULE-SLOTS",
+    "method": "DELETE",
+    "path": "/api/teacher-schedule-slots/1/",
+    "module": "teacher-schedule-slots",
+    "target": "1",
+    "status_code": 204,
+    "success": true,
+    "ip_address": "41.221.181.241",
+    "user_agent": "Python-urllib/3.13",
+    "details": ""
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 1,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$G6WXly3AI58xmScGulZGs8$XBP0He5fggCteW7295vo9mr3Hb91o9wbNnQTXsB/40U=",
+    "last_login": null,
+    "is_superuser": true,
+    "username": "superadmin",
+    "first_name": "Super",
+    "last_name": "Admin",
+    "email": "admin@gestionschool.local",
+    "is_staff": true,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:20.488Z",
+    "role": "super_admin",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 2,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$tqsAvzHDc2cgZVQrZvyZpn$9ZV/FC1d6RgVaODCln9HqJZMgGaAxJDlSIz86owJQSc=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "directeur",
+    "first_name": "Jean",
+    "last_name": "Directeur",
+    "email": "directeur@gestionschool.local",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:21.921Z",
+    "role": "director",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 3,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$UG5ksfFGfHYNNsXinIDPvE$38fgRgBvUecyraQ+kQJMU/K96fSJwesJQVrdpkrExVM=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "comptable",
+    "first_name": "Marie",
+    "last_name": "Comptable",
+    "email": "comptable@gestionschool.local",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:44.974Z",
+    "role": "accountant",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 4,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$g3MENPtyVuxFEqXXaOvEZ7$k2pdnok60vZ1w6dqh0Sp4p3qMEd53BAKMsfjksLAhG8=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "enseignant1",
+    "first_name": "Ali",
+    "last_name": "Kouadio",
+    "email": "enseignant1@gestionschool.local",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:46.602Z",
+    "role": "teacher",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+}

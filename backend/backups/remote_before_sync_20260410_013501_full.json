@@ -1,0 +1,1323 @@
+[
+{
+  "model": "common.activitylog",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-09T22:25:40.359Z",
+    "updated_at": "2026-03-09T22:25:40.360Z",
+    "user": null,
+    "etablissement": null,
+    "role": "",
+    "action": "CREATE_AUTH",
+    "method": "POST",
+    "path": "/api/auth/register/",
+    "module": "auth",
+    "target": "register",
+    "status_code": 401,
+    "success": false,
+    "ip_address": "217.64.103.81",
+    "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36",
+    "details": "payload masqué"
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-10T00:15:41.697Z",
+    "updated_at": "2026-03-10T00:15:41.697Z",
+    "user": 11,
+    "etablissement": null,
+    "role": "super_admin",
+    "action": "DELETE_AUTH",
+    "method": "DELETE",
+    "path": "/api/auth/users/13/",
+    "module": "auth",
+    "target": "users",
+    "status_code": 204,
+    "success": true,
+    "ip_address": "217.64.103.81",
+    "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36",
+    "details": ""
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-10T00:15:45.837Z",
+    "updated_at": "2026-03-10T00:15:45.837Z",
+    "user": 11,
+    "etablissement": null,
+    "role": "super_admin",
+    "action": "DELETE_AUTH",
+    "method": "DELETE",
+    "path": "/api/auth/users/14/",
+    "module": "auth",
+    "target": "users",
+    "status_code": 204,
+    "success": true,
+    "ip_address": "217.64.103.81",
+    "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36",
+    "details": ""
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-03-10T00:16:06.665Z",
+    "updated_at": "2026-03-10T00:16:06.665Z",
+    "user": 11,
+    "etablissement": null,
+    "role": "super_admin",
+    "action": "DELETE_AUTH",
+    "method": "DELETE",
+    "path": "/api/auth/users/15/",
+    "module": "auth",
+    "target": "users",
+    "status_code": 204,
+    "success": true,
+    "ip_address": "217.64.103.81",
+    "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36",
+    "details": ""
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 5,
+  "fields": {
+    "created_at": "2026-03-16T22:19:44.432Z",
+    "updated_at": "2026-03-16T22:19:44.432Z",
+    "user": null,
+    "etablissement": null,
+    "role": "",
+    "action": "CREATE_TEACHER-SCHEDULE-SLOTS",
+    "method": "POST",
+    "path": "/api/teacher-schedule-slots/",
+    "module": "teacher-schedule-slots",
+    "target": "",
+    "status_code": 404,
+    "success": false,
+    "ip_address": "41.73.102.194",
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    "details": "{\"assignment\":3,\"day_of_week\":\"MON\",\"start_time\":\"08:00:00\",\"end_time\":\"12:00:00\",\"room\":\"1\"}"
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 6,
+  "fields": {
+    "created_at": "2026-03-16T22:20:42.282Z",
+    "updated_at": "2026-03-16T22:20:42.282Z",
+    "user": null,
+    "etablissement": null,
+    "role": "",
+    "action": "CREATE_TEACHER-SCHEDULE-SLOTS",
+    "method": "POST",
+    "path": "/api/teacher-schedule-slots/",
+    "module": "teacher-schedule-slots",
+    "target": "",
+    "status_code": 404,
+    "success": false,
+    "ip_address": "41.73.102.194",
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    "details": "{\"assignment\":3,\"day_of_week\":\"MON\",\"start_time\":\"08:00:00\",\"end_time\":\"12:00:00\",\"room\":\"\"}"
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 7,
+  "fields": {
+    "created_at": "2026-03-17T01:06:22.400Z",
+    "updated_at": "2026-03-17T01:06:22.400Z",
+    "user": null,
+    "etablissement": null,
+    "role": "",
+    "action": "CREATE_TEACHER-SCHEDULE-SLOTS",
+    "method": "POST",
+    "path": "/api/teacher-schedule-slots/",
+    "module": "teacher-schedule-slots",
+    "target": "",
+    "status_code": 404,
+    "success": false,
+    "ip_address": "41.221.181.241",
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    "details": "{\"assignment\":3,\"day_of_week\":\"MON\",\"start_time\":\"08:00:00\",\"end_time\":\"12:00:00\",\"room\":\"1\"}"
+  }
+},
+{
+  "model": "common.activitylog",
+  "pk": 8,
+  "fields": {
+    "created_at": "2026-03-17T01:09:26.097Z",
+    "updated_at": "2026-03-17T01:09:26.097Z",
+    "user": 1,
+    "etablissement": null,
+    "role": "super_admin",
+    "action": "DELETE_TEACHER-SCHEDULE-SLOTS",
+    "method": "DELETE",
+    "path": "/api/teacher-schedule-slots/1/",
+    "module": "teacher-schedule-slots",
+    "target": "1",
+    "status_code": 204,
+    "success": true,
+    "ip_address": "41.221.181.241",
+    "user_agent": "Python-urllib/3.13",
+    "details": ""
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 1,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$G6WXly3AI58xmScGulZGs8$XBP0He5fggCteW7295vo9mr3Hb91o9wbNnQTXsB/40U=",
+    "last_login": null,
+    "is_superuser": true,
+    "username": "superadmin",
+    "first_name": "Super",
+    "last_name": "Admin",
+    "email": "admin@gestionschool.local",
+    "is_staff": true,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:20.488Z",
+    "role": "super_admin",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 2,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$tqsAvzHDc2cgZVQrZvyZpn$9ZV/FC1d6RgVaODCln9HqJZMgGaAxJDlSIz86owJQSc=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "directeur",
+    "first_name": "Jean",
+    "last_name": "Directeur",
+    "email": "directeur@gestionschool.local",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:21.921Z",
+    "role": "director",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 3,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$UG5ksfFGfHYNNsXinIDPvE$38fgRgBvUecyraQ+kQJMU/K96fSJwesJQVrdpkrExVM=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "comptable",
+    "first_name": "Marie",
+    "last_name": "Comptable",
+    "email": "comptable@gestionschool.local",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:44.974Z",
+    "role": "accountant",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 4,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$g3MENPtyVuxFEqXXaOvEZ7$k2pdnok60vZ1w6dqh0Sp4p3qMEd53BAKMsfjksLAhG8=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "enseignant1",
+    "first_name": "Ali",
+    "last_name": "Kouadio",
+    "email": "enseignant1@gestionschool.local",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:46.602Z",
+    "role": "teacher",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 5,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$IjgvSnfxtjpwL4vlGbgYEC$wejp/gyrscVWTpKOLx1aYVhcFTc3w/PLRtgLbniVHUg=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "parent1",
+    "first_name": "Awa",
+    "last_name": "Traore",
+    "email": "parent1@gestionschool.local",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:48.463Z",
+    "role": "parent",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 6,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$Dv1N6dPGkFIt0YDJWU7pNv$+2Kp3s8EU7In3vO5khGetT/lJsREEIkRDR1nCG3mmBI=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "surveillant1",
+    "first_name": "Idrissa",
+    "last_name": "Keita",
+    "email": "surveillant1@gestionschool.local",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:49.776Z",
+    "role": "supervisor",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 7,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$brFW9Z1u1Qta7q1OxagZXj$LTw6+akPXeAq/bUQb9lxzVY+TuN6QCiJFDZ83aqJW8M=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "eleve1",
+    "first_name": "Koffi",
+    "last_name": "Nguessan",
+    "email": "eleve1@gestionschool.local",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:51.210Z",
+    "role": "student",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 8,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$r93PdHr3nQEk88LfOW2q83$+CPjIr6EFDqOMfZuWttEMq/OCWuunjkPvjUje4d6JXg=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "eleve2",
+    "first_name": "Fatou",
+    "last_name": "Diallo",
+    "email": "eleve2@gestionschool.local",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-07T18:50:52.647Z",
+    "role": "student",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 9,
+  "fields": {
+    "password": "",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "modibo",
+    "first_name": "MODIBO",
+    "last_name": "KEITA",
+    "email": "modibokeita050@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-08T00:14:37.152Z",
+    "role": "student",
+    "phone": "66083152",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 10,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$6uLRXds5U3nXAtD2OZxB3O$rhS5jHyMR4hI4mXQ8Cblx9BGUjPckkWkDIAGmbrc/RI=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "ouali",
+    "first_name": "OUALI",
+    "last_name": "SISSOKO",
+    "email": "oualisissoko@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-08T00:20:10.634Z",
+    "role": "director",
+    "phone": "90919356",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 11,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$kwLpwyMp69i1MXacfKSYT6$o24hP4yq+mIEH8pPzlccuyP6awsZtdYbtYYKNbyjNfI=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "van",
+    "first_name": "MODIBO",
+    "last_name": "KEITA",
+    "email": "modibokeita050@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-08T00:31:00.102Z",
+    "role": "super_admin",
+    "phone": "66083152",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 12,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$7ioBRsW6cDdNxFOvoxoSNs$c97MLaOAOlVrUiOVJnBnmUBUSz0PKWozUh0zhVhcdrE=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "balta",
+    "first_name": "BASSIROU",
+    "last_name": "DIARRA",
+    "email": "balta@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-09T22:25:42.983Z",
+    "role": "director",
+    "phone": "78 73 75 41",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 16,
+  "fields": {
+    "password": "",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "eleve3",
+    "first_name": "Modibo",
+    "last_name": "SANGARÉ",
+    "email": "",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-10T00:16:32.088Z",
+    "role": "student",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 17,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$bgTUqFcPo4hxLamTwIAhaw$L5mbN9yXsBJhXKO5asZWZtkcXnsERcEvV9xpXFzeimc=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "ali",
+    "first_name": "ALI",
+    "last_name": "DOUMBIA",
+    "email": "alidoumbia@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-14T18:56:37.754Z",
+    "role": "teacher",
+    "phone": "78 78 99 98",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 18,
+  "fields": {
+    "password": "",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "oualyss",
+    "first_name": "ouali",
+    "last_name": "sissoko",
+    "email": "",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-14T22:03:35.928Z",
+    "role": "student",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 19,
+  "fields": {
+    "password": "",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "adama1",
+    "first_name": "adama",
+    "last_name": "sissoko",
+    "email": "",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-14T22:04:27.399Z",
+    "role": "student",
+    "phone": "",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "accounts.user",
+  "pk": 20,
+  "fields": {
+    "password": "pbkdf2_sha256$870000$FY5FfdyRHnTMrvz5c1lAhK$bfkeIVKph0k44A5XqDiw3w4iinBtLVmYQugIgEuu9xc=",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "sikou",
+    "first_name": "SIKOU",
+    "last_name": "SIRA",
+    "email": "sikousira@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-03-16T21:51:37.341Z",
+    "role": "director",
+    "phone": "74446560",
+    "profile_photo": "",
+    "etablissement": null,
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "school.etablissement",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-19T22:36:22.685Z",
+    "updated_at": "2026-03-19T22:36:22.685Z",
+    "name": "Lycée Technique Oumar Bah (LTOB)",
+    "address": "",
+    "phone": "",
+    "email": "",
+    "logo": ""
+  }
+},
+{
+  "model": "school.etablissement",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-19T22:36:23.164Z",
+    "updated_at": "2026-03-19T22:36:23.164Z",
+    "name": "Lycée Technique Oumar Bah (LOBK)",
+    "address": "",
+    "phone": "",
+    "email": "",
+    "logo": ""
+  }
+},
+{
+  "model": "school.etablissement",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-19T22:36:23.638Z",
+    "updated_at": "2026-03-19T22:36:23.638Z",
+    "name": "IFP-OBK",
+    "address": "",
+    "phone": "",
+    "email": "",
+    "logo": ""
+  }
+},
+{
+  "model": "school.etablissement",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-03-19T22:36:24.116Z",
+    "updated_at": "2026-03-19T22:36:24.116Z",
+    "name": "Complexe Scolaire Omar Bah (CSOB)",
+    "address": "",
+    "phone": "",
+    "email": "",
+    "logo": ""
+  }
+},
+{
+  "model": "school.academicyear",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-07T18:50:54.284Z",
+    "updated_at": "2026-03-07T18:50:54.284Z",
+    "name": "2025-2026",
+    "start_date": "2025-09-01",
+    "end_date": "2026-07-31",
+    "is_active": true
+  }
+},
+{
+  "model": "school.academicyear",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-09T23:50:31.423Z",
+    "updated_at": "2026-03-09T23:50:31.423Z",
+    "name": "2025 - 2026",
+    "start_date": "2026-09-01",
+    "end_date": "2027-07-31",
+    "is_active": true
+  }
+},
+{
+  "model": "school.level",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-07T18:50:55.306Z",
+    "updated_at": "2026-03-07T18:50:55.306Z",
+    "name": "6ème"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-09T23:51:14.065Z",
+    "updated_at": "2026-03-09T23:51:14.065Z",
+    "name": "12ème"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-09T23:54:18.057Z",
+    "updated_at": "2026-03-09T23:54:18.057Z",
+    "name": "11ème"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-03-09T23:54:32.008Z",
+    "updated_at": "2026-03-09T23:54:32.008Z",
+    "name": "10ème"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 5,
+  "fields": {
+    "created_at": "2026-03-09T23:55:42.499Z",
+    "updated_at": "2026-03-09T23:55:42.499Z",
+    "name": "1ère Année"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 6,
+  "fields": {
+    "created_at": "2026-03-09T23:55:58.430Z",
+    "updated_at": "2026-03-09T23:55:58.430Z",
+    "name": "2ème Année"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 7,
+  "fields": {
+    "created_at": "2026-03-09T23:56:10.960Z",
+    "updated_at": "2026-03-09T23:56:10.960Z",
+    "name": "3ème Année"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 8,
+  "fields": {
+    "created_at": "2026-03-09T23:56:30.375Z",
+    "updated_at": "2026-03-09T23:56:30.375Z",
+    "name": "4ème Année"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 9,
+  "fields": {
+    "created_at": "2026-03-09T23:56:42.366Z",
+    "updated_at": "2026-03-09T23:56:42.366Z",
+    "name": "5ème Année"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 10,
+  "fields": {
+    "created_at": "2026-03-09T23:56:55.103Z",
+    "updated_at": "2026-03-09T23:56:55.103Z",
+    "name": "6ème Année"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 11,
+  "fields": {
+    "created_at": "2026-03-09T23:57:07.040Z",
+    "updated_at": "2026-03-09T23:57:07.040Z",
+    "name": "7ème Année"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 12,
+  "fields": {
+    "created_at": "2026-03-09T23:57:19.623Z",
+    "updated_at": "2026-03-09T23:57:19.623Z",
+    "name": "8ème Année"
+  }
+},
+{
+  "model": "school.level",
+  "pk": 13,
+  "fields": {
+    "created_at": "2026-03-09T23:57:36.983Z",
+    "updated_at": "2026-03-09T23:57:36.983Z",
+    "name": "9ème Année"
+  }
+},
+{
+  "model": "school.section",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-07T18:50:56.130Z",
+    "updated_at": "2026-03-07T18:50:56.130Z",
+    "name": "Collège"
+  }
+},
+{
+  "model": "school.section",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-09T23:51:28.240Z",
+    "updated_at": "2026-03-09T23:51:28.240Z",
+    "name": "Lycée"
+  }
+},
+{
+  "model": "school.section",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-09T23:58:31.855Z",
+    "updated_at": "2026-03-09T23:58:31.855Z",
+    "name": "Professionnel"
+  }
+},
+{
+  "model": "school.classroom",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-07T18:50:56.948Z",
+    "updated_at": "2026-03-07T18:50:56.948Z",
+    "name": "6A",
+    "level": 1,
+    "section": 1,
+    "academic_year": 1,
+    "etablissement": null
+  }
+},
+{
+  "model": "school.classroom",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-09T23:53:36.097Z",
+    "updated_at": "2026-03-09T23:53:36.097Z",
+    "name": "TLL",
+    "level": 2,
+    "section": 2,
+    "academic_year": 2,
+    "etablissement": null
+  }
+},
+{
+  "model": "school.classroom",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-10T00:04:36.974Z",
+    "updated_at": "2026-03-10T00:04:36.974Z",
+    "name": "TLL",
+    "level": 3,
+    "section": 2,
+    "academic_year": 2,
+    "etablissement": null
+  }
+},
+{
+  "model": "school.classroom",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-03-10T00:05:50.672Z",
+    "updated_at": "2026-03-10T00:05:50.672Z",
+    "name": "TSECO",
+    "level": 3,
+    "section": 2,
+    "academic_year": 2,
+    "etablissement": null
+  }
+},
+{
+  "model": "school.classroom",
+  "pk": 5,
+  "fields": {
+    "created_at": "2026-03-10T00:06:19.245Z",
+    "updated_at": "2026-03-10T00:06:19.245Z",
+    "name": "TSECO",
+    "level": 2,
+    "section": 2,
+    "academic_year": 2,
+    "etablissement": null
+  }
+},
+{
+  "model": "school.classroom",
+  "pk": 6,
+  "fields": {
+    "created_at": "2026-03-10T00:07:21.237Z",
+    "updated_at": "2026-03-10T00:07:21.237Z",
+    "name": "Commune",
+    "level": 4,
+    "section": 2,
+    "academic_year": 2,
+    "etablissement": null
+  }
+},
+{
+  "model": "school.subject",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-07T18:50:57.755Z",
+    "updated_at": "2026-03-07T18:50:57.755Z",
+    "name": "Mathématiques",
+    "code": "MATH",
+    "coefficient": "4.00"
+  }
+},
+{
+  "model": "school.subject",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-07T18:50:58.752Z",
+    "updated_at": "2026-03-07T18:50:58.752Z",
+    "name": "Français",
+    "code": "FR",
+    "coefficient": "3.00"
+  }
+},
+{
+  "model": "school.subject",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-07T18:51:01.548Z",
+    "updated_at": "2026-03-07T18:51:01.548Z",
+    "name": "Anglais",
+    "code": "EN",
+    "coefficient": "2.00"
+  }
+},
+{
+  "model": "school.subject",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-03-09T23:52:12.508Z",
+    "updated_at": "2026-03-09T23:52:12.508Z",
+    "name": "Histoire",
+    "code": "Hist",
+    "coefficient": "2.00"
+  }
+},
+{
+  "model": "school.subject",
+  "pk": 5,
+  "fields": {
+    "created_at": "2026-03-09T23:59:44.241Z",
+    "updated_at": "2026-03-09T23:59:44.241Z",
+    "name": "Géographie",
+    "code": "Géo",
+    "coefficient": "2.00"
+  }
+},
+{
+  "model": "school.subject",
+  "pk": 6,
+  "fields": {
+    "created_at": "2026-03-10T00:00:31.180Z",
+    "updated_at": "2026-03-10T00:00:31.180Z",
+    "name": "Comptabilité",
+    "code": "Compta",
+    "coefficient": "9.00"
+  }
+},
+{
+  "model": "school.subject",
+  "pk": 7,
+  "fields": {
+    "created_at": "2026-03-10T00:01:47.458Z",
+    "updated_at": "2026-03-10T00:01:47.458Z",
+    "name": "Philosophie",
+    "code": "Philo",
+    "coefficient": "1.00"
+  }
+},
+{
+  "model": "school.subject",
+  "pk": 8,
+  "fields": {
+    "created_at": "2026-03-10T00:02:26.737Z",
+    "updated_at": "2026-03-10T00:02:26.737Z",
+    "name": "Mathématique",
+    "code": "Math",
+    "coefficient": "1.00"
+  }
+},
+{
+  "model": "school.subject",
+  "pk": 9,
+  "fields": {
+    "created_at": "2026-03-10T00:04:03.678Z",
+    "updated_at": "2026-03-10T00:04:03.678Z",
+    "name": "Mathématique Financière",
+    "code": "Math-Fin",
+    "coefficient": "3.00"
+  }
+},
+{
+  "model": "school.teacher",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-07T18:51:02.187Z",
+    "updated_at": "2026-03-07T18:51:02.188Z",
+    "user": 4,
+    "employee_code": "TCH-0001",
+    "hire_date": "2025-03-07",
+    "salary_base": "350000.00",
+    "etablissement": null
+  }
+},
+{
+  "model": "school.teacher",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-14T19:00:06.806Z",
+    "updated_at": "2026-03-14T19:00:06.806Z",
+    "user": 17,
+    "employee_code": "TCH-0002",
+    "hire_date": "2026-03-14",
+    "salary_base": "100000.00",
+    "etablissement": null
+  }
+},
+{
+  "model": "school.teacherassignment",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-07T18:51:03.481Z",
+    "updated_at": "2026-03-07T18:51:03.481Z",
+    "teacher": 1,
+    "subject": 1,
+    "classroom": 1
+  }
+},
+{
+  "model": "school.teacherassignment",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-07T18:51:07.877Z",
+    "updated_at": "2026-03-07T18:51:07.877Z",
+    "teacher": 1,
+    "subject": 2,
+    "classroom": 1
+  }
+},
+{
+  "model": "school.teacherassignment",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-07T18:51:08.705Z",
+    "updated_at": "2026-03-07T18:51:08.705Z",
+    "teacher": 1,
+    "subject": 3,
+    "classroom": 1
+  }
+},
+{
+  "model": "school.teacherassignment",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-03-14T18:59:33.895Z",
+    "updated_at": "2026-03-14T18:59:33.895Z",
+    "teacher": 1,
+    "subject": 9,
+    "classroom": 5
+  }
+},
+{
+  "model": "school.teacherassignment",
+  "pk": 5,
+  "fields": {
+    "created_at": "2026-03-14T19:00:41.968Z",
+    "updated_at": "2026-03-14T19:00:41.968Z",
+    "teacher": 2,
+    "subject": 9,
+    "classroom": 5
+  }
+},
+{
+  "model": "school.teacherscheduleslot",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-17T01:10:05.290Z",
+    "updated_at": "2026-03-17T01:10:05.290Z",
+    "assignment": 3,
+    "day_of_week": "MON",
+    "start_time": "08:00:00",
+    "end_time": "12:00:00",
+    "room": "1"
+  }
+},
+{
+  "model": "school.teacherscheduleslot",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-17T01:11:37.145Z",
+    "updated_at": "2026-03-17T01:26:18.704Z",
+    "assignment": 3,
+    "day_of_week": "MON",
+    "start_time": "14:00:00",
+    "end_time": "17:00:00",
+    "room": "1"
+  }
+},
+{
+  "model": "school.teacherscheduleslot",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-03-17T01:14:00.714Z",
+    "updated_at": "2026-03-17T01:14:00.714Z",
+    "assignment": 1,
+    "day_of_week": "TUE",
+    "start_time": "14:00:00",
+    "end_time": "17:00:00",
+    "room": ""
+  }
+},
+{
+  "model": "school.teacherscheduleslot",
+  "pk": 5,
+  "fields": {
+    "created_at": "2026-03-17T01:15:49.389Z",
+    "updated_at": "2026-03-17T01:15:49.389Z",
+    "assignment": 2,
+    "day_of_week": "WED",
+    "start_time": "10:00:00",
+    "end_time": "12:00:00",
+    "room": ""
+  }
+},
+{
+  "model": "school.teacherscheduleslot",
+  "pk": 6,
+  "fields": {
+    "created_at": "2026-03-17T01:17:08.996Z",
+    "updated_at": "2026-03-17T01:17:08.996Z",
+    "assignment": 3,
+    "day_of_week": "THU",
+    "start_time": "08:00:00",
+    "end_time": "10:00:00",
+    "room": ""
+  }
+},
+{
+  "model": "school.teacherscheduleslot",
+  "pk": 7,
+  "fields": {
+    "created_at": "2026-03-17T01:18:09.442Z",
+    "updated_at": "2026-03-17T01:18:09.442Z",
+    "assignment": 3,
+    "day_of_week": "FRI",
+    "start_time": "08:00:00",
+    "end_time": "12:00:00",
+    "room": ""
+  }
+},
+{
+  "model": "school.teacherscheduleslot",
+  "pk": 8,
+  "fields": {
+    "created_at": "2026-03-17T01:20:01.250Z",
+    "updated_at": "2026-03-17T01:20:01.250Z",
+    "assignment": 3,
+    "day_of_week": "SAT",
+    "start_time": "13:00:00",
+    "end_time": "15:00:00",
+    "room": ""
+  }
+},
+{
+  "model": "school.timetablepublication",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-17T01:25:19.496Z",
+    "updated_at": "2026-03-17T01:50:16.166Z",
+    "classroom": 1,
+    "is_published": true,
+    "is_locked": false,
+    "published_by": 1,
+    "published_at": "2026-03-17T01:49:45.474Z",
+    "notes": ""
+  }
+},
+{
+  "model": "school.parentprofile",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-07T18:51:09.519Z",
+    "updated_at": "2026-03-07T18:51:09.519Z",
+    "user": 5,
+    "profession": "Commerçante",
+    "etablissement": null
+  }
+},
+{
+  "model": "school.student",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-07T18:51:10.438Z",
+    "updated_at": "2026-03-11T17:40:28.536Z",
+    "user": 7,
+    "matricule": "GS-2026-00001",
+    "birth_date": "2012-04-08",
+    "classroom": 1,
+    "parent": 1,
+    "photo": "",
+    "enrollment_date": "2026-03-07",
+    "is_archived": true,
+    "conduite": "18.00",
+    "etablissement": null
+  }
+},
+{
+  "model": "school.student",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-07T18:51:11.459Z",
+    "updated_at": "2026-03-07T18:51:11.459Z",
+    "user": 8,
+    "matricule": "GS-2026-00002",
+    "birth_date": "2011-12-18",
+    "classroom": 1,
+    "parent": 1,
+    "photo": "",
+    "enrollment_date": "2026-03-07",
+    "is_archived": false,
+    "conduite": "18.00",
+    "etablissement": null
+  }
+},
+{
+  "model": "school.student",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-08T00:14:40.143Z",
+    "updated_at": "2026-03-23T16:16:06.842Z",
+    "user": 9,
+    "matricule": "GS-2026-00003",
+    "birth_date": "2005-01-01",
+    "classroom": 5,
+    "parent": null,
+    "photo": "students/Photo_didentité_MODIBO_KEITA.jpg",
+    "enrollment_date": "2026-03-08",
+    "is_archived": false,
+    "conduite": "18.00",
+    "etablissement": null
+  }
+},
+{
+  "model": "school.student",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-03-10T00:16:33.770Z",
+    "updated_at": "2026-03-10T00:16:33.770Z",
+    "user": 16,
+    "matricule": "GS-2026-00004",
+    "birth_date": "2005-01-01",
+    "classroom": 4,
+    "parent": null,
+    "photo": "",
+    "enrollment_date": "2026-03-10",
+    "is_archived": false,
+    "conduite": "18.00",
+    "etablissement": null
+  }
+},
+{
+  "model": "school.student",
+  "pk": 5,
+  "fields": {
+    "created_at": "2026-03-14T22:03:39.288Z",
+    "updated_at": "2026-03-14T22:03:39.288Z",
+    "user": 18,
+    "matricule": "GS-2026-00005",
+    "birth_date": null,
+    "classroom": 4,
+    "parent": null,
+    "photo": "students/20250718_175304.jpg",
+    "enrollment_date": "2026-03-14",
+    "is_archived": false,
+    "conduite": "18.00",
+    "etablissement": null
+  }
+},
+{
+  "model": "school.student",
+  "pk": 6,
+  "fields": {
+    "created_at": "2026-03-14T22:04:29.943Z",
+    "updated_at": "2026-03-14T22:04:29.943Z",
+    "user": 19,
+    "matricule": "GS-2026-00006",
+    "birth_date": null,
+    "classroom": 4,
+    "parent": null,
+    "photo": "students/20250718_175304_Tdy648Y.jpg",
+    "enrollment_date": "2026-03-14",
+    "is_archived": false,
+    "conduite": "18.00",
+    "etablissement": null
+  }
+},
+{
+  "model": "school.studentacademichistory",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-03-07T18:51:18.207Z",
+    "updated_at": "2026-03-07T18:53:41.185Z",
+    "student": 1,
+    "academic_year": 1,
+    "classroom": 1,
+    "average": "14.17",
+    "rank": 1
+  }
+},
+{
+  "model": "school.studentacademichistory",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-07T18:51:19.425Z",
+    "updated_at": "2026-03-07T18:53:41.901Z",
+    "student": 2,
+    "academic_year": 1,
+    "classroom": 1,
+    "average": "12.67",
+    "rank": 2
+  }
+},
+{
+  "model": "school.studentacademichistory",
+  "pk": 3,
+  "fields": {
+    "created_at": "2026-03-14T22:17:36.096Z",
+    "updated_at": "2026-03-14T22:17:36.096Z",
+    "student": 6,
+    "academic_year": 2,
+    "classroom": 4,
+    "average": "12.17",
+    "rank": 1
+  }
+},
+{
+  "model": "school.studentacademichistory",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-03-14T22:17:36.816Z",
+    "updated_at": "2026-03-14T22:17:36.816Z",
+    "student": 4,
+    "academic_year": 2,
+    "classroom": 4,
+    "average": "0.00",
+    "rank": 2
+  }
+},
+{
+  "model": "school.studentacademichistory",
+  "pk": 5,
+  "fields": {
+    "created_at": "2026-03-14T22:17:37.529Z",
+    "updated_at": "2026-03-14T22:17:37.529Z",
+    "student": 5,
+    "academic_year": 2,
+    "classroom": 4,
+    "average": "0.00",
+    "rank": 3
+  }
+},
+{
+  "model": "school.studentacademichistory",
+  "pk": 6,
+  "fields": {
+    "created_at": "2026-03-15T20:08:09.621Z",
+    "updated_at": "2026-03-15T20:08:09.621Z",
+    "student": 2,
+    "academic_year": 2,
+    "classroom": 1,
+    "average": "0.00",
+    "rank": 1
+  }
+}
