@@ -1,17 +1,28 @@
 from datetime import datetime
+import hashlib
+import json
+import shutil
+import tempfile
+import zipfile
 from pathlib import Path
 
 from django.conf import settings
+from django.apps import apps
+from django.core import serializers
+from django.core.files.uploadedfile import UploadedFile
+from django.db import transaction
 from django.db.models import Q
-from django.http import HttpResponse
+from django.http import FileResponse, HttpResponse
 from django.utils import timezone
-from rest_framework import permissions, viewsets
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.response import Response
 
 from apps.accounts.permissions import IsAdminOrDirector
 from apps.common.pagination import AuditLogPagination
-from .models import ActivityLog
-from .serializers import ActivityLogSerializer
+from .models import ActivityLog, BackupArchive
+from .serializers import ActivityLogSerializer, BackupArchiveSerializer
 
 
 def _pdf_text(value) -> str:
@@ -396,3 +407,335 @@ class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
         response = HttpResponse(data, content_type="application/pdf")
         response["Content-Disposition"] = 'attachment; filename="activity_logs.pdf"'
         return response
+
+
+class BackupArchiveViewSet(viewsets.ModelViewSet):
+    queryset = BackupArchive.objects.select_related("created_by", "restored_by", "etablissement").all()
+    serializer_class = BackupArchiveSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrDirector]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+    http_method_names = ["get", "post"]
+    filterset_fields = ["scope", "status", "etablissement", "created_by", "restored_by"]
+    search_fields = ["filename", "notes", "etablissement__name", "created_by__username"]
+    ordering_fields = ["created_at", "status", "scope", "file_size_bytes"]
+    ordering = ["-created_at"]
+
+    def _is_super_admin(self):
+        return getattr(self.request.user, "role", "") == "super_admin"
+
+    def _resolve_etablissement(self):
+        from apps.school.models import Etablissement
+
+        etablissement_id = self.request.data.get("etablissement") or self.request.data.get("etablissement_id")
+        if etablissement_id in (None, ""):
+            return getattr(self.request.user, "etablissement", None)
+        try:
+            parsed = int(etablissement_id)
+        except (TypeError, ValueError):
+            return None
+        return Etablissement.objects.filter(id=parsed).first()
+
+    def _backups_root(self) -> Path:
+        root = Path(settings.BASE_DIR) / "backups" / "archives"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _sha256_file(self, file_path: Path) -> str:
+        digest = hashlib.sha256()
+        with file_path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _serialize_global(self) -> str:
+        serialized_payload = []
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin"}:
+                continue
+            queryset = model.objects.all().order_by("pk")
+            if not queryset.exists():
+                continue
+            serialized_payload.append(serializers.serialize("json", queryset))
+
+        if not serialized_payload:
+            return "[]"
+
+        merged = []
+        for payload in serialized_payload:
+            merged.extend(json.loads(payload))
+        return json.dumps(merged, ensure_ascii=False)
+
+    def _serialize_etablissement(self, etablissement) -> str:
+        serialized_payload = []
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin"}:
+                continue
+
+            field_names = {field.name for field in opts.fields}
+            queryset = None
+
+            if model.__name__ == "Etablissement":
+                queryset = model.objects.filter(pk=etablissement.pk)
+            elif opts.app_label == "accounts" and model.__name__ == "User":
+                queryset = model.objects.filter(etablissement=etablissement)
+            elif "etablissement" in field_names:
+                queryset = model.objects.filter(etablissement=etablissement)
+
+            if queryset is None or not queryset.exists():
+                continue
+
+            serialized_payload.append(serializers.serialize("json", queryset.order_by("pk")))
+
+        if not serialized_payload:
+            return "[]"
+
+        merged = []
+        for payload in serialized_payload:
+            merged.extend(json.loads(payload))
+        return json.dumps(merged, ensure_ascii=False)
+
+    def _build_archive(self, backup: BackupArchive) -> BackupArchive:
+        stamp = timezone.localtime().strftime("%Y%m%d_%H%M%S")
+        suffix = "global" if backup.scope == BackupArchive.Scope.GLOBAL else f"etab_{backup.etablissement_id}"
+        backup_name = f"backup_{suffix}_{stamp}.zip"
+        backup_dir = self._backups_root()
+        archive_path = backup_dir / backup_name
+
+        backup.status = BackupArchive.Status.RUNNING
+        backup.filename = backup_name
+        backup.file_path = str(archive_path)
+        backup.save(update_fields=["status", "filename", "file_path", "updated_at"])
+
+        payload_json = self._serialize_global()
+        if backup.scope == BackupArchive.Scope.ETABLISSEMENT:
+            payload_json = self._serialize_etablissement(backup.etablissement)
+
+        manifest = {
+            "version": 1,
+            "kind": backup.kind,
+            "scope": backup.scope,
+            "created_at": timezone.localtime().isoformat(),
+            "created_by": getattr(backup.created_by, "username", ""),
+            "etablissement_id": backup.etablissement_id,
+            "include_media": bool(backup.include_media),
+        }
+
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+            zf.writestr("data.json", payload_json)
+
+            if backup.include_media:
+                media_root = Path(settings.MEDIA_ROOT)
+                if media_root.exists() and media_root.is_dir():
+                    for item in media_root.rglob("*"):
+                        if item.is_file():
+                            relative = item.relative_to(media_root)
+                            zf.write(item, arcname=str(Path("media") / relative))
+
+        backup.file_size_bytes = archive_path.stat().st_size
+        backup.sha256 = self._sha256_file(archive_path)
+        backup.manifest = manifest
+        backup.status = BackupArchive.Status.COMPLETED
+        backup.save(
+            update_fields=[
+                "file_size_bytes",
+                "sha256",
+                "manifest",
+                "status",
+                "updated_at",
+            ]
+        )
+        return backup
+
+    def _restore_from_archive(self, backup: BackupArchive, archive_path: Path):
+        restore_notes = []
+        with tempfile.TemporaryDirectory(prefix="restore_backup_") as tmp:
+            tmp_path = Path(tmp)
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                zf.extractall(tmp_path)
+
+            data_json = tmp_path / "data.json"
+            if not data_json.exists():
+                raise ValueError("Archive invalide: data.json manquant.")
+
+            media_dir = tmp_path / "media"
+
+            with transaction.atomic():
+                serializers.deserialize("json", data_json.read_text(encoding="utf-8"))
+                from django.core.management import call_command
+
+                call_command("loaddata", str(data_json), verbosity=0)
+
+            if media_dir.exists() and media_dir.is_dir():
+                media_root = Path(settings.MEDIA_ROOT)
+                media_root.mkdir(parents=True, exist_ok=True)
+                for src in media_dir.rglob("*"):
+                    if not src.is_file():
+                        continue
+                    dst = media_root / src.relative_to(media_dir)
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+                restore_notes.append("Medias restaures.")
+
+        backup.restored_by = self.request.user
+        backup.restored_at = timezone.now()
+        backup.restore_log = "\n".join(restore_notes) if restore_notes else "Restauration terminee."
+        backup.status = BackupArchive.Status.COMPLETED
+        backup.save(update_fields=["restored_by", "restored_at", "restore_log", "status", "updated_at"])
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self._is_super_admin():
+            return queryset
+
+        user_etablissement = getattr(self.request.user, "etablissement", None)
+        if user_etablissement is None:
+            return queryset.none()
+        return queryset.filter(scope=BackupArchive.Scope.ETABLISSEMENT, etablissement=user_etablissement)
+
+    def create(self, request, *args, **kwargs):
+        scope = str(request.data.get("scope") or BackupArchive.Scope.ETABLISSEMENT).strip()
+        include_media_raw = request.data.get("include_media", True)
+        include_media = str(include_media_raw).lower() not in {"0", "false", "no"}
+        notes = str(request.data.get("notes") or "").strip()
+
+        if scope not in {BackupArchive.Scope.GLOBAL, BackupArchive.Scope.ETABLISSEMENT}:
+            return Response({"detail": "Scope invalide."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if scope == BackupArchive.Scope.GLOBAL and not self._is_super_admin():
+            return Response(
+                {"detail": "Seul un super admin peut creer une sauvegarde globale."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        etablissement = None
+        if scope == BackupArchive.Scope.ETABLISSEMENT:
+            etablissement = self._resolve_etablissement()
+            if etablissement is None:
+                return Response(
+                    {"detail": "Etablissement introuvable pour la sauvegarde."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if not self._is_super_admin() and getattr(request.user, "etablissement_id", None) != etablissement.id:
+                return Response(
+                    {"detail": "Vous ne pouvez sauvegarder que votre etablissement."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        backup = BackupArchive.objects.create(
+            scope=scope,
+            etablissement=etablissement,
+            created_by=request.user,
+            include_media=include_media,
+            notes=notes,
+            status=BackupArchive.Status.PENDING,
+        )
+
+        try:
+            backup = self._build_archive(backup)
+        except Exception as exc:
+            backup.status = BackupArchive.Status.FAILED
+            backup.restore_log = str(exc)
+            backup.save(update_fields=["status", "restore_log", "updated_at"])
+            return Response({"detail": f"Echec sauvegarde: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(self.get_serializer(backup).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"], url_path="download")
+    def download(self, request, pk=None):
+        backup = self.get_object()
+        archive_path = Path(str(backup.file_path or "")).expanduser()
+        if not archive_path.exists() or not archive_path.is_file():
+            return Response({"detail": "Fichier backup introuvable."}, status=status.HTTP_404_NOT_FOUND)
+
+        response = FileResponse(archive_path.open("rb"), as_attachment=True, filename=backup.filename or archive_path.name)
+        return response
+
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, pk=None):
+        backup = self.get_object()
+        if backup.scope == BackupArchive.Scope.GLOBAL and not self._is_super_admin():
+            return Response(
+                {"detail": "Seul un super admin peut restaurer une sauvegarde globale."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        archive_path = Path(str(backup.file_path or "")).expanduser()
+        if not archive_path.exists() or not archive_path.is_file():
+            return Response({"detail": "Fichier backup introuvable."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            self._restore_from_archive(backup, archive_path)
+        except Exception as exc:
+            backup.status = BackupArchive.Status.FAILED
+            backup.restore_log = str(exc)
+            backup.save(update_fields=["status", "restore_log", "updated_at"])
+            return Response({"detail": f"Echec restauration: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(self.get_serializer(backup).data)
+
+    @action(detail=False, methods=["post"], url_path="upload-restore")
+    def upload_restore(self, request):
+        uploaded = request.FILES.get("file")
+        if not isinstance(uploaded, UploadedFile):
+            return Response({"detail": "Fichier requis."}, status=status.HTTP_400_BAD_REQUEST)
+
+        scope = str(request.data.get("scope") or BackupArchive.Scope.ETABLISSEMENT).strip()
+        if scope not in {BackupArchive.Scope.GLOBAL, BackupArchive.Scope.ETABLISSEMENT}:
+            return Response({"detail": "Scope invalide."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if scope == BackupArchive.Scope.GLOBAL and not self._is_super_admin():
+            return Response(
+                {"detail": "Seul un super admin peut restaurer globalement."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        etablissement = None
+        if scope == BackupArchive.Scope.ETABLISSEMENT:
+            etablissement = self._resolve_etablissement()
+            if etablissement is None:
+                return Response(
+                    {"detail": "Etablissement introuvable pour la restauration."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not self._is_super_admin() and getattr(request.user, "etablissement_id", None) != etablissement.id:
+                return Response(
+                    {"detail": "Vous ne pouvez restaurer que votre etablissement."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        backup_dir = self._backups_root()
+        stamp = timezone.localtime().strftime("%Y%m%d_%H%M%S")
+        target = backup_dir / f"uploaded_restore_{scope}_{stamp}.zip"
+        with target.open("wb") as out:
+            for chunk in uploaded.chunks():
+                out.write(chunk)
+
+        backup = BackupArchive.objects.create(
+            scope=scope,
+            etablissement=etablissement,
+            created_by=request.user,
+            filename=target.name,
+            file_path=str(target),
+            file_size_bytes=target.stat().st_size,
+            sha256=self._sha256_file(target),
+            notes=str(request.data.get("notes") or "").strip(),
+            status=BackupArchive.Status.RUNNING,
+        )
+
+        try:
+            self._restore_from_archive(backup, target)
+        except Exception as exc:
+            backup.status = BackupArchive.Status.FAILED
+            backup.restore_log = str(exc)
+            backup.save(update_fields=["status", "restore_log", "updated_at"])
+            return Response({"detail": f"Echec restauration: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(self.get_serializer(backup).data, status=status.HTTP_201_CREATED)

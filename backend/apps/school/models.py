@@ -113,8 +113,6 @@ class TeacherScheduleSlot(TimeStampedModel):
         )
 
 
-<<<<<<< HEAD
-=======
 class TeacherAvailabilitySlot(TimeStampedModel):
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="availability_slots")
     etablissement = models.ForeignKey(
@@ -148,7 +146,6 @@ class TeacherAvailabilitySlot(TimeStampedModel):
         )
 
 
->>>>>>> main
 class TimetablePublication(TimeStampedModel):
     classroom = models.OneToOneField(ClassRoom, on_delete=models.CASCADE, related_name="timetable_publication")
     is_published = models.BooleanField(default=False)
@@ -172,10 +169,7 @@ class TimetablePublication(TimeStampedModel):
         return f"{self.classroom.name}: {state}{lock_state}"
 
 
-<<<<<<< HEAD
-=======
 
->>>>>>> main
 class ParentProfile(TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="parent_profile")
     profession = models.CharField(max_length=120, blank=True)

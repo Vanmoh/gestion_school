@@ -16,6 +16,7 @@ import 'features/auth/presentation/auth_controller.dart';
 import 'features/auth/domain/auth_user.dart';
 import 'features/auth/presentation/login_page.dart';
 import 'features/canteen/presentation/canteen_page.dart';
+import 'features/backup/presentation/backup_restore_page.dart';
 import 'features/dashboard/presentation/dashboard_controller.dart';
 import 'features/dashboard/presentation/dashboard_page.dart';
 import 'features/exams/presentation/exams_controller.dart';
@@ -430,6 +431,12 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       view: ActivityLogsPage(),
     ),
     _AdminMenuItem(
+      keyName: 'backup_restore',
+      label: 'Backup & Restore',
+      icon: Icons.backup_table_outlined,
+      view: BackupRestorePage(),
+    ),
+    _AdminMenuItem(
       keyName: 'users',
       label: 'Gestion des utilisateurs',
       icon: Icons.group_outlined,
@@ -506,6 +513,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         'communication',
         'reports',
         'activity_logs',
+        'backup_restore',
       ],
       collapsible: true,
     ),

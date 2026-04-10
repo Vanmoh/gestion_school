@@ -1,10 +1,7 @@
 from decimal import Decimal
 from rest_framework import serializers
 from .term_utils import normalize_term
-<<<<<<< HEAD
-=======
 from apps.accounts.models import UserRole
->>>>>>> main
 from .models import (
     AcademicYear,
     Announcement,
@@ -40,10 +37,7 @@ from .models import (
     Teacher,
     TeacherAttendance,
     TeacherAssignment,
-<<<<<<< HEAD
-=======
     TeacherAvailabilitySlot,
->>>>>>> main
     TeacherScheduleSlot,
     TimetablePublication,
     TeacherPayroll,
@@ -109,11 +103,8 @@ class TeacherSerializer(serializers.ModelSerializer):
     user_first_name = serializers.SerializerMethodField(read_only=True)
     user_last_name = serializers.SerializerMethodField(read_only=True)
     user_username = serializers.SerializerMethodField(read_only=True)
-<<<<<<< HEAD
-=======
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
     etablissement_name = serializers.SerializerMethodField(read_only=True)
->>>>>>> main
 
     def get_user_full_name(self, obj):
         if not obj.user:
@@ -130,13 +121,10 @@ class TeacherSerializer(serializers.ModelSerializer):
     def get_user_username(self, obj):
         return obj.user.username if obj.user else ""
 
-<<<<<<< HEAD
-=======
     def get_etablissement_name(self, obj):
         etablissement = obj.etablissement
         return etablissement.name if etablissement else ""
 
->>>>>>> main
     class Meta:
         model = Teacher
         fields = "__all__"
@@ -346,8 +334,6 @@ class TeacherScheduleSlotSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-<<<<<<< HEAD
-=======
 class TeacherAvailabilitySlotSerializer(serializers.ModelSerializer):
     teacher_name = serializers.SerializerMethodField(read_only=True)
     etablissement_name = serializers.SerializerMethodField(read_only=True)
@@ -420,7 +406,6 @@ class TeacherAvailabilitySlotSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
->>>>>>> main
 class TimetablePublicationSerializer(serializers.ModelSerializer):
     classroom_name = serializers.SerializerMethodField(read_only=True)
     published_by_name = serializers.SerializerMethodField(read_only=True)
@@ -538,15 +523,12 @@ class StudentAcademicHistorySerializer(serializers.ModelSerializer):
 
 class GradeSerializer(serializers.ModelSerializer):
     TERM_ERROR_MESSAGE = "Période invalide. Utilisez uniquement T1, T2 ou T3."
-<<<<<<< HEAD
-=======
     value = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
     homework_scores = serializers.ListField(
         child=serializers.DecimalField(max_digits=5, decimal_places=2),
         required=False,
         allow_empty=True,
     )
->>>>>>> main
 
     def validate_term(self, value):
         normalized = normalize_term(value)
@@ -560,11 +542,6 @@ class GradeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("La note doit être comprise entre 0 et 20.")
         return value
 
-<<<<<<< HEAD
-    def validate(self, attrs):
-        attrs = super().validate(attrs)
-
-=======
     def validate_homework_scores(self, value):
         if value is None:
             return []
@@ -599,7 +576,6 @@ class GradeSerializer(serializers.ModelSerializer):
             attrs["value"] = average.quantize(Decimal("0.01"))
             attrs["homework_scores"] = [str(score) for score in provided_homework_scores]
 
->>>>>>> main
         student = attrs.get("student") or getattr(self.instance, "student", None)
         classroom = attrs.get("classroom") or getattr(self.instance, "classroom", None)
         subject = attrs.get("subject") or getattr(self.instance, "subject", None)
