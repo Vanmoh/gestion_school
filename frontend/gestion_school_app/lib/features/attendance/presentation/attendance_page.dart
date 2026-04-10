@@ -2,6 +2,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../auth/presentation/auth_controller.dart';
 import '../domain/attendance_student.dart';
 import 'attendance_controller.dart';
 
@@ -15,6 +16,7 @@ class AttendancePage extends ConsumerStatefulWidget {
 class _AttendancePageState extends ConsumerState<AttendancePage> {
   final _formKey = GlobalKey<FormState>();
   final _reasonController = TextEditingController();
+  final _conduiteController = TextEditingController(text: '18');
 
   int? _selectedStudentId;
   DateTime _selectedDate = DateTime.now();
@@ -24,7 +26,26 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   @override
   void dispose() {
     _reasonController.dispose();
+    _conduiteController.dispose();
     super.dispose();
+  }
+
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
   }
 
   @override
@@ -33,18 +54,21 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     final attendancesAsync = ref.watch(attendancesProvider);
     final statsAsync = ref.watch(attendanceMonthlyStatsProvider);
     final mutationState = ref.watch(attendanceMutationProvider);
+    final authState = ref.watch(authControllerProvider);
+    final userRole = authState.valueOrNull?.role;
+    final canEditConduite =
+        userRole == 'supervisor' || userRole == 'super_admin';
 
     ref.listen<AsyncValue<void>>(attendanceMutationProvider, (prev, next) {
       if (prev?.isLoading == true && !next.isLoading && mounted) {
         if (next.hasError) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Erreur enregistrement: ${next.error}')),
-          );
+          _showMessage('Erreur enregistrement: ${next.error}');
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Absence/retard enregistré')),
-          );
+          _showMessage('Absence/retard enregistré', isSuccess: true);
           _reasonController.clear();
+          if (canEditConduite) {
+            _conduiteController.text = '18';
+          }
           setState(() {
             _isAbsent = true;
             _isLate = false;
@@ -195,6 +219,20 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                         labelText: 'Motif / remarque',
                       ),
                     ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      controller: _conduiteController,
+                      enabled: canEditConduite,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: 'Conduite (/20)',
+                        helperText: canEditConduite
+                            ? 'Modifiable par surveillant/super admin.'
+                            : 'Lecture seule: modifiable par surveillant/super admin.',
+                      ),
+                    ),
                     const SizedBox(height: 12),
                     FilledButton(
                       onPressed: mutationState.isLoading
@@ -204,6 +242,25 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                               if (studentId == null) {
                                 return;
                               }
+
+                              double? conduite;
+                              if (canEditConduite) {
+                                conduite = double.tryParse(
+                                  _conduiteController.text.trim().replaceAll(
+                                    ',',
+                                    '.',
+                                  ),
+                                );
+                                if (conduite == null ||
+                                    conduite < 0 ||
+                                    conduite > 20) {
+                                  _showMessage(
+                                    'La conduite doit être comprise entre 0 et 20.',
+                                  );
+                                  return;
+                                }
+                              }
+
                               await ref
                                   .read(attendanceMutationProvider.notifier)
                                   .createAttendance(
@@ -212,6 +269,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                                     isAbsent: _isAbsent,
                                     isLate: _isLate,
                                     reason: _reasonController.text.trim(),
+                                    conduite: conduite,
                                   );
                             },
                       child: mutationState.isLoading
@@ -251,7 +309,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                             '${item.studentFullName} (${item.studentMatricule})',
                           ),
                           subtitle: Text(
-                            '${item.date} • ${item.isAbsent ? 'Absent' : 'Présent'} • ${item.isLate ? 'Retard' : 'À l\'heure'}',
+                            '${item.date} • ${item.isAbsent ? 'Absent' : 'Présent'} • ${item.isLate ? 'Retard' : 'À l\'heure'} • Conduite: ${item.conduite.toStringAsFixed(2)}',
                           ),
                           trailing: item.reason.isEmpty
                               ? null

@@ -2,6 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 from decouple import config
 import dj_database_url
+from corsheaders.defaults import default_headers
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -10,9 +11,26 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 def _csv_setting(name: str, default: str = "") -> list[str]:
     return [value.strip() for value in config(name, default=default).split(",") if value.strip()]
 
-SECRET_KEY = config("SECRET_KEY", default="change-me-in-production")
-DEBUG = config("DEBUG", cast=bool, default=False)
-ALLOWED_HOSTS = _csv_setting("ALLOWED_HOSTS", default="*")
+DEBUG = config("DEBUG", cast=bool, default=True)
+
+_secret_key = config("SECRET_KEY", default="").strip()
+if _secret_key:
+    SECRET_KEY = _secret_key
+elif DEBUG:
+    SECRET_KEY = "dev-insecure-key-change-me"
+else:
+    raise ImproperlyConfigured(
+        "SECRET_KEY is required when DEBUG=False. "
+        "Set a strong SECRET_KEY in environment variables."
+    )
+
+_default_allowed_hosts = "localhost,127.0.0.1,0.0.0.0" if DEBUG else ""
+ALLOWED_HOSTS = _csv_setting("ALLOWED_HOSTS", default=_default_allowed_hosts)
+if not DEBUG and not ALLOWED_HOSTS:
+    raise ImproperlyConfigured(
+        "ALLOWED_HOSTS is required when DEBUG=False. "
+        "Set ALLOWED_HOSTS to your domain(s), separated by commas."
+    )
 
 DATABASE_URL = config("DATABASE_URL", default="").strip()
 DB_CONN_MAX_AGE = config("DB_CONN_MAX_AGE", cast=int, default=600)
@@ -43,6 +61,7 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "apps.common.middleware.RequestTimingMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "apps.common.middleware.ActivityLogMiddleware",
@@ -116,8 +135,23 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-CORS_ALLOW_ALL_ORIGINS = config("CORS_ALLOW_ALL_ORIGINS", cast=bool, default=True)
+CORS_ALLOW_ALL_ORIGINS = config(
+    "CORS_ALLOW_ALL_ORIGINS", cast=bool, default=DEBUG
+)
+
+# Never allow wildcard CORS in production even if the env var is misconfigured.
+if not DEBUG and CORS_ALLOW_ALL_ORIGINS:
+    CORS_ALLOW_ALL_ORIGINS = False
+
 CORS_ALLOWED_ORIGINS = _csv_setting("CORS_ALLOWED_ORIGINS") if not CORS_ALLOW_ALL_ORIGINS else []
+if not DEBUG and not CORS_ALLOW_ALL_ORIGINS and not CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS = [
+        config("WEB_APP_ORIGIN", default="https://gestion-school-web.onrender.com")
+    ]
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-etablissement-id",
+    "x-etablissement-name",
+]
 CSRF_TRUSTED_ORIGINS = _csv_setting("CSRF_TRUSTED_ORIGINS")
 
 USE_X_FORWARDED_HOST = config("USE_X_FORWARDED_HOST", cast=bool, default=True)
@@ -175,6 +209,9 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 
 ENABLE_FILE_LOGGING = config("ENABLE_FILE_LOGGING", cast=bool, default=True)
+ENABLE_PROFILING_HEADERS = config(
+    "ENABLE_PROFILING_HEADERS", cast=bool, default=DEBUG
+)
 LOG_DIR = BASE_DIR / "logs"
 LOG_FILE_PATH = LOG_DIR / "app.log"
 

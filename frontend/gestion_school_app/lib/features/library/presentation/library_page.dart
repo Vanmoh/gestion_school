@@ -74,9 +74,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
       });
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur chargement bibliothèque: $error')),
-      );
+      _showMessage('Erreur chargement bibliothèque: $error');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -91,9 +89,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
         _bookIsbnController.text.trim().isEmpty ||
         total == null ||
         available == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Complétez les champs livre.')),
-      );
+      _showMessage('Complétez les champs livre.');
       return;
     }
 
@@ -119,15 +115,11 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
       _bookIsbnController.clear();
       _bookTotalController.text = '1';
       _bookAvailableController.text = '1';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Livre créé avec succès.')));
+      _showMessage('Livre créé avec succès.', isSuccess: true);
       await _loadData();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Erreur création livre: $error')));
+      _showMessage('Erreur création livre: $error');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -139,9 +131,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     final penalty = double.tryParse(_borrowPenaltyController.text.trim()) ?? 0;
 
     if (student == null || book == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sélectionnez élève et livre.')),
-      );
+      _showMessage('Sélectionnez élève et livre.');
       return;
     }
 
@@ -162,20 +152,37 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
           );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Emprunt enregistré.')));
+      _showMessage('Emprunt enregistré.', isSuccess: true);
       await _loadData();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur enregistrement emprunt: $error')),
-      );
+      _showMessage('Erreur enregistrement emprunt: $error');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
+<<<<<<< HEAD
+=======
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
+  }
+
+>>>>>>> main
   Future<void> _refreshLibrary() async {
     await _loadData();
   }

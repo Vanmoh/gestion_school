@@ -51,6 +51,27 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     await Future<void>.delayed(const Duration(milliseconds: 120));
   }
 
+<<<<<<< HEAD
+=======
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
+  }
+
+>>>>>>> main
   Widget _metricChip(String label, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -96,13 +117,9 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     ref.listen<AsyncValue<void>>(examMutationProvider, (prev, next) {
       if (prev?.isLoading == true && !next.isLoading && mounted) {
         if (next.hasError) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Erreur: ${next.error}')));
+          _showMessage('Erreur: ${next.error}');
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Opération examen réussie')),
-          );
+          _showMessage('Opération examen réussie', isSuccess: true);
         }
       }
     });

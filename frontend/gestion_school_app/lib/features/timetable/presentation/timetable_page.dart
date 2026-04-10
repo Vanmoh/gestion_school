@@ -8,6 +8,11 @@ import 'package:printing/printing.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
+<<<<<<< HEAD
+=======
+import '../../../models/etablissement.dart';
+import '../../auth/presentation/auth_controller.dart';
+>>>>>>> main
 import 'timetable_workload.dart';
 
 class TimetablePage extends ConsumerStatefulWidget {
@@ -37,6 +42,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   String _activeApiBaseUrl = ApiConstants.baseUrl;
   bool _usingCustomApiBaseUrl = false;
   bool _apiUrlResetAttempted = false;
+<<<<<<< HEAD
+=======
+  bool _isTeacherUser = false;
+  int? _loggedTeacherId;
+  Set<int> _teacherAssignmentIds = <int>{};
+  Set<int> _teacherClassroomIds = <int>{};
+>>>>>>> main
 
   static const List<String> _dayOrder = [
     'MON',
@@ -151,6 +163,38 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
       if (!mounted) return;
 
+<<<<<<< HEAD
+=======
+      final authUser = ref.read(authControllerProvider).value;
+      final isTeacherUser = authUser?.role == 'teacher';
+
+      int? loggedTeacherId;
+      Set<int> teacherAssignmentIds = <int>{};
+      Set<int> teacherClassroomIds = <int>{};
+
+      if (isTeacherUser && authUser != null) {
+        final ownTeacher = results[0].firstWhere(
+          (row) => _asInt(row['user']) == authUser.id,
+          orElse: () => <String, dynamic>{},
+        );
+        final teacherId = _asInt(ownTeacher['id']);
+        if (teacherId > 0) {
+          loggedTeacherId = teacherId;
+          final ownAssignments = results[3]
+              .where((row) => _asInt(row['teacher']) == teacherId)
+              .toList();
+          teacherAssignmentIds = ownAssignments
+              .map((row) => _asInt(row['id']))
+              .where((id) => id > 0)
+              .toSet();
+          teacherClassroomIds = ownAssignments
+              .map((row) => _asInt(row['classroom']))
+              .where((id) => id > 0)
+              .toSet();
+        }
+      }
+
+>>>>>>> main
       final hasSlotEndpoint404 = failures.any(
         (entry) =>
             entry.contains('/teacher-schedule-slots/') &&
@@ -200,12 +244,31 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         _activeApiBaseUrl = activeApiUrl;
         _usingCustomApiBaseUrl = hasStoredCustomApi;
         _scheduleApiSupported = scheduleApiSupported;
+<<<<<<< HEAD
 
         final classIds = _classrooms.map((row) => _asInt(row['id'])).toSet();
         if (_selectedClassroom == null ||
             !classIds.contains(_selectedClassroom)) {
           _selectedClassroom = _classrooms.isNotEmpty
               ? _asInt(_classrooms.first['id'])
+=======
+        _isTeacherUser = isTeacherUser;
+        _loggedTeacherId = loggedTeacherId;
+        _teacherAssignmentIds = teacherAssignmentIds;
+        _teacherClassroomIds = teacherClassroomIds;
+        if (_isTeacherUser) {
+          _viewMode = 'teacher';
+        }
+
+        final classIds = _visibleClassrooms()
+            .map((row) => _asInt(row['id']))
+            .toSet();
+        if (_selectedClassroom == null ||
+            !classIds.contains(_selectedClassroom)) {
+          final visible = _visibleClassrooms();
+          _selectedClassroom = visible.isNotEmpty
+              ? _asInt(visible.first['id'])
+>>>>>>> main
               : null;
         }
       });
@@ -298,7 +361,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         'emploi_du_temps_${_slugify(className)}_${DateTime.now().millisecondsSinceEpoch}.csv';
 
     await Printing.sharePdf(bytes: bytes, filename: fileName);
+<<<<<<< HEAD
     _showMessage('Export Excel (CSV) lancé: $fileName');
+=======
+    _showMessage('Export Excel (CSV) lancé: $fileName', isSuccess: true);
+>>>>>>> main
   }
 
   Future<void> _refreshTimetable() async {
@@ -362,6 +429,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         lockAfterPublish
             ? 'Planning publié et verrouillé.'
             : 'Planning publié sans verrouillage.',
+<<<<<<< HEAD
+=======
+        isSuccess: true,
+>>>>>>> main
       );
       await _loadData();
     } catch (error) {
@@ -396,7 +467,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           );
 
       if (!mounted) return;
+<<<<<<< HEAD
       _showMessage(lock ? 'Planning verrouillé.' : 'Planning déverrouillé.');
+=======
+      _showMessage(
+        lock ? 'Planning verrouillé.' : 'Planning déverrouillé.',
+        isSuccess: true,
+      );
+>>>>>>> main
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -428,7 +506,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           );
 
       if (!mounted) return;
+<<<<<<< HEAD
       _showMessage('Planning remis en brouillon.');
+=======
+      _showMessage('Planning remis en brouillon.', isSuccess: true);
+>>>>>>> main
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -457,11 +539,29 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
     setState(() => _saving = true);
     try {
+<<<<<<< HEAD
+=======
+      final selectedEtablissement = ref.read(etablissementProvider).selected;
+      final scopedQueryParameters = <String, dynamic>{
+        if (queryParameters != null) ...queryParameters,
+        if (selectedEtablissement?.id != null)
+          'etablissement': selectedEtablissement!.id,
+        if ((selectedEtablissement?.name ?? '').trim().isNotEmpty)
+          'etablissement_name': selectedEtablissement!.name.trim(),
+      };
+
+>>>>>>> main
       final response = await ref
           .read(dioProvider)
           .get(
             endpoint,
+<<<<<<< HEAD
             queryParameters: queryParameters,
+=======
+            queryParameters: scopedQueryParameters.isEmpty
+                ? null
+                : scopedQueryParameters,
+>>>>>>> main
             options: Options(responseType: ResponseType.bytes),
           );
 
@@ -469,7 +569,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       await Printing.sharePdf(bytes: bytes, filename: filename);
 
       if (!mounted) return;
+<<<<<<< HEAD
       _showMessage('Export lancé: $filename');
+=======
+      _showMessage('Export lancé: $filename', isSuccess: true);
+>>>>>>> main
     } catch (error) {
       if (!mounted) return;
       _markScheduleApiUnsupportedFromError(error);
@@ -509,6 +613,30 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     );
   }
 
+<<<<<<< HEAD
+=======
+  Future<Uint8List> _fetchTimetablePdfBytes({int? classroomId}) async {
+    final selectedEtablissement = ref.read(etablissementProvider).selected;
+    final queryParameters = <String, dynamic>{
+      if (classroomId != null && classroomId > 0) 'classroom': classroomId,
+      if (selectedEtablissement?.id != null)
+        'etablissement': selectedEtablissement!.id,
+      if ((selectedEtablissement?.name ?? '').trim().isNotEmpty)
+        'etablissement_name': selectedEtablissement!.name.trim(),
+    };
+
+    final response = await ref
+        .read(dioProvider)
+        .get(
+          '/teacher-schedule-slots/export_pdf/',
+          queryParameters: queryParameters,
+          options: Options(responseType: ResponseType.bytes),
+        );
+
+    return _toUint8List(response.data);
+  }
+
+>>>>>>> main
   Future<void> _printSelectedClassPdfFromBackend() async {
     if (!_requireScheduleApiSupported('impression PDF')) {
       return;
@@ -522,6 +650,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
     setState(() => _saving = true);
     try {
+<<<<<<< HEAD
       final response = await ref
           .read(dioProvider)
           .get(
@@ -531,6 +660,9 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           );
 
       final bytes = _toUint8List(response.data);
+=======
+      final bytes = await _fetchTimetablePdfBytes(classroomId: classId);
+>>>>>>> main
       await Printing.layoutPdf(onLayout: (_) async => bytes);
     } catch (error) {
       if (!mounted) return;
@@ -543,6 +675,141 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
+<<<<<<< HEAD
+=======
+  Future<void> _printGlobalPdfFromBackend() async {
+    if (!_requireScheduleApiSupported('impression globale PDF')) {
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final bytes = await _fetchTimetablePdfBytes();
+      await Printing.layoutPdf(onLayout: (_) async => bytes);
+    } catch (error) {
+      if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
+      _showMessage('Erreur impression globale PDF: ${_extractErrorMessage(error)}');
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<void> _openTimetablePrintFloatingWindow() async {
+    if (!_requireScheduleApiSupported('impression planning')) {
+      return;
+    }
+
+    final visibleClassrooms = _visibleClassrooms();
+
+    if (visibleClassrooms.isEmpty) {
+      _showMessage('Aucune classe disponible pour l\'impression.');
+      return;
+    }
+
+    int selectedClass = _selectedClassroom ?? _asInt(visibleClassrooms.first['id']);
+    if (!visibleClassrooms.any((row) => _asInt(row['id']) == selectedClass)) {
+      selectedClass = _asInt(visibleClassrooms.first['id']);
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: const Text('Impression emplois du temps'),
+              content: SizedBox(
+                width: 1180,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<int>(
+                            initialValue: selectedClass,
+                            decoration: const InputDecoration(
+                              labelText: 'Classe',
+                            ),
+                            items: visibleClassrooms
+                                .map(
+                                  (row) => DropdownMenuItem<int>(
+                                    value: _asInt(row['id']),
+                                    child: Text((row['name'] ?? '').toString()),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setDialogState(() => selectedClass = value);
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      constraints: const BoxConstraints(maxHeight: 460),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.outlineVariant.withValues(alpha: 0.65),
+                        ),
+                      ),
+                      child: PdfPreview(
+                        build: (_) async {
+                          return _fetchTimetablePdfBytes(
+                            classroomId: selectedClass,
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: _saving
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Fermer'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: _saving
+                      ? null
+                      : () async {
+                          setState(() => _selectedClassroom = selectedClass);
+                          await _printGlobalPdfFromBackend();
+                        },
+                  icon: const Icon(Icons.print_outlined),
+                  label: const Text('Imprimer global'),
+                ),
+                FilledButton.icon(
+                  onPressed: _saving
+                      ? null
+                      : () async {
+                          setState(() => _selectedClassroom = selectedClass);
+                          await _printSelectedClassPdfFromBackend();
+                        },
+                  icon: const Icon(Icons.print),
+                  label: const Text('Imprimer classe'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+>>>>>>> main
   Future<void> _openDuplicateScheduleDialog() async {
     if (!_requireScheduleApiSupported('duplication de planning')) {
       return;
@@ -665,6 +932,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     ),
                   ],
                 ),
+<<<<<<< HEAD
               ),
               actions: [
                 TextButton(
@@ -727,6 +995,465 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       _showMessage(
         'Duplication terminée: créés $created, mis à jour $updated, '
         'conflits $skippedConflicts, non mappés $skippedUnmapped.',
+      );
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
+      _showMessage('Erreur duplication: ${_extractErrorMessage(error)}');
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  List<String> _predictSlotConflicts({
+    required int assignmentId,
+    required String dayCode,
+    required TimeOfDay start,
+    required TimeOfDay end,
+    required String room,
+    int? excludeSlotId,
+  }) {
+    final assignmentById = _assignmentById();
+    final selected = assignmentById[assignmentId];
+    if (selected == null) return const <String>[];
+
+    final startMinutes = start.hour * 60 + start.minute;
+    final endMinutes = end.hour * 60 + end.minute;
+    final selectedClassId = _asInt(selected['classroom']);
+    final selectedTeacherId = _asInt(selected['teacher']);
+    final selectedRoom = room.trim().toLowerCase();
+
+    final messages = <String>{};
+    for (final slot in _scheduleSlots) {
+      final slotId = _asInt(slot['id']);
+      if (excludeSlotId != null && slotId == excludeSlotId) {
+        continue;
+      }
+
+      final slotDay = (slot['day_of_week'] ?? '').toString();
+      if (slotDay != dayCode) {
+        continue;
+      }
+
+      final slotStart = _timeToMinutes(slot['start_time']);
+      final slotEnd = _timeToMinutes(slot['end_time']);
+      final isOverlap = slotStart < endMinutes && slotEnd > startMinutes;
+      if (!isOverlap) {
+        continue;
+      }
+
+      final otherAssignment = assignmentById[_asInt(slot['assignment'])];
+      if (otherAssignment == null) {
+        continue;
+      }
+
+      final label =
+          '${_hhmm(slot['start_time'])}-${_hhmm(slot['end_time'])} • '
+          '${otherAssignment['subjectCode']} '
+          '(${_teacherDisplayLabel(otherAssignment['teacherName'], otherAssignment['teacherCode'])})';
+
+      final otherClassId = _asInt(otherAssignment['classroom']);
+      if (otherClassId == selectedClassId) {
+        messages.add('Conflit classe: $label');
+      }
+
+      final otherTeacherId = _asInt(otherAssignment['teacher']);
+      if (otherTeacherId == selectedTeacherId) {
+        messages.add('Conflit enseignant: $label');
+      }
+
+      final otherRoom = (slot['room'] ?? '').toString().trim().toLowerCase();
+      if (selectedRoom.isNotEmpty &&
+          otherRoom.isNotEmpty &&
+          selectedRoom == otherRoom) {
+        messages.add('Conflit salle: $label');
+      }
+    }
+
+    return messages.toList()..sort();
+  }
+
+  String _extractErrorMessage(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map<String, dynamic>) {
+        final nonFieldErrors = data['non_field_errors'];
+        if (nonFieldErrors is List && nonFieldErrors.isNotEmpty) {
+          return nonFieldErrors.map((item) => item.toString()).join(' | ');
+        }
+
+        final detail = data['detail'];
+        if (detail != null && detail.toString().trim().isNotEmpty) {
+          return detail.toString();
+        }
+
+        for (final entry in data.entries) {
+          final value = entry.value;
+          if (value is List && value.isNotEmpty) {
+            return value.map((item) => item.toString()).join(' | ');
+          }
+          if (value is String && value.trim().isNotEmpty) {
+            return value;
+          }
+        }
+      }
+
+      final status = error.response?.statusCode;
+      if (status != null) {
+        final endpoint = error.requestOptions.path;
+        if (endpoint.trim().isNotEmpty) {
+          return 'HTTP $status sur $endpoint';
+        }
+        return 'HTTP $status';
+      }
+
+      final message = error.message;
+      if (message != null && message.trim().isNotEmpty) {
+        return message;
+      }
+    }
+
+    return error.toString();
+  }
+
+  Future<void> _openSlotDialog({
+    Map<String, dynamic>? slot,
+    int? forceClassroomId,
+  }) async {
+    if (!_requireScheduleApiSupported('gestion des horaires')) {
+      return;
+    }
+
+    final classroomId = forceClassroomId ?? _selectedClassroom;
+    if (classroomId == null || classroomId <= 0) {
+      _showMessage('Sélectionnez une classe avant d\'ajouter un horaire.');
+      return;
+    }
+
+    if (_isClassLockedById(classroomId)) {
+      _showMessage(
+        'Emploi du temps verrouillé pour cette classe. Déverrouillez avant modification.',
+      );
+      return;
+    }
+
+    final assignmentById = _assignmentById();
+    final assignmentsByClass = _assignmentsByClass(assignmentById);
+    final classAssignments =
+        assignmentsByClass[classroomId] ?? <Map<String, dynamic>>[];
+
+    if (classAssignments.isEmpty) {
+      _showMessage(
+        'Aucune affectation disponible pour cette classe. Créez d\'abord une affectation.',
+      );
+      return;
+    }
+
+    var selectedAssignment = _asInt(slot?['assignment']);
+    final assignmentIds = classAssignments
+        .map((row) => _asInt(row['id']))
+        .toSet();
+    if (selectedAssignment <= 0 ||
+        !assignmentIds.contains(selectedAssignment)) {
+      selectedAssignment = _asInt(classAssignments.first['id']);
+    }
+
+    var selectedDay = (slot?['day_of_week'] ?? _dayOrder.first).toString();
+    if (!_dayOrder.contains(selectedDay)) {
+      selectedDay = _dayOrder.first;
+    }
+
+    final startController = TextEditingController(
+      text: _hhmm(slot?['start_time']),
+    );
+    final endController = TextEditingController(text: _hhmm(slot?['end_time']));
+    final roomController = TextEditingController(
+      text: (slot?['room'] ?? '').toString(),
+    );
+    final isEdit = slot != null;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        Future<void> pickTime(TextEditingController controller) async {
+          final parsed = _parseTimeOfDay(controller.text.trim());
+          final picked = await showTimePicker(
+            context: dialogContext,
+            initialTime: parsed ?? const TimeOfDay(hour: 8, minute: 0),
+          );
+          if (picked != null) {
+            controller.text = _formatTimeOfDay(picked);
+          }
+        }
+
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            List<String> computeDialogConflicts() {
+              final start = _parseTimeOfDay(startController.text.trim());
+              final end = _parseTimeOfDay(endController.text.trim());
+              if (start == null || end == null) {
+                return const <String>[];
+              }
+
+              final startMinutes = start.hour * 60 + start.minute;
+              final endMinutes = end.hour * 60 + end.minute;
+              if (endMinutes <= startMinutes) {
+                return const <String>[];
+              }
+
+              final excludeSlotId = isEdit
+                  ? _asInt(slot['slotId'] ?? slot['id'])
+                  : null;
+              return _predictSlotConflicts(
+                assignmentId: selectedAssignment,
+                dayCode: selectedDay,
+                start: start,
+                end: end,
+                room: roomController.text.trim(),
+                excludeSlotId: excludeSlotId,
+              );
+            }
+
+            final dialogConflicts = computeDialogConflicts();
+
+            return AlertDialog(
+              title: Text(
+                isEdit ? 'Modifier un horaire' : 'Ajouter un horaire',
+              ),
+              content: SizedBox(
+                width: 520,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text('Classe: ${_classNameById(classroomId)}'),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<int>(
+                      initialValue: selectedAssignment,
+                      decoration: const InputDecoration(
+                        labelText: 'Affectation (matière / enseignant)',
+                      ),
+                      items: classAssignments
+                          .map(
+                            (row) => DropdownMenuItem<int>(
+                              value: _asInt(row['id']),
+                              child: Text(
+                                '${row['subjectCode']} - ${row['subjectName']} • '
+                                '${_teacherDisplayLabel(row['teacherName'], row['teacherCode'])}',
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setDialogState(() => selectedAssignment = value);
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedDay,
+                      decoration: const InputDecoration(labelText: 'Jour'),
+                      items: _dayOrder
+                          .map(
+                            (dayCode) => DropdownMenuItem<String>(
+                              value: dayCode,
+                              child: Text(_dayLabel(dayCode)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setDialogState(() => selectedDay = value);
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: startController,
+                            onChanged: (_) => setDialogState(() {}),
+                            decoration: InputDecoration(
+                              labelText: 'Heure début (HH:MM)',
+                              suffixIcon: IconButton(
+                                onPressed: () => pickTime(startController),
+                                icon: const Icon(Icons.access_time),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: endController,
+                            onChanged: (_) => setDialogState(() {}),
+                            decoration: InputDecoration(
+                              labelText: 'Heure fin (HH:MM)',
+                              suffixIcon: IconButton(
+                                onPressed: () => pickTime(endController),
+                                icon: const Icon(Icons.access_time_filled),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: roomController,
+                      onChanged: (_) => setDialogState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Salle (optionnel)',
+                      ),
+                    ),
+                    if (dialogConflicts.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.shade200),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Conflits détectés',
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            ...dialogConflicts
+                                .take(5)
+                                .map(
+                                  (message) => Text(
+                                    '- $message',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: _saving
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Annuler'),
+                ),
+                FilledButton(
+                  onPressed: _saving
+                      ? null
+                      : () {
+                          final start = _parseTimeOfDay(
+                            startController.text.trim(),
+                          );
+                          final end = _parseTimeOfDay(
+                            endController.text.trim(),
+                          );
+
+                          if (start == null || end == null) {
+                            _showMessage(
+                              'Heures invalides. Format attendu: HH:MM',
+                            );
+                            return;
+                          }
+
+                          final startMinutes = start.hour * 60 + start.minute;
+                          final endMinutes = end.hour * 60 + end.minute;
+                          if (endMinutes <= startMinutes) {
+                            _showMessage(
+                              'L\'heure de fin doit être après l\'heure de début.',
+                            );
+                            return;
+                          }
+
+                          if (dialogConflicts.isNotEmpty) {
+                            _showMessage(
+                              'Conflits détectés. Ajustez l\'horaire avant validation.',
+                            );
+                            return;
+                          }
+
+                          Navigator.of(dialogContext).pop(true);
+                        },
+                  child: Text(isEdit ? 'Modifier' : 'Ajouter'),
+                ),
+              ],
+=======
+              ),
+              actions: [
+                TextButton(
+                  onPressed: _saving
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Annuler'),
+                ),
+                FilledButton(
+                  onPressed: _saving
+                      ? null
+                      : () {
+                          if (sourceClass == targetClass) {
+                            _showMessage(
+                              'La classe source et la classe cible doivent être différentes.',
+                            );
+                            return;
+                          }
+                          if (selectedDays.isEmpty) {
+                            _showMessage('Sélectionnez au moins un jour.');
+                            return;
+                          }
+                          Navigator.of(dialogContext).pop(true);
+                        },
+                  child: const Text('Dupliquer'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirm != true) {
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final response = await ref
+          .read(dioProvider)
+          .post(
+            '/teacher-schedule-slots/duplicate_schedule/',
+            data: {
+              'source_classroom': sourceClass,
+              'target_classroom': targetClass,
+              'days': selectedDays.toList()..sort(),
+              'overwrite': overwrite,
+              'keep_room': keepRoom,
+            },
+          );
+
+      final payload = Map<String, dynamic>.from(response.data as Map);
+      final created = _asInt(payload['created']);
+      final updated = _asInt(payload['updated']);
+      final skippedConflicts = _asInt(payload['skipped_conflicts']);
+      final skippedUnmapped = _asInt(payload['skipped_unmapped']);
+
+      if (!mounted) return;
+      _showMessage(
+        'Duplication terminée: créés $created, mis à jour $updated, '
+        'conflits $skippedConflicts, non mappés $skippedUnmapped.',
+        isSuccess: true,
       );
       await _loadData();
     } catch (error) {
@@ -1197,6 +1924,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       if (!mounted) return;
       _showMessage(
         isEdit ? 'Horaire modifié avec succès.' : 'Horaire ajouté avec succès.',
+        isSuccess: true,
       );
       await _loadData();
     } catch (error) {
@@ -1205,6 +1933,569 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       _showMessage(
         'Erreur enregistrement horaire: ${_extractErrorMessage(error)}',
       );
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<void> _openSlotBatchFloatingWindow({int? forceClassroomId}) async {
+    if (!_requireScheduleApiSupported('ajout en lot des horaires')) {
+      return;
+    }
+
+    final assignmentById = _assignmentById();
+    final assignmentsByClass = _assignmentsByClass(assignmentById);
+    final slotsByClass = _slotsByClass(assignmentById);
+    final visibleClassrooms = _visibleClassrooms();
+
+    if (visibleClassrooms.isEmpty) {
+      _showMessage('Aucune classe disponible.');
+      return;
+    }
+
+    int selectedClass = forceClassroomId ?? _selectedClassroom ?? _asInt(visibleClassrooms.first['id']);
+    if (!visibleClassrooms.any((row) => _asInt(row['id']) == selectedClass)) {
+      selectedClass = _asInt(visibleClassrooms.first['id']);
+    }
+
+    List<Map<String, dynamic>> classAssignments =
+        assignmentsByClass[selectedClass] ?? <Map<String, dynamic>>[];
+    if (classAssignments.isEmpty) {
+      _showMessage('Aucune affectation disponible pour cette classe.');
+      return;
+    }
+
+    int selectedAssignment = _asInt(classAssignments.first['id']);
+    final selectedCells = <String>{};
+    final roomController = TextEditingController();
+
+    const fallbackRanges = <String>[
+      '08:00-09:00',
+      '09:00-10:00',
+      '10:00-11:00',
+      '11:00-12:00',
+      '14:00-15:00',
+      '15:00-16:00',
+      '16:00-17:00',
+    ];
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            final screenSize = MediaQuery.sizeOf(dialogContext);
+            final dialogWidth = screenSize.width > 1200
+                ? 1080.0
+                : (screenSize.width * 0.94).clamp(320.0, 1080.0);
+            final dialogHeight = screenSize.height > 900
+                ? 820.0
+                : (screenSize.height * 0.88).clamp(520.0, 820.0);
+            final isLocked = _isClassLockedById(selectedClass);
+            final classSlots =
+                slotsByClass[selectedClass] ?? const <Map<String, dynamic>>[];
+            final existingRanges = classSlots
+                .map(_slotRange)
+                .where((range) => range.trim().isNotEmpty)
+                .toSet()
+                .toList()
+              ..sort((a, b) => _rangeStartMinutes(a).compareTo(_rangeStartMinutes(b)));
+            final presetRanges = existingRanges.isNotEmpty
+                ? existingRanges
+                : fallbackRanges;
+            final matrix = _classMatrix(classSlots);
+            classAssignments =
+                assignmentsByClass[selectedClass] ?? <Map<String, dynamic>>[];
+            if (classAssignments.isNotEmpty &&
+                !classAssignments.any(
+                  (row) => _asInt(row['id']) == selectedAssignment,
+                )) {
+              selectedAssignment = _asInt(classAssignments.first['id']);
+            }
+
+            return Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 20,
+              ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: dialogWidth,
+                  maxHeight: dialogHeight,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Ajouter des horaires par créneaux',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 14),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              DropdownButtonFormField<int>(
+                                initialValue: selectedClass,
+                                decoration: const InputDecoration(
+                                  labelText: 'Classe',
+                                ),
+                                items: visibleClassrooms
+                                    .map(
+                                      (row) => DropdownMenuItem<int>(
+                                        value: _asInt(row['id']),
+                                        child: Text(
+                                          (row['name'] ?? '').toString(),
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) {
+                                  if (value == null) return;
+                                  setDialogState(() {
+                                    selectedClass = value;
+                                    selectedCells.clear();
+                                  });
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              DropdownButtonFormField<int>(
+                                initialValue: selectedAssignment,
+                                decoration: const InputDecoration(
+                                  labelText: 'Affectation (matière / enseignant)',
+                                ),
+                                items: classAssignments
+                                    .map(
+                                      (row) => DropdownMenuItem<int>(
+                                        value: _asInt(row['id']),
+                                        child: Text(
+                                          '${row['subjectCode']} - ${row['subjectName']} • '
+                                          '${_teacherDisplayLabel(row['teacherName'], row['teacherCode'])}',
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) {
+                                  if (value == null) return;
+                                  setDialogState(
+                                    () => selectedAssignment = value,
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: roomController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Salle (optionnel)',
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                existingRanges.isNotEmpty
+                                    ? 'Créneaux de la classe: cliquez sur les cases libres à ajouter'
+                                    : 'Créneaux: cliquez sur les cases libres à ajouter',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                constraints: BoxConstraints(
+                                  maxHeight: dialogHeight - 290,
+                                ),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .outlineVariant,
+                                  ),
+                                ),
+                                child: SingleChildScrollView(
+                                  child: SingleChildScrollView(
+                                    scrollDirection: Axis.horizontal,
+                                    child: DataTable(
+                                      columnSpacing: 8,
+                                      horizontalMargin: 12,
+                                      dataRowMinHeight: 64,
+                                      dataRowMaxHeight: 96,
+                                      headingRowColor: WidgetStatePropertyAll(
+                                        Theme.of(context)
+                                            .colorScheme
+                                            .surfaceContainer,
+                                      ),
+                                      columns: [
+                                        const DataColumn(label: Text('Horaire')),
+                                        ..._dayOrder.map(
+                                          (dayCode) => DataColumn(
+                                            label: Text(_dayLabel(dayCode)),
+                                          ),
+                                        ),
+                                      ],
+                                      rows: presetRanges.map((range) {
+                                        final dayMap = matrix[range] ??
+                                            const <String, List<Map<String, dynamic>>>{};
+                                        return DataRow(
+                                          cells: [
+                                            DataCell(
+                                              SizedBox(
+                                                width: 88,
+                                                child: Text(range),
+                                              ),
+                                            ),
+                                            ..._dayOrder.map((dayCode) {
+                                              final cellKey = '$dayCode|$range';
+                                              final cellSlots = dayMap[dayCode] ??
+                                                  const <Map<String, dynamic>>[];
+                                              final occupied = cellSlots.isNotEmpty;
+                                              final selected = selectedCells
+                                                  .contains(cellKey);
+                                              final cardColor = occupied
+                                                  ? Theme.of(context)
+                                                      .colorScheme
+                                                      .surfaceContainerHighest
+                                                  : selected
+                                                  ? Theme.of(context)
+                                                      .colorScheme
+                                                      .primaryContainer
+                                                  : Theme.of(context)
+                                                      .colorScheme
+                                                      .surfaceContainerLowest;
+                                              final borderColor = selected
+                                                  ? Theme.of(context)
+                                                      .colorScheme
+                                                      .primary
+                                                  : Theme.of(context)
+                                                      .colorScheme
+                                                      .outlineVariant;
+
+                                              return DataCell(
+                                                InkWell(
+                                                  onTap: (occupied || isLocked)
+                                                      ? null
+                                                      : () {
+                                                          setDialogState(() {
+                                                            if (selected) {
+                                                              selectedCells.remove(cellKey);
+                                                            } else {
+                                                              selectedCells.add(cellKey);
+                                                            }
+                                                          });
+                                                        },
+                                                  child: Container(
+                                                    width: 116,
+                                                    padding: const EdgeInsets.all(8),
+                                                    decoration: BoxDecoration(
+                                                      color: cardColor,
+                                                      borderRadius:
+                                                          BorderRadius.circular(10),
+                                                      border: Border.all(
+                                                        color: borderColor,
+                                                      ),
+                                                    ),
+                                                    child: occupied
+                                                        ? Column(
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment.start,
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment.center,
+                                                            children: [
+                                                              Text(
+                                                                '${cellSlots.first['subjectCode'] ?? ''} - ${cellSlots.first['subjectName'] ?? ''}',
+                                                                maxLines: 2,
+                                                                overflow: TextOverflow.ellipsis,
+                                                                style: Theme.of(context)
+                                                                    .textTheme
+                                                                    .bodySmall
+                                                                    ?.copyWith(
+                                                                      fontWeight: FontWeight.w700,
+                                                                    ),
+                                                              ),
+                                                              const SizedBox(height: 4),
+                                                              Text(
+                                                                'Occupé',
+                                                                style: Theme.of(context)
+                                                                    .textTheme
+                                                                    .bodySmall,
+                                                              ),
+                                                            ],
+                                                          )
+                                                        : Column(
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment.start,
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment.center,
+                                                            children: [
+                                                              Row(
+                                                                children: [
+                                                                  Icon(
+                                                                    selected
+                                                                        ? Icons.check_circle
+                                                                        : Icons.add_circle_outline,
+                                                                    size: 17,
+                                                                  ),
+                                                                  const SizedBox(width: 6),
+                                                                  Expanded(
+                                                                    child: Text(
+                                                                      selected
+                                                                          ? 'Sélectionné'
+                                                                          : 'Disponible',
+                                                                      maxLines: 1,
+                                                                      overflow: TextOverflow.ellipsis,
+                                                                      style: Theme.of(context)
+                                                                          .textTheme
+                                                                          .bodySmall
+                                                                          ?.copyWith(
+                                                                            fontWeight: FontWeight.w700,
+                                                                          ),
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                              const SizedBox(height: 4),
+                                                              Text(
+                                                                selected
+                                                                    ? 'Cliquer pour retirer'
+                                                                    : 'Cliquer pour ajouter',
+                                                                maxLines: 2,
+                                                                overflow: TextOverflow.ellipsis,
+                                                                style: Theme.of(context)
+                                                                    .textTheme
+                                                                    .bodySmall,
+                                                              ),
+                                                            ],
+                                                          ),
+                                                  ),
+                                                ),
+                                              );
+                                            }),
+                                          ],
+                                        );
+                                      }).toList(),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                '${selectedCells.length} créneau(x) sélectionné(s)',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                              if (isLocked) ...[
+                                const SizedBox(height: 10),
+                                const Text(
+                                  'Planning verrouillé pour cette classe: ajoutez d\'abord un déverrouillage.',
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Divider(height: 1),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: _saving
+                                ? null
+                                : () => Navigator.of(dialogContext).pop(false),
+                            child: const Text('Annuler'),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            onPressed: (_saving || _isClassLockedById(selectedClass))
+                                ? null
+                                : () {
+                                    if (selectedCells.isEmpty) {
+                                      _showMessage('Sélectionnez au moins une case de créneau.');
+                                      return;
+                                    }
+                                    Navigator.of(dialogContext).pop(true);
+                                  },
+                            child: const Text('Ajouter les créneaux'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+>>>>>>> main
+            );
+          },
+        );
+      },
+    );
+
+<<<<<<< HEAD
+    if (confirm != true) {
+      startController.dispose();
+      endController.dispose();
+      roomController.dispose();
+      return;
+    }
+
+    final start = _parseTimeOfDay(startController.text.trim());
+    final end = _parseTimeOfDay(endController.text.trim());
+
+    if (start == null || end == null) {
+      _showMessage('Heures invalides. Format attendu: HH:MM');
+      startController.dispose();
+      endController.dispose();
+      roomController.dispose();
+      return;
+    }
+
+    final startMinutes = start.hour * 60 + start.minute;
+    final endMinutes = end.hour * 60 + end.minute;
+    if (endMinutes <= startMinutes) {
+      _showMessage('L\'heure de fin doit être après l\'heure de début.');
+      startController.dispose();
+      endController.dispose();
+      roomController.dispose();
+      return;
+    }
+
+    final liveConflicts = _predictSlotConflicts(
+      assignmentId: selectedAssignment,
+      dayCode: selectedDay,
+      start: start,
+      end: end,
+      room: roomController.text.trim(),
+      excludeSlotId: isEdit ? _asInt(slot['slotId'] ?? slot['id']) : null,
+    );
+    if (liveConflicts.isNotEmpty) {
+      _showMessage('Conflits détectés. Ajustez l\'horaire avant validation.');
+      startController.dispose();
+      endController.dispose();
+      roomController.dispose();
+      return;
+    }
+
+    final payload = {
+      'assignment': selectedAssignment,
+      'day_of_week': selectedDay,
+      'start_time': _toApiTime(start),
+      'end_time': _toApiTime(end),
+      'room': roomController.text.trim(),
+    };
+
+    startController.dispose();
+    endController.dispose();
+    roomController.dispose();
+
+    setState(() => _saving = true);
+    try {
+      final dio = ref.read(dioProvider);
+      if (isEdit) {
+        final slotId = _asInt(slot['slotId'] ?? slot['id']);
+        await dio.patch('/teacher-schedule-slots/$slotId/', data: payload);
+      } else {
+        await dio.post('/teacher-schedule-slots/', data: payload);
+=======
+    final roomValue = roomController.text.trim();
+    roomController.dispose();
+
+    if (confirm != true) return;
+
+    if (_isClassLockedById(selectedClass)) {
+      _showMessage('Classe verrouillée: ajout impossible.');
+      return;
+    }
+
+    final selections = selectedCells.toList()
+      ..sort((a, b) {
+        final left = a.split('|');
+        final right = b.split('|');
+        final byDay = _dayIndex(left.first).compareTo(_dayIndex(right.first));
+        if (byDay != 0) return byDay;
+        return _rangeStartMinutes(left.last).compareTo(_rangeStartMinutes(right.last));
+      });
+
+    setState(() => _saving = true);
+    try {
+      final dio = ref.read(dioProvider);
+      var created = 0;
+      var skippedConflicts = 0;
+      var failed = 0;
+
+      for (final selection in selections) {
+        final parts = selection.split('|');
+        if (parts.length != 2) {
+          failed += 1;
+          continue;
+        }
+
+        final dayCode = parts.first;
+        final range = parts.last;
+        final rangeParts = range.split('-');
+        if (rangeParts.length != 2) {
+          failed += 1;
+          continue;
+        }
+
+        final start = _parseTimeOfDay(rangeParts[0].trim());
+        final end = _parseTimeOfDay(rangeParts[1].trim());
+        if (start == null || end == null) {
+          failed += 1;
+          continue;
+        }
+
+        final conflicts = _predictSlotConflicts(
+          assignmentId: selectedAssignment,
+          dayCode: dayCode,
+          start: start,
+          end: end,
+          room: roomValue,
+        );
+        if (conflicts.isNotEmpty) {
+          skippedConflicts += 1;
+          continue;
+        }
+
+        try {
+          await dio.post(
+            '/teacher-schedule-slots/',
+            data: {
+              'assignment': selectedAssignment,
+              'day_of_week': dayCode,
+              'start_time': _toApiTime(start),
+              'end_time': _toApiTime(end),
+              'room': roomValue,
+            },
+          );
+          created += 1;
+        } catch (_) {
+          failed += 1;
+        }
+>>>>>>> main
+      }
+
+      if (!mounted) return;
+      _showMessage(
+<<<<<<< HEAD
+        isEdit ? 'Horaire modifié avec succès.' : 'Horaire ajouté avec succès.',
+=======
+        'Ajout en lot terminé: créés $created, conflits ignorés $skippedConflicts, échecs $failed.',
+        isSuccess: created > 0,
+>>>>>>> main
+      );
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      _markScheduleApiUnsupportedFromError(error);
+<<<<<<< HEAD
+      _showMessage(
+        'Erreur enregistrement horaire: ${_extractErrorMessage(error)}',
+      );
+=======
+      _showMessage('Erreur ajout en lot: ${_extractErrorMessage(error)}');
+>>>>>>> main
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -1264,7 +2555,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     try {
       await ref.read(dioProvider).delete('/teacher-schedule-slots/$slotId/');
       if (!mounted) return;
+<<<<<<< HEAD
       _showMessage('Horaire supprimé.');
+=======
+      _showMessage('Horaire supprimé.', isSuccess: true);
+>>>>>>> main
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -1279,11 +2574,30 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
+<<<<<<< HEAD
   void _showMessage(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+=======
+  void _showMessage(String message, {bool isSuccess = false}) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    const successColor = Color(0xFF197A43);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          backgroundColor: isSuccess ? successColor : null,
+          content: Text(
+            message,
+            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+          ),
+        ),
+      );
+>>>>>>> main
   }
 
   Future<void> _resetCustomApiUrlAndReload() async {
@@ -1380,6 +2694,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             SizedBox(
               height: 460,
               child: Center(child: CircularProgressIndicator()),
+<<<<<<< HEAD
             ),
           ],
         ),
@@ -1451,10 +2766,222 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               ),
             ),
             const SizedBox(height: 8),
+=======
+            ),
+          ],
+        ),
+      );
+    }
+
+    final assignmentById = _assignmentById();
+    final assignmentsByClass = _assignmentsByClass(assignmentById);
+    final slotsByClass = _slotsByClass(assignmentById);
+    final publicationByClass = _publicationByClassroom();
+    final visibleClassrooms = _visibleClassrooms();
+
+    final colorScheme = Theme.of(context).colorScheme;
+    final classesWithSlots = visibleClassrooms
+        .where((row) => (slotsByClass[_asInt(row['id'])] ?? []).isNotEmpty)
+        .length;
+    final classesPublished = visibleClassrooms
+        .where(
+          (row) =>
+              _asBool(publicationByClass[_asInt(row['id'])]?['is_published']),
+        )
+        .length;
+    final classesLocked = visibleClassrooms
+        .where(
+          (row) => _asBool(publicationByClass[_asInt(row['id'])]?['is_locked']),
+        )
+        .length;
+
+    final selectedClassId = _selectedClassroom;
+    final selectedClassName = _classNameById(selectedClassId);
+    final selectedAssignments = _visibleAssignmentsForClass(
+      selectedClassId,
+      assignmentsByClass,
+    );
+    final selectedSlots = _visibleSlotsForClass(selectedClassId, slotsByClass);
+    final selectedPublication = selectedClassId == null
+        ? null
+        : publicationByClass[selectedClassId];
+    final selectedIsPublished = _asBool(selectedPublication?['is_published']);
+    final selectedIsLocked = _asBool(selectedPublication?['is_locked']);
+    final selectedPublicationLabel = _publicationLabel(selectedPublication);
+    final isNarrow = MediaQuery.of(context).size.width < 980;
+
+    final teacherWorkloads =
+        buildTeacherWorkloadRows(
+          teachers: _teachers,
+          assignmentById: assignmentById,
+          scheduleSlots: _scheduleSlots,
+          classroomFilter: _teacherScope == 'selected' ? selectedClassId : null,
+        ).where((row) {
+          if (!_isTeacherUser || (_loggedTeacherId ?? 0) <= 0) {
+            return true;
+          }
+          return row.teacherId == _loggedTeacherId;
+        }).toList();
+
+    final controlsPanel = _sectionCard(
+      title: 'Filtres et actions',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!_scheduleApiSupported) ...[
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: Text(
+                'Backend planning non compatible: les routes horaires ne sont pas disponibles sur\n'
+                '$_activeApiBaseUrl\n'
+                'Configurez une API mise à jour via Connexion > Configuration API.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
+                OutlinedButton.icon(
+                  onPressed: _saving ? null : _loadData,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retester compatibilité API'),
+                ),
+                if (_usingCustomApiBaseUrl)
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _resetCustomApiUrlAndReload,
+                    icon: const Icon(Icons.settings_backup_restore_outlined),
+                    label: const Text('Réinitialiser URL API'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+          ],
+          if (!_isTeacherUser)
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment<String>(
+                  value: 'classroom',
+                  label: Text('Par classe'),
+                  icon: Icon(Icons.grid_view_outlined),
+                ),
+                ButtonSegment<String>(
+                  value: 'teacher',
+                  label: Text('Par enseignant'),
+                  icon: Icon(Icons.badge_outlined),
+                ),
+              ],
+              selected: {_viewMode},
+              onSelectionChanged: (values) {
+                final next = values.first;
+                setState(() => _viewMode = next);
+              },
+            ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<int>(
+            initialValue: _selectedClassroom,
+            decoration: const InputDecoration(labelText: 'Classe'),
+            items: visibleClassrooms
+                .map(
+                  (row) => DropdownMenuItem<int>(
+                    value: _asInt(row['id']),
+                    child: Text('${row['name']}'),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              setState(() => _selectedClassroom = value);
+            },
+          ),
+          if (selectedClassId != null) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _metricChip('Statut planning', selectedPublicationLabel),
+                _metricChip('Horaires', '${selectedSlots.length}'),
+              ],
+            ),
+          ],
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (!_isTeacherUser)
+                FilledButton.tonalIcon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null)
+                      ? null
+                      : _exportSelectedClassXlsx,
+                  icon: const Icon(Icons.table_view_outlined),
+                  label: const Text('Exporter XLSX classe'),
+                ),
+              FilledButton.tonalIcon(
+                onPressed: (_saving || selectedClassId == null)
+                    ? null
+                    : _exportCurrentClassCsv,
+                icon: const Icon(Icons.grid_on_outlined),
+                label: const Text('Exporter Excel (CSV)'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _saving ? null : _loadData,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Actualiser'),
+              ),
+              if (!_isTeacherUser)
+                FilledButton.tonalIcon(
+                  onPressed: (_saving || !_scheduleApiSupported)
+                      ? null
+                      : _openDuplicateScheduleDialog,
+                  icon: const Icon(Icons.copy_all_outlined),
+                  label: const Text('Dupliquer planning'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Actions rapides disponibles via les boutons flottants: ajout d\'horaire et impression PDF.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (!_isTeacherUser) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: (_saving || !_scheduleApiSupported)
+                      ? null
+                      : _exportGlobalXlsx,
+                  icon: const Icon(Icons.dataset_outlined),
+                  label: const Text('Export global XLSX'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: (_saving || !_scheduleApiSupported)
+                      ? null
+                      : _exportGlobalPdf,
+                  icon: const Icon(Icons.picture_as_pdf_outlined),
+                  label: const Text('Export global PDF'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+>>>>>>> main
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+<<<<<<< HEAD
                 OutlinedButton.icon(
                   onPressed: _saving ? null : _loadData,
                   icon: const Icon(Icons.refresh),
@@ -1649,6 +3176,61 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               ),
             ],
           ),
+=======
+                FilledButton.tonalIcon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          selectedAssignments.isEmpty)
+                      ? null
+                      : () => _publishSelectedClass(lockAfterPublish: true),
+                  icon: const Icon(Icons.publish),
+                  label: const Text('Publier + verrouiller'),
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          selectedAssignments.isEmpty)
+                      ? null
+                      : () => _publishSelectedClass(lockAfterPublish: false),
+                  icon: const Icon(Icons.cloud_upload_outlined),
+                  label: const Text('Publier sans verrou'),
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          !selectedIsPublished)
+                      ? null
+                      : () => _setSelectedClassLock(lock: !selectedIsLocked),
+                  icon: Icon(
+                    selectedIsLocked
+                        ? Icons.lock_open_outlined
+                        : Icons.lock_outline,
+                  ),
+                  label: Text(
+                    selectedIsLocked ? 'Déverrouiller' : 'Verrouiller',
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          !selectedIsPublished)
+                      ? null
+                      : _unpublishSelectedClass,
+                  icon: const Icon(Icons.unpublished_outlined),
+                  label: const Text('Repasser brouillon'),
+                ),
+              ],
+            ),
+          ],
+>>>>>>> main
           if (_viewMode == 'teacher') ...[
             const SizedBox(height: 10),
             SegmentedButton<String>(
@@ -1665,9 +3247,17 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 ),
               ],
               selected: {_teacherScope},
+<<<<<<< HEAD
               onSelectionChanged: (values) {
                 setState(() => _teacherScope = values.first);
               },
+=======
+              onSelectionChanged: _isTeacherUser
+                  ? null
+                  : (values) {
+                      setState(() => _teacherScope = values.first);
+                    },
+>>>>>>> main
             ),
             const SizedBox(height: 6),
             Text(
@@ -1692,6 +3282,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
+<<<<<<< HEAD
                   children: [
                     _metricChip(
                       'Affectations classe',
@@ -1935,10 +3526,294 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     Text(
                       'Vue pedagogique basee sur les affectations enseignants/matieres/classes.',
                       style: Theme.of(context).textTheme.bodyMedium,
+=======
+                  children: [
+                    _metricChip(
+                      'Affectations classe',
+                      '${selectedAssignments.length}',
                     ),
+                    _metricChip('Horaires classe', '${selectedSlots.length}'),
+                    _metricChip('Statut', selectedPublicationLabel),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (selectedIsLocked)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'Planning verrouillé: les modifications d\'horaires sont temporairement bloquées.',
+                    ),
+                  ),
+                if (selectedAssignments.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 10),
+                    child: Text(
+                      'Aucune affectation pour cette classe. Créez des affectations puis des horaires.',
+                    ),
+                  )
+                else ...[
+                  TextField(
+                    controller: _slotsSearchController,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      labelText: 'Filtre rapide (matière, enseignant, salle)',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _slotsSearchController.text.trim().isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () {
+                                _slotsSearchController.clear();
+                                setState(() {});
+                              },
+                              icon: const Icon(Icons.clear),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Tous jours'),
+                        selected: _mobileDayFilter == 'ALL',
+                        onSelected: (_) {
+                          setState(() => _mobileDayFilter = 'ALL');
+                        },
+                      ),
+                      ..._dayOrder.map(
+                        (dayCode) => ChoiceChip(
+                          label: Text(_dayLabel(dayCode)),
+                          selected: _mobileDayFilter == dayCode,
+                          onSelected: (_) {
+                            setState(() => _mobileDayFilter = dayCode);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _buildClassWeeklyGrid(
+                    classId: selectedClassId,
+                    classSlots: selectedSlots,
+                    dayFilter: _mobileDayFilter,
+                    searchTerm: _slotsSearchController.text,
+                    compact: isNarrow,
+                  ),
+                ],
+              ],
+            ),
+    );
+
+    final teacherWorkloadPanel = _sectionCard(
+      title: _teacherScope == 'selected'
+          ? 'Charge horaire - classe sélectionnée'
+          : 'Charge horaire - toutes classes',
+      child: teacherWorkloads.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Text('Aucune charge disponible pour le filtre courant.'),
+            )
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columnSpacing: 16,
+                headingRowColor: WidgetStatePropertyAll(
+                  Theme.of(context).colorScheme.surfaceContainer,
+                ),
+                columns: const [
+                  DataColumn(label: Text('Enseignant')),
+                  DataColumn(label: Text('Horaires')),
+                  DataColumn(label: Text('Classes')),
+                  DataColumn(label: Text('Lundi')),
+                  DataColumn(label: Text('Mardi')),
+                  DataColumn(label: Text('Mercredi')),
+                  DataColumn(label: Text('Jeudi')),
+                  DataColumn(label: Text('Vendredi')),
+                  DataColumn(label: Text('Samedi')),
+                  DataColumn(label: Text('Total h/sem.')),
+                  DataColumn(label: Text('Niveau')),
+                ],
+                rows: teacherWorkloads.map((row) {
+                  final levelColor = row.level == 'Surcharge'
+                      ? Colors.red
+                      : (row.level == 'A surveiller'
+                            ? Colors.orange
+                            : Colors.green);
+                  final perDay = row.perDayMinutes;
+
+                  String hours(String day) {
+                    final minutes = perDay[day] ?? 0;
+                    return (minutes / 60).toStringAsFixed(2);
+                  }
+
+                  return DataRow(
+                    cells: [
+                      DataCell(
+                        Text(
+                          _teacherDisplayLabel(
+                            row.teacherName,
+                            row.teacherCode,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      DataCell(Text('${row.slotCount}')),
+                      DataCell(Text('${row.classCount}')),
+                      DataCell(Text(hours('MON'))),
+                      DataCell(Text(hours('TUE'))),
+                      DataCell(Text(hours('WED'))),
+                      DataCell(Text(hours('THU'))),
+                      DataCell(Text(hours('FRI'))),
+                      DataCell(Text(hours('SAT'))),
+                      DataCell(Text(row.totalHours.toStringAsFixed(2))),
+                      DataCell(
+                        Text(
+                          row.level,
+                          style: TextStyle(
+                            color: levelColor,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+    );
+
+    final perClassPanel = _sectionCard(
+      title: 'Chaque classe a son emploi du temps',
+      child: _classrooms.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Text('Aucune classe disponible.'),
+            )
+          : Column(
+              children: _classrooms.map((classroom) {
+                final classId = _asInt(classroom['id']);
+                final className = (classroom['name'] ?? 'Classe $classId')
+                    .toString();
+                final classAssignments =
+                    assignmentsByClass[classId] ?? <Map<String, dynamic>>[];
+                final classSlots =
+                    slotsByClass[classId] ?? <Map<String, dynamic>>[];
+                final publication = publicationByClass[classId];
+                final classIsLocked = _asBool(publication?['is_locked']);
+                final publicationLabel = _publicationLabel(publication);
+
+                return Card(
+                  child: ExpansionTile(
+                    initiallyExpanded: classId == _selectedClassroom,
+                    onExpansionChanged: (expanded) {
+                      if (expanded) {
+                        setState(() => _selectedClassroom = classId);
+                      }
+                    },
+                    title: Text(className),
+                    subtitle: Text(
+                      '$publicationLabel • ${classSlots.length} horaire(s) • ${classAssignments.length} affectation(s)',
+>>>>>>> main
+                    ),
+                    childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    children: [
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: OutlinedButton.icon(
+                          onPressed:
+                              (_saving ||
+                                  !_scheduleApiSupported ||
+                                  classIsLocked)
+                              ? null
+                              : () =>
+                                    _openSlotDialog(forceClassroomId: classId),
+                          icon: const Icon(Icons.add),
+                          label: const Text('Ajouter horaire'),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      if (classAssignments.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Text('Aucune affectation pour cette classe.'),
+                        )
+                      else
+                        _buildClassWeeklyGrid(
+                          classId: classId,
+                          classSlots: classSlots,
+                        ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+    );
+
+    return Stack(
+      children: [
+        RefreshIndicator(
+          onRefresh: _refreshTimetable,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 92),
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Emploi du temps',
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Vue pedagogique basee sur les affectations enseignants/matieres/classes.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _loadData,
+                    icon: const Icon(Icons.sync),
+                    label: const Text('Actualiser'),
+                  ),
+                ],
+              ),
+              if (_saving) ...[
+                const SizedBox(height: 8),
+                const LinearProgressIndicator(),
+              ],
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerLowest,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+                  ),
+                ),
+                child: Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    _metricChip('Enseignants', '${_teachers.length}'),
+                    _metricChip('Matieres', '${_subjects.length}'),
+                    _metricChip('Classes', '${_classrooms.length}'),
+                    _metricChip('Affectations', '${_assignments.length}'),
+                    _metricChip('Horaires', '${_scheduleSlots.length}'),
+                    _metricChip('Classes planifiées', '$classesWithSlots'),
+                    _metricChip('Classes publiées', '$classesPublished'),
+                    _metricChip('Classes verrouillées', '$classesLocked'),
                   ],
                 ),
               ),
+<<<<<<< HEAD
               OutlinedButton.icon(
                 onPressed: _saving ? null : _loadData,
                 icon: const Icon(Icons.sync),
@@ -1988,6 +3863,57 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           ],
         ],
       ),
+=======
+              const SizedBox(height: 12),
+              controlsPanel,
+              if (_viewMode == 'classroom') ...[
+                const SizedBox(height: 12),
+                selectedClassPanel,
+                const SizedBox(height: 12),
+                perClassPanel,
+              ] else ...[
+                const SizedBox(height: 12),
+                teacherWorkloadPanel,
+              ],
+            ],
+          ),
+        ),
+        Positioned(
+          right: 20,
+          bottom: 20,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (!_isTeacherUser)
+                FloatingActionButton.extended(
+                  heroTag: 'fab_timetable_add_slot',
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          selectedClassId == null ||
+                          selectedIsLocked)
+                      ? null
+                      : () => _openSlotBatchFloatingWindow(
+                          forceClassroomId: selectedClassId,
+                        ),
+                  icon: const Icon(Icons.add_circle_outline),
+                  label: const Text('Ajouter horaire'),
+                ),
+              if (!_isTeacherUser) const SizedBox(height: 10),
+              FloatingActionButton.extended(
+                heroTag: 'fab_timetable_print_pdf',
+                onPressed:
+                    (_saving || !_scheduleApiSupported || selectedClassId == null)
+                    ? null
+                    : _openTimetablePrintFloatingWindow,
+                icon: const Icon(Icons.picture_as_pdf_outlined),
+                label: const Text('Imprimer tableau'),
+              ),
+            ],
+          ),
+        ),
+      ],
+>>>>>>> main
     );
   }
 
@@ -2053,6 +3979,56 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     return grouped;
   }
 
+<<<<<<< HEAD
+=======
+  List<Map<String, dynamic>> _visibleClassrooms() {
+    if (!_isTeacherUser) {
+      return _classrooms;
+    }
+    if (_teacherClassroomIds.isEmpty) {
+      return const [];
+    }
+    return _classrooms
+        .where((row) => _teacherClassroomIds.contains(_asInt(row['id'])))
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _visibleAssignmentsForClass(
+    int? classId,
+    Map<int, List<Map<String, dynamic>>> assignmentsByClass,
+  ) {
+    final rows = classId == null
+        ? <Map<String, dynamic>>[]
+        : (assignmentsByClass[classId] ?? <Map<String, dynamic>>[]);
+    if (!_isTeacherUser || (_loggedTeacherId ?? 0) <= 0) {
+      return rows;
+    }
+    return rows
+        .where((row) => _asInt(row['teacher']) == _loggedTeacherId)
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _visibleSlotsForClass(
+    int? classId,
+    Map<int, List<Map<String, dynamic>>> slotsByClass,
+  ) {
+    final rows = classId == null
+        ? <Map<String, dynamic>>[]
+        : (slotsByClass[classId] ?? <Map<String, dynamic>>[]);
+    if (!_isTeacherUser) {
+      return rows;
+    }
+    if (_teacherAssignmentIds.isEmpty) {
+      return const [];
+    }
+    return rows
+        .where(
+          (row) => _teacherAssignmentIds.contains(_asInt(row['assignment'])),
+        )
+        .toList();
+  }
+
+>>>>>>> main
   Map<int, List<Map<String, dynamic>>> _slotsByClass(
     Map<int, Map<String, dynamic>> assignmentById,
   ) {

@@ -6,6 +6,8 @@ class UserAccount {
   final String email;
   final String role;
   final String phone;
+  final int? etablissementId;
+  final String etablissementName;
 
   const UserAccount({
     required this.id,
@@ -15,6 +17,8 @@ class UserAccount {
     required this.email,
     required this.role,
     required this.phone,
+    this.etablissementId,
+    this.etablissementName = '',
   });
 
   String get fullName {

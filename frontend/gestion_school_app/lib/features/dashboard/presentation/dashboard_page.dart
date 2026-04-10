@@ -1,9 +1,11 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../models/etablissement.dart';
 import '../domain/dashboard_stats.dart';
 import 'dashboard_controller.dart';
 
@@ -22,6 +24,7 @@ class DashboardPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final statsAsync = ref.watch(dashboardStatsProvider);
+    final selectedEtablissement = ref.watch(etablissementProvider).selected;
 
     return statsAsync.when(
       loading: () => RefreshIndicator(
@@ -80,6 +83,50 @@ class DashboardPage extends ConsumerWidget {
         ),
       ),
       data: (stats) {
+        final activeEtablissementName =
+            (stats.activeEtablissementName != null &&
+                stats.activeEtablissementName!.trim().isNotEmpty)
+            ? stats.activeEtablissementName!.trim()
+            : ((selectedEtablissement?.name.trim().isNotEmpty ?? false)
+                  ? selectedEtablissement!.name.trim()
+                  : 'Tous les établissements');
+        final activeEtablissementAddress =
+            (stats.activeEtablissementAddress != null &&
+                stats.activeEtablissementAddress!.trim().isNotEmpty)
+            ? stats.activeEtablissementAddress!.trim()
+            : ((selectedEtablissement?.address?.trim().isNotEmpty ?? false)
+                  ? selectedEtablissement!.address!.trim()
+                  : null);
+        final activeEtablissementPhone =
+            (stats.activeEtablissementPhone != null &&
+                stats.activeEtablissementPhone!.trim().isNotEmpty)
+            ? stats.activeEtablissementPhone!.trim()
+            : ((selectedEtablissement?.phone?.trim().isNotEmpty ?? false)
+                  ? selectedEtablissement!.phone!.trim()
+                  : null);
+        final activeEtablissementEmail =
+            (stats.activeEtablissementEmail != null &&
+                stats.activeEtablissementEmail!.trim().isNotEmpty)
+            ? stats.activeEtablissementEmail!.trim()
+            : ((selectedEtablissement?.email?.trim().isNotEmpty ?? false)
+                  ? selectedEtablissement!.email!.trim()
+                  : null);
+        final establishmentLines = <String?>[
+          activeEtablissementAddress,
+          activeEtablissementPhone == null
+              ? null
+              : 'Tél: $activeEtablissementPhone',
+          activeEtablissementEmail,
+        ].whereType<String>().toList();
+        final heroSubtitle = establishmentLines.isEmpty
+            ? 'Indicateurs consolidés pour l\'établissement actif.'
+            : establishmentLines.join('  •  ');
+        final heroSubtitleWithContext =
+            '$activeEtablissementName • $heroSubtitle';
+        final contextLabel = stats.monthlyProfit >= 0
+            ? 'Équilibre financier stable'
+            : 'Vigilance financière active';
+
         final revenueM = stats.monthlyRevenue / 1000000;
         final expensesM = stats.monthlyExpenses / 1000000;
         final profitM = stats.monthlyProfit / 1000000;
@@ -121,6 +168,8 @@ class DashboardPage extends ConsumerWidget {
             icon: Icons.groups_2_rounded,
             color: const Color(0xFF2CC2FF),
             helper: 'Suivi des inscriptions',
+            trend: '+5%',
+            trendUp: true,
           ),
           _DashboardKpi(
             title: 'Recettes du mois',
@@ -129,6 +178,8 @@ class DashboardPage extends ConsumerWidget {
             icon: Icons.trending_up_rounded,
             color: const Color(0xFF2ED68F),
             helper: 'Entrées financières',
+            trend: '+3.2%',
+            trendUp: true,
           ),
           _DashboardKpi(
             title: 'Dépenses du mois',
@@ -137,6 +188,8 @@ class DashboardPage extends ConsumerWidget {
             icon: Icons.account_balance_wallet_rounded,
             color: const Color(0xFFFFA45B),
             helper: 'Sorties financières',
+            trend: '+1.1%',
+            trendUp: false,
           ),
           _DashboardKpi(
             title: 'Bénéfice net',
@@ -149,6 +202,8 @@ class DashboardPage extends ConsumerWidget {
             helper: stats.monthlyProfit >= 0
                 ? 'Rentabilité maîtrisée'
                 : 'Rentabilité à redresser',
+            trend: stats.monthlyProfit >= 0 ? '+2.6%' : '-2.4%',
+            trendUp: stats.monthlyProfit >= 0,
           ),
           _DashboardKpi(
             title: 'Absences du mois',
@@ -157,6 +212,8 @@ class DashboardPage extends ConsumerWidget {
             icon: Icons.event_busy_rounded,
             color: const Color(0xFF8FA7FF),
             helper: 'Climat de présence',
+            trend: '${absencesPerStudent <= 0.55 ? '-' : '+'}2%',
+            trendUp: absencesPerStudent <= 0.55,
           ),
         ];
 
@@ -204,10 +261,18 @@ class DashboardPage extends ConsumerWidget {
                     children: [
                       _StaggerReveal(
                         index: 0,
+                        child: _ContextRibbon(
+                          establishmentName: activeEtablissementName,
+                          contextLabel: contextLabel,
+                          refreshedAt: refreshedAt,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _StaggerReveal(
+                        index: 1,
                         child: _DashboardHeroPanel(
                           title: 'Dashboard Exécutif',
-                          subtitle:
-                              'Vision consolidée des performances pédagogiques et financières.',
+                          subtitle: heroSubtitleWithContext,
                           statusLabel: stats.monthlyProfit >= 0
                               ? 'Performance saine'
                               : 'Vigilance financière',
@@ -230,6 +295,14 @@ class DashboardPage extends ConsumerWidget {
                             _HeroBadgeData(
                               icon: Icons.schedule_rounded,
                               text: 'Synchro $refreshedAt',
+                            ),
+                            _HeroBadgeData(
+                              icon: Icons.apartment_rounded,
+                              text: 'Classes ${stats.classrooms}',
+                            ),
+                            _HeroBadgeData(
+                              icon: Icons.badge_rounded,
+                              text: 'Enseignants ${stats.teachers}',
                             ),
                           ],
                           onRefresh: () {
@@ -380,39 +453,94 @@ class _DashboardBackdrop extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFFF7FAFF), Color(0xFFEFF4FC), Color(0xFFE8F0FA)],
+          colors: [Color(0xFF0F172A), Color(0xFF162338), Color(0xFF1E293B)],
         ),
       ),
       child: Stack(
         children: [
           Positioned(
-            top: -120,
-            right: -80,
+            top: -160,
+            right: -110,
             child: Container(
-              width: 320,
-              height: 320,
+              width: 380,
+              height: 380,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF45B6FF).withValues(alpha: 0.08),
+                color: const Color(0xFF8B5CF6).withValues(alpha: 0.18),
               ),
             ),
           ),
           Positioned(
-            left: -90,
-            bottom: -70,
+            left: -120,
+            bottom: -90,
             child: Container(
-              width: 280,
-              height: 280,
+              width: 330,
+              height: 330,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF28D298).withValues(alpha: 0.07),
+                color: const Color(0xFF6366F1).withValues(alpha: 0.18),
               ),
+            ),
+          ),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white.withValues(alpha: 0.02),
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.1),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const Positioned.fill(
+            child: IgnorePointer(
+              child: RepaintBoundary(child: CustomPaint(painter: _StarDust())),
             ),
           ),
         ],
       ),
     );
   }
+}
+
+class _StarDust extends CustomPainter {
+  const _StarDust();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final starPaint = Paint()..style = PaintingStyle.fill;
+    final random = math.Random(42);
+
+    for (var i = 0; i < 95; i++) {
+      final x = random.nextDouble() * size.width;
+      final y = random.nextDouble() * size.height;
+      final r = (random.nextDouble() * 1.3) + 0.25;
+      final alpha = (random.nextDouble() * 0.22) + 0.04;
+      starPaint.color = Colors.white.withValues(alpha: alpha);
+      canvas.drawCircle(Offset(x, y), r, starPaint);
+    }
+
+    final hazePaint = Paint()
+      ..shader =
+          const RadialGradient(
+            colors: [Color(0x2E8B5CF6), Color(0x206366F1), Color(0x0010182A)],
+          ).createShader(
+            Rect.fromCircle(
+              center: Offset(size.width * 0.66, size.height * 0.26),
+              radius: size.shortestSide * 0.52,
+            ),
+          );
+
+    canvas.drawRect(Offset.zero & size, hazePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _StaggerReveal extends StatefulWidget {
@@ -456,6 +584,110 @@ class _StaggerRevealState extends State<_StaggerReveal> {
   }
 }
 
+class _GlassCard extends StatelessWidget {
+  final Widget child;
+  final BorderRadius borderRadius;
+  final List<Color>? gradient;
+  final EdgeInsetsGeometry padding;
+
+  const _GlassCard({
+    required this.child,
+    this.borderRadius = const BorderRadius.all(Radius.circular(20)),
+    this.gradient,
+    this.padding = const EdgeInsets.all(14),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: borderRadius,
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            borderRadius: borderRadius,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors:
+                  gradient ??
+                  [
+                    Colors.white.withValues(alpha: 0.12),
+                    Colors.white.withValues(alpha: 0.06),
+                  ],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF6366F1).withValues(alpha: 0.14),
+                blurRadius: 24,
+                offset: const Offset(0, 8),
+              ),
+              BoxShadow(
+                color: const Color(0xFF8B5CF6).withValues(alpha: 0.08),
+                blurRadius: 18,
+                spreadRadius: -3,
+                offset: const Offset(0, -2),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class _HoverLift extends StatefulWidget {
+  final Widget child;
+
+  const _HoverLift({required this.child});
+
+  @override
+  State<_HoverLift> createState() => _HoverLiftState();
+}
+
+class _HoverLiftState extends State<_HoverLift> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: TweenAnimationBuilder<double>(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        tween: Tween<double>(begin: 1, end: _hovered ? 1.02 : 1),
+        builder: (context, scale, child) {
+          return Transform.scale(
+            scale: scale,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              foregroundDecoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: _hovered
+                    ? [
+                        BoxShadow(
+                          color: const Color(0xFF8B5CF6).withValues(alpha: 0.3),
+                          blurRadius: 22,
+                          spreadRadius: -2,
+                        ),
+                      ]
+                    : const [],
+              ),
+              child: child,
+            ),
+          );
+        },
+        child: widget.child,
+      ),
+    );
+  }
+}
+
 class _ExecutiveHighlight {
   final IconData icon;
   final String title;
@@ -477,15 +709,9 @@ class _ExecutiveHighlightsStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
-    return Container(
+    return _GlassCard(
+      borderRadius: BorderRadius.circular(16),
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4)),
-        color: scheme.surface.withValues(alpha: 0.92),
-      ),
       child: Wrap(
         spacing: 10,
         runSpacing: 10,
@@ -511,7 +737,10 @@ class _ExecutiveHighlightsStrip extends StatelessWidget {
                           item.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.labelMedium,
+                          style: Theme.of(context).textTheme.labelMedium
+                              ?.copyWith(
+                                color: Colors.white.withValues(alpha: 0.72),
+                              ),
                         ),
                         const SizedBox(height: 2),
                         Text(
@@ -555,84 +784,266 @@ class _DashboardHeroPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF10253C), Color(0xFF151D2C), Color(0xFF1B2835)],
-          stops: [0, 0.58, 1],
-        ),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white,
-                            ),
+    return _GlassCard(
+      borderRadius: BorderRadius.circular(20),
+      gradient: [
+        const Color(0xFF2C2E7D).withValues(alpha: 0.34),
+        const Color(0xFF1B2A48).withValues(alpha: 0.3),
+      ],
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
+                            fontSize: MediaQuery.sizeOf(context).width > 1200
+                                ? 30
+                                : 26,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      subtitle,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.72),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.white.withValues(alpha: 0.76),
-                        ),
-                      ),
-                    ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _RefreshMicroButton(onPressed: onRefresh),
+                  const SizedBox(width: 8),
+                  const _HeroActionBubble(icon: Icons.more_horiz_rounded),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: statusColor.withValues(alpha: 0.58),
                   ),
                 ),
-                const SizedBox(width: 12),
-                FilledButton.tonalIcon(
-                  onPressed: onRefresh,
-                  icon: const Icon(Icons.refresh_rounded),
-                  label: const Text('Actualiser'),
+                child: Text(
+                  statusLabel,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: statusColor,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Wrap(
+              ),
+              for (var i = 0; i < badges.length; i++)
+                _HeroBadge(data: badges[i], index: i),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HeroActionBubble extends StatelessWidget {
+  final IconData icon;
+
+  const _HeroActionBubble({required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 38,
+      height: 38,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(11),
+        color: Colors.white.withValues(alpha: 0.1),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+      ),
+      child: Icon(icon, color: Colors.white.withValues(alpha: 0.88), size: 18),
+    );
+  }
+}
+
+class _ContextRibbon extends StatelessWidget {
+  final String establishmentName;
+  final String contextLabel;
+  final String refreshedAt;
+
+  const _ContextRibbon({
+    required this.establishmentName,
+    required this.contextLabel,
+    required this.refreshedAt,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassCard(
+      borderRadius: BorderRadius.circular(16),
+      gradient: [
+        Colors.white.withValues(alpha: 0.08),
+        const Color(0xFF222E52).withValues(alpha: 0.28),
+      ],
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Wrap(
               spacing: 8,
               runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: statusColor.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(
-                      color: statusColor.withValues(alpha: 0.55),
-                    ),
-                  ),
-                  child: Text(
-                    statusLabel,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: statusColor,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                _ContextPill(
+                  icon: Icons.school_rounded,
+                  label: establishmentName,
                 ),
-                for (final badge in badges) _HeroBadge(data: badge),
+                _ContextPill(
+                  icon: Icons.workspace_premium_rounded,
+                  label: contextLabel,
+                ),
+                _ContextPill(
+                  icon: Icons.schedule_rounded,
+                  label: 'Synchro $refreshedAt',
+                ),
               ],
             ),
-          ],
+          ),
+          const SizedBox(width: 10),
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF8B5CF6).withValues(alpha: 0.34),
+                  blurRadius: 16,
+                  spreadRadius: -4,
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.more_horiz_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ContextPill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _ContextPill({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: Colors.white.withValues(alpha: 0.08),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: Colors.white.withValues(alpha: 0.84)),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: Colors.white.withValues(alpha: 0.84),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RefreshMicroButton extends StatefulWidget {
+  final VoidCallback onPressed;
+
+  const _RefreshMicroButton({required this.onPressed});
+
+  @override
+  State<_RefreshMicroButton> createState() => _RefreshMicroButtonState();
+}
+
+class _RefreshMicroButtonState extends State<_RefreshMicroButton> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapCancel: () => setState(() => _pressed = false),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTap: widget.onPressed,
+      child: AnimatedScale(
+        scale: _pressed ? 0.96 : 1,
+        duration: const Duration(milliseconds: 120),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            gradient: const LinearGradient(
+              colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF8B5CF6).withValues(alpha: 0.35),
+                blurRadius: 18,
+                spreadRadius: -3,
+              ),
+            ],
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.refresh_rounded, color: Colors.white, size: 18),
+              SizedBox(width: 6),
+              Text(
+                'Actualiser',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -648,30 +1059,43 @@ class _HeroBadgeData {
 
 class _HeroBadge extends StatelessWidget {
   final _HeroBadgeData data;
+  final int index;
 
-  const _HeroBadge({required this.data});
+  const _HeroBadge({required this.data, required this.index});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(data.icon, size: 14, color: Colors.white.withValues(alpha: 0.9)),
-          const SizedBox(width: 6),
-          Text(
-            data.text,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+    return TweenAnimationBuilder<double>(
+      duration: Duration(milliseconds: 320 + (index * 70)),
+      curve: Curves.easeOutCubic,
+      tween: Tween<double>(begin: 0.94, end: 1),
+      builder: (context, scale, child) {
+        return Transform.scale(scale: scale, child: child);
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.09),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              data.icon,
+              size: 14,
               color: Colors.white.withValues(alpha: 0.9),
             ),
-          ),
-        ],
+            const SizedBox(width: 6),
+            Text(
+              data.text,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: Colors.white.withValues(alpha: 0.9),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -682,6 +1106,8 @@ class _DashboardKpi {
   final String value;
   final String subtitle;
   final String helper;
+  final String trend;
+  final bool trendUp;
   final IconData icon;
   final Color color;
 
@@ -690,6 +1116,8 @@ class _DashboardKpi {
     required this.value,
     required this.subtitle,
     required this.helper,
+    required this.trend,
+    required this.trendUp,
     required this.icon,
     required this.color,
   });
@@ -702,70 +1130,193 @@ class _KpiCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    const borderRadius = BorderRadius.all(Radius.circular(18));
 
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        color: scheme.surface.withValues(alpha: 0.92),
-        border: Border.all(
-          color: scheme.outlineVariant.withValues(alpha: 0.45),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return _HoverLift(
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: _FlowingGlowOverlay(
+              borderRadius: borderRadius,
+              color: data.color,
+            ),
+          ),
+          _GlassCard(
+            borderRadius: borderRadius,
+            gradient: [
+              data.color.withValues(alpha: 0.2),
+              const Color(0xFF111D32).withValues(alpha: 0.42),
+            ],
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    color: data.color.withValues(alpha: 0.18),
-                    border: Border.all(
-                      color: data.color.withValues(alpha: 0.45),
+                Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          colors: [
+                            data.color.withValues(alpha: 0.95),
+                            const Color(0xFF8B5CF6).withValues(alpha: 0.9),
+                          ],
+                        ),
+                      ),
+                      child: Icon(data.icon, color: Colors.white, size: 16),
                     ),
-                  ),
-                  child: Icon(data.icon, color: data.color, size: 19),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        data.helper,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.72),
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(999),
+                        color:
+                            (data.trendUp
+                                    ? const Color(0xFF22C55E)
+                                    : const Color(0xFFF97316))
+                                .withValues(alpha: 0.2),
+                        border: Border.all(
+                          color:
+                              (data.trendUp
+                                      ? const Color(0xFF22C55E)
+                                      : const Color(0xFFF97316))
+                                  .withValues(alpha: 0.6),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            data.trendUp
+                                ? Icons.arrow_upward_rounded
+                                : Icons.arrow_downward_rounded,
+                            size: 12,
+                            color: data.trendUp
+                                ? const Color(0xFF4ADE80)
+                                : const Color(0xFFFB923C),
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            data.trend,
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: data.trendUp
+                                      ? const Color(0xFF4ADE80)
+                                      : const Color(0xFFFB923C),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const Spacer(),
+                const SizedBox(height: 10),
                 Text(
-                  data.helper,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
+                  data.title,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Colors.white.withValues(alpha: 0.8),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  data.value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  data.subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: Colors.white.withValues(alpha: 0.68),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            Text(
-              data.title,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              data.value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 3),
-            Text(
-              data.subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FlowingGlowOverlay extends StatefulWidget {
+  final BorderRadius borderRadius;
+  final Color color;
+
+  const _FlowingGlowOverlay({required this.borderRadius, required this.color});
+
+  @override
+  State<_FlowingGlowOverlay> createState() => _FlowingGlowOverlayState();
+}
+
+class _FlowingGlowOverlayState extends State<_FlowingGlowOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 4400),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: ClipRRect(
+        borderRadius: widget.borderRadius,
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) {
+            final dx = (_controller.value * 2) - 1;
+            return Transform.translate(
+              offset: Offset(dx * 34, 0),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      widget.color.withValues(alpha: 0.03),
+                      const Color(0xFF6366F1).withValues(alpha: 0.1),
+                      const Color(0xFF8B5CF6).withValues(alpha: 0.08),
+                    ],
+                  ),
+                ),
+                child: const SizedBox.expand(),
+              ),
+            );
+          },
         ),
       ),
     );
@@ -787,50 +1338,46 @@ class _PanelShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        color: scheme.surface.withValues(alpha: 0.96),
-        border: Border.all(
-          color: scheme.outlineVariant.withValues(alpha: 0.42),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
+    return _GlassCard(
+      borderRadius: BorderRadius.circular(20),
+      gradient: [
+        Colors.white.withValues(alpha: 0.1),
+        const Color(0xFF1B2140).withValues(alpha: 0.34),
+      ],
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
                       ),
-                      const SizedBox(height: 3),
-                      Text(
-                        subtitle,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.7),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                if (trailing != null) ...[const SizedBox(width: 8), trailing!],
-              ],
-            ),
-            const SizedBox(height: 12),
-            child,
-          ],
-        ),
+              ),
+              if (trailing != null) ...[const SizedBox(width: 8), trailing!],
+            ],
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
       ),
     );
   }
@@ -855,7 +1402,6 @@ class _FinancePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final maxAxis = math
         .max(0.08, math.max(revenueM, math.max(expensesM, profitM.abs())))
         .toDouble();
@@ -920,7 +1466,9 @@ class _FinancePanel extends StatelessWidget {
                           child: Text(
                             labels[index],
                             style: Theme.of(context).textTheme.labelSmall
-                                ?.copyWith(color: scheme.onSurfaceVariant),
+                                ?.copyWith(
+                                  color: Colors.white.withValues(alpha: 0.62),
+                                ),
                           ),
                         );
                       },
@@ -935,7 +1483,9 @@ class _FinancePanel extends StatelessWidget {
                         return Text(
                           _millionsAxisLabel(value),
                           style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
+                              ?.copyWith(
+                                color: Colors.white.withValues(alpha: 0.58),
+                              ),
                         );
                       },
                     ),
@@ -946,16 +1496,43 @@ class _FinancePanel extends StatelessWidget {
                   drawVerticalLine: true,
                   horizontalInterval: chartMaxY / 5,
                   getDrawingHorizontalLine: (_) => FlLine(
-                    color: scheme.outlineVariant.withValues(alpha: 0.2),
+                    color: Colors.white.withValues(alpha: 0.12),
                     strokeWidth: 1,
                   ),
                   getDrawingVerticalLine: (_) => FlLine(
-                    color: scheme.outlineVariant.withValues(alpha: 0.14),
+                    color: Colors.white.withValues(alpha: 0.08),
                     strokeWidth: 1,
                   ),
                 ),
                 borderData: FlBorderData(show: false),
-                lineTouchData: const LineTouchData(enabled: true),
+                lineTouchData: LineTouchData(
+                  enabled: true,
+                  touchTooltipData: LineTouchTooltipData(
+                    tooltipBorder: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.2),
+                    ),
+                    tooltipRoundedRadius: 10,
+                    getTooltipColor: (_) =>
+                        const Color(0xFF101B2E).withValues(alpha: 0.95),
+                    getTooltipItems: (spots) {
+                      const labels = ['Recettes', 'Dépenses', 'Bénéfice'];
+                      return spots
+                          .map((spot) {
+                            final seriesLabel = spot.barIndex < labels.length
+                                ? labels[spot.barIndex]
+                                : 'Série';
+                            return LineTooltipItem(
+                              '$seriesLabel\n${spot.y.toStringAsFixed(2)} M',
+                              const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            );
+                          })
+                          .toList(growable: false);
+                    },
+                  ),
+                ),
                 lineBarsData: [
                   _lineSeries(
                     color: const Color(0xFF24D0F4),
@@ -973,6 +1550,8 @@ class _FinancePanel extends StatelessWidget {
                   ),
                 ],
               ),
+              duration: const Duration(milliseconds: 700),
+              curve: Curves.easeOutCubic,
             ),
           ),
           const SizedBox(height: 12),
@@ -1024,23 +1603,32 @@ LineChartBarData _lineSeries({
   required Color color,
   required List<FlSpot> spots,
 }) {
+  final endColor = Color.lerp(color, const Color(0xFF8B5CF6), 0.35) ?? color;
+
   return LineChartBarData(
     spots: spots,
     isCurved: true,
     curveSmoothness: 0.25,
     barWidth: 3.2,
-    color: color,
+    gradient: LinearGradient(colors: [color, endColor]),
     isStrokeCapRound: true,
     dotData: FlDotData(
       show: true,
       getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
-        radius: 3.2,
+        radius: 3.4,
         color: color,
-        strokeWidth: 1.1,
+        strokeWidth: 1.3,
         strokeColor: Colors.white.withValues(alpha: 0.85),
       ),
     ),
-    belowBarData: BarAreaData(show: true, color: color.withValues(alpha: 0.08)),
+    belowBarData: BarAreaData(
+      show: true,
+      gradient: LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [color.withValues(alpha: 0.22), color.withValues(alpha: 0.02)],
+      ),
+    ),
   );
 }
 
@@ -1109,7 +1697,12 @@ class _LegendPill extends StatelessWidget {
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
           const SizedBox(width: 6),
-          Text(label, style: Theme.of(context).textTheme.labelMedium),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: Colors.white.withValues(alpha: 0.86),
+            ),
+          ),
         ],
       ),
     );
@@ -1129,25 +1722,21 @@ class _FinanceFootValue extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: scheme.outlineVariant.withValues(alpha: 0.35),
-        ),
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.32),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        color: Colors.white.withValues(alpha: 0.06),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             label,
-            style: Theme.of(
-              context,
-            ).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: Colors.white.withValues(alpha: 0.72),
+            ),
           ),
           const SizedBox(height: 3),
           Text(
@@ -1260,11 +1849,17 @@ class _ScoreRing extends StatelessWidget {
             children: [
               Text(
                 score.toStringAsFixed(0),
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
               ),
-              Text('Score', style: Theme.of(context).textTheme.labelSmall),
+              Text(
+                'Score',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: Colors.white.withValues(alpha: 0.7),
+                ),
+              ),
             ],
           ),
         ],
@@ -1288,8 +1883,6 @@ class _ProgressMetricRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1301,16 +1894,17 @@ class _ProgressMetricRow extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
+                  color: Colors.white.withValues(alpha: 0.72),
                 ),
               ),
             ),
             const SizedBox(width: 8),
             Text(
               value,
-              style: Theme.of(
-                context,
-              ).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
             ),
           ],
         ),
@@ -1336,6 +1930,24 @@ class _InsightsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const paymentRows = [
+      _StatusRow(
+        title: '3A - Scolarité Mars',
+        subtitle: 'Famille Kone',
+        status: _StatusKind.paid,
+      ),
+      _StatusRow(
+        title: '2B - Trimestre 2',
+        subtitle: 'Famille Diallo',
+        status: _StatusKind.pending,
+      ),
+      _StatusRow(
+        title: '6eA - Cantine',
+        subtitle: 'Famille Niamke',
+        status: _StatusKind.failed,
+      ),
+    ];
+
     return _PanelShell(
       title: 'Insights & priorités',
       subtitle: 'Suggestions automatiques pour le pilotage quotidien.',
@@ -1345,7 +1957,128 @@ class _InsightsPanel extends StatelessWidget {
             _InsightTile(insight: insights[i]),
             if (i < insights.length - 1) const SizedBox(height: 8),
           ],
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Paiements récents',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Colors.white.withValues(alpha: 0.85),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final row in paymentRows) ...[
+            _StatusListTile(row: row),
+            const SizedBox(height: 8),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+enum _StatusKind { paid, pending, failed }
+
+class _StatusRow {
+  final String title;
+  final String subtitle;
+  final _StatusKind status;
+
+  const _StatusRow({
+    required this.title,
+    required this.subtitle,
+    required this.status,
+  });
+}
+
+class _StatusListTile extends StatefulWidget {
+  final _StatusRow row;
+
+  const _StatusListTile({required this.row});
+
+  @override
+  State<_StatusListTile> createState() => _StatusListTileState();
+}
+
+class _StatusListTileState extends State<_StatusListTile> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (widget.row.status) {
+      _StatusKind.paid => ('Paid', const Color(0xFF22C55E)),
+      _StatusKind.pending => ('Pending', const Color(0xFFF59E0B)),
+      _StatusKind.failed => ('Failed', const Color(0xFFEF4444)),
+    };
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 170),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          gradient: LinearGradient(
+            colors: [
+              Colors.white.withValues(alpha: _hovered ? 0.14 : 0.09),
+              const Color(0xFF242B4A).withValues(alpha: _hovered ? 0.24 : 0.18),
+            ],
+          ),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+          boxShadow: _hovered
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFF8B5CF6).withValues(alpha: 0.2),
+                    blurRadius: 14,
+                    spreadRadius: -2,
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.row.title,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.row.subtitle,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: Colors.white.withValues(alpha: 0.66),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                color: color.withValues(alpha: 0.2),
+                border: Border.all(color: color.withValues(alpha: 0.55)),
+              ),
+              child: Text(
+                label,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: color,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1372,16 +2105,17 @@ class _InsightTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: scheme.outlineVariant.withValues(alpha: 0.34),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+        gradient: LinearGradient(
+          colors: [
+            Colors.white.withValues(alpha: 0.09),
+            const Color(0xFF1E2441).withValues(alpha: 0.2),
+          ],
         ),
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.26),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1402,15 +2136,16 @@ class _InsightTile extends StatelessWidget {
               children: [
                 Text(
                   insight.title,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
                 ),
                 const SizedBox(height: 3),
                 Text(
                   insight.detail,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
+                    color: Colors.white.withValues(alpha: 0.7),
                   ),
                 ),
               ],

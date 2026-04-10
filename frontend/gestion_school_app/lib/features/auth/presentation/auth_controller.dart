@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 import '../../../core/network/api_client.dart';
 import '../data/auth_repository.dart';
 import '../domain/auth_user.dart';
@@ -34,21 +35,19 @@ class AuthController extends StateNotifier<AsyncValue<AuthUser?>> {
       return;
     }
 
-    final cachedUser = await _repository.cachedUser();
-    if (cachedUser != null) {
-      state = AsyncValue.data(cachedUser);
-    }
-
     final restored = await AsyncValue.guard(
       () => _repository.fetchCurrentUser(),
     );
     if (restored.hasError) {
-      if (cachedUser == null) {
+      final err = restored.error;
+      if (err is DioException && err.response?.statusCode == 401) {
+        // Token invalid/expired and refresh failed: force clean login state.
         await _repository.logout();
-        state = const AsyncValue.data(null);
       }
+      state = const AsyncValue.data(null);
       return;
     }
+
     state = restored;
   }
 

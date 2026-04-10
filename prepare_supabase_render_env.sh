@@ -18,7 +18,7 @@ usage() {
 Usage:
   ./prepare_supabase_render_env.sh \
     --db-password='<SUPABASE_DB_PASSWORD>' \
-    --api-domain='gestion-school-api.onrender.com' \
+    --api-domain='gestion-school-jkzf.onrender.com' \
     [--web-domain='gestion-school-web.onrender.com'] \
     [--db-mode='session|direct'] \
     [--pooler-host='aws-1-eu-west-1.pooler.supabase.com'] \

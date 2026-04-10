@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1440" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07142A"/>
+      <stop offset="1" stop-color="#0F2747"/>
+    </linearGradient>
+    <linearGradient id="hero" x1="320" y1="140" x2="1360" y2="470" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5E47C2"/>
+      <stop offset="1" stop-color="#2C245D"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#132647"/>
+      <stop offset="1" stop-color="#0A1A33"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <rect width="1440" height="900" fill="url(#bg)"/>
+
+  <rect x="0" y="0" width="300" height="900" fill="#081129"/>
+  <rect x="16" y="164" width="268" height="44" rx="12" fill="#1E2C49"/>
+  <rect x="16" y="222" width="268" height="44" rx="12" fill="#6B59E4"/>
+  <rect x="16" y="280" width="268" height="44" rx="12" fill="#1E2C49"/>
+  <rect x="16" y="338" width="268" height="44" rx="12" fill="#1E2C49"/>
+  <rect x="16" y="396" width="268" height="44" rx="12" fill="#1E2C49"/>
+
+  <text x="32" y="74" fill="#EAF0FF" font-family="Segoe UI, sans-serif" font-size="34" font-weight="700">IFP-OBK</text>
+  <text x="32" y="136" fill="#8EA3C9" font-family="Segoe UI, sans-serif" font-size="24" font-weight="600">Pédagogie</text>
+
+  <text x="70" y="195" fill="#D4DDF3" font-family="Segoe UI, sans-serif" font-size="24">Tableau de bord</text>
+  <text x="70" y="253" fill="#F8F5FF" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700">Gestion des élèves</text>
+  <text x="70" y="311" fill="#D4DDF3" font-family="Segoe UI, sans-serif" font-size="24">Enseignants</text>
+  <text x="70" y="369" fill="#D4DDF3" font-family="Segoe UI, sans-serif" font-size="24">Absences</text>
+  <text x="70" y="427" fill="#D4DDF3" font-family="Segoe UI, sans-serif" font-size="24">Discipline</text>
+
+  <rect x="320" y="36" width="1088" height="72" rx="16" fill="#243654"/>
+  <text x="344" y="79" fill="#EAF0FF" font-family="Segoe UI, sans-serif" font-size="26" font-weight="600">Etablissement actif: IFP-OBK | Utilisateur connecté: Directeur (superadmin)</text>
+
+  <g filter="url(#soft)">
+    <rect x="320" y="140" width="1088" height="292" rx="20" fill="url(#hero)"/>
+  </g>
+  <text x="350" y="198" fill="#B6A7FF" font-family="Segoe UI, sans-serif" font-size="28" font-weight="600">Tableau de bord élèves</text>
+  <text x="350" y="248" fill="#F4F7FF" font-family="Segoe UI, sans-serif" font-size="58" font-weight="800">Gestion des élèves</text>
+  <text x="350" y="291" fill="#D7DDFC" font-family="Segoe UI, sans-serif" font-size="26">Inscription, attribution classe, archivage, historique académique et dossier.</text>
+
+  <rect x="350" y="320" width="195" height="44" rx="22" fill="#1A2D55"/>
+  <rect x="559" y="320" width="160" height="44" rx="22" fill="#1A2D55"/>
+  <rect x="733" y="320" width="230" height="44" rx="22" fill="#1A2D55"/>
+  <text x="375" y="349" fill="#DCE4FF" font-family="Segoe UI, sans-serif" font-size="22">Année: 2025-2026</text>
+  <text x="590" y="349" fill="#DCE4FF" font-family="Segoe UI, sans-serif" font-size="22">15 classes</text>
+  <text x="765" y="349" fill="#DCE4FF" font-family="Segoe UI, sans-serif" font-size="22">40 élèves visibles</text>
+
+  <rect x="350" y="372" width="740" height="14" rx="7" fill="#7E66FF"/>
+  <text x="350" y="416" fill="#D4DDF3" font-family="Segoe UI, sans-serif" font-size="22">100% actifs • 0% archivés</text>
+
+  <rect x="350" y="460" width="260" height="130" rx="16" fill="url(#card)"/>
+  <rect x="624" y="460" width="260" height="130" rx="16" fill="url(#card)"/>
+  <rect x="898" y="460" width="260" height="130" rx="16" fill="url(#card)"/>
+  <rect x="1172" y="460" width="236" height="130" rx="16" fill="url(#card)"/>
+
+  <text x="374" y="502" fill="#AFBEE0" font-family="Segoe UI, sans-serif" font-size="30">Nombre total d’élèves</text>
+  <text x="374" y="553" fill="#F4F7FF" font-family="Segoe UI, sans-serif" font-size="54" font-weight="800">40</text>
+
+  <text x="648" y="502" fill="#AFBEE0" font-family="Segoe UI, sans-serif" font-size="30">Actifs</text>
+  <text x="648" y="553" fill="#F4F7FF" font-family="Segoe UI, sans-serif" font-size="54" font-weight="800">40</text>
+
+  <text x="922" y="502" fill="#AFBEE0" font-family="Segoe UI, sans-serif" font-size="30">Archivés</text>
+  <text x="922" y="553" fill="#F4F7FF" font-family="Segoe UI, sans-serif" font-size="54" font-weight="800">0</text>
+
+  <text x="1195" y="502" fill="#AFBEE0" font-family="Segoe UI, sans-serif" font-size="30">Nouveaux</text>
+  <text x="1195" y="553" fill="#F4F7FF" font-family="Segoe UI, sans-serif" font-size="54" font-weight="800">15</text>
+
+  <rect x="320" y="616" width="1088" height="240" rx="18" fill="#0A1730"/>
+  <text x="350" y="662" fill="#F4F7FF" font-family="Segoe UI, sans-serif" font-size="42" font-weight="800">Registre des élèves (40)</text>
+  <text x="350" y="699" fill="#AFC1E8" font-family="Segoe UI, sans-serif" font-size="24">Nouveau flux: ouvre une fiche, puis traite les modifications dans Actions dossier.</text>
+
+  <rect x="350" y="722" width="1028" height="108" rx="12" fill="#15294B"/>
+  <line x1="420" y1="722" x2="420" y2="830" stroke="#2C4167"/>
+  <line x1="570" y1="722" x2="570" y2="830" stroke="#2C4167"/>
+  <line x1="770" y1="722" x2="770" y2="830" stroke="#2C4167"/>
+  <line x1="930" y1="722" x2="930" y2="830" stroke="#2C4167"/>
+  <line x1="1110" y1="722" x2="1110" y2="830" stroke="#2C4167"/>
+
+  <text x="370" y="757" fill="#DDE6FA" font-family="Segoe UI, sans-serif" font-size="21" font-weight="600">N°</text>
+  <text x="450" y="757" fill="#DDE6FA" font-family="Segoe UI, sans-serif" font-size="21" font-weight="600">Matricule</text>
+  <text x="600" y="757" fill="#DDE6FA" font-family="Segoe UI, sans-serif" font-size="21" font-weight="600">Nom complet</text>
+  <text x="805" y="757" fill="#DDE6FA" font-family="Segoe UI, sans-serif" font-size="21" font-weight="600">Classe</text>
+  <text x="960" y="757" fill="#DDE6FA" font-family="Segoe UI, sans-serif" font-size="21" font-weight="600">Statut</text>
+  <text x="1142" y="757" fill="#DDE6FA" font-family="Segoe UI, sans-serif" font-size="21" font-weight="600">Accès</text>
+
+  <text x="370" y="800" fill="#EAF0FF" font-family="Segoe UI, sans-serif" font-size="23">1</text>
+  <text x="450" y="800" fill="#EAF0FF" font-family="Segoe UI, sans-serif" font-size="23">GS-2026-00005</text>
+  <text x="600" y="800" fill="#EAF0FF" font-family="Segoe UI, sans-serif" font-size="23">Eleve02 1èreAnnéeEM1</text>
+  <text x="805" y="800" fill="#EAF0FF" font-family="Segoe UI, sans-serif" font-size="23">1ère Année EM1</text>
+
+  <rect x="960" y="774" width="100" height="34" rx="17" fill="#273C63"/>
+  <text x="985" y="798" fill="#8EE49D" font-family="Segoe UI, sans-serif" font-size="20" font-weight="700">Actif</text>
+
+  <rect x="1142" y="772" width="188" height="38" rx="19" fill="#4F66DE"/>
+  <text x="1178" y="798" fill="#F8FBFF" font-family="Segoe UI, sans-serif" font-size="22" font-weight="700">Ouvrir fiche</text>
+</svg>

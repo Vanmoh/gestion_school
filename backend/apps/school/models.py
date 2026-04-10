@@ -1,8 +1,21 @@
+
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 from django.db import models
 from apps.common.models import TimeStampedModel
+
+
+# Nouveau modèle pour la gestion multi-établissements
+class Etablissement(TimeStampedModel):
+    name = models.CharField(max_length=255, unique=True)
+    address = models.CharField(max_length=255, blank=True)
+    phone = models.CharField(max_length=30, blank=True)
+    email = models.EmailField(blank=True)
+    logo = models.ImageField(upload_to="etablissements/logos/", blank=True, null=True)
+
+    def __str__(self):
+        return self.name
 
 
 class AcademicYear(TimeStampedModel):
@@ -29,11 +42,13 @@ class Section(TimeStampedModel):
         return self.name
 
 
+
 class ClassRoom(TimeStampedModel):
     name = models.CharField(max_length=50)
     level = models.ForeignKey(Level, on_delete=models.PROTECT, related_name="classes")
     section = models.ForeignKey(Section, on_delete=models.PROTECT, related_name="classes")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="classes")
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="classes", null=True, blank=True)
 
     class Meta:
         unique_together = ("name", "level", "section", "academic_year")
@@ -56,6 +71,7 @@ class Teacher(TimeStampedModel):
     employee_code = models.CharField(max_length=30, unique=True)
     hire_date = models.DateField()
     salary_base = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="teachers", null=True, blank=True)
 
     def __str__(self):
         return self.user.get_full_name() or self.user.username
@@ -97,6 +113,42 @@ class TeacherScheduleSlot(TimeStampedModel):
         )
 
 
+<<<<<<< HEAD
+=======
+class TeacherAvailabilitySlot(TimeStampedModel):
+    teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="availability_slots")
+    etablissement = models.ForeignKey(
+        "Etablissement",
+        on_delete=models.PROTECT,
+        related_name="teacher_availability_slots",
+        null=True,
+        blank=True,
+    )
+    day_of_week = models.CharField(max_length=3, choices=WeekDay.choices)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    class Meta:
+        unique_together = ("etablissement", "day_of_week", "start_time", "end_time")
+        ordering = ("day_of_week", "start_time", "end_time", "id")
+        indexes = [
+            models.Index(
+                fields=["etablissement", "day_of_week", "start_time", "end_time"],
+                name="teacheravail_etab_day_time_idx",
+            ),
+            models.Index(fields=["teacher", "day_of_week"], name="teacheravail_teacher_day_idx"),
+        ]
+
+    def __str__(self):
+        teacher_name = self.teacher.user.get_full_name().strip() if self.teacher and self.teacher.user else ""
+        teacher_label = teacher_name or (self.teacher.employee_code if self.teacher else "Enseignant")
+        return (
+            f"{teacher_label} | {self.get_day_of_week_display()} "
+            f"{self.start_time.strftime('%H:%M')}-{self.end_time.strftime('%H:%M')}"
+        )
+
+
+>>>>>>> main
 class TimetablePublication(TimeStampedModel):
     classroom = models.OneToOneField(ClassRoom, on_delete=models.CASCADE, related_name="timetable_publication")
     is_published = models.BooleanField(default=False)
@@ -120,12 +172,18 @@ class TimetablePublication(TimeStampedModel):
         return f"{self.classroom.name}: {state}{lock_state}"
 
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> main
 class ParentProfile(TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="parent_profile")
     profession = models.CharField(max_length=120, blank=True)
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="parents", null=True, blank=True)
 
     def __str__(self):
         return self.user.get_full_name() or self.user.username
+
 
 
 class Student(TimeStampedModel):
@@ -137,6 +195,8 @@ class Student(TimeStampedModel):
     photo = models.ImageField(upload_to="students/", null=True, blank=True)
     enrollment_date = models.DateField(auto_now_add=True)
     is_archived = models.BooleanField(default=False)
+    conduite = models.DecimalField(max_digits=4, decimal_places=2, default=18)
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="students", null=True, blank=True)
 
     def save(self, *args, **kwargs):
         if not self.matricule:
@@ -155,6 +215,15 @@ class Student(TimeStampedModel):
     def __str__(self):
         return f"{self.matricule} - {self.user.get_full_name()}"
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["etablissement", "-created_at"], name="student_etab_created_idx"),
+            models.Index(fields=["classroom", "is_archived"], name="student_class_arch_idx"),
+            models.Index(fields=["parent"], name="student_parent_idx"),
+            models.Index(fields=["etablissement", "is_archived", "classroom"], name="student_etab_arch_class_idx"),
+            models.Index(fields=["enrollment_date"], name="student_enroll_date_idx"),
+        ]
+
 
 class StudentAcademicHistory(TimeStampedModel):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="history")
@@ -170,7 +239,28 @@ class Grade(TimeStampedModel):
     classroom = models.ForeignKey(ClassRoom, on_delete=models.PROTECT, related_name="grades")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="grades")
     term = models.CharField(max_length=20)
+    homework_scores = models.JSONField(default=list, blank=True)
     value = models.DecimalField(max_digits=5, decimal_places=2)
+
+    def _normalized_homework_scores(self):
+        raw_scores = self.homework_scores if isinstance(self.homework_scores, list) else []
+        normalized = []
+        for item in raw_scores:
+            try:
+                numeric = Decimal(str(item))
+            except Exception:
+                continue
+            if numeric < Decimal("0") or numeric > Decimal("20"):
+                continue
+            normalized.append(numeric)
+        return normalized
+
+    def save(self, *args, **kwargs):
+        scores = self._normalized_homework_scores()
+        if scores:
+            average = sum(scores) / Decimal(len(scores))
+            self.value = average.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        super().save(*args, **kwargs)
 
     class Meta:
         unique_together = ("student", "subject", "classroom", "academic_year", "term")
@@ -203,6 +293,12 @@ class Attendance(TimeStampedModel):
     reason = models.CharField(max_length=255, blank=True)
     proof = models.FileField(upload_to="attendance_proofs/", null=True, blank=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["student", "date"], name="attendance_student_date_idx"),
+            models.Index(fields=["date", "is_absent"], name="attendance_date_abs_idx"),
+        ]
+
 
 class TeacherAttendance(TimeStampedModel):
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="attendances")
@@ -211,6 +307,12 @@ class TeacherAttendance(TimeStampedModel):
     is_late = models.BooleanField(default=False)
     reason = models.CharField(max_length=255, blank=True)
     proof = models.FileField(upload_to="teacher_attendance_proofs/", null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["teacher", "date"], name="teachatt_teacher_date_idx"),
+            models.Index(fields=["date", "is_absent"], name="teachatt_date_abs_idx"),
+        ]
 
 
 class DisciplineSeverity(models.TextChoices):
@@ -241,6 +343,12 @@ class DisciplineIncident(TimeStampedModel):
         related_name="discipline_reports",
     )
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["student", "-incident_date"], name="discipline_student_date_idx"),
+            models.Index(fields=["status", "-incident_date"], name="discipline_status_date_idx"),
+        ]
+
 
 class FeeType(models.TextChoices):
     REGISTRATION = "registration", "Frais inscription"
@@ -264,6 +372,12 @@ class StudentFee(TimeStampedModel):
     def balance(self):
         return self.amount_due - self.amount_paid
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["student", "-due_date"], name="studentfee_student_due_idx"),
+            models.Index(fields=["academic_year", "-due_date"], name="studentfee_year_due_idx"),
+        ]
+
 
 class Payment(TimeStampedModel):
     fee = models.ForeignKey(StudentFee, on_delete=models.CASCADE, related_name="payments")
@@ -271,6 +385,14 @@ class Payment(TimeStampedModel):
     method = models.CharField(max_length=50)
     reference = models.CharField(max_length=100, blank=True)
     received_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="received_payments")
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="payments", null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["etablissement", "-created_at"], name="payment_etab_created_idx"),
+            models.Index(fields=["fee", "-created_at"], name="payment_fee_created_idx"),
+            models.Index(fields=["method"], name="payment_method_idx"),
+        ]
 
 
 class Expense(TimeStampedModel):
@@ -279,6 +401,12 @@ class Expense(TimeStampedModel):
     date = models.DateField()
     category = models.CharField(max_length=100)
     notes = models.TextField(blank=True)
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="expenses", null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["etablissement", "-date"], name="expense_etab_date_idx"),
+        ]
 
 
 class TeacherPayroll(TimeStampedModel):
@@ -290,6 +418,7 @@ class TeacherPayroll(TimeStampedModel):
 
 
 class Announcement(TimeStampedModel):
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="announcements", null=True, blank=True)
     title = models.CharField(max_length=150)
     message = models.TextField()
     audience = models.CharField(max_length=50, default="all")
@@ -303,6 +432,7 @@ class NotificationChannel(models.TextChoices):
 
 
 class Notification(TimeStampedModel):
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="notifications", null=True, blank=True)
     recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     channel = models.CharField(max_length=10, choices=NotificationChannel.choices)
     title = models.CharField(max_length=150)
@@ -312,6 +442,7 @@ class Notification(TimeStampedModel):
 
 
 class SmsProviderConfig(TimeStampedModel):
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="sms_provider_configs", null=True, blank=True)
     provider_name = models.CharField(max_length=100)
     api_url = models.URLField()
     api_token = models.CharField(max_length=255)
@@ -325,6 +456,7 @@ class Book(TimeStampedModel):
     isbn = models.CharField(max_length=30, unique=True)
     quantity_total = models.PositiveIntegerField(default=0)
     quantity_available = models.PositiveIntegerField(default=0)
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="books", null=True, blank=True)
 
 
 class Borrow(TimeStampedModel):
@@ -338,6 +470,7 @@ class Borrow(TimeStampedModel):
 
 class CanteenMenu(TimeStampedModel):
     menu_date = models.DateField()
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="canteen_menus", null=True, blank=True)
     name = models.CharField(max_length=150)
     description = models.TextField(blank=True)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -398,14 +531,24 @@ class ExamResult(TimeStampedModel):
     subject = models.ForeignKey(Subject, on_delete=models.PROTECT)
     score = models.DecimalField(max_digits=5, decimal_places=2)
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "student", "subject"],
+                name="uniq_exam_result_session_student_subject",
+            )
+        ]
+
 
 class Supplier(TimeStampedModel):
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="suppliers", null=True, blank=True)
     name = models.CharField(max_length=120)
     phone = models.CharField(max_length=30, blank=True)
     email = models.EmailField(blank=True)
 
 
 class StockItem(TimeStampedModel):
+    etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="stock_items", null=True, blank=True)
     name = models.CharField(max_length=120)
     quantity = models.IntegerField(default=0)
     minimum_threshold = models.IntegerField(default=5)

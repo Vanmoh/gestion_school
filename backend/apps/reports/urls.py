@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     BulletinPdfView,
+    ClassBulletinsPdfView,
     ClassStudentCardsPdfView,
     PaymentExcelExportView,
     PaymentReceiptPdfView,
@@ -11,6 +12,11 @@ from .views import (
 urlpatterns = [
     path("context/", ReportsContextView.as_view(), name="reports-context"),
     path("bulletin/<int:student_id>/<int:academic_year_id>/<str:term>/", BulletinPdfView.as_view(), name="bulletin-pdf"),
+    path(
+        "bulletins/class/<int:classroom_id>/<int:academic_year_id>/<str:term>/",
+        ClassBulletinsPdfView.as_view(),
+        name="class-bulletins-pdf",
+    ),
     path("receipt/<int:payment_id>/", PaymentReceiptPdfView.as_view(), name="payment-receipt-pdf"),
     path("payments/export-excel/", PaymentExcelExportView.as_view(), name="payments-export-excel"),
     path("student-card/<int:student_id>/", StudentCardPdfView.as_view(), name="student-card-pdf"),

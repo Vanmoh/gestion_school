@@ -1,4 +1,27 @@
+import time
+
+from django.conf import settings
+from django.db import connection
+
 from apps.common.models import ActivityLog
+
+
+class RequestTimingMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        start = time.perf_counter()
+        initial_queries = len(connection.queries) if settings.DEBUG else 0
+        response = self.get_response(request)
+
+        if getattr(settings, "ENABLE_PROFILING_HEADERS", settings.DEBUG):
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            response["X-Response-Time-ms"] = f"{elapsed_ms:.2f}"
+            if settings.DEBUG:
+                response["X-Query-Count"] = str(max(0, len(connection.queries) - initial_queries))
+
+        return response
 
 
 class ActivityLogMiddleware:
@@ -28,6 +51,7 @@ class ActivityLogMiddleware:
         try:
             user = request.user if getattr(request, "user", None) and request.user.is_authenticated else None
             role = getattr(user, "role", "") if user else ""
+            etablissement = self._resolve_etablissement(request, user)
             module = self._extract_module(path)
             action = self._build_action(request.method, module)
             target = self._extract_target(path)
@@ -37,6 +61,7 @@ class ActivityLogMiddleware:
 
             ActivityLog.objects.create(
                 user=user,
+                etablissement=etablissement,
                 role=role,
                 action=action,
                 method=request.method,
@@ -90,3 +115,32 @@ class ActivityLogMiddleware:
         if any(keyword in body.lower() for keyword in ["password", "token", "refresh"]):
             return "payload masqué"
         return body[:255]
+
+    def _requested_etablissement_id(self, request):
+        raw_value = request.headers.get("X-Etablissement-Id") or request.query_params.get("etablissement")
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _resolve_etablissement(self, request, user):
+        if not user:
+            return None
+
+        # Non-superadmin users are always pinned to their own establishment.
+        if getattr(user, "role", None) != "super_admin":
+            return getattr(user, "etablissement", None)
+
+        requested_id = self._requested_etablissement_id(request)
+        if not requested_id:
+            return None
+
+        try:
+            from apps.school.models import Etablissement
+
+            return Etablissement.objects.filter(id=requested_id).first()
+        except Exception:
+            return None

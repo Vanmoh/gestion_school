@@ -35,6 +35,8 @@ class AuthRepository {
       username: data['username'] as String,
       fullName: '${data['first_name']} ${data['last_name']}'.trim(),
       role: data['role'] as String,
+      etablissementId: (data['etablissement'] as num?)?.toInt(),
+      etablissementName: data['etablissement_name']?.toString() ?? '',
     );
 
     await tokenStorage.saveCachedUser(
@@ -43,6 +45,8 @@ class AuthRepository {
         'username': user.username,
         'fullName': user.fullName,
         'role': user.role,
+        'etablissementId': user.etablissementId,
+        'etablissementName': user.etablissementName,
       }),
     );
 
@@ -69,6 +73,8 @@ class AuthRepository {
         username: data['username'] as String,
         fullName: data['fullName'] as String,
         role: data['role'] as String,
+        etablissementId: (data['etablissementId'] as num?)?.toInt(),
+        etablissementName: data['etablissementName']?.toString() ?? '',
       );
     } catch (_) {
       return null;
