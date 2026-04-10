@@ -83,10 +83,6 @@ class TokenStorage {
     await _safeDelete(_selectedEtablissementKey);
   }
 
-  Future<void> clearApiBaseUrl() async {
-    await _storage.delete(key: _apiBaseUrlKey);
-  }
-
   Future<void> clear() async {
     await _safeDelete(_accessKey);
     await _safeDelete(_refreshKey);

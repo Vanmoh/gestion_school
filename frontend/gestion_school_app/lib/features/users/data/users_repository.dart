@@ -193,30 +193,4 @@ class UsersRepository {
       throw Exception(_extractApiErrorMessage(error));
     }
   }
-
-  Future<void> updateUser({
-    required int userId,
-    required String username,
-    required String firstName,
-    required String lastName,
-    required String email,
-    required String role,
-    required String phone,
-  }) async {
-    await dio.patch(
-      '/auth/users/$userId/',
-      data: {
-        'username': username,
-        'first_name': firstName,
-        'last_name': lastName,
-        'email': email,
-        'role': role,
-        'phone': phone,
-      },
-    );
-  }
-
-  Future<void> deleteUser(int userId) async {
-    await dio.delete('/auth/users/$userId/');
-  }
 }

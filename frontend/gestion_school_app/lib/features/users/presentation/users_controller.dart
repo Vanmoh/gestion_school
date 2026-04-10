@@ -141,44 +141,4 @@ class UserMutationController extends StateNotifier<AsyncValue<void>> {
       ref.invalidate(usersPaginatedProvider);
     }
   }
-
-  Future<void> updateUser({
-    required int userId,
-    required String username,
-    required String firstName,
-    required String lastName,
-    required String email,
-    required String role,
-    required String phone,
-  }) async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() {
-      return ref
-          .read(usersRepositoryProvider)
-          .updateUser(
-            userId: userId,
-            username: username,
-            firstName: firstName,
-            lastName: lastName,
-            email: email,
-            role: role,
-            phone: phone,
-          );
-    });
-
-    if (!state.hasError) {
-      ref.invalidate(usersProvider);
-    }
-  }
-
-  Future<void> deleteUser({required int userId}) async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() {
-      return ref.read(usersRepositoryProvider).deleteUser(userId);
-    });
-
-    if (!state.hasError) {
-      ref.invalidate(usersProvider);
-    }
-  }
 }
