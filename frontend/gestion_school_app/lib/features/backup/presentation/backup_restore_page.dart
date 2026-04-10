@@ -163,22 +163,27 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
 
     await _runBusyTask(() async {
       final selectedEtab = ref.read(etablissementProvider).selected;
-      final data = FormData.fromMap({
-        'scope': _restoreScope,
-        'notes': _restoreNotesController.text.trim(),
-        if (_restoreScope == 'etablissement' && selectedEtab != null)
-          'etablissement_id': selectedEtab.id,
-        'file': MultipartFile.fromBytes(
-          _restoreFile!.bytes!,
-          filename: _restoreFile!.name,
-        ),
-      });
-
       await _requestWithBackupFallback(
-        (base) => ref.read(dioProvider).post('$base/upload-restore/', data: data),
+        (base) => ref.read(dioProvider).post(
+          '$base/upload-restore/',
+          data: _buildRestoreFormData(selectedEtab),
+        ),
       );
       _showMessage('Archive envoyée. Restauration lancée en arrière-plan.', isSuccess: true);
       await _loadRows();
+    });
+  }
+
+  FormData _buildRestoreFormData(Etablissement? selectedEtab) {
+    return FormData.fromMap({
+      'scope': _restoreScope,
+      'notes': _restoreNotesController.text.trim(),
+      if (_restoreScope == 'etablissement' && selectedEtab != null)
+        'etablissement_id': selectedEtab.id,
+      'file': MultipartFile.fromBytes(
+        _restoreFile!.bytes!,
+        filename: _restoreFile!.name,
+      ),
     });
   }
 
