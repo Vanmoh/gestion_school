@@ -122,6 +122,8 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
     }
   }
 
+<<<<<<< HEAD
+=======
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
 
@@ -140,6 +142,7 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
       );
   }
 
+>>>>>>> main
   Future<void> _refreshCanteen() async {
     await _loadData();
   }

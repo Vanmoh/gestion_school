@@ -18,12 +18,15 @@ bool _isIdempotentMethod(String method) {
   return normalized == 'GET' || normalized == 'HEAD' || normalized == 'OPTIONS';
 }
 
+<<<<<<< HEAD
+=======
 bool _sameBaseUrl(String left, String right) {
   final l = left.trim().replaceAll(RegExp(r'/+$'), '');
   final r = right.trim().replaceAll(RegExp(r'/+$'), '');
   return l == r;
 }
 
+>>>>>>> main
 final dioProvider = Provider<Dio>((ref) {
   final tokenStorage = ref.read(tokenStorageProvider);
   final dio = Dio(
@@ -31,6 +34,10 @@ final dioProvider = Provider<Dio>((ref) {
       baseUrl: ApiConstants.baseUrl,
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(seconds: 45),
+<<<<<<< HEAD
+      headers: {'Content-Type': 'application/json'},
+=======
+>>>>>>> main
     ),
   );
 
@@ -174,6 +181,8 @@ final dioProvider = Provider<Dio>((ref) {
             _isIdempotentMethod(request.method) &&
             request.extra['retried_network'] != true;
 
+<<<<<<< HEAD
+=======
         final hadCustomBaseUrl = request.extra['had_custom_base_url'] == true;
         final usedBaseUrl =
             request.extra['effective_base_url']?.toString() ?? '';
@@ -200,6 +209,7 @@ final dioProvider = Provider<Dio>((ref) {
           }
         }
 
+>>>>>>> main
         if (canRetryNetworkError) {
           final retriedOptions = request.copyWith();
           retriedOptions.extra['retried_network'] = true;

@@ -67,7 +67,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       final results = await Future.wait([
         dio.get('/students/'),
         dio.get('/subjects/'),
+<<<<<<< HEAD
+=======
         dio.get('/teachers/'),
+>>>>>>> main
         dio.get('/teacher-assignments/'),
         dio.get('/classrooms/'),
         dio.get('/academic-years/'),
@@ -104,6 +107,16 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       setState(() {
         _students = _extractRows(results[0].data);
         _subjects = _extractRows(results[1].data);
+<<<<<<< HEAD
+        _teacherAssignments = _extractRows(results[2].data);
+        _classrooms = _extractRows(results[3].data);
+        _years = _extractRows(results[4].data);
+        _termController.text = _currentTermOrDefault();
+
+        _selectedClassroom ??= _classrooms.isNotEmpty
+            ? _asInt(_classrooms.first['id'])
+            : null;
+=======
         _teacherAssignments = assignments;
         _classrooms = classrooms;
         _years = years;
@@ -125,6 +138,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               : null;
         }
 
+>>>>>>> main
         _selectedAcademicYear ??= _years.isNotEmpty
             ? _asInt(_years.first['id'])
             : null;
@@ -136,7 +150,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             : (_students.isNotEmpty ? _asInt(_students.first['id']) : null);
         _selectedSubject ??= classSubjects.isNotEmpty
             ? _asInt(classSubjects.first['id'])
+<<<<<<< HEAD
+            : (_subjects.isNotEmpty ? _asInt(_subjects.first['id']) : null);
+=======
             : null;
+>>>>>>> main
       });
 
       await _refreshValidationStatus();
@@ -222,10 +240,13 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     required int academicYearId,
     required String term,
   }) async {
+<<<<<<< HEAD
+=======
     if (subjectId <= 0 || classroomId <= 0 || academicYearId <= 0) {
       return <int, Map<String, dynamic>>{};
     }
 
+>>>>>>> main
     final dio = ref.read(dioProvider);
     final rowsByStudent = <int, Map<String, dynamic>>{};
 
@@ -269,6 +290,9 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     return rowsByStudent;
   }
 
+<<<<<<< HEAD
+  Future<void> _openGradeEntryDialog() async {
+=======
   Future<int> _ensureExamSessionForCurrentPeriod() async {
     final academicYearId = _selectedAcademicYear;
     final term = _currentTermOrDefault();
@@ -403,6 +427,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   }
 
   Future<void> _openExamEntryDialog() async {
+>>>>>>> main
     if (_isValidated) {
       _showMessage('Période validée par la direction: saisie verrouillée.');
       return;
@@ -411,6 +436,14 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     if (_selectedClassroom == null ||
         _selectedAcademicYear == null ||
         _termController.text.trim().isEmpty) {
+<<<<<<< HEAD
+      _showMessage('Sélectionnez classe, année et période avant la saisie.');
+      return;
+    }
+
+    if (_students.isEmpty || _subjects.isEmpty || _classrooms.isEmpty) {
+      _showMessage('Aucun élève ou matière disponible pour la saisie.');
+=======
       _showMessage(
         'Sélectionnez classe, année et période avant la saisie examen.',
       );
@@ -420,10 +453,22 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     final visibleClassrooms = _classroomsForCurrentRole();
     if (_students.isEmpty || visibleClassrooms.isEmpty) {
       _showMessage('Aucun élève ou matière disponible pour la saisie examen.');
+>>>>>>> main
       return;
     }
 
     int selectedClassroom =
+<<<<<<< HEAD
+        _selectedClassroom ?? _asInt(_classrooms.first['id']);
+    final initialSubjects = _subjectsForClassroom(selectedClassroom);
+    int selectedSubject = initialSubjects.isNotEmpty
+        ? _asInt(initialSubjects.first['id'])
+        : (_selectedSubject ?? _asInt(_subjects.first['id']));
+    List<Map<String, dynamic>> dialogStudents = _studentsForClassroom(
+      selectedClassroom,
+    );
+    final noteControllers = <int, TextEditingController>{};
+=======
         _selectedClassroom ?? _asInt(visibleClassrooms.first['id']);
     final initialSubjects = _subjectsForClassroom(selectedClassroom);
     if (initialSubjects.isEmpty) {
@@ -436,6 +481,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       selectedClassroom,
     );
     final scoreControllers = <int, TextEditingController>{};
+>>>>>>> main
     Map<int, Map<String, dynamic>> existingByStudent = {};
     bool loadingRows = false;
     bool savingRows = false;
@@ -446,10 +492,17 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     int skippedCount = 0;
 
     void disposeDialogControllers() {
+<<<<<<< HEAD
+      for (final controller in noteControllers.values) {
+        controller.dispose();
+      }
+      noteControllers.clear();
+=======
       for (final controller in scoreControllers.values) {
         controller.dispose();
       }
       scoreControllers.clear();
+>>>>>>> main
     }
 
     Future<void> loadDialogRows(StateSetter setDialogState) async {
@@ -459,19 +512,35 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       });
 
       try {
+<<<<<<< HEAD
+        final term = _currentTermOrDefault();
+        final loadedStudents = _studentsForClassroom(selectedClassroom);
+        final loadedExisting = await _fetchExistingGradesForDialog(
+          classroomId: selectedClassroom,
+          subjectId: selectedSubject,
+          academicYearId: _selectedAcademicYear!,
+          term: term,
+=======
         final loadedStudents = _studentsForClassroom(selectedClassroom);
         final sessionId = await _ensureExamSessionForCurrentPeriod();
         final loadedExisting = await _fetchExistingExamResultsForDialog(
           sessionId: sessionId,
           subjectId: selectedSubject,
+>>>>>>> main
         );
 
         disposeDialogControllers();
         for (final student in loadedStudents) {
           final studentId = _asInt(student['id']);
           final existing = loadedExisting[studentId];
+<<<<<<< HEAD
+          final initialValue = (existing?['value'] ?? '').toString();
+          noteControllers[studentId] = TextEditingController(
+            text: initialValue,
+=======
           scoreControllers[studentId] = TextEditingController(
             text: (existing?['score'] ?? '').toString(),
+>>>>>>> main
           );
         }
 
@@ -483,8 +552,12 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       } catch (error) {
         setDialogState(() {
           loadingRows = false;
+<<<<<<< HEAD
+          dialogError = 'Erreur chargement élèves/notes: $error';
+=======
           dialogError =
               'Erreur chargement notes examen: ${_extractFriendlyError(error)}';
+>>>>>>> main
         });
       }
     }
@@ -504,7 +577,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             }
 
             return AlertDialog(
+<<<<<<< HEAD
+              title: const Text('Saisie des notes par classe'),
+=======
               title: const Text('Saisie des notes examen'),
+>>>>>>> main
               content: SizedBox(
                 width: 760,
                 child: Column(
@@ -523,7 +600,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                             decoration: const InputDecoration(
                               labelText: 'Classe',
                             ),
+<<<<<<< HEAD
+                            items: _classrooms
+=======
                             items: _classroomsForCurrentRole()
+>>>>>>> main
                                 .map(
                                   (row) => DropdownMenuItem<int>(
                                     value: _asInt(row['id']),
@@ -541,9 +622,17 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                           _subjectsForClassroom(
                                             selectedClassroom,
                                           );
+<<<<<<< HEAD
+                                      if (classSubjects.isNotEmpty) {
+                                        selectedSubject = _asInt(
+                                          classSubjects.first['id'],
+                                        );
+                                      }
+=======
                                       selectedSubject = classSubjects.isNotEmpty
                                           ? _asInt(classSubjects.first['id'])
                                           : 0;
+>>>>>>> main
                                     });
                                     loadDialogRows(setDialogState);
                                   },
@@ -552,9 +641,13 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: DropdownButtonFormField<int>(
+<<<<<<< HEAD
+                            initialValue: selectedSubject,
+=======
                             initialValue: selectedSubject > 0
                                 ? selectedSubject
                                 : null,
+>>>>>>> main
                             decoration: const InputDecoration(
                               labelText: 'Matière',
                             ),
@@ -571,7 +664,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                             onChanged: loadingRows || savingRows
                                 ? null
                                 : (value) {
+<<<<<<< HEAD
+                                    if (value == null) return;
+=======
                                     if (value == null || value <= 0) return;
+>>>>>>> main
                                     setDialogState(
                                       () => selectedSubject = value,
                                     );
@@ -615,9 +712,15 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                             final student = dialogStudents[index];
                             final studentId = _asInt(student['id']);
                             final controller =
+<<<<<<< HEAD
+                                noteControllers[studentId] ??
+                                TextEditingController();
+                            noteControllers[studentId] = controller;
+=======
                                 scoreControllers[studentId] ??
                                 TextEditingController();
                             scoreControllers[studentId] = controller;
+>>>>>>> main
                             final existing = existingByStudent[studentId];
 
                             return Padding(
@@ -638,8 +741,12 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                     const Padding(
                                       padding: EdgeInsets.only(right: 8),
                                       child: Tooltip(
+<<<<<<< HEAD
+                                        message: 'Note existante: modification',
+=======
                                         message:
                                             'Note examen existante: modification',
+>>>>>>> main
                                         child: Icon(
                                           Icons.edit_note_outlined,
                                           size: 18,
@@ -648,7 +755,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                       ),
                                     ),
                                   SizedBox(
+<<<<<<< HEAD
+                                    width: 120,
+=======
                                     width: 130,
+>>>>>>> main
                                     child: TextField(
                                       controller: controller,
                                       enabled: !savingRows,
@@ -658,7 +769,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                           ),
                                       decoration: const InputDecoration(
                                         isDense: true,
+<<<<<<< HEAD
+                                        labelText: 'Note /20',
+=======
                                         labelText: 'Examen /20',
+>>>>>>> main
                                       ),
                                     ),
                                   ),
@@ -682,6 +797,13 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                   onPressed: savingRows || loadingRows || dialogStudents.isEmpty
                       ? null
                       : () async {
+<<<<<<< HEAD
+                          final term = _currentTermOrDefault();
+                          final academicYear = _selectedAcademicYear;
+                          final classSubjects = _subjectsForClassroom(
+                            selectedClassroom,
+                          );
+=======
                           for (final student in dialogStudents) {
                             final studentId = _asInt(student['id']);
                             final raw =
@@ -1290,6 +1412,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                       : () async {
                           final term = _currentTermOrDefault();
                           final academicYear = _selectedAcademicYear;
+>>>>>>> main
                           if (academicYear == null) {
                             setDialogState(() {
                               dialogError =
@@ -1297,6 +1420,30 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                             });
                             return;
                           }
+<<<<<<< HEAD
+                          if (classSubjects.isEmpty) {
+                            setDialogState(() {
+                              dialogError =
+                                  'Aucune matière attribuée à cette classe. Configurez les attributions enseignant/matière.';
+                            });
+                            return;
+                          }
+
+                          for (final student in dialogStudents) {
+                            final studentId = _asInt(student['id']);
+                            final raw =
+                                noteControllers[studentId]?.text.trim() ?? '';
+                            if (raw.isEmpty) {
+                              continue;
+                            }
+                            final parsed = double.tryParse(
+                              raw.replaceAll(',', '.'),
+                            );
+                            if (parsed == null) {
+                              setDialogState(() {
+                                dialogError =
+                                    'Note invalide pour ${(student['user_full_name'] ?? student['matricule'] ?? 'un élève')}.';
+=======
 
                           for (final student in dialogStudents) {
                             final studentId = _asInt(student['id']);
@@ -1306,6 +1453,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                               setDialogState(() {
                                 dialogError =
                                     'Notes de devoir invalides pour ${(student['user_full_name'] ?? student['matricule'] ?? 'un élève')}.';
+>>>>>>> main
                               });
                               return;
                             }
@@ -1322,6 +1470,22 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
                           try {
                             final dio = ref.read(dioProvider);
+<<<<<<< HEAD
+
+                            for (final student in dialogStudents) {
+                              final studentId = _asInt(student['id']);
+                              final raw =
+                                  noteControllers[studentId]?.text.trim() ?? '';
+                              if (raw.isEmpty) {
+                                skippedCount += 1;
+                                continue;
+                              }
+
+                              final value = double.tryParse(
+                                raw.replaceAll(',', '.'),
+                              );
+                              if (value == null) {
+=======
                             for (final student in dialogStudents) {
                               final studentId = _asInt(student['id']);
                               final scores = parseStudentScores(
@@ -1330,18 +1494,42 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
                               if (scores.isEmpty) {
                                 skippedCount += 1;
+>>>>>>> main
                                 continue;
                               }
 
                               final existing = existingByStudent[studentId];
                               if (existing != null) {
                                 final gradeId = _asInt(existing['id']);
+<<<<<<< HEAD
+                                try {
+                                  await dio.patch(
+                                    '/grades/$gradeId/',
+                                    data: {'value': value},
+                                  );
+                                } on DioException catch (dioError) {
+                                  final studentLabel =
+                                      (student['user_full_name'] ??
+                                              student['matricule'] ??
+                                              'Élève')
+                                          .toString();
+                                  throw Exception(
+                                    '$studentLabel: ${_extractDioErrorMessage(dioError)}',
+                                  );
+                                }
+                                updatedCount += 1;
+                                continue;
+                              }
+
+                              try {
+=======
                                 await dio.patch(
                                   '/grades/$gradeId/',
                                   data: {'homework_scores': scores},
                                 );
                                 updatedCount += 1;
                               } else {
+>>>>>>> main
                                 await dio.post(
                                   '/grades/',
                                   data: {
@@ -1350,11 +1538,28 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                     'classroom': selectedClassroom,
                                     'academic_year': academicYear,
                                     'term': term,
+<<<<<<< HEAD
+                                    'value': value,
+                                  },
+                                );
+                              } on DioException catch (dioError) {
+                                final studentLabel =
+                                    (student['user_full_name'] ??
+                                            student['matricule'] ??
+                                            'Élève')
+                                        .toString();
+                                throw Exception(
+                                  '$studentLabel: ${_extractDioErrorMessage(dioError)}',
+                                );
+                              }
+                              createdCount += 1;
+=======
                                     'homework_scores': scores,
                                   },
                                 );
                                 createdCount += 1;
                               }
+>>>>>>> main
                             }
 
                             if (dialogContext.mounted) {
@@ -1399,7 +1604,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     if (touched > 0) {
       _showMessage(
         'Enregistrement terminé: $createdCount ajoutées, $updatedCount modifiées, $skippedCount ignorées.',
+<<<<<<< HEAD
+=======
         isSuccess: true,
+>>>>>>> main
       );
     } else {
       _showMessage('Aucune note enregistrée (champs vides).');
@@ -1455,6 +1663,15 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     }
   }
 
+<<<<<<< HEAD
+  Future<void> _printBulletin() async {
+    final studentId = _selectedStudent;
+    final yearId = _selectedAcademicYear;
+    final term = _currentTermOrDefault();
+
+    if (studentId == null || yearId == null || term.isEmpty) {
+      _showMessage('Sélectionnez élève, année et période pour le bulletin.');
+=======
   Future<Uint8List> _fetchBulletinPdfBytes({
     required int studentId,
     int? yearId,
@@ -1509,16 +1726,28 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     final effectiveStudentId = studentId ?? _selectedStudent;
     if (effectiveStudentId == null) {
       _showMessage('Sélectionnez un élève pour le bulletin.');
+>>>>>>> main
       return;
     }
 
     setState(() => _saving = true);
     try {
+<<<<<<< HEAD
+      final response = await ref
+          .read(dioProvider)
+          .get(
+            '/reports/bulletin/$studentId/$yearId/${Uri.encodeComponent(term)}/',
+            options: Options(responseType: ResponseType.bytes),
+          );
+
+      final bytes = _toUint8List(response.data);
+=======
       final bytes = await _fetchBulletinPdfBytes(
         studentId: effectiveStudentId,
         yearId: yearId,
         term: term,
       );
+>>>>>>> main
       await Printing.layoutPdf(onLayout: (_) async => bytes);
     } catch (error) {
       if (!mounted) return;
@@ -1528,6 +1757,8 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     }
   }
 
+<<<<<<< HEAD
+=======
   Future<void> _printClassBulletins({
     int? classroomId,
     int? yearId,
@@ -1979,6 +2210,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     );
   }
 
+>>>>>>> main
   Future<void> _exportFilteredNotesCsv(
     List<Map<String, dynamic>> grades,
     Map<int, Map<String, dynamic>> studentById,
@@ -2005,7 +2237,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       buffer.writeln('Annee;$academicYearName');
       buffer.writeln('Periode;$period');
       buffer.writeln('');
+<<<<<<< HEAD
+      buffer.writeln('Eleve;Matiere;Periode;Note');
+=======
       buffer.writeln('Eleve;Matiere;Periode;Note classe');
+>>>>>>> main
 
       for (final grade in grades) {
         final student = studentById[_asInt(grade['student'])];
@@ -2032,7 +2268,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       await Printing.sharePdf(bytes: bytes, filename: fileName);
 
       if (!mounted) return;
+<<<<<<< HEAD
+      _showMessage('Export Excel (CSV) lancé: $fileName');
+=======
       _showMessage('Export Excel (CSV) lancé: $fileName', isSuccess: true);
+>>>>>>> main
     } catch (error) {
       if (!mounted) return;
       _showMessage('Erreur export Excel (CSV): $error');
@@ -2092,7 +2332,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               pw.Text('Période: $period'),
               pw.SizedBox(height: 10),
               pw.TableHelper.fromTextArray(
+<<<<<<< HEAD
+                headers: const ['Élève', 'Matière', 'Période', 'Note'],
+=======
                 headers: const ['Élève', 'Matière', 'Période', 'Note classe'],
+>>>>>>> main
                 data: tableRows,
                 headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                 headerDecoration: const pw.BoxDecoration(
@@ -2125,6 +2369,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       return;
     }
 
+<<<<<<< HEAD
+    final valueController = TextEditingController(
+      text: (gradeRow['value'] ?? '').toString(),
+=======
     var devoirCount = 3;
     final initialScores = _homeworkScoresFromGradeRow(gradeRow);
     if (initialScores.length > devoirCount) {
@@ -2137,11 +2385,70 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             ? initialScores[index].toStringAsFixed(2)
             : '',
       ),
+>>>>>>> main
     );
 
     final student = _findById(_students, _asInt(gradeRow['student']));
     final subject = _findById(_subjects, _asInt(gradeRow['subject']));
 
+<<<<<<< HEAD
+    final shouldSave = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Modifier la note'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '${student?['matricule'] ?? ''} • ${(student?['user_full_name'] ?? '').toString().trim()}',
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${subject?['code'] ?? 'MAT'} - ${subject?['name'] ?? ''}',
+                ),
+                const SizedBox(height: 4),
+                Text('Période: ${gradeRow['term'] ?? '-'}'),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: valueController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Nouvelle note /20',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: _saving
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: _saving
+                  ? null
+                  : () {
+                      final parsed = double.tryParse(
+                        valueController.text.trim(),
+                      );
+                      if (parsed == null) {
+                        _showMessage('Entrez une note valide.');
+                        return;
+                      }
+                      Navigator.of(dialogContext).pop(true);
+                    },
+              child: const Text('Enregistrer'),
+            ),
+          ],
+=======
     List<double> parseScores() {
       final scores = <double>[];
       for (final controller in controllers) {
@@ -2290,11 +2597,22 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               ],
             );
           },
+>>>>>>> main
         );
       },
     );
 
     if (shouldSave != true) {
+<<<<<<< HEAD
+      valueController.dispose();
+      return;
+    }
+
+    final parsedValue = double.tryParse(valueController.text.trim());
+    valueController.dispose();
+    if (parsedValue == null) {
+      _showMessage('Entrez une note valide.');
+=======
       for (final controller in controllers) {
         controller.dispose();
       }
@@ -2317,6 +2635,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
     if (scores.isEmpty) {
       _showMessage('Ajoutez au moins une note de devoir.');
+>>>>>>> main
       return;
     }
 
@@ -2324,10 +2643,17 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     try {
       await ref
           .read(dioProvider)
+<<<<<<< HEAD
+          .patch('/grades/$gradeId/', data: {'value': parsedValue});
+
+      if (!mounted) return;
+      _showMessage('Note modifiée avec succès.');
+=======
           .patch('/grades/$gradeId/', data: {'homework_scores': scores});
 
       if (!mounted) return;
       _showMessage('Note modifiée avec succès.', isSuccess: true);
+>>>>>>> main
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -2381,7 +2707,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       await ref.read(dioProvider).delete('/grades/$gradeId/');
 
       if (!mounted) return;
+<<<<<<< HEAD
+      _showMessage('Note supprimée avec succès.');
+=======
       _showMessage('Note supprimée avec succès.', isSuccess: true);
+>>>>>>> main
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -2471,6 +2801,18 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     await _loadData();
   }
 
+<<<<<<< HEAD
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  List<Map<String, dynamic>> _studentsForClassroom(int? classroomId) {
+    if (classroomId == null || classroomId <= 0) return _students;
+    return _students
+=======
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
 
@@ -2506,6 +2848,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
     if (classroomId == null || classroomId <= 0) return pool;
     return pool
+>>>>>>> main
         .where((row) => _asInt(row['classroom']) == classroomId)
         .toList();
   }
@@ -2515,6 +2858,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       return _subjects;
     }
 
+<<<<<<< HEAD
+    final assignedSubjectIds = _teacherAssignments
+        .where((row) => _asInt(row['classroom']) == classroomId)
+=======
     final assignedRows = _teacherAssignments.where((row) {
       if (_asInt(row['classroom']) != classroomId) {
         return false;
@@ -2526,12 +2873,17 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     });
 
     final assignedSubjectIds = assignedRows
+>>>>>>> main
         .map((row) => _asInt(row['subject']))
         .where((id) => id > 0)
         .toSet();
 
     if (assignedSubjectIds.isEmpty) {
+<<<<<<< HEAD
+      return _subjects;
+=======
       return const [];
+>>>>>>> main
     }
 
     return _subjects
@@ -2539,6 +2891,8 @@ class _GradesPageState extends ConsumerState<GradesPage> {
         .toList();
   }
 
+<<<<<<< HEAD
+=======
   List<Map<String, dynamic>> _classroomsForCurrentRole() {
     if (!_isTeacherUser) {
       return _classrooms;
@@ -2551,6 +2905,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
         .toList();
   }
 
+>>>>>>> main
   String _extractFriendlyError(Object error) {
     if (error is DioException) {
       return _extractDioErrorMessage(error);
@@ -2619,6 +2974,8 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     return raw.replaceAll(' ', '');
   }
 
+<<<<<<< HEAD
+=======
   String _apiDate(DateTime value) {
     final y = value.year.toString().padLeft(4, '0');
     final m = value.month.toString().padLeft(2, '0');
@@ -2626,6 +2983,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     return '$y-$m-$d';
   }
 
+>>>>>>> main
   Widget _metricChip(String label, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -2690,7 +3048,23 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
+<<<<<<< HEAD
+    final studentsForSelectedClass = _studentsForClassroom(_selectedClassroom);
+    final selectableStudents = studentsForSelectedClass.isNotEmpty
+        ? studentsForSelectedClass
+        : _students;
+
+    final selectedStudentIds = selectableStudents
+        .map((row) => _asInt(row['id']))
+        .toSet();
+    final effectiveStudent = selectedStudentIds.contains(_selectedStudent)
+        ? _selectedStudent
+        : (selectableStudents.isNotEmpty
+              ? _asInt(selectableStudents.first['id'])
+              : null);
+=======
     final visibleClassrooms = _classroomsForCurrentRole();
+>>>>>>> main
 
     final studentById = {for (final s in _students) _asInt(s['id']): s};
     final subjectById = {for (final s in _subjects) _asInt(s['id']): s};
@@ -2774,6 +3148,512 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             decoration: const InputDecoration(
               labelText: 'Note de validation (optionnel)',
             ),
+<<<<<<< HEAD
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.tonal(
+                onPressed: _saving
+                    ? null
+                    : () => _toggleValidation(validate: true),
+                child: const Text('Valider periode'),
+              ),
+              FilledButton.tonal(
+                onPressed: _saving
+                    ? null
+                    : () => _toggleValidation(validate: false),
+                child: const Text('Reouvrir periode'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    final entryPanel = _sectionCard(
+      title: 'Saisie des notes',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'La saisie se fait en lot: choisissez la classe et la matière, puis entrez les notes élève par élève sur la même ligne.',
+          ),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: (_saving || _isValidated) ? null : _openGradeEntryDialog,
+            icon: const Icon(Icons.note_add_outlined),
+            label: const Text('Saisir les notes'),
+          ),
+          const SizedBox(height: 8),
+          if (_isValidated)
+            const Text(
+              'Période validée: la fenêtre de saisie reste verrouillée.',
+            ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<int>(
+            initialValue: _selectedClassroom,
+            decoration: const InputDecoration(labelText: 'Classe'),
+            items: _classrooms
+                .map(
+                  (c) => DropdownMenuItem<int>(
+                    value: _asInt(c['id']),
+                    child: Text('${c['name']} (ID ${c['id']})'),
+                  ),
+                )
+                .toList(),
+            onChanged: (v) {
+              setState(() {
+                _selectedClassroom = v;
+                _notesPage = 1;
+                final scopedStudents = _studentsForClassroom(v);
+                if (scopedStudents.isNotEmpty) {
+                  _selectedStudent = _asInt(scopedStudents.first['id']);
+                }
+              });
+              _refreshValidationStatus();
+              _reloadGradesForCurrentFilters();
+            },
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<int>(
+            initialValue: _selectedAcademicYear,
+            decoration: const InputDecoration(labelText: 'Annee scolaire'),
+            items: _years
+                .map(
+                  (y) => DropdownMenuItem<int>(
+                    value: _asInt(y['id']),
+                    child: Text('${y['name']}'),
+                  ),
+                )
+                .toList(),
+            onChanged: (v) {
+              setState(() {
+                _selectedAcademicYear = v;
+                _notesPage = 1;
+              });
+              _refreshValidationStatus();
+              _reloadGradesForCurrentFilters();
+            },
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            initialValue: _currentTermOrDefault(),
+            decoration: const InputDecoration(labelText: 'Période'),
+            items: const [
+              DropdownMenuItem(value: 'T1', child: Text('T1')),
+              DropdownMenuItem(value: 'T2', child: Text('T2')),
+              DropdownMenuItem(value: 'T3', child: Text('T3')),
+            ],
+            onChanged: (value) {
+              setState(() {
+                _termController.text = value ?? 'T1';
+                _notesPage = 1;
+              });
+              _refreshValidationStatus();
+              _reloadGradesForCurrentFilters();
+            },
+          ),
+          const SizedBox(height: 8),
+          FilledButton.tonal(
+            onPressed: (_saving || _isValidated) ? null : _recalculateRanking,
+            child: const Text('Recalculer classement'),
+          ),
+        ],
+      ),
+    );
+
+    final bulletinPanel = _sectionCard(
+      title: 'Bulletin scolaire',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DropdownButtonFormField<int>(
+            initialValue: effectiveStudent,
+            decoration: const InputDecoration(labelText: 'Élève du bulletin'),
+            items: selectableStudents
+                .map(
+                  (row) => DropdownMenuItem<int>(
+                    value: _asInt(row['id']),
+                    child: Text(
+                      '${row['matricule'] ?? ''} • ${(row['user_full_name'] ?? '').toString().trim()}',
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              setState(() => _selectedStudent = value);
+            },
+          ),
+          const SizedBox(height: 10),
+          FilledButton.icon(
+            onPressed: _saving
+                ? null
+                : () async {
+                    if (effectiveStudent != null &&
+                        effectiveStudent != _selectedStudent) {
+                      setState(() => _selectedStudent = effectiveStudent);
+                    }
+                    await _printBulletin();
+                  },
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            label: const Text('Imprimer bulletin PDF'),
+          ),
+        ],
+      ),
+    );
+
+    final latestGradesPanel = _sectionCard(
+      title: 'Dernieres notes (classe/période sélectionnées)',
+      child: scopedGrades.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Text('Aucune note enregistree'),
+            )
+          : SizedBox(
+              height: 740,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _metricChip('Filtrées', '${scopedGrades.length}'),
+                      _metricChip('Moyenne', scopedAverage.toStringAsFixed(2)),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _gradesSearchController,
+                    onChanged: (_) => setState(() => _notesPage = 1),
+                    decoration: InputDecoration(
+                      labelText: 'Rechercher élève / matière',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _gradesSearchController.text.trim().isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () {
+                                _gradesSearchController.clear();
+                                setState(() => _notesPage = 1);
+                              },
+                              icon: const Icon(Icons.clear),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _saving
+                            ? null
+                            : () => _exportFilteredNotesCsv(
+                                scopedGrades,
+                                studentById,
+                                subjectById,
+                              ),
+                        icon: const Icon(Icons.grid_on_outlined),
+                        label: const Text('Exporter Excel (CSV)'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _saving
+                            ? null
+                            : () => _exportFilteredNotesPdf(
+                                scopedGrades,
+                                studentById,
+                                subjectById,
+                              ),
+                        icon: const Icon(Icons.picture_as_pdf_outlined),
+                        label: const Text('Exporter PDF'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Affichage ${notesStart + 1}-$notesEnd sur ${scopedGrades.length} notes',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                      SizedBox(
+                        width: 130,
+                        child: DropdownButtonFormField<int>(
+                          initialValue: _notesRowsPerPage,
+                          isDense: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Lignes',
+                          ),
+                          items: const [8, 12, 20, 30]
+                              .map(
+                                (value) => DropdownMenuItem<int>(
+                                  value: value,
+                                  child: Text('$value'),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() {
+                              _notesRowsPerPage = value;
+                              _notesPage = 1;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainer,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: colorScheme.outlineVariant.withValues(
+                          alpha: 0.6,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      children: const [
+                        Expanded(flex: 4, child: Text('Élève')),
+                        Expanded(flex: 3, child: Text('Matière')),
+                        Expanded(
+                          flex: 2,
+                          child: Text('Période', textAlign: TextAlign.center),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Text('Note', textAlign: TextAlign.center),
+                        ),
+                        SizedBox(
+                          width: 96,
+                          child: Text('Actions', textAlign: TextAlign.center),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: pagedGrades.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 6),
+                      itemBuilder: (context, index) {
+                        final grade = pagedGrades[index];
+                        final student = studentById[_asInt(grade['student'])];
+                        final subject = subjectById[_asInt(grade['subject'])];
+                        final studentLabel =
+                            '${student?['matricule'] ?? ''} • ${student?['user_full_name'] ?? 'Eleve'}';
+                        final subjectLabel =
+                            '${subject?['code'] ?? 'MAT'} • ${subject?['name'] ?? 'Matiere'}';
+
+                        return Card(
+                          child: ListTile(
+                            dense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 2,
+                            ),
+                            title: Row(
+                              children: [
+                                Expanded(
+                                  flex: 4,
+                                  child: Text(
+                                    studentLabel,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                Expanded(
+                                  flex: 3,
+                                  child: Text(
+                                    subjectLabel,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                Expanded(
+                                  flex: 2,
+                                  child: Text(
+                                    '${grade['term']}',
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                                Expanded(
+                                  flex: 2,
+                                  child: Text(
+                                    '${grade['value']}/20',
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 96,
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      IconButton(
+                                        tooltip: 'Modifier',
+                                        onPressed: (_saving || _isValidated)
+                                            ? null
+                                            : () => _openEditGradeDialog(grade),
+                                        icon: const Icon(Icons.edit_outlined),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Supprimer',
+                                        onPressed: (_saving || _isValidated)
+                                            ? null
+                                            : () => _deleteGrade(grade),
+                                        icon: const Icon(Icons.delete_outline),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Text(
+                        'Page $notesCurrentPage / $notesTotalPages',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const Spacer(),
+                      OutlinedButton.icon(
+                        onPressed: notesCurrentPage > 1
+                            ? () {
+                                setState(
+                                  () => _notesPage = notesCurrentPage - 1,
+                                );
+                              }
+                            : null,
+                        icon: const Icon(Icons.chevron_left),
+                        label: const Text('Précédent'),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: notesCurrentPage < notesTotalPages
+                            ? () {
+                                setState(
+                                  () => _notesPage = notesCurrentPage + 1,
+                                );
+                              }
+                            : null,
+                        icon: const Icon(Icons.chevron_right),
+                        label: const Text('Suivant'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+    );
+
+    return RefreshIndicator(
+      onRefresh: _refreshGrades,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(18),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Notes & Bulletins',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Saisie des notes, classement et validation direction.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _loadData,
+                icon: const Icon(Icons.sync),
+                label: const Text('Actualiser'),
+              ),
+            ],
+          ),
+          if (_saving) ...[
+            const SizedBox(height: 8),
+            const LinearProgressIndicator(),
+          ],
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+              ),
+            ),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _metricChip('Eleves', '${_students.length}'),
+                _metricChip('Matieres', '${_subjects.length}'),
+                _metricChip('Classes', '${_classrooms.length}'),
+                _metricChip('Annees', '${_years.length}'),
+                _metricChip('Notes', '${_grades.length}'),
+                _metricChip('Validation', validationLabel),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isWide = constraints.maxWidth >= 1120;
+              final leftPanel = Column(
+                children: [
+                  validationPanel,
+                  const SizedBox(height: 12),
+                  entryPanel,
+                  const SizedBox(height: 12),
+                  bulletinPanel,
+                ],
+              );
+
+              if (isWide) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 6, child: leftPanel),
+                    const SizedBox(width: 12),
+                    Expanded(flex: 5, child: latestGradesPanel),
+                  ],
+                );
+              }
+
+              return Column(
+                children: [
+                  leftPanel,
+                  const SizedBox(height: 12),
+                  latestGradesPanel,
+                ],
+              );
+            },
+=======
           ),
           const SizedBox(height: 10),
           Wrap(
@@ -3283,9 +4163,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                 label: const Text('Imprimer bulletins'),
               ),
             ],
+>>>>>>> main
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

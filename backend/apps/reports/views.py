@@ -3,7 +3,11 @@ import tempfile
 from pathlib import Path
 
 from django.conf import settings
+<<<<<<< HEAD
+from django.db.models import Avg
+=======
 from django.db.models import Avg, Q
+>>>>>>> main
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -20,7 +24,10 @@ from apps.accounts.models import UserRole
 from apps.school.models import (
     AcademicYear,
     ClassRoom,
+<<<<<<< HEAD
+=======
     Etablissement,
+>>>>>>> main
     ExamPlanning,
     ExamResult,
     Grade,
@@ -969,6 +976,84 @@ def _build_bulletin_rows(
     return rows, average, coef_sum
 
 
+def _term_variants(term: str) -> list[str]:
+    raw = str(term or "").strip().upper()
+    if not raw:
+        return []
+
+    variants = {raw}
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if raw.isdigit():
+        digits = raw
+
+    if digits:
+        variants.update(
+            {
+                digits,
+                f"T{digits}",
+                f"TRIMESTRE{digits}",
+                f"TRIMESTRE {digits}",
+            }
+        )
+
+    return sorted(value for value in variants if value)
+
+
+def _exam_term_title_tokens(term: str) -> list[str]:
+    raw = str(term or "").strip().upper()
+    if not raw:
+        return []
+
+    tokens = {raw}
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if digits:
+        tokens.update(
+            {
+                digits,
+                f"T{digits}",
+                f"TRIMESTRE{digits}",
+                f"TRIMESTRE {digits}",
+                f"TERM{digits}",
+                f"TERM {digits}",
+            }
+        )
+
+    return sorted(token for token in tokens if token)
+
+
+def _term_display_label(term: str) -> str:
+    raw = str(term or "").strip().upper()
+    if not raw:
+        return "-"
+
+    if raw.isdigit():
+        return f"T{raw}"
+
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if raw.startswith("TRIMESTRE") and digits:
+        return f"T{digits}"
+
+    return raw
+
+
+def _format_cell_value(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.2f}"
+
+
+def _format_coef_value(value: float | None) -> str:
+    if value is None:
+        return "-"
+
+    text = f"{value:.2f}"
+    if text.endswith(".00"):
+        return text[:-3]
+    if text.endswith("0"):
+        return text[:-1]
+    return text
+
+
 class ReportsContextView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1000,6 +1085,149 @@ class BulletinPdfView(APIView):
                 {"detail": "Période invalide. Utilisez uniquement T1, T2 ou T3."},
                 status=400,
             )
+<<<<<<< HEAD
+
+        student = get_object_or_404(
+            Student.objects.select_related(
+                "user",
+                "classroom",
+                "parent",
+                "parent__user",
+            ),
+            id=student_id,
+        )
+        _ensure_student_access(request.user, student)
+
+        school_name = getattr(settings, "SCHOOL_NAME", "LYCEE TECHNIQUE OUMAR BAH")
+        school_short = getattr(settings, "SCHOOL_SHORT", "LTOB")
+        school_level = getattr(settings, "SCHOOL_LEVEL", "1er etage")
+        school_phone = getattr(settings, "SCHOOL_PHONE", "")
+        logo_path = _school_logo_path()
+
+        student_name = student.user.get_full_name().strip() or student.user.username
+        class_name = student.classroom.name if student.classroom else "N/A"
+        period_label = normalized_term
+        academic_year_name = (
+            AcademicYear.objects.filter(id=academic_year_id)
+            .values_list("name", flat=True)
+            .first()
+            or str(academic_year_id)
+        )
+
+        student_grades_qs = Grade.objects.filter(
+            student_id=student_id,
+            academic_year_id=academic_year_id,
+            term=normalized_term,
+        ).select_related("subject")
+
+        student_note_by_subject: dict[int, float] = {}
+        for grade in student_grades_qs.order_by("subject_id", "-created_at", "-id"):
+            student_note_by_subject.setdefault(grade.subject_id, float(grade.value))
+
+        classroom_id = student.classroom_id
+        subject_ids: set[int] = set(student_note_by_subject.keys())
+        class_average_by_subject: dict[int, float] = {}
+
+        if classroom_id:
+            class_grades_qs = Grade.objects.filter(
+                classroom_id=classroom_id,
+                academic_year_id=academic_year_id,
+                term=normalized_term,
+            )
+            subject_ids.update(
+                class_grades_qs.values_list("subject_id", flat=True)
+            )
+
+            class_avg_rows = class_grades_qs.values("subject_id").annotate(
+                avg_note=Avg("value")
+            )
+            class_average_by_subject = {
+                int(row["subject_id"]): float(row["avg_note"])
+                for row in class_avg_rows
+                if row.get("avg_note") is not None
+            }
+
+            subject_ids.update(
+                TeacherAssignment.objects.filter(classroom_id=classroom_id)
+                .values_list("subject_id", flat=True)
+            )
+            subject_ids.update(
+                ExamPlanning.objects.filter(
+                    classroom_id=classroom_id,
+                    session__academic_year_id=academic_year_id,
+                ).values_list("subject_id", flat=True)
+            )
+
+        student_exam_results_qs = ExamResult.objects.filter(
+            student_id=student_id,
+            session__academic_year_id=academic_year_id,
+            session__term=normalized_term,
+        )
+        subject_ids.update(
+            student_exam_results_qs.values_list("subject_id", flat=True)
+        )
+
+        exam_note_by_subject: dict[int, float] = {}
+        for exam_result in student_exam_results_qs.order_by(
+            "subject_id",
+            "-session__end_date",
+            "-session__start_date",
+            "-created_at",
+            "-id",
+        ):
+            exam_note_by_subject.setdefault(exam_result.subject_id, float(exam_result.score))
+
+        subjects = Subject.objects.filter(id__in=subject_ids).order_by("name", "id")
+
+        weighted_sum = 0.0
+        coef_sum = 0.0
+        rows = []
+
+        for index, subject in enumerate(subjects, start=1):
+            coef = float(subject.coefficient)
+            note_classe = student_note_by_subject.get(subject.id)
+            note_examen = exam_note_by_subject.get(subject.id)
+
+            if note_classe is not None and note_examen is not None:
+                note_finale = round((note_classe + note_examen) / 2.0, 2)
+            else:
+                note_finale = note_classe if note_classe is not None else note_examen
+
+            note_moyenne_classe = class_average_by_subject.get(subject.id)
+            points = round(note_finale * coef, 2) if note_finale is not None else None
+
+            if note_finale is not None and coef > 0:
+                weighted_sum += note_finale * coef
+                coef_sum += coef
+
+            rows.append(
+                {
+                    "index": index,
+                    "subject": subject.name,
+                    "coef": coef,
+                    "note_classe": note_classe,
+                    "note_examen": note_examen,
+                    "note_finale": note_finale,
+                    "moyenne_classe": note_moyenne_classe,
+                    "points": points,
+                }
+            )
+
+        average = round(weighted_sum / coef_sum, 2) if coef_sum else 0.0
+
+        if average >= 16:
+            mention = "Tres bien"
+        elif average >= 14:
+            mention = "Bien"
+        elif average >= 12:
+            mention = "Assez bien"
+        elif average >= 10:
+            mention = "Passable"
+        else:
+            mention = "Insuffisant"
+
+        pdf = FPDF(orientation="L", format="A4")
+=======
 
         student = get_object_or_404(
             Student.objects.select_related(
@@ -1020,9 +1248,38 @@ class BulletinPdfView(APIView):
 
         pdf = FPDF(orientation="L", format="A4")
         pdf.set_auto_page_break(auto=False)
+>>>>>>> main
         pdf.add_page()
         _render_bulletin_page(pdf, payload)
 
+<<<<<<< HEAD
+        left_margin = 10
+        right_margin = pdf.w - 10
+
+        if logo_path:
+            try:
+                pdf.image(logo_path, x=left_margin, y=8, w=20)
+            except Exception:
+                pass
+
+        pdf.set_xy(34 if logo_path else left_margin, 8)
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.cell(0, 7, _pdf_text(school_name), ln=True)
+
+        pdf.set_x(34 if logo_path else left_margin)
+        pdf.set_font("Helvetica", size=10)
+        header_line = f"{school_level} | Tel: {school_phone}" if school_phone else school_level
+        pdf.cell(0, 5, _pdf_text(header_line), ln=True)
+
+        pdf.set_x(34 if logo_path else left_margin)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 5, _pdf_text(f"Application: {school_short} - GESTION SCHOOL"), ln=True)
+
+        top_line_y = max(pdf.get_y() + 2, 28)
+        pdf.set_draw_color(60, 60, 60)
+        pdf.line(left_margin, top_line_y, right_margin, top_line_y)
+        pdf.set_y(top_line_y + 4)
+=======
         safe_term = str(payload["period_label"] or term or "periode").replace("/", "-")
         return pdf_output_response(pdf, f"bulletin_{student.matricule}_{safe_term}.pdf")
 
@@ -1050,11 +1307,130 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
         academic_year_id=academic_year_id,
         term=normalized_term,
     ).select_related("subject")
+>>>>>>> main
 
     student_note_by_subject: dict[int, float] = {}
     for grade in student_grades_qs.order_by("subject_id", "-created_at", "-id"):
         student_note_by_subject.setdefault(grade.subject_id, float(grade.value))
 
+<<<<<<< HEAD
+        info_label_w = 28
+        info_value_w = 50
+        info_rows = [
+            ("Eleve", student_name),
+            ("Matricule", student.matricule),
+            ("Classe", class_name),
+            ("Annee", academic_year_name),
+            ("Periode", period_label),
+        ]
+
+        for index, (label, value) in enumerate(info_rows):
+            if index % 2 == 0:
+                pdf.set_x(left_margin)
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(info_label_w, 7, _pdf_text(label), border=1)
+            pdf.set_font("Helvetica", size=10)
+            pdf.cell(info_value_w, 7, _pdf_text(value)[:34], border=1)
+            if index % 2 == 1:
+                pdf.ln(7)
+        if len(info_rows) % 2 == 1:
+            pdf.ln(7)
+
+        table_columns = [
+            ("N", 12, "index"),
+            ("Matiere", 88, "subject"),
+            ("Coef", 20, "coef"),
+            ("Note classe", 28, "note_classe"),
+            ("Note examen", 28, "note_examen"),
+            ("Note finale", 28, "note_finale"),
+            ("Moy. classe", 28, "moyenne_classe"),
+            ("Points", 30, "points"),
+        ]
+        table_width = sum(column[1] for column in table_columns)
+        table_x = max(left_margin, (pdf.w - table_width) / 2)
+
+        def draw_table_header() -> None:
+            pdf.set_x(table_x)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_fill_color(228, 234, 244)
+            for title, width, key in table_columns:
+                align = "L" if key == "subject" else "C"
+                pdf.cell(width, 8, _pdf_text(title), border=1, fill=True, align=align)
+            pdf.ln(8)
+
+        pdf.ln(3)
+        draw_table_header()
+
+        pdf.set_font("Helvetica", size=8.8)
+        if not rows:
+            pdf.set_x(table_x)
+            pdf.cell(
+                table_width,
+                8,
+                _pdf_text("Aucune note disponible pour cette periode."),
+                border=1,
+                align="C",
+            )
+            pdf.ln(8)
+        else:
+            for row in rows:
+                if pdf.get_y() > (pdf.h - 24):
+                    pdf.add_page()
+                    draw_table_header()
+                    pdf.set_font("Helvetica", size=8.8)
+
+                fill_row = row["index"] % 2 == 0
+                if fill_row:
+                    pdf.set_fill_color(248, 250, 253)
+
+                pdf.set_x(table_x)
+                pdf.cell(12, 7, _pdf_text(str(row["index"])), border=1, align="C", fill=fill_row)
+                pdf.cell(88, 7, _pdf_text(str(row["subject"])[:58]), border=1, fill=fill_row)
+                pdf.cell(20, 7, _pdf_text(_format_coef_value(row["coef"])), border=1, align="C", fill=fill_row)
+                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["note_classe"])), border=1, align="C", fill=fill_row)
+                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["note_examen"])), border=1, align="C", fill=fill_row)
+                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["note_finale"])), border=1, align="C", fill=fill_row)
+                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["moyenne_classe"])), border=1, align="C", fill=fill_row)
+                pdf.cell(30, 7, _pdf_text(_format_cell_value(row["points"])), border=1, align="C", fill=fill_row)
+                pdf.ln(7)
+
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 6, _pdf_text(f"Moyenne generale ponderee: {average:.2f}/20"), ln=True)
+        pdf.cell(0, 6, _pdf_text(f"Total coefficients utilises: {_format_coef_value(coef_sum)}"), ln=True)
+        pdf.cell(0, 6, _pdf_text(f"Mention: {mention}"), ln=True)
+
+        pdf.ln(2)
+        pdf.set_font("Helvetica", size=9)
+        pdf.set_text_color(70, 70, 70)
+        pdf.multi_cell(
+            0,
+            5,
+            _pdf_text(
+                "Formule: Note finale = (Note classe + Note examen) / 2. "
+                "Si l'une des deux notes est absente, la note disponible est retenue."
+            ),
+        )
+        pdf.set_text_color(0, 0, 0)
+
+        signature_y = min(pdf.h - 16, pdf.get_y() + 8)
+        left_sig_x1 = left_margin + 5
+        left_sig_x2 = left_sig_x1 + 70
+        right_sig_x2 = right_margin - 5
+        right_sig_x1 = right_sig_x2 - 70
+
+        pdf.line(left_sig_x1, signature_y, left_sig_x2, signature_y)
+        pdf.line(right_sig_x1, signature_y, right_sig_x2, signature_y)
+        pdf.set_y(signature_y + 2)
+        pdf.set_font("Helvetica", size=9)
+        pdf.set_x(left_sig_x1)
+        pdf.cell(left_sig_x2 - left_sig_x1, 5, _pdf_text("Titulaire / Enseignant"), align="C")
+        pdf.set_x(right_sig_x1)
+        pdf.cell(right_sig_x2 - right_sig_x1, 5, _pdf_text("Direction"), align="C")
+
+        safe_term = str(period_label or term or "periode").replace("/", "-")
+        return pdf_output_response(pdf, f"bulletin_{student.matricule}_{safe_term}.pdf")
+=======
     classroom_id = student.classroom_id
     subject_ids: set[int] = set(student_note_by_subject.keys())
     class_average_by_subject: dict[int, float] = {}
@@ -1354,6 +1730,7 @@ class ClassBulletinsPdfView(APIView):
         safe_term = str(normalized_term or term or "periode").replace("/", "-")
         class_slug = str(classroom.name or f"classe_{classroom.id}").strip().replace(" ", "_")
         return pdf_output_response(pdf, f"bulletins_{class_slug}_{safe_term}.pdf")
+>>>>>>> main
 
 
 class PaymentReceiptPdfView(APIView):

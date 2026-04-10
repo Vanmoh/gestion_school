@@ -84,6 +84,8 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
           _selectedLogKey = rows.isNotEmpty ? _logKey(rows.first) : null;
         }
       });
+<<<<<<< HEAD
+=======
     } on DioException catch (error) {
       if (CancelToken.isCancel(error)) {
         return;
@@ -92,6 +94,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Erreur chargement logs: $error')));
+>>>>>>> main
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -384,6 +387,168 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
     );
   }
 
+  Map<String, dynamic>? _selectedLog() {
+    if (_selectedLogKey == null) return null;
+    for (final row in _logs) {
+      if (_logKey(row) == _selectedLogKey) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  String _logKey(Map<String, dynamic> row) {
+    final id = row['id'];
+    if (id != null) {
+      return 'id:$id';
+    }
+    final createdAt = row['created_at']?.toString() ?? '-';
+    final path = row['path']?.toString() ?? '-';
+    final method = row['method']?.toString() ?? '-';
+    return 'fallback:$createdAt|$path|$method';
+  }
+
+  Widget _metricChip(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionCard({required String title, required Widget child}) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _statusChip(Map<String, dynamic> row) {
+    final success = row['success'] == true;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: success ? const Color(0xFFE7F6EC) : const Color(0xFFFDECEC),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        success ? 'Succes' : 'Echec',
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: success ? const Color(0xFF1E7B3D) : const Color(0xFFB42318),
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  void _showLogDetailsDialog(Map<String, dynamic> row) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('Evenement ${row['id'] ?? '-'}'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _detailLine('Date', row['created_at']?.toString() ?? '-'),
+                  _detailLine('Action', row['action']?.toString() ?? '-'),
+                  _detailLine('Methode', row['method']?.toString() ?? '-'),
+                  _detailLine('Path', row['path']?.toString() ?? '-'),
+                  _detailLine(
+                    'Utilisateur',
+                    row['user_display']?.toString() ??
+                        row['role']?.toString() ??
+                        'Anonyme',
+                  ),
+                  _detailLine(
+                    'Code HTTP',
+                    row['status_code']?.toString() ?? '-',
+                  ),
+                  _detailLine(
+                    'IP',
+                    row['ip_address']?.toString().trim().isEmpty == true
+                        ? '-'
+                        : row['ip_address']?.toString() ?? '-',
+                  ),
+                  _detailLine('Succes', row['success'] == true ? 'Oui' : 'Non'),
+                  _detailLine(
+                    'Payload',
+                    row['payload']?.toString().trim().isEmpty == true
+                        ? '-'
+                        : row['payload']?.toString() ?? '-',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _detailLine(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(label, style: Theme.of(context).textTheme.bodySmall),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -512,7 +677,10 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                     ],
                     onChanged: (value) {
                       setState(() => _methodFilter = value ?? '');
+<<<<<<< HEAD
+=======
                       _loadData();
+>>>>>>> main
                     },
                   ),
                 ),
@@ -528,7 +696,10 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                     ],
                     onChanged: (value) {
                       setState(() => _successFilter = value ?? '');
+<<<<<<< HEAD
+=======
                       _loadData();
+>>>>>>> main
                     },
                   ),
                 ),
@@ -565,7 +736,10 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                     ],
                     onChanged: (value) {
                       setState(() => _ordering = value ?? '-created_at');
+<<<<<<< HEAD
+=======
                       _loadData();
+>>>>>>> main
                     },
                   ),
                 ),

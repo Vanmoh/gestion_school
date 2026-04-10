@@ -27,6 +27,11 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   int? _selectedFeeId;
   int? _selectedPaymentId;
   String _methodFilter = 'all';
+<<<<<<< HEAD
+
+  @override
+  void dispose() {
+=======
   int _currentPage = 1;
   int _pageSize = 25;
   String _searchTerm = '';
@@ -35,6 +40,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   @override
   void dispose() {
     _searchDebounce?.cancel();
+>>>>>>> main
     _searchController.dispose();
     _amountController.dispose();
     _methodController.dispose();
@@ -43,6 +49,13 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   }
 
   Future<void> _refreshPayments() async {
+<<<<<<< HEAD
+    ref.invalidate(paymentsProvider);
+    ref.invalidate(feesProvider);
+    try {
+      await Future.wait([
+        ref.read(paymentsProvider.future),
+=======
     final query = PaymentsPageQuery(
       page: _currentPage,
       pageSize: _pageSize,
@@ -54,6 +67,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     try {
       await Future.wait([
         ref.read(paymentsPaginatedProvider(query).future),
+>>>>>>> main
         ref.read(feesProvider.future),
       ]);
     } catch (_) {
@@ -61,6 +75,16 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     }
   }
 
+<<<<<<< HEAD
+  void _showMessage(String text, {bool isSuccess = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
+      ),
+    );
+=======
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 300), () {
@@ -87,6 +111,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
           backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
         ),
       );
+>>>>>>> main
   }
 
   Future<void> _printReceipt(int paymentId) async {
@@ -117,7 +142,24 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   }
 
   List<PaymentItem> _filteredPayments(List<PaymentItem> payments) {
+<<<<<<< HEAD
+    final query = _searchController.text.trim().toLowerCase();
+
+    final rows = payments.where((payment) {
+      if (_methodFilter != 'all' && payment.method != _methodFilter) {
+        return false;
+      }
+      if (query.isEmpty) {
+        return true;
+      }
+      final haystack =
+          '${payment.studentFullName} ${payment.studentMatricule} ${payment.method} ${payment.feeType} ${payment.reference}'
+              .toLowerCase();
+      return haystack.contains(query);
+    }).toList();
+=======
     final rows = payments.toList();
+>>>>>>> main
 
     rows.sort((left, right) {
       final lDate = DateTime.tryParse(left.createdAt);
@@ -515,6 +557,9 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
 
   @override
   Widget build(BuildContext context) {
+<<<<<<< HEAD
+    final paymentsAsync = ref.watch(paymentsProvider);
+=======
     final query = PaymentsPageQuery(
       page: _currentPage,
       pageSize: _pageSize,
@@ -522,6 +567,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
       method: _methodFilter == 'all' ? null : _methodFilter,
     );
     final paymentsAsync = ref.watch(paymentsPaginatedProvider(query));
+>>>>>>> main
     final feesAsync = ref.watch(feesProvider);
     final mutationState = ref.watch(paymentMutationProvider);
     final isMutating = mutationState.isLoading;
@@ -620,8 +666,12 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
               ],
             ),
           ),
+<<<<<<< HEAD
+          data: (payments) {
+=======
           data: (pageData) {
             final payments = pageData.results;
+>>>>>>> main
             final filteredPayments = _filteredPayments(payments);
             _syncSelectedPayment(filteredPayments);
             final selectedPayment = _selectedPayment(filteredPayments);
@@ -713,7 +763,11 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                           width: 290,
                           child: TextField(
                             controller: _searchController,
+<<<<<<< HEAD
+                            onChanged: (_) => setState(() {}),
+=======
                             onChanged: _onSearchChanged,
+>>>>>>> main
                             decoration: InputDecoration(
                               labelText: 'Recherche paiement',
                               prefixIcon: const Icon(Icons.search),
@@ -721,12 +775,17 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                   ? null
                                   : IconButton(
                                       onPressed: () {
+<<<<<<< HEAD
+                                        _searchController.clear();
+                                        setState(() {});
+=======
                                         _searchDebounce?.cancel();
                                         _searchController.clear();
                                         setState(() {
                                           _searchTerm = '';
                                           _currentPage = 1;
                                         });
+>>>>>>> main
                                       },
                                       icon: const Icon(Icons.clear),
                                     ),
@@ -753,10 +812,14 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                 )
                                 .toList(),
                             onChanged: (value) {
+<<<<<<< HEAD
+                              setState(() => _methodFilter = value ?? 'all');
+=======
                               setState(() {
                                 _methodFilter = value ?? 'all';
                                 _currentPage = 1;
                               });
+>>>>>>> main
                             },
                           ),
                         ),
@@ -764,6 +827,10 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                           onPressed: isMutating
                               ? null
                               : () {
+<<<<<<< HEAD
+                                  _searchController.clear();
+                                  setState(() => _methodFilter = 'all');
+=======
                                   _searchDebounce?.cancel();
                                   _searchController.clear();
                                   setState(() {
@@ -771,6 +838,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                     _searchTerm = '';
                                     _currentPage = 1;
                                   });
+>>>>>>> main
                                 },
                           icon: const Icon(Icons.filter_alt_off_outlined),
                           label: const Text('Reinitialiser'),
@@ -801,6 +869,8 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                               'Historique paiements (${filteredPayments.length})',
                               style: Theme.of(context).textTheme.titleSmall,
                             ),
+<<<<<<< HEAD
+=======
                             const SizedBox(height: 4),
                             Text(
                               pageData.count == 0
@@ -808,6 +878,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                   : 'Page $_currentPage • ${payments.length} résultat(s) sur ${pageData.count}',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
+>>>>>>> main
                             const SizedBox(height: 8),
                             if (filteredPayments.isEmpty)
                               const Padding(
@@ -966,6 +1037,8 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                   );
                                 },
                               ),
+<<<<<<< HEAD
+=======
                             const SizedBox(height: 8),
                             Wrap(
                               alignment: WrapAlignment.spaceBetween,
@@ -1026,6 +1099,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                 ),
                               ],
                             ),
+>>>>>>> main
                           ],
                         ),
                       );

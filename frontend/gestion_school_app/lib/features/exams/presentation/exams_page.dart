@@ -51,6 +51,8 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     await Future<void>.delayed(const Duration(milliseconds: 120));
   }
 
+<<<<<<< HEAD
+=======
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
 
@@ -69,6 +71,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
       );
   }
 
+>>>>>>> main
   Widget _metricChip(String label, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
