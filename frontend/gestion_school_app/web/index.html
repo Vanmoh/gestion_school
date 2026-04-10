@@ -34,6 +34,18 @@
 </head>
 <body>
   <style>
+    :root {
+      --bg-1: #eef4fb;
+      --bg-2: #dfe9f6;
+      --ink-strong: #123a64;
+      --ink-soft: #3f5f80;
+      --accent: #2563eb;
+      --accent-2: #1d4ed8;
+      --chip-bg: rgba(18, 58, 100, 0.08);
+      --surface: rgba(255, 255, 255, 0.82);
+      --surface-border: rgba(37, 99, 235, 0.2);
+    }
+
     #boot-status {
       position: fixed;
       inset: 0;
@@ -41,35 +53,237 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: linear-gradient(180deg, #f3f7fb 0%, #e9f0f9 100%);
-      color: #123a64;
+      overflow: hidden;
+      background:
+        radial-gradient(1100px 500px at -10% -20%, #ffffff 0%, transparent 58%),
+        radial-gradient(900px 480px at 110% 120%, #d4e3f8 0%, transparent 58%),
+        linear-gradient(160deg, var(--bg-1) 0%, var(--bg-2) 100%);
+      color: var(--ink-strong);
       font-family: "Segoe UI", Tahoma, Verdana, sans-serif;
       text-align: center;
       padding: 20px;
       z-index: 9999;
     }
 
+    #boot-status::before,
+    #boot-status::after {
+      content: "";
+      position: absolute;
+      border-radius: 999px;
+      filter: blur(0.3px);
+      pointer-events: none;
+    }
+
+    #boot-status::before {
+      width: min(54vw, 640px);
+      height: min(54vw, 640px);
+      left: -16vw;
+      top: -18vw;
+      background: radial-gradient(circle, rgba(37, 99, 235, 0.17) 0%, rgba(37, 99, 235, 0) 70%);
+      animation: float-slow 8s ease-in-out infinite;
+    }
+
+    #boot-status::after {
+      width: min(44vw, 520px);
+      height: min(44vw, 520px);
+      right: -12vw;
+      bottom: -16vw;
+      background: radial-gradient(circle, rgba(29, 78, 216, 0.16) 0%, rgba(29, 78, 216, 0) 70%);
+      animation: float-slow 9.5s ease-in-out infinite reverse;
+    }
+
+    #boot-status .panel {
+      position: relative;
+      width: min(92vw, 760px);
+      padding: clamp(22px, 3vw, 34px);
+      border-radius: 24px;
+      border: 1px solid var(--surface-border);
+      background: var(--surface);
+      backdrop-filter: blur(9px);
+      box-shadow:
+        0 22px 70px rgba(13, 55, 103, 0.17),
+        inset 0 1px 0 rgba(255, 255, 255, 0.9);
+      animation: panel-in 550ms ease-out;
+    }
+
+    #boot-status .identity {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    #boot-status .logo {
+      width: 52px;
+      height: 52px;
+      border-radius: 15px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: linear-gradient(140deg, var(--accent), var(--accent-2));
+      box-shadow: 0 10px 24px rgba(37, 99, 235, 0.34);
+    }
+
     #boot-status .title {
-      font-size: 24px;
+      font-size: clamp(30px, 4.2vw, 44px);
+      font-weight: 800;
+      letter-spacing: 0.3px;
+      margin-bottom: 10px;
+      line-height: 1.07;
+      text-wrap: balance;
+    }
+
+    #boot-status .subtitle {
+      font-size: clamp(12px, 1.8vw, 14px);
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      color: var(--ink-soft);
       font-weight: 700;
       margin-bottom: 8px;
     }
 
     #boot-status .message {
-      font-size: 15px;
-      max-width: 700px;
+      font-size: clamp(15px, 2vw, 18px);
+      max-width: 660px;
       line-height: 1.45;
-      opacity: 0.92;
+      opacity: 0.95;
+      color: var(--ink-soft);
+      margin: 0 auto;
+    }
+
+    #boot-status .loading-row {
+      margin-top: 20px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: var(--chip-bg);
+      color: var(--ink-strong);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    #boot-status .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--accent);
+      animation: pulse 1.25s ease-in-out infinite;
+    }
+
+    #boot-status .dot:nth-child(2) {
+      animation-delay: 0.18s;
+    }
+
+    #boot-status .dot:nth-child(3) {
+      animation-delay: 0.36s;
+    }
+
+    #boot-status .pillars {
+      margin-top: 16px;
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    #boot-status .pill {
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(18, 58, 100, 0.12);
+      color: var(--ink-soft);
+      font-size: 12px;
+      font-weight: 700;
     }
 
     #boot-status.error .title {
       color: #9f1d35;
     }
+
+    #boot-status.error .logo {
+      background: linear-gradient(140deg, #c6284f, #9f1d35);
+      box-shadow: 0 10px 24px rgba(159, 29, 53, 0.3);
+    }
+
+    @keyframes pulse {
+      0%,
+      100% {
+        transform: scale(0.92);
+        opacity: 0.38;
+      }
+      50% {
+        transform: scale(1.04);
+        opacity: 1;
+      }
+    }
+
+    @keyframes float-slow {
+      0%,
+      100% {
+        transform: translateY(0px);
+      }
+      50% {
+        transform: translateY(-10px);
+      }
+    }
+
+    @keyframes panel-in {
+      from {
+        transform: translateY(10px) scale(0.985);
+        opacity: 0;
+      }
+      to {
+        transform: translateY(0) scale(1);
+        opacity: 1;
+      }
+    }
+
+    @media (max-width: 640px) {
+      #boot-status .panel {
+        border-radius: 20px;
+        padding: 20px 16px;
+      }
+      #boot-status .logo {
+        width: 46px;
+        height: 46px;
+      }
+    }
   </style>
 
   <div id="boot-status" role="status" aria-live="polite">
-    <div class="title">Gestion School</div>
-    <div class="message">Chargement de l'application...</div>
+    <div class="panel">
+      <div class="identity">
+        <div class="logo" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 6.5C4 5.67 4.67 5 5.5 5H18.5C19.33 5 20 5.67 20 6.5V17.5C20 18.33 19.33 19 18.5 19H5.5C4.67 19 4 18.33 4 17.5V6.5Z" fill="rgba(255,255,255,0.23)"/>
+            <path d="M6.5 7.2H17.5V16.8H6.5V7.2Z" stroke="white" stroke-width="1.6"/>
+            <path d="M9 10.2H15M9 13.2H13.4" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="subtitle">Plateforme Education</div>
+      </div>
+
+      <div class="title">Gestion School</div>
+      <div class="message">Initialisation de l'espace scolaire: classes, emplois du temps, notes et suivi administratif...</div>
+
+      <div class="loading-row" aria-hidden="true">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span>Chargement securise</span>
+      </div>
+
+      <div class="pillars" aria-hidden="true">
+        <span class="pill">Eleves</span>
+        <span class="pill">Enseignants</span>
+        <span class="pill">Bulletins</span>
+        <span class="pill">Presences</span>
+        <span class="pill">Paiements</span>
+      </div>
+    </div>
   </div>
 
   <script>
