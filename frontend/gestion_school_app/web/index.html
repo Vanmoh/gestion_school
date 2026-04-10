@@ -290,6 +290,8 @@
     (function () {
       const statusEl = document.getElementById('boot-status');
       const messageEl = statusEl ? statusEl.querySelector('.message') : null;
+      let mounted = false;
+      let retryInjected = false;
 
       function showError(message) {
         if (!statusEl || !messageEl) {
@@ -300,60 +302,67 @@
           message || 'Une erreur de chargement est survenue. Rechargez la page (Ctrl+F5).';
       }
 
+      function hasMountedFlutter() {
+        return Boolean(document.querySelector('flt-glass-pane, flt-scene-host, canvas'));
+      }
+
+      function removeBootStatus() {
+        if (statusEl) {
+          statusEl.remove();
+        }
+      }
+
+      function ensureBootstrapScript() {
+        if (retryInjected || hasMountedFlutter()) {
+          return;
+        }
+        retryInjected = true;
+        const script = document.createElement('script');
+        script.src = 'flutter_bootstrap.js?v=' + Date.now();
+        script.defer = true;
+        document.body.appendChild(script);
+      }
+
       // If Flutter does not mount anything after a while, show a clear message.
       window.setTimeout(function () {
-        const mounted = document.querySelector('flt-glass-pane, flt-scene-host, canvas');
-        if (!mounted) {
-          showError('L application tarde a se charger. Verifiez la connexion puis rechargez (Ctrl+F5).');
+        if (!hasMountedFlutter()) {
+          showError('Le demarrage prend plus de temps que prevu. Patientez encore quelques secondes ou rechargez (Ctrl+F5).');
+          ensureBootstrapScript();
         }
-      }, 15000);
+      }, 45000);
+
+      // Retry bootstrap injection once if initial script execution is delayed.
+      window.setTimeout(function () {
+        if (!hasMountedFlutter()) {
+          ensureBootstrapScript();
+        }
+      }, 9000);
 
       const mountWatcher = window.setInterval(function () {
-        const mounted = document.querySelector('flt-glass-pane, flt-scene-host, canvas');
-        if (mounted) {
+        if (hasMountedFlutter()) {
+          mounted = true;
           window.clearInterval(mountWatcher);
-          if (statusEl) {
-            statusEl.remove();
-          }
+          removeBootStatus();
         }
       }, 350);
 
       window.addEventListener('error', function () {
-        showError('Le navigateur a bloque le demarrage de l application. Rechargez la page (Ctrl+F5).');
+        if (!mounted) {
+          showError('Le navigateur a rencontre un probleme au demarrage. Rechargez la page (Ctrl+F5).');
+        }
       });
 
       window.addEventListener('unhandledrejection', function () {
-        showError('Une erreur JavaScript est survenue au chargement. Rechargez la page (Ctrl+F5).');
+        if (!mounted) {
+          showError('Une erreur JavaScript est survenue au chargement. Rechargez la page (Ctrl+F5).');
+        }
       });
 
       window.__hideBootStatus = function () {
-        if (statusEl) {
-          statusEl.remove();
-        }
+        removeBootStatus();
       };
     })();
   </script>
-
-  <script>
-    // Clear stale Flutter service workers/caches from older deployments.
-    (function () {
-      if (!('serviceWorker' in navigator)) {
-        return;
-      }
-      navigator.serviceWorker.getRegistrations().then(function (registrations) {
-        for (const registration of registrations) {
-          registration.unregister();
-        }
-      });
-      if ('caches' in window) {
-        caches.keys().then(function (keys) {
-          for (const key of keys) {
-            caches.delete(key);
-          }
-        });
-      }
-    })();
-  </script>
-  <script src="flutter_bootstrap.js" async></script>
+  <script src="flutter_bootstrap.js" defer></script>
 </body>
 </html>
