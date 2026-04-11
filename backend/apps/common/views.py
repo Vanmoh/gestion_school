@@ -567,6 +567,13 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             if not data_json.exists():
                 raise ValueError("Archive invalide: data.json manquant.")
 
+            payload = json.loads(data_json.read_text(encoding="utf-8"))
+            if backup.scope == BackupArchive.Scope.ETABLISSEMENT and backup.etablissement_id:
+                payload, renamed_count = self._resolve_user_username_conflicts(payload)
+                if renamed_count:
+                    restore_notes.append(f"{renamed_count} usernames adaptes pour eviter les doublons.")
+                data_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
             media_dir = tmp_path / "media"
 
             with transaction.atomic():
@@ -598,6 +605,52 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         backup.restore_log = "\n".join(restore_notes) if restore_notes else "Restauration terminee."
         backup.status = BackupArchive.Status.COMPLETED
         backup.save(update_fields=["restored_by", "restored_at", "restore_log", "status", "updated_at"])
+
+    def _resolve_user_username_conflicts(self, payload):
+        from apps.accounts.models import User
+
+        if not isinstance(payload, list):
+            return payload, 0
+
+        renamed_count = 0
+        seen_usernames = set()
+
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("model")) != "accounts.user":
+                continue
+
+            fields = entry.get("fields")
+            if not isinstance(fields, dict):
+                continue
+
+            original_username = str(fields.get("username") or "").strip()
+            pk_value = entry.get("pk")
+
+            if not original_username:
+                original_username = f"user_{pk_value or 'restored'}"
+
+            new_username = original_username
+            suffix = 0
+
+            while True:
+                collision_in_payload = new_username in seen_usernames
+                collision_in_db = User.objects.filter(username=new_username).exclude(pk=pk_value).exists()
+                if not collision_in_payload and not collision_in_db:
+                    break
+
+                suffix += 1
+                base = original_username[:120]
+                new_username = f"{base}_restored_{pk_value}_{suffix}"[:150]
+
+            if new_username != original_username:
+                fields["username"] = new_username
+                renamed_count += 1
+
+            seen_usernames.add(new_username)
+
+        return payload, renamed_count
 
     def _clear_establishment_scope_data(self, etablissement):
         if etablissement is None:

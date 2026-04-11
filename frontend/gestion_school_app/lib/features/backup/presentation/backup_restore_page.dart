@@ -28,6 +28,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
   bool _historyRefreshing = false;
   List<Map<String, dynamic>> _rows = [];
   Timer? _historyAutoRefreshTimer;
+  DateTime? _forcePollingUntil;
 
   String _createScope = 'etablissement';
   bool _includeMedia = true;
@@ -91,8 +92,16 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     return false;
   }
 
+  bool _shouldForcePolling() {
+    final until = _forcePollingUntil;
+    if (until == null) {
+      return false;
+    }
+    return DateTime.now().isBefore(until);
+  }
+
   void _syncHistoryAutoRefresh() {
-    final shouldRefresh = _hasActiveRestore();
+    final shouldRefresh = _hasActiveRestore() || _shouldForcePolling();
     if (!shouldRefresh) {
       _historyAutoRefreshTimer?.cancel();
       _historyAutoRefreshTimer = null;
@@ -178,6 +187,8 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     }
 
     await _runBusyTask(() async {
+      _forcePollingUntil = DateTime.now().add(const Duration(minutes: 2));
+      _syncHistoryAutoRefresh();
       await _requestWithBackupFallback(
         (base) => ref.read(dioProvider).post('$base/$id/restore/'),
       );
@@ -206,6 +217,8 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
 
     await _runBusyTask(() async {
       final selectedEtab = ref.read(etablissementProvider).selected;
+      _forcePollingUntil = DateTime.now().add(const Duration(minutes: 2));
+      _syncHistoryAutoRefresh();
       await _requestWithBackupFallback(
         (base) => ref.read(dioProvider).post(
           '$base/upload-restore/',
