@@ -568,8 +568,13 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             media_dir = tmp_path / "media"
 
             with transaction.atomic():
-                serializers.deserialize("json", data_json.read_text(encoding="utf-8"))
                 from django.core.management import call_command
+
+                # For establishment restores, remove current scoped data first to
+                # avoid duplicate PK / unique constraint conflicts on loaddata.
+                if backup.scope == BackupArchive.Scope.ETABLISSEMENT and backup.etablissement_id:
+                    self._clear_establishment_scope_data(backup.etablissement)
+                    restore_notes.append("Donnees existantes de l'etablissement nettoyees.")
 
                 call_command("loaddata", str(data_json), verbosity=0)
 
@@ -589,6 +594,32 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         backup.restore_log = "\n".join(restore_notes) if restore_notes else "Restauration terminee."
         backup.status = BackupArchive.Status.COMPLETED
         backup.save(update_fields=["restored_by", "restored_at", "restore_log", "status", "updated_at"])
+
+    def _clear_establishment_scope_data(self, etablissement):
+        if etablissement is None:
+            return
+
+        from apps.accounts.models import User
+
+        # Delete users of the establishment first; cascades remove most dependent
+        # school rows tied to those users (students/teachers/parents).
+        User.objects.filter(etablissement=etablissement).delete()
+
+        # Delete remaining establishment-scoped rows in all managed models.
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin", "auth"}:
+                continue
+
+            field_names = {field.name for field in opts.fields}
+            if model.__name__ in {"Etablissement", "BackupArchive"}:
+                continue
+            if "etablissement" not in field_names:
+                continue
+
+            model.objects.filter(etablissement=etablissement).delete()
 
     def _run_restore_in_background(self, backup_id: int, archive_path: str, actor_id: int | None):
         def job():

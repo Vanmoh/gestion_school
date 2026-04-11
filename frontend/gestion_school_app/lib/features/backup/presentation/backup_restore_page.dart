@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -24,7 +25,9 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
 
   bool _loading = true;
   bool _busy = false;
+  bool _historyRefreshing = false;
   List<Map<String, dynamic>> _rows = [];
+  Timer? _historyAutoRefreshTimer;
 
   String _createScope = 'etablissement';
   bool _includeMedia = true;
@@ -42,13 +45,16 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
 
   @override
   void dispose() {
+    _historyAutoRefreshTimer?.cancel();
     _notesController.dispose();
     _restoreNotesController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadRows() async {
-    setState(() => _loading = true);
+  Future<void> _loadRows({bool showLoading = true}) async {
+    if (showLoading) {
+      setState(() => _loading = true);
+    }
     try {
       final response = await _requestWithBackupFallback(
         (base) => ref.read(dioProvider).get('$base/'),
@@ -63,13 +69,50 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
             .whereType<Map<String, dynamic>>()
             .toList(growable: false);
       });
+      _syncHistoryAutoRefresh();
     } catch (error) {
-      _showMessage('Erreur chargement backups: $error');
+      if (showLoading) {
+        _showMessage('Erreur chargement backups: $error');
+      }
     } finally {
-      if (mounted) {
+      if (mounted && showLoading) {
         setState(() => _loading = false);
       }
     }
+  }
+
+  bool _hasActiveRestore() {
+    for (final row in _rows) {
+      final status = (row['status']?.toString() ?? '').toLowerCase();
+      if (status == 'running' || status == 'pending') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _syncHistoryAutoRefresh() {
+    final shouldRefresh = _hasActiveRestore();
+    if (!shouldRefresh) {
+      _historyAutoRefreshTimer?.cancel();
+      _historyAutoRefreshTimer = null;
+      return;
+    }
+    if (_historyAutoRefreshTimer != null) {
+      return;
+    }
+
+    _historyAutoRefreshTimer = Timer.periodic(const Duration(seconds: 4), (_) async {
+      if (!mounted || _busy || _historyRefreshing) {
+        return;
+      }
+      _historyRefreshing = true;
+      try {
+        await _loadRows(showLoading: false);
+      } finally {
+        _historyRefreshing = false;
+      }
+    });
   }
 
   Future<void> _createBackup() async {
@@ -441,14 +484,19 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
             ..._rows.map((row) {
               final statusValue = row['status']?.toString() ?? '-';
               final canDownload = (row['file_path']?.toString().isNotEmpty ?? false);
+              final restoreLog = (row['restore_log']?.toString() ?? '').trim();
+              final isFailed = statusValue == 'failed';
               return Card(
                 child: ListTile(
                   title: Text(row['filename']?.toString().isNotEmpty == true
                       ? row['filename'].toString()
                       : 'Archive #${row['id']}'),
                   subtitle: Text(
-                    '${_scopeLabel(row['scope']?.toString() ?? '')} • Statut: $statusValue',
+                    isFailed && restoreLog.isNotEmpty
+                        ? '${_scopeLabel(row['scope']?.toString() ?? '')} • Statut: $statusValue\nErreur: ${restoreLog.split("\n").first}'
+                        : '${_scopeLabel(row['scope']?.toString() ?? '')} • Statut: $statusValue',
                   ),
+                  isThreeLine: isFailed && restoreLog.isNotEmpty,
                   trailing: Wrap(
                     spacing: 8,
                     children: [
