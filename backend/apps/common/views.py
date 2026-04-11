@@ -4,6 +4,7 @@ import json
 import shutil
 import tempfile
 import threading
+import traceback
 import zipfile
 from pathlib import Path
 
@@ -11,8 +12,9 @@ from django.conf import settings
 from django.apps import apps
 from django.core import serializers
 from django.core.files.uploadedfile import UploadedFile
-from django.db import close_old_connections, transaction
+from django.db import close_old_connections, connection, transaction
 from django.db.models import Q
+from django.db.models.deletion import ProtectedError
 from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from rest_framework import permissions, status, viewsets
@@ -576,7 +578,9 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                     self._clear_establishment_scope_data(backup.etablissement)
                     restore_notes.append("Donnees existantes de l'etablissement nettoyees.")
 
-                call_command("loaddata", str(data_json), verbosity=0)
+                with connection.constraint_checks_disabled():
+                    call_command("loaddata", str(data_json), verbosity=0)
+                connection.check_constraints()
 
             if media_dir.exists() and media_dir.is_dir():
                 media_root = Path(settings.MEDIA_ROOT)
@@ -605,7 +609,9 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         # school rows tied to those users (students/teachers/parents).
         User.objects.filter(etablissement=etablissement).delete()
 
-        # Delete remaining establishment-scoped rows in all managed models.
+        # Delete remaining establishment-scoped rows in reverse model order to
+        # reduce protected relation conflicts between dependent tables.
+        scoped_models = []
         for model in apps.get_models():
             opts = model._meta
             if opts.proxy or not opts.managed:
@@ -619,6 +625,17 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             if "etablissement" not in field_names:
                 continue
 
+            scoped_models.append(model)
+
+        retry_models = []
+        for model in reversed(scoped_models):
+            try:
+                model.objects.filter(etablissement=etablissement).delete()
+            except ProtectedError:
+                retry_models.append(model)
+
+        # Second pass once most child rows are gone.
+        for model in retry_models:
             model.objects.filter(etablissement=etablissement).delete()
 
     def _run_restore_in_background(self, backup_id: int, archive_path: str, actor_id: int | None):
@@ -634,7 +651,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 try:
                     backup = BackupArchive.objects.get(pk=backup_id)
                     backup.status = BackupArchive.Status.FAILED
-                    backup.restore_log = str(exc)
+                    backup.restore_log = f"{exc}\n\n{traceback.format_exc()}"
                     backup.save(update_fields=["status", "restore_log", "updated_at"])
                 except Exception:
                     pass
