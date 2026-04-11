@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$ROOT_DIR/frontend/gestion_school_app"
 DOWNLOADS_DIR="$ROOT_DIR/downloads_site"
 APK_PUBLISHED_NAME="Gestion School.apk"
+INDEX_FILE="$DOWNLOADS_DIR/index.html"
+RELEASE_VERSION="$(date -u +'%Y-%m-%d-r%H%M%S')"
 
 APK_SRC="$APP_DIR/build/app/outputs/flutter-apk/app-release.apk"
 LINUX_SRC="$APP_DIR/build/linux/x64/release/bundle"
@@ -21,6 +23,12 @@ fi
 
 mkdir -p "$DOWNLOADS_DIR"
 cp "$APK_SRC" "$APK_DST"
+
+if [[ -f "$INDEX_FILE" ]]; then
+  sed -i -E "s/(const releaseVersion = ')[^']+(')/\\1$RELEASE_VERSION\\2/" "$INDEX_FILE"
+  sed -i -E "s/(<code id=\"release-version\">)[^<]+(<\\/code>)/\\1$RELEASE_VERSION\\2/" "$INDEX_FILE"
+  echo "Version release mise a jour dans index.html: $RELEASE_VERSION"
+fi
 
 if [[ -d "$LINUX_SRC" ]]; then
   tar -czf "$LINUX_ARCHIVE" -C "$LINUX_SRC" .
