@@ -569,9 +569,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
             payload = json.loads(data_json.read_text(encoding="utf-8"))
             if backup.scope == BackupArchive.Scope.ETABLISSEMENT and backup.etablissement_id:
-                payload, renamed_count = self._resolve_user_username_conflicts(payload)
-                if renamed_count:
-                    restore_notes.append(f"{renamed_count} usernames adaptes pour eviter les doublons.")
+                payload, rewrite_stats = self._resolve_unique_field_conflicts(payload)
+                if rewrite_stats:
+                    details = ", ".join(f"{k}: {v}" for k, v in rewrite_stats.items())
+                    restore_notes.append(f"Identifiants uniques adaptes ({details}).")
                 data_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
             media_dir = tmp_path / "media"
@@ -606,51 +607,62 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         backup.status = BackupArchive.Status.COMPLETED
         backup.save(update_fields=["restored_by", "restored_at", "restore_log", "status", "updated_at"])
 
-    def _resolve_user_username_conflicts(self, payload):
+    def _resolve_unique_field_conflicts(self, payload):
         from apps.accounts.models import User
+        from apps.school.models import Student, Teacher
 
         if not isinstance(payload, list):
-            return payload, 0
+            return payload, {}
 
-        renamed_count = 0
-        seen_usernames = set()
+        unique_specs = [
+            ("accounts.user", "username", User, 150, "user"),
+            ("school.student", "matricule", Student, 30, "matr"),
+            ("school.teacher", "employee_code", Teacher, 30, "emp"),
+        ]
+
+        seen_by_spec = {(model_label, field_name): set() for model_label, field_name, *_ in unique_specs}
+        rewrite_stats = {}
 
         for entry in payload:
             if not isinstance(entry, dict):
                 continue
-            if str(entry.get("model")) != "accounts.user":
-                continue
-
+            model_label = str(entry.get("model") or "")
             fields = entry.get("fields")
             if not isinstance(fields, dict):
                 continue
-
-            original_username = str(fields.get("username") or "").strip()
             pk_value = entry.get("pk")
 
-            if not original_username:
-                original_username = f"user_{pk_value or 'restored'}"
+            for spec_model_label, field_name, model_cls, max_length, prefix in unique_specs:
+                if model_label != spec_model_label:
+                    continue
 
-            new_username = original_username
-            suffix = 0
+                original_value = str(fields.get(field_name) or "").strip()
+                if not original_value:
+                    original_value = f"{prefix}_{pk_value or 'restored'}"
 
-            while True:
-                collision_in_payload = new_username in seen_usernames
-                collision_in_db = User.objects.filter(username=new_username).exclude(pk=pk_value).exists()
-                if not collision_in_payload and not collision_in_db:
-                    break
+                new_value = original_value
+                suffix = 0
+                seen_values = seen_by_spec[(spec_model_label, field_name)]
 
-                suffix += 1
-                base = original_username[:120]
-                new_username = f"{base}_restored_{pk_value}_{suffix}"[:150]
+                while True:
+                    collision_in_payload = new_value in seen_values
+                    collision_in_db = model_cls.objects.filter(**{field_name: new_value}).exclude(pk=pk_value).exists()
+                    if not collision_in_payload and not collision_in_db:
+                        break
 
-            if new_username != original_username:
-                fields["username"] = new_username
-                renamed_count += 1
+                    suffix += 1
+                    base_max = max(4, max_length - 18)
+                    base = original_value[:base_max]
+                    new_value = f"{base}_r{pk_value}_{suffix}"[:max_length]
 
-            seen_usernames.add(new_username)
+                if new_value != original_value:
+                    fields[field_name] = new_value
+                    key = f"{model_label}.{field_name}"
+                    rewrite_stats[key] = rewrite_stats.get(key, 0) + 1
 
-        return payload, renamed_count
+                seen_values.add(new_value)
+
+        return payload, rewrite_stats
 
     def _clear_establishment_scope_data(self, etablissement):
         if etablissement is None:
