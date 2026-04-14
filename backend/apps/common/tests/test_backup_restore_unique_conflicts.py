@@ -263,3 +263,27 @@ class BackupRestoreUniqueConflictTests(TestCase):
 
         self.assertEqual(len(cleaned_payload), 2)
         self.assertEqual(dropped_stats, {})
+
+    def test_drop_orphan_foreign_keys_payload_only_mode(self):
+        payload = [
+            {
+                "model": "school.payment",
+                "pk": 300,
+                "fields": {
+                    "fee": 12345,
+                    "amount": "90.00",
+                    "method": "cash",
+                    "reference": "",
+                    "received_by": None,
+                    "etablissement": self.etablissement.id,
+                },
+            }
+        ]
+
+        cleaned_payload, dropped_stats = self.viewset._drop_orphan_foreign_key_relations(
+            payload,
+            check_db=False,
+        )
+
+        self.assertEqual(cleaned_payload, [])
+        self.assertEqual(dropped_stats.get("school.payment"), 1)
