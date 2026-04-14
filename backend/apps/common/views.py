@@ -13,6 +13,7 @@ from django.apps import apps
 from django.core import serializers
 from django.core.files.uploadedfile import UploadedFile
 from django.db import close_old_connections, connection, transaction
+from django.db import models
 from django.db.models import Q
 from django.db.models.deletion import ProtectedError
 from django.http import FileResponse, HttpResponse
@@ -651,20 +652,56 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         )
 
     def _resolve_unique_field_conflicts(self, payload):
-        from apps.accounts.models import User
-        from apps.school.models import Student, Teacher
-
         if not isinstance(payload, list):
             return payload, {}
 
-        unique_specs = [
-            ("accounts.user", "username", User, 150, "user"),
-            ("school.student", "matricule", Student, 30, "matr"),
-            ("school.teacher", "employee_code", Teacher, 30, "emp"),
-        ]
+        string_unique_fields = (
+            models.CharField,
+            models.EmailField,
+            models.SlugField,
+            models.TextField,
+        )
 
-        seen_by_spec = {(model_label, field_name): set() for model_label, field_name, *_ in unique_specs}
+        model_specs = {}
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+
+            unique_fields = []
+            for field in opts.fields:
+                if field.primary_key or not getattr(field, "unique", False):
+                    continue
+                if not isinstance(field, string_unique_fields):
+                    continue
+                max_length = getattr(field, "max_length", None) or 255
+                unique_fields.append((field.name, max_length))
+
+            if unique_fields:
+                model_specs[opts.label_lower] = {
+                    "model": model,
+                    "fields": unique_fields,
+                }
+
+        seen_by_spec = {
+            (model_label, field_name): set()
+            for model_label, spec in model_specs.items()
+            for field_name, _ in spec["fields"]
+        }
         rewrite_stats = {}
+
+        def _normalize_model_label(value: str) -> str:
+            normalized_label = str(value or "").strip().lower()
+            parts = [part for part in normalized_label.split(".") if part]
+            if len(parts) >= 2:
+                return ".".join(parts[-2:])
+            return normalized_label
+
+        def _unique_prefix(model_label: str, field_name: str) -> str:
+            model_name = model_label.split(".")[-1] if "." in model_label else model_label
+            model_name = (model_name or "value").replace("_", "")
+            field_bits = "".join(part[:2] for part in field_name.split("_")) or field_name[:3]
+            return f"{model_name[:6]}{field_bits[:4]}".lower()
 
         def _matches_spec(entry_model_label: str, spec_model_label: str) -> bool:
             normalized_label = str(entry_model_label or "").strip().lower()
@@ -687,17 +724,27 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 continue
             pk_value = entry.get("pk")
 
-            for spec_model_label, field_name, model_cls, max_length, prefix in unique_specs:
-                if not _matches_spec(model_label, spec_model_label):
-                    continue
+            normalized_model_label = _normalize_model_label(model_label)
+            spec = model_specs.get(normalized_model_label)
+            if spec is None:
+                for spec_model_label in model_specs.keys():
+                    if _matches_spec(model_label, spec_model_label):
+                        normalized_model_label = spec_model_label
+                        spec = model_specs[spec_model_label]
+                        break
 
+            if spec is None:
+                continue
+
+            model_cls = spec["model"]
+            for field_name, max_length in spec["fields"]:
                 original_value = str(fields.get(field_name) or "").strip()
                 if not original_value:
-                    original_value = f"{prefix}_{pk_value or 'restored'}"
+                    original_value = f"{_unique_prefix(normalized_model_label, field_name)}_{pk_value or 'restored'}"
 
                 new_value = original_value
                 suffix = 0
-                seen_values = seen_by_spec[(spec_model_label, field_name)]
+                seen_values = seen_by_spec[(normalized_model_label, field_name)]
 
                 while True:
                     normalized_candidate = new_value.strip().lower()
@@ -717,7 +764,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
                 if new_value != original_value:
                     fields[field_name] = new_value
-                    key = f"{spec_model_label}.{field_name}"
+                    key = f"{normalized_model_label}.{field_name}"
                     rewrite_stats[key] = rewrite_stats.get(key, 0) + 1
 
                 seen_values.add(new_value.strip().lower())
