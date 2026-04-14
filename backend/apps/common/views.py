@@ -579,15 +579,14 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             with transaction.atomic():
                 from django.core.management import call_command
 
-                if backup.scope == BackupArchive.Scope.GLOBAL:
-                    self._clear_global_scope_data(keep_backup_id=backup.id)
-                    restore_notes.append("Donnees globales existantes nettoyees.")
-
                 # For establishment restores, remove current scoped data first to
                 # avoid duplicate PK / unique constraint conflicts on loaddata.
                 if backup.scope == BackupArchive.Scope.ETABLISSEMENT and backup.etablissement_id:
                     self._clear_establishment_scope_data(backup.etablissement)
                     restore_notes.append("Donnees existantes de l'etablissement nettoyees.")
+                elif backup.scope == BackupArchive.Scope.GLOBAL:
+                    self._clear_global_scope_data()
+                    restore_notes.append("Donnees existantes de la plateforme nettoyees.")
 
                 with connection.constraint_checks_disabled():
                     call_command("loaddata", str(data_json), verbosity=0)
@@ -626,6 +625,18 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         seen_by_spec = {(model_label, field_name): set() for model_label, field_name, *_ in unique_specs}
         rewrite_stats = {}
 
+        def _matches_spec(entry_model_label: str, spec_model_label: str) -> bool:
+            normalized_label = str(entry_model_label or "").strip().lower()
+            normalized_spec = str(spec_model_label or "").strip().lower()
+            if normalized_label == normalized_spec:
+                return True
+            parts = [part for part in normalized_label.split(".") if part]
+            if len(parts) >= 2:
+                tail2 = ".".join(parts[-2:])
+                if tail2 == normalized_spec:
+                    return True
+            return False
+
         for entry in payload:
             if not isinstance(entry, dict):
                 continue
@@ -636,7 +647,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             pk_value = entry.get("pk")
 
             for spec_model_label, field_name, model_cls, max_length, prefix in unique_specs:
-                if model_label != spec_model_label:
+                if not _matches_spec(model_label, spec_model_label):
                     continue
 
                 original_value = str(fields.get(field_name) or "").strip()
@@ -665,12 +676,35 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
                 if new_value != original_value:
                     fields[field_name] = new_value
-                    key = f"{model_label}.{field_name}"
+                    key = f"{spec_model_label}.{field_name}"
                     rewrite_stats[key] = rewrite_stats.get(key, 0) + 1
 
                 seen_values.add(new_value.strip().lower())
 
         return payload, rewrite_stats
+
+    def _clear_global_scope_data(self):
+        # Preserve backup history rows while cleaning platform data.
+        global_models = []
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin", "auth"}:
+                continue
+            if model.__name__ in {"BackupArchive"}:
+                continue
+            global_models.append(model)
+
+        retry_models = []
+        for model in reversed(global_models):
+            try:
+                model.objects.all().delete()
+            except ProtectedError:
+                retry_models.append(model)
+
+        for model in retry_models:
+            model.objects.all().delete()
 
     def _clear_establishment_scope_data(self, etablissement):
         if etablissement is None:
@@ -710,34 +744,6 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         # Second pass once most child rows are gone.
         for model in retry_models:
             model.objects.filter(etablissement=etablissement).delete()
-
-    def _clear_global_scope_data(self, keep_backup_id: int | None = None):
-        scoped_models = []
-        for model in apps.get_models():
-            opts = model._meta
-            if opts.proxy or not opts.managed:
-                continue
-            if opts.app_label in {"contenttypes", "sessions", "admin"}:
-                continue
-            if model is BackupArchive:
-                continue
-
-            scoped_models.append(model)
-
-        retry_models = []
-        for model in reversed(scoped_models):
-            try:
-                model.objects.all().delete()
-            except ProtectedError:
-                retry_models.append(model)
-
-        for model in retry_models:
-            model.objects.all().delete()
-
-        backup_qs = BackupArchive.objects.all()
-        if keep_backup_id is not None:
-            backup_qs = backup_qs.exclude(pk=keep_backup_id)
-        backup_qs.delete()
 
     def _run_restore_in_background(self, backup_id: int, archive_path: str, actor_id: int | None):
         def job():
