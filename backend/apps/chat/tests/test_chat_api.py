@@ -5,6 +5,7 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import User, UserRole
 from apps.chat.models import ChatMessage, Conversation, ConversationParticipant
+from apps.chat.serializers import ConversationSerializer
 from apps.school.models import AcademicYear, Etablissement
 
 
@@ -77,3 +78,29 @@ class ChatSendMessageApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ChatMessage.objects.count(), 0)
+
+    def test_conversation_serializer_uses_other_participant_last_read_message(self):
+        first_message = ChatMessage.objects.create(
+            conversation=self.conversation,
+            sender=self.sender,
+            content="Premier message",
+        )
+        second_message = ChatMessage.objects.create(
+            conversation=self.conversation,
+            sender=self.sender,
+            content="Deuxieme message",
+        )
+        receiver_participant = ConversationParticipant.objects.get(
+            conversation=self.conversation,
+            user=self.receiver,
+        )
+        receiver_participant.last_read_message = first_message
+        receiver_participant.save(update_fields=["last_read_message", "updated_at"])
+
+        serializer = ConversationSerializer(
+            self.conversation,
+            context={"request": type("Req", (), {"user": self.sender})()},
+        )
+
+        self.assertEqual(serializer.data["other_last_read_message_id"], first_message.id)
+        self.assertNotEqual(serializer.data["other_last_read_message_id"], second_message.id)

@@ -197,6 +197,21 @@ class _ChatPanelState extends State<ChatPanel> {
     );
   }
 
+  void _syncConversationReadState(List<Map<String, dynamic>> rows) {
+    for (final row in rows) {
+      final conversationId = _asInt(row['id']);
+      if (conversationId <= 0) {
+        continue;
+      }
+      final otherLastRead = _asInt(row['other_last_read_message_id']);
+      if (otherLastRead > 0) {
+        _lastReadByConversation[conversationId] = otherLastRead;
+      } else {
+        _lastReadByConversation.remove(conversationId);
+      }
+    }
+  }
+
   String _wsUrlFromApiBase(String apiBase, String token) {
     final base = Uri.parse(apiBase.trim());
     final wsScheme = base.scheme == 'https' ? 'wss' : 'ws';
@@ -244,6 +259,7 @@ class _ChatPanelState extends State<ChatPanel> {
 
       final conversations = _rows(responses[0].data);
       final users = _rows(responses[1].data);
+      _syncConversationReadState(conversations);
       for (final row in users) {
         final id = _asInt(row['id']);
         _presenceByUser[id] = row['online'] == true;
@@ -371,6 +387,7 @@ class _ChatPanelState extends State<ChatPanel> {
     try {
       final resp = await widget.dio.get('/chat/conversations/');
       final rows = _rows(resp.data);
+      _syncConversationReadState(rows);
       if (!mounted) return;
       setState(() {
         _conversations = rows;
@@ -564,10 +581,6 @@ class _ChatPanelState extends State<ChatPanel> {
       final map = response.data is Map
           ? Map<String, dynamic>.from(response.data as Map)
           : const <String, dynamic>{};
-      final lastRead = _asInt(map['last_read_message']);
-      if (lastRead > 0) {
-        _lastReadByConversation[conversationId] = lastRead;
-      }
       _channel?.sink.add(jsonEncode(<String, dynamic>{
         'action': 'mark_read',
         'conversation_id': conversationId,
@@ -889,10 +902,6 @@ class _ChatPanelState extends State<ChatPanel> {
         _messageController.clear();
         _messages = <Map<String, dynamic>>[..._messages, msg];
         _oldestMessageId = _messages.isNotEmpty ? _asInt(_messages.first['id']) : null;
-        final messageId = _asInt(msg['id']);
-        if (messageId > 0) {
-          _lastReadByConversation[conversationId] = messageId;
-        }
 
         _conversations = _conversations.map((row) {
           if (_asInt(row['id']) != conversationId) return row;
