@@ -556,12 +556,35 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         )
         return backup
 
+    def _set_restore_progress(self, backup_ref, *, progress=None, phase=None):
+        backup_id = backup_ref.id if isinstance(backup_ref, BackupArchive) else int(backup_ref)
+        update_kwargs = {}
+        update_fields = []
+
+        if progress is not None:
+            bounded = max(0, min(100, int(progress)))
+            update_kwargs["restore_progress"] = bounded
+            update_fields.append("restore_progress")
+
+        if phase is not None:
+            update_kwargs["restore_phase"] = str(phase or "")[:120]
+            update_fields.append("restore_phase")
+
+        if not update_kwargs:
+            return
+
+        update_kwargs["updated_at"] = timezone.now()
+        update_fields.append("updated_at")
+        BackupArchive.objects.filter(pk=backup_id).update(**update_kwargs)
+
     def _restore_from_archive(self, backup: BackupArchive, archive_path: Path, actor=None):
+        self._set_restore_progress(backup, progress=3, phase="Preparation de l'archive")
         restore_notes = []
         with tempfile.TemporaryDirectory(prefix="restore_backup_") as tmp:
             tmp_path = Path(tmp)
             with zipfile.ZipFile(archive_path, "r") as zf:
                 zf.extractall(tmp_path)
+            self._set_restore_progress(backup, progress=15, phase="Archive extraite")
 
             data_json = tmp_path / "data.json"
             if not data_json.exists():
@@ -573,6 +596,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 details = ", ".join(f"{k}: {v}" for k, v in rewrite_stats.items())
                 restore_notes.append(f"Identifiants uniques adaptes ({details}).")
             data_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            self._set_restore_progress(backup, progress=28, phase="Donnees preparees")
 
             media_dir = tmp_path / "media"
 
@@ -582,15 +606,19 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 # For establishment restores, remove current scoped data first to
                 # avoid duplicate PK / unique constraint conflicts on loaddata.
                 if backup.scope == BackupArchive.Scope.ETABLISSEMENT and backup.etablissement_id:
+                    self._set_restore_progress(backup, progress=40, phase="Nettoyage etablissement")
                     self._clear_establishment_scope_data(backup.etablissement)
                     restore_notes.append("Donnees existantes de l'etablissement nettoyees.")
                 elif backup.scope == BackupArchive.Scope.GLOBAL:
+                    self._set_restore_progress(backup, progress=40, phase="Nettoyage plateforme")
                     self._clear_global_scope_data()
                     restore_notes.append("Donnees existantes de la plateforme nettoyees.")
 
+                self._set_restore_progress(backup, progress=62, phase="Chargement des donnees")
                 with connection.constraint_checks_disabled():
                     call_command("loaddata", str(data_json), verbosity=0)
                 connection.check_constraints()
+                self._set_restore_progress(backup, progress=82, phase="Donnees restaurees")
 
             if media_dir.exists() and media_dir.is_dir():
                 media_root = Path(settings.MEDIA_ROOT)
@@ -602,12 +630,25 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, dst)
                 restore_notes.append("Medias restaures.")
+            self._set_restore_progress(backup, progress=94, phase="Finalisation")
 
         backup.restored_by = actor
         backup.restored_at = timezone.now()
         backup.restore_log = "\n".join(restore_notes) if restore_notes else "Restauration terminee."
+        backup.restore_phase = "Terminee"
+        backup.restore_progress = 100
         backup.status = BackupArchive.Status.COMPLETED
-        backup.save(update_fields=["restored_by", "restored_at", "restore_log", "status", "updated_at"])
+        backup.save(
+            update_fields=[
+                "restored_by",
+                "restored_at",
+                "restore_log",
+                "restore_phase",
+                "restore_progress",
+                "status",
+                "updated_at",
+            ]
+        )
 
     def _resolve_unique_field_conflicts(self, payload):
         from apps.accounts.models import User
@@ -758,8 +799,18 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 try:
                     backup = BackupArchive.objects.get(pk=backup_id)
                     backup.status = BackupArchive.Status.FAILED
+                    backup.restore_phase = "Echec"
+                    backup.restore_progress = max(backup.restore_progress, 100)
                     backup.restore_log = f"{exc}\n\n{traceback.format_exc()}"
-                    backup.save(update_fields=["status", "restore_log", "updated_at"])
+                    backup.save(
+                        update_fields=[
+                            "status",
+                            "restore_phase",
+                            "restore_progress",
+                            "restore_log",
+                            "updated_at",
+                        ]
+                    )
                 except Exception:
                     pass
             finally:
@@ -852,7 +903,11 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
         backup.status = BackupArchive.Status.RUNNING
         backup.restore_log = "Restauration lancee en arriere-plan."
-        backup.save(update_fields=["status", "restore_log", "updated_at"])
+        backup.restore_phase = "En attente du traitement"
+        backup.restore_progress = 1
+        backup.save(
+            update_fields=["status", "restore_log", "restore_phase", "restore_progress", "updated_at"]
+        )
         self._run_restore_in_background(backup.id, str(archive_path), getattr(request.user, "id", None))
         return Response(
             {
@@ -909,9 +964,11 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             sha256=self._sha256_file(target),
             notes=str(request.data.get("notes") or "").strip(),
             status=BackupArchive.Status.RUNNING,
+            restore_phase="Archive recue",
+            restore_progress=1,
         )
         backup.restore_log = "Archive recue. Restauration lancee en arriere-plan."
-        backup.save(update_fields=["restore_log", "updated_at"])
+        backup.save(update_fields=["restore_log", "restore_phase", "restore_progress", "updated_at"])
         self._run_restore_in_background(backup.id, str(target), getattr(request.user, "id", None))
         return Response(
             {
