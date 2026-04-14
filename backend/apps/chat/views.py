@@ -554,16 +554,36 @@ class ConversationSendMessageView(APIView):
         content = str(request.data.get("content", "")).strip()
         if not content:
             return Response({"detail": "Message vide."}, status=status.HTTP_400_BAD_REQUEST)
+        raw_client_message_id = str(request.data.get("client_message_id", "")).strip()
+        client_message_id = raw_client_message_id[:64] if raw_client_message_id else None
 
         conversation = Conversation.objects.select_for_update().filter(id=conversation_id).first()
         if conversation is None:
             return Response({"detail": "Conversation introuvable."}, status=status.HTTP_404_NOT_FOUND)
 
-        message = ChatMessage.objects.create(
-            conversation=conversation,
-            sender=request.user,
-            content=content,
-        )
+        created = True
+        if client_message_id:
+            message = ChatMessage.objects.filter(
+                conversation=conversation,
+                sender=request.user,
+                client_message_id=client_message_id,
+            ).first()
+            if message is None:
+                message = ChatMessage.objects.create(
+                    conversation=conversation,
+                    sender=request.user,
+                    content=content,
+                    client_message_id=client_message_id,
+                )
+            else:
+                created = False
+        else:
+            message = ChatMessage.objects.create(
+                conversation=conversation,
+                sender=request.user,
+                content=content,
+            )
+
         participant.last_read_message = message
         participant.save(update_fields=["last_read_message", "updated_at"])
         conversation.save(update_fields=["updated_at"])
@@ -584,7 +604,7 @@ class ConversationSendMessageView(APIView):
             "content": message.content,
             "created_at": message.created_at.isoformat(),
         }
-        if participant_user_ids:
+        if created and participant_user_ids:
             _broadcast_rest_message_async(participant_user_ids, ws_message)
 
-        return Response(payload, status=status.HTTP_201_CREATED)
+        return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)

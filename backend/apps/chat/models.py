@@ -60,9 +60,17 @@ class ChatMessage(TimeStampedModel):
         related_name="chat_messages",
     )
     content = models.TextField()
+    client_message_id = models.CharField(max_length=64, blank=True, null=True)
 
     class Meta:
         ordering = ["id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["conversation", "sender", "client_message_id"],
+                condition=models.Q(client_message_id__isnull=False) & ~models.Q(client_message_id=""),
+                name="uniq_chatmsg_conv_sender_clientmsg",
+            )
+        ]
         indexes = [
             models.Index(fields=["conversation", "-id"], name="chatmsg_conv_id_desc_idx"),
             models.Index(fields=["sender", "-created_at"], name="chatmsg_sender_created_idx"),
