@@ -568,12 +568,11 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 raise ValueError("Archive invalide: data.json manquant.")
 
             payload = json.loads(data_json.read_text(encoding="utf-8"))
-            if backup.scope == BackupArchive.Scope.ETABLISSEMENT and backup.etablissement_id:
-                payload, rewrite_stats = self._resolve_unique_field_conflicts(payload)
-                if rewrite_stats:
-                    details = ", ".join(f"{k}: {v}" for k, v in rewrite_stats.items())
-                    restore_notes.append(f"Identifiants uniques adaptes ({details}).")
-                data_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            payload, rewrite_stats = self._resolve_unique_field_conflicts(payload)
+            if rewrite_stats:
+                details = ", ".join(f"{k}: {v}" for k, v in rewrite_stats.items())
+                restore_notes.append(f"Identifiants uniques adaptes ({details}).")
+            data_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
             media_dir = tmp_path / "media"
 
