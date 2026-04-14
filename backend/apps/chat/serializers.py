@@ -42,7 +42,15 @@ class ChatMessageSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ChatMessage
-        fields = ["id", "conversation", "sender", "sender_name", "content", "created_at"]
+        fields = [
+            "id",
+            "conversation",
+            "sender",
+            "sender_name",
+            "content",
+            "created_at",
+            "client_message_id",
+        ]
 
     def get_sender_name(self, obj):
         return obj.sender.get_full_name().strip() or obj.sender.username

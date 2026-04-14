@@ -109,9 +109,11 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
         if action == "send_message":
             conversation_id = content.get("conversation_id")
             text = str(content.get("content", "")).strip()
+            raw_client_message_id = str(content.get("client_message_id", "")).strip()
+            client_message_id = raw_client_message_id[:64] if raw_client_message_id else None
             if not text:
                 return
-            message_payload = await self._create_message(conversation_id, text)
+            message_payload = await self._create_message(conversation_id, text, client_message_id=client_message_id)
             if message_payload is None:
                 await self.send_json({"event": "error", "detail": "Conversation invalide."})
                 return
@@ -123,7 +125,11 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
                 "sender_name": message_payload["sender_name"],
                 "content": message_payload["content"],
                 "created_at": message_payload["created_at"],
+                "client_message_id": message_payload.get("client_message_id"),
             }
+
+            if not message_payload.get("created", True):
+                return
 
             for user_id in message_payload.get("participant_user_ids", []):
                 await self.channel_layer.group_send(
@@ -265,7 +271,7 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
         return payload
 
     @database_sync_to_async
-    def _create_message(self, conversation_id, text):
+    def _create_message(self, conversation_id, text, client_message_id=None):
         try:
             conversation_id = int(conversation_id)
         except (TypeError, ValueError):
@@ -283,11 +289,29 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
             if conversation is None:
                 return None
 
-            message = ChatMessage.objects.create(
-                conversation=conversation,
-                sender=self.user,
-                content=text,
-            )
+            created = True
+            if client_message_id:
+                message = ChatMessage.objects.filter(
+                    conversation=conversation,
+                    sender=self.user,
+                    client_message_id=client_message_id,
+                ).first()
+                if message is None:
+                    message = ChatMessage.objects.create(
+                        conversation=conversation,
+                        sender=self.user,
+                        content=text,
+                        client_message_id=client_message_id,
+                    )
+                else:
+                    created = False
+            else:
+                message = ChatMessage.objects.create(
+                    conversation=conversation,
+                    sender=self.user,
+                    content=text,
+                )
+
             conversation.save(update_fields=["updated_at"])
             participant_user_ids = list(
                 ConversationParticipant.objects.filter(conversation_id=conversation.id)
@@ -302,6 +326,8 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
                 "sender_name": sender_name,
                 "content": message.content,
                 "created_at": message.created_at.isoformat(),
+                "client_message_id": message.client_message_id,
+                "created": created,
                 "participant_user_ids": participant_user_ids,
             }
 

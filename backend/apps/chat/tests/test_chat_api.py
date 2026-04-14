@@ -79,6 +79,33 @@ class ChatSendMessageApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ChatMessage.objects.count(), 0)
 
+    def test_send_message_is_idempotent_with_client_message_id(self):
+        first = self.client.post(
+            f"/api/chat/conversations/{self.conversation.id}/send/",
+            {
+                "content": "Message idempotent",
+                "client_message_id": "client-msg-001",
+            },
+            format="json",
+        )
+        second = self.client.post(
+            f"/api/chat/conversations/{self.conversation.id}/send/",
+            {
+                "content": "Message idempotent",
+                "client_message_id": "client-msg-001",
+            },
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(ChatMessage.objects.count(), 1)
+
+        message = ChatMessage.objects.get()
+        self.assertEqual(first.data["id"], message.id)
+        self.assertEqual(second.data["id"], message.id)
+        self.assertEqual(second.data["client_message_id"], "client-msg-001")
+
     def test_conversation_serializer_uses_other_participant_last_read_message(self):
         first_message = ChatMessage.objects.create(
             conversation=self.conversation,

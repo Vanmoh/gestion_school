@@ -48,6 +48,9 @@ class _ChatPanelState extends State<ChatPanel> {
   final Map<int, bool> _typingByConversation = <int, bool>{};
   final Map<int, Timer> _typingExpiryByConversation = <int, Timer>{};
   final Map<int, int> _lastReadByConversation = <int, int>{};
+  final Map<int, String> _draftByConversation = <int, String>{};
+  final Set<String> _seenMessageKeys = <String>{};
+  int _pendingInThreadCount = 0;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _channelSub;
@@ -60,6 +63,67 @@ class _ChatPanelState extends State<ChatPanel> {
   int _wsReconnectAttempt = 0;
   String? _wsBaseUrl;
   String? _wsToken;
+
+  String _messageKey(int conversationId, int messageId) => '$conversationId:$messageId';
+
+  void _rebuildSeenMessageKeys(int conversationId) {
+    _seenMessageKeys
+      ..clear()
+      ..addAll(
+        _messages
+            .map((row) => _messageKey(conversationId, _asInt(row['id'])))
+            .where((key) => !key.endsWith(':0')),
+      );
+  }
+
+  bool _isTransientSendError(Object error) {
+    if (error is! DioException) {
+      return false;
+    }
+    return error.type == DioExceptionType.connectionTimeout ||
+        error.type == DioExceptionType.sendTimeout ||
+        error.type == DioExceptionType.receiveTimeout ||
+        error.type == DioExceptionType.connectionError;
+  }
+
+  String _newClientMessageId(int conversationId) {
+    final userId = _currentUserId ?? 0;
+    final micros = DateTime.now().microsecondsSinceEpoch;
+    return 'c${conversationId}_u${userId}_$micros';
+  }
+
+  bool _isThreadNearBottom() {
+    if (!_messageScrollController.hasClients) {
+      return true;
+    }
+    final position = _messageScrollController.position;
+    final remaining = position.maxScrollExtent - position.pixels;
+    return remaining <= 84;
+  }
+
+  void _storeCurrentDraft() {
+    final conversationId = _selectedConversationId;
+    if (conversationId == null) {
+      return;
+    }
+    _draftByConversation[conversationId] = _messageController.text;
+  }
+
+  Future<void> _selectConversation(int conversationId) async {
+    _storeCurrentDraft();
+    final restoredDraft = _draftByConversation[conversationId] ?? '';
+    if (!mounted) return;
+    setState(() {
+      _selectedConversationId = conversationId;
+      _sendError = null;
+      _pendingInThreadCount = 0;
+      _messageController.value = TextEditingValue(
+        text: restoredDraft,
+        selection: TextSelection.collapsed(offset: restoredDraft.length),
+      );
+    });
+    await _loadMessages(conversationId, reset: true);
+  }
 
   @override
   void initState() {
@@ -74,6 +138,7 @@ class _ChatPanelState extends State<ChatPanel> {
 
   @override
   void dispose() {
+    _storeCurrentDraft();
     _typingStopTimer?.cancel();
     for (final timer in _typingExpiryByConversation.values) {
       timer.cancel();
@@ -386,6 +451,7 @@ class _ChatPanelState extends State<ChatPanel> {
               : null;
           _loadingOlderMessages = false;
         });
+        _rebuildSeenMessageKeys(conversationId);
 
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!_messageScrollController.hasClients) {
@@ -401,7 +467,9 @@ class _ChatPanelState extends State<ChatPanel> {
           _messages = rows;
           _hasMoreMessages = rows.length >= _pageSize;
           _oldestMessageId = rows.isNotEmpty ? _asInt(rows.first['id']) : null;
+          _pendingInThreadCount = 0;
         });
+        _rebuildSeenMessageKeys(conversationId);
         await _markRead(conversationId);
         _scrollToBottom(immediate: true);
       }
@@ -677,6 +745,11 @@ class _ChatPanelState extends State<ChatPanel> {
     _wsReconnectAttempt = 0;
     if (!mounted) return;
     setState(() => _wsConnected = true);
+    unawaited(_reloadConversationsOnly());
+    final conversationId = _selectedConversationId;
+    if (conversationId != null) {
+      unawaited(_loadMessages(conversationId, reset: true));
+    }
   }
 
   void _setWsDisconnected() {
@@ -833,18 +906,28 @@ class _ChatPanelState extends State<ChatPanel> {
       if (event == 'message') {
         final conversationId = _asInt(data['conversation_id']);
         final senderId = _asInt(data['sender_id']);
+        final messageId = _asInt(data['message_id']);
+        if (conversationId <= 0 || messageId <= 0) {
+          return;
+        }
+        final dedupeKey = _messageKey(conversationId, messageId);
+        if (_seenMessageKeys.contains(dedupeKey)) {
+          return;
+        }
         final mine = _currentUserId != null && senderId == _currentUserId;
+        final shouldAutoScroll = mine || _selectedConversationId != conversationId || _isThreadNearBottom();
         final existedBefore = _conversations.any(
           (row) => _asInt(row['id']) == conversationId,
         );
 
         final message = <String, dynamic>{
-          'id': _asInt(data['message_id']),
+          'id': messageId,
           'conversation': conversationId,
           'sender': senderId,
           'sender_name': _asString(data['sender_name']),
           'content': _asString(data['content']),
           'created_at': _asString(data['created_at']),
+          'client_message_id': _asString(data['client_message_id']),
         };
 
         if (!mounted) return;
@@ -855,6 +938,10 @@ class _ChatPanelState extends State<ChatPanel> {
           if (_selectedConversationId == conversationId) {
             _messages = <Map<String, dynamic>>[..._messages, message];
             _oldestMessageId = _messages.isNotEmpty ? _asInt(_messages.first['id']) : null;
+            _seenMessageKeys.add(dedupeKey);
+            if (!mine && !shouldAutoScroll) {
+              _pendingInThreadCount += 1;
+            }
           }
 
           _conversations = _conversations.map((row) {
@@ -880,7 +967,10 @@ class _ChatPanelState extends State<ChatPanel> {
         });
 
         widget.onUnreadChanged?.call(_sumUnread(_conversations));
-        if (_selectedConversationId == conversationId) {
+        if (_selectedConversationId == conversationId && shouldAutoScroll) {
+          if (mounted) {
+            setState(() => _pendingInThreadCount = 0);
+          }
           _scrollToBottom();
         }
         if (!mine && _selectedConversationId != conversationId && mounted) {
@@ -923,6 +1013,7 @@ class _ChatPanelState extends State<ChatPanel> {
       final cid = _asInt(conversation['id']);
 
       if (!mounted) return;
+      _storeCurrentDraft();
       setState(() {
         final exists = _conversations.any((row) => _asInt(row['id']) == cid);
         if (!exists) {
@@ -930,8 +1021,14 @@ class _ChatPanelState extends State<ChatPanel> {
         }
         _selectedConversationId = cid;
         _sendError = null;
+        _pendingInThreadCount = 0;
+        final restoredDraft = _draftByConversation[cid] ?? '';
+        _messageController.value = TextEditingValue(
+          text: restoredDraft,
+          selection: TextSelection.collapsed(offset: restoredDraft.length),
+        );
       });
-      await _loadMessages(cid);
+      await _loadMessages(cid, reset: true);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -948,6 +1045,8 @@ class _ChatPanelState extends State<ChatPanel> {
       return;
     }
 
+    final clientMessageId = _newClientMessageId(conversationId);
+
     setState(() {
       _sending = true;
       _sendError = null;
@@ -956,16 +1055,43 @@ class _ChatPanelState extends State<ChatPanel> {
     _onInputChanged('');
 
     try {
-      final resp = await widget.dio.post(
-        '/chat/conversations/$conversationId/send/',
-        data: <String, dynamic>{'content': content},
-      );
+      Response<dynamic> resp;
+      try {
+        resp = await widget.dio.post(
+          '/chat/conversations/$conversationId/send/',
+          data: <String, dynamic>{
+            'content': content,
+            'client_message_id': clientMessageId,
+          },
+        );
+      } catch (error) {
+        if (_isTransientSendError(error)) {
+          await Future<void>.delayed(const Duration(milliseconds: 900));
+          resp = await widget.dio.post(
+            '/chat/conversations/$conversationId/send/',
+            data: <String, dynamic>{
+              'content': content,
+              'client_message_id': clientMessageId,
+            },
+          );
+        } else {
+          rethrow;
+        }
+      }
+
       final msg = Map<String, dynamic>.from(resp.data as Map);
+      final msgId = _asInt(msg['id']);
       if (!mounted) return;
       setState(() {
+        _draftByConversation[conversationId] = '';
         _messageController.clear();
-        _messages = <Map<String, dynamic>>[..._messages, msg];
+        final dedupeKey = _messageKey(conversationId, msgId);
+        if (msgId > 0 && !_seenMessageKeys.contains(dedupeKey)) {
+          _messages = <Map<String, dynamic>>[..._messages, msg];
+          _seenMessageKeys.add(dedupeKey);
+        }
         _oldestMessageId = _messages.isNotEmpty ? _asInt(_messages.first['id']) : null;
+        _pendingInThreadCount = 0;
 
         _conversations = _conversations.map((row) {
           if (_asInt(row['id']) != conversationId) return row;
@@ -1171,9 +1297,7 @@ class _ChatPanelState extends State<ChatPanel> {
                   dense: true,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   onTap: () async {
-                    setState(() => _selectedConversationId = id);
-                    setState(() => _sendError = null);
-                    await _loadMessages(id);
+                    await _selectConversation(id);
                   },
                   title: Row(
                     children: [
@@ -1709,8 +1833,10 @@ class _ChatPanelState extends State<ChatPanel> {
               ? IconButton(
                   icon: const Icon(Icons.arrow_back),
                   onPressed: () => setState(() {
+                    _storeCurrentDraft();
                     _selectedConversationId = null;
                     _messages = <Map<String, dynamic>>[];
+                    _pendingInThreadCount = 0;
                   }),
                 )
               : null,
@@ -1844,6 +1970,24 @@ class _ChatPanelState extends State<ChatPanel> {
           ),
         ),
         const Divider(height: 1),
+        if (_pendingInThreadCount > 0)
+          Align(
+            alignment: Alignment.center,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: TextButton.icon(
+                onPressed: () {
+                  setState(() => _pendingInThreadCount = 0);
+                  _scrollToBottom();
+                  if (conversationId > 0) {
+                    unawaited(_markRead(conversationId));
+                  }
+                },
+                icon: const Icon(Icons.arrow_downward),
+                label: Text('$_pendingInThreadCount nouveaux messages'),
+              ),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
           child: Column(
@@ -1866,6 +2010,11 @@ class _ChatPanelState extends State<ChatPanel> {
                       minLines: 1,
                       maxLines: 4,
                       onChanged: _onInputChanged,
+                      onTap: () {
+                        if (_pendingInThreadCount > 0) {
+                          setState(() => _pendingInThreadCount = 0);
+                        }
+                      },
                       onSubmitted: (_) => _sendMessage(),
                       decoration: const InputDecoration(
                         hintText: 'Ecrire un message...',
