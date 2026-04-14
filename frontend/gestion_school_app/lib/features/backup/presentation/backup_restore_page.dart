@@ -399,6 +399,20 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     final selectedEtab = ref.watch(etablissementProvider).selected;
     final user = ref.watch(authControllerProvider).value;
     final isSuperAdmin = user?.role == 'super_admin';
+    final activeRows = _rows.where((row) {
+      final status = (row['status']?.toString() ?? '').toLowerCase();
+      return status == 'running' || status == 'pending';
+    }).toList(growable: false);
+    final activeRow = activeRows.isNotEmpty ? activeRows.first : null;
+    final activeProgress = activeRow == null ? 0 : _progressValue(activeRow);
+    final activePhase = activeRow == null
+        ? ''
+        : (activeRow['restore_phase']?.toString() ?? '').trim();
+    final activeName = activeRow == null
+        ? ''
+        : (activeRow['filename']?.toString().isNotEmpty == true
+              ? activeRow['filename'].toString()
+              : 'Archive #${activeRow['id']}');
 
     if (_loading) {
       return RefreshIndicator(
@@ -561,6 +575,38 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
             ),
           ),
           const SizedBox(height: 12),
+          if (activeRow != null)
+            Card(
+              color: Theme.of(context).colorScheme.primaryContainer.withValues(
+                alpha: 0.55,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Restauration en cours: $activeProgress%',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(activeName),
+                    if (activePhase.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text('Etape: $activePhase'),
+                    ],
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(
+                      value: activeProgress / 100.0,
+                      minHeight: 10,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (activeRow != null) const SizedBox(height: 12),
           Text(
             'Historique',
             style: Theme.of(context).textTheme.titleMedium,
