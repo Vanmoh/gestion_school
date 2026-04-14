@@ -987,10 +987,6 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
         from apps.accounts.models import User
 
-        # Delete users of the establishment first; cascades remove most dependent
-        # school rows tied to those users (students/teachers/parents).
-        User.objects.filter(etablissement=etablissement).delete()
-
         # Delete remaining establishment-scoped rows in reverse model order to
         # reduce protected relation conflicts between dependent tables.
         scoped_models = []
@@ -1016,9 +1012,44 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             except ProtectedError:
                 retry_models.append(model)
 
+        # Some models (ex: PromotionDecision) do not carry etablissement but
+        # protect Student deletion. Remove those references before retrying.
+        self._clear_protected_student_dependencies(etablissement)
+
         # Second pass once most child rows are gone.
         for model in retry_models:
             model.objects.filter(etablissement=etablissement).delete()
+
+        # Delete users of the establishment last, once protected student
+        # dependencies have been removed.
+        User.objects.filter(etablissement=etablissement).delete()
+
+    def _clear_protected_student_dependencies(self, etablissement):
+        from apps.school.models import Student
+
+        student_ids = list(
+            Student.objects.filter(etablissement=etablissement).values_list("pk", flat=True)
+        )
+        if not student_ids:
+            return
+
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin", "auth"}:
+                continue
+
+            for field in opts.fields:
+                if not isinstance(field, (models.ForeignKey, models.OneToOneField)):
+                    continue
+                remote_model = getattr(getattr(field, "remote_field", None), "model", None)
+                on_delete = getattr(getattr(field, "remote_field", None), "on_delete", None)
+                if remote_model is not Student or on_delete is not models.PROTECT:
+                    continue
+
+                lookup = {f"{field.name}_id__in": student_ids}
+                model.objects.filter(**lookup).delete()
 
     def _run_restore_in_background(self, backup_id: int, archive_path: str, actor_id: int | None):
         manage_py = Path(settings.BASE_DIR) / "manage.py"
