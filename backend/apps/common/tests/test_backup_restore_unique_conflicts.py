@@ -4,7 +4,19 @@ from django.test import TestCase
 
 from apps.accounts.models import User, UserRole
 from apps.common.views import BackupArchiveViewSet
-from apps.school.models import AcademicYear, Book, Etablissement, Payment, Student, StudentFee, Teacher
+from apps.school.models import (
+    AcademicYear,
+    Book,
+    ClassRoom,
+    Etablissement,
+    Payment,
+    PromotionDecision,
+    PromotionDecisionType,
+    PromotionRun,
+    Student,
+    StudentFee,
+    Teacher,
+)
 
 
 class BackupRestoreUniqueConflictTests(TestCase):
@@ -287,3 +299,41 @@ class BackupRestoreUniqueConflictTests(TestCase):
 
         self.assertEqual(cleaned_payload, [])
         self.assertEqual(dropped_stats.get("school.payment"), 1)
+
+    def test_clear_establishment_scope_data_handles_promotiondecision_protect(self):
+        student_user = User.objects.create_user(
+            username="student_protect_case",
+            password="pass1234",
+            role=UserRole.STUDENT,
+            etablissement=self.etablissement,
+        )
+        student = Student.objects.create(
+            user=student_user,
+            matricule="MAT-PROTECT-001",
+            etablissement=self.etablissement,
+        )
+        classroom = ClassRoom.objects.create(
+            name="7A",
+            academic_year=self.year,
+            etablissement=self.etablissement,
+        )
+        run = PromotionRun.objects.create(
+            etablissement=self.etablissement,
+            source_academic_year=self.year,
+            status="simulated",
+        )
+        PromotionDecision.objects.create(
+            run=run,
+            student=student,
+            source_classroom=classroom,
+            target_classroom=None,
+            decision=PromotionDecisionType.PROMOTED,
+            average="12.00",
+            conduite="15.00",
+            rank=1,
+            reason="OK",
+        )
+
+        self.viewset._clear_establishment_scope_data(self.etablissement)
+
+        self.assertFalse(User.objects.filter(pk=student_user.pk).exists())
