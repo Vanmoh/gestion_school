@@ -4,7 +4,7 @@ from django.test import TestCase
 
 from apps.accounts.models import User, UserRole
 from apps.common.views import BackupArchiveViewSet
-from apps.school.models import AcademicYear, Book, Etablissement, Student, Teacher
+from apps.school.models import AcademicYear, Book, Etablissement, Payment, Student, StudentFee, Teacher
 
 
 class BackupRestoreUniqueConflictTests(TestCase):
@@ -171,7 +171,7 @@ class BackupRestoreUniqueConflictTests(TestCase):
         }
         self.assertIn(external_user.id, user_entry_pks)
 
-    def test_drop_orphan_user_relations_removes_orphan_teacher_rows(self):
+    def test_drop_orphan_foreign_keys_removes_orphan_teacher_rows(self):
         payload = [
             {
                 "model": "school.teacher",
@@ -187,7 +187,79 @@ class BackupRestoreUniqueConflictTests(TestCase):
             }
         ]
 
-        cleaned_payload, dropped_stats = self.viewset._drop_orphan_user_relations(payload)
+        cleaned_payload, dropped_stats = self.viewset._drop_orphan_foreign_key_relations(payload)
 
         self.assertEqual(cleaned_payload, [])
         self.assertEqual(dropped_stats.get("school.teacher"), 1)
+
+    def test_drop_orphan_foreign_keys_removes_orphan_payment_rows(self):
+        payload = [
+            {
+                "model": "school.payment",
+                "pk": 200,
+                "fields": {
+                    "fee": 999999,
+                    "amount": "120.00",
+                    "method": "cash",
+                    "reference": "",
+                    "received_by": None,
+                    "etablissement": self.etablissement.id,
+                },
+            }
+        ]
+
+        cleaned_payload, dropped_stats = self.viewset._drop_orphan_foreign_key_relations(payload)
+
+        self.assertEqual(cleaned_payload, [])
+        self.assertEqual(dropped_stats.get("school.payment"), 1)
+
+    def test_drop_orphan_foreign_keys_keeps_payment_when_fee_exists_in_payload(self):
+        student_user = User.objects.create_user(
+            username="student_linked",
+            password="pass1234",
+            role=UserRole.STUDENT,
+            etablissement=self.etablissement,
+        )
+        student = Student.objects.create(
+            user=student_user,
+            matricule="MAT-LINK-001",
+            etablissement=self.etablissement,
+        )
+        fee = StudentFee.objects.create(
+            student=student,
+            academic_year=self.year,
+            fee_type="monthly",
+            amount_due="120.00",
+            due_date="2026-04-14",
+        )
+
+        payload = [
+            {
+                "model": "school.studentfee",
+                "pk": fee.id,
+                "fields": {
+                    "student": student.id,
+                    "academic_year": self.year.id,
+                    "fee_type": "monthly",
+                    "amount_due": "120.00",
+                    "due_date": "2026-04-14",
+                },
+            },
+            {
+                "model": "school.payment",
+                "pk": 201,
+                "fields": {
+                    "fee": fee.id,
+                    "amount": "120.00",
+                    "method": "cash",
+                    "reference": "",
+                    "received_by": None,
+                    "etablissement": self.etablissement.id,
+                },
+            },
+        ]
+
+        cleaned_payload, dropped_stats = self.viewset._drop_orphan_foreign_key_relations(payload)
+
+        self.assertEqual(len(cleaned_payload), 2)
+        self.assertEqual(dropped_stats, {})

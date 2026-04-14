@@ -643,7 +643,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 raise ValueError("Archive invalide: data.json manquant.")
 
             payload = json.loads(data_json.read_text(encoding="utf-8"))
-            payload, orphan_stats = self._drop_orphan_user_relations(payload)
+            payload, orphan_stats = self._drop_orphan_foreign_key_relations(payload)
             if orphan_stats:
                 orphan_details = ", ".join(f"{k}: {v}" for k, v in orphan_stats.items())
                 restore_notes.append(f"Lignes orphelines ignorees ({orphan_details}).")
@@ -826,11 +826,33 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
         return payload, rewrite_stats
 
-    def _drop_orphan_user_relations(self, payload):
+    def _drop_orphan_foreign_key_relations(self, payload):
         if not isinstance(payload, list):
             return payload, {}
 
-        from apps.accounts.models import User
+        model_map = {}
+        fk_specs = {}
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            model_map[opts.label_lower] = model
+
+            specs = []
+            for field in opts.fields:
+                if not isinstance(field, (models.ForeignKey, models.OneToOneField)):
+                    continue
+                remote_model = getattr(getattr(field, "remote_field", None), "model", None)
+                if remote_model is None:
+                    continue
+                specs.append(
+                    {
+                        "field_name": field.name,
+                        "target_label": remote_model._meta.label_lower,
+                        "nullable": bool(getattr(field, "null", False)),
+                    }
+                )
+            fk_specs[opts.label_lower] = specs
 
         def _normalize_model_label(value: str) -> str:
             normalized = str(value or "").strip().lower()
@@ -839,75 +861,86 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 return ".".join(parts[-2:])
             return normalized
 
-        user_linked_models = set()
-        for model in apps.get_models():
-            opts = model._meta
-            if opts.proxy or not opts.managed:
-                continue
-            user_field = next(
-                (
-                    field
-                    for field in opts.fields
-                    if field.name == "user"
-                    and isinstance(field, (models.ForeignKey, models.OneToOneField))
-                    and getattr(getattr(field, "remote_field", None), "model", None) is User
-                ),
-                None,
-            )
-            if user_field is not None:
-                user_linked_models.add(opts.label_lower)
 
-        payload_user_ids = set()
-        referenced_user_ids = set()
+        def _payload_pk_index(rows):
+            index = {}
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                label = _normalize_model_label(item.get("model"))
+                pk_value = item.get("pk")
+                if label and pk_value not in (None, ""):
+                    index.setdefault(label, set()).add(str(pk_value))
+            return index
 
-        for entry in payload:
-            if not isinstance(entry, dict):
-                continue
-            model_label = _normalize_model_label(entry.get("model"))
-            fields = entry.get("fields")
-            if not isinstance(fields, dict):
-                continue
+        db_fk_cache = {}
 
-            if model_label == "accounts.user":
-                pk = entry.get("pk")
-                if pk not in (None, ""):
-                    payload_user_ids.add(str(pk))
-                continue
+        def _exists_in_db(target_label: str, pk_value: str) -> bool:
+            cache_key = (target_label, pk_value)
+            if cache_key in db_fk_cache:
+                return db_fk_cache[cache_key]
 
-            if model_label in user_linked_models:
-                user_id = fields.get("user")
-                if user_id not in (None, ""):
-                    referenced_user_ids.add(str(user_id))
+            model_cls = model_map.get(target_label)
+            if model_cls is None:
+                db_fk_cache[cache_key] = True
+                return True
 
-        if not referenced_user_ids:
-            return payload, {}
+            exists = model_cls.objects.filter(pk=pk_value).exists()
+            db_fk_cache[cache_key] = exists
+            return exists
 
-        missing_user_ids = referenced_user_ids - payload_user_ids
-        if not missing_user_ids:
-            return payload, {}
-
-        existing_db_user_ids = {
-            str(pk)
-            for pk in User.objects.filter(pk__in=list(missing_user_ids)).values_list("pk", flat=True)
-        }
-        allowed_user_ids = payload_user_ids | existing_db_user_ids
-
-        cleaned_payload = []
+        cleaned_payload = list(payload)
         dropped_stats = {}
-        for entry in payload:
-            if not isinstance(entry, dict):
-                cleaned_payload.append(entry)
-                continue
 
-            model_label = _normalize_model_label(entry.get("model"))
-            fields = entry.get("fields")
-            if model_label in user_linked_models and isinstance(fields, dict):
-                user_id = fields.get("user")
-                if user_id not in (None, "") and str(user_id) not in allowed_user_ids:
-                    dropped_stats[model_label] = dropped_stats.get(model_label, 0) + 1
+        while True:
+            removed_in_pass = 0
+            payload_pk_index = _payload_pk_index(cleaned_payload)
+            next_payload = []
+
+            for entry in cleaned_payload:
+                if not isinstance(entry, dict):
+                    next_payload.append(entry)
                     continue
 
-            cleaned_payload.append(entry)
+                model_label = _normalize_model_label(entry.get("model"))
+                fields = entry.get("fields")
+                if not isinstance(fields, dict):
+                    next_payload.append(entry)
+                    continue
+
+                entry_invalid = False
+                for spec in fk_specs.get(model_label, []):
+                    field_name = spec["field_name"]
+                    target_label = spec["target_label"]
+                    nullable = spec["nullable"]
+                    fk_value = fields.get(field_name)
+
+                    if fk_value in (None, ""):
+                        if nullable:
+                            continue
+                        entry_invalid = True
+                        break
+
+                    fk_key = str(fk_value)
+                    if fk_key in payload_pk_index.get(target_label, set()):
+                        continue
+
+                    if _exists_in_db(target_label, fk_key):
+                        continue
+
+                    entry_invalid = True
+                    break
+
+                if entry_invalid:
+                    dropped_stats[model_label] = dropped_stats.get(model_label, 0) + 1
+                    removed_in_pass += 1
+                    continue
+
+                next_payload.append(entry)
+
+            cleaned_payload = next_payload
+            if removed_in_pass == 0:
+                break
 
         return cleaned_payload, dropped_stats
 
