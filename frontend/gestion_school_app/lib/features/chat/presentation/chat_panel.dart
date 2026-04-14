@@ -101,6 +101,13 @@ class _ChatPanelState extends State<ChatPanel> {
     return remaining <= 84;
   }
 
+  bool _isThreadNearTop() {
+    if (!_messageScrollController.hasClients) {
+      return true;
+    }
+    return _messageScrollController.position.pixels <= 80;
+  }
+
   void _storeCurrentDraft() {
     final conversationId = _selectedConversationId;
     if (conversationId == null) {
@@ -493,7 +500,7 @@ class _ChatPanelState extends State<ChatPanel> {
     if (!_messageScrollController.hasClients || _selectedConversationId == null) {
       return;
     }
-    if (_messageScrollController.position.pixels <= 80) {
+    if (_isThreadNearTop()) {
       _loadMessages(_selectedConversationId!, appendOlder: true);
     }
   }
@@ -1902,22 +1909,59 @@ class _ChatPanelState extends State<ChatPanel> {
           ),
         ),
         const Divider(height: 1),
-        if (_loadingOlderMessages)
-          const Padding(
-            padding: EdgeInsets.only(top: 4),
-            child: SizedBox(
-              height: 16,
-              width: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          ),
         Expanded(
           child: ListView.builder(
             controller: _messageScrollController,
             padding: const EdgeInsets.all(12),
-            itemCount: _messages.length,
+            itemCount: _messages.length + 1,
             itemBuilder: (context, index) {
-              final message = _messages[index];
+              if (index == 0) {
+                if (_messages.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 28),
+                    child: Center(
+                      child: Text(
+                        'Aucun message pour le moment. Lance la conversation.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  );
+                }
+
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    children: [
+                      if (_hasMoreMessages)
+                        TextButton.icon(
+                          onPressed: _loadingOlderMessages
+                              ? null
+                              : () => _loadMessages(conversationId, appendOlder: true),
+                          icon: _loadingOlderMessages
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.history_outlined),
+                          label: Text(
+                            _loadingOlderMessages
+                                ? 'Chargement...'
+                                : 'Charger les anciens messages',
+                          ),
+                        )
+                      else
+                        Text(
+                          'Debut de la conversation',
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                    ],
+                  ),
+                );
+              }
+
+              final message = _messages[index - 1];
               final mine = _currentUserId != null &&
                   _asInt(message['sender'] ?? message['sender_id']) == _currentUserId;
               final messageId = _asInt(message['id']);
