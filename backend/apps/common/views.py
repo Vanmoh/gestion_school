@@ -1,9 +1,11 @@
 from datetime import datetime
 import hashlib
 import json
+import os
 import shutil
+import subprocess
+import sys
 import tempfile
-import threading
 import traceback
 import zipfile
 from pathlib import Path
@@ -578,6 +580,25 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         update_fields.append("updated_at")
         BackupArchive.objects.filter(pk=backup_id).update(**update_kwargs)
 
+    def _mark_restore_failed(self, backup_id: int, exc: Exception):
+        try:
+            backup = BackupArchive.objects.get(pk=backup_id)
+            backup.status = BackupArchive.Status.FAILED
+            backup.restore_phase = "Echec"
+            backup.restore_progress = max(int(backup.restore_progress or 0), 100)
+            backup.restore_log = f"{exc}\n\n{traceback.format_exc()}"
+            backup.save(
+                update_fields=[
+                    "status",
+                    "restore_phase",
+                    "restore_progress",
+                    "restore_log",
+                    "updated_at",
+                ]
+            )
+        except Exception:
+            pass
+
     def _restore_from_archive(self, backup: BackupArchive, archive_path: Path, actor=None):
         self._set_restore_progress(backup, progress=3, phase="Preparation de l'archive")
         restore_notes = []
@@ -834,37 +855,33 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             model.objects.filter(etablissement=etablissement).delete()
 
     def _run_restore_in_background(self, backup_id: int, archive_path: str, actor_id: int | None):
-        def job():
-            close_old_connections()
-            try:
-                from apps.accounts.models import User
+        manage_py = Path(settings.BASE_DIR) / "manage.py"
+        command = [
+            sys.executable,
+            str(manage_py),
+            "run_backup_restore",
+            f"--backup-id={backup_id}",
+            f"--archive-path={archive_path}",
+        ]
+        if actor_id:
+            command.append(f"--actor-id={actor_id}")
 
-                backup = BackupArchive.objects.get(pk=backup_id)
-                actor = User.objects.filter(pk=actor_id).first() if actor_id else None
-                self._restore_from_archive(backup, Path(archive_path), actor=actor)
-            except Exception as exc:
-                try:
-                    backup = BackupArchive.objects.get(pk=backup_id)
-                    backup.status = BackupArchive.Status.FAILED
-                    backup.restore_phase = "Echec"
-                    backup.restore_progress = max(backup.restore_progress, 100)
-                    backup.restore_log = f"{exc}\n\n{traceback.format_exc()}"
-                    backup.save(
-                        update_fields=[
-                            "status",
-                            "restore_phase",
-                            "restore_progress",
-                            "restore_log",
-                            "updated_at",
-                        ]
-                    )
-                except Exception:
-                    pass
-            finally:
-                close_old_connections()
+        env = os.environ.copy()
+        env.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
-        worker = threading.Thread(target=job, name=f"backup-restore-{backup_id}", daemon=True)
-        worker.start()
+        try:
+            subprocess.Popen(
+                command,
+                cwd=str(settings.BASE_DIR),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            self._mark_restore_failed(backup_id, exc)
+            raise
 
     def get_queryset(self):
         queryset = super().get_queryset()
