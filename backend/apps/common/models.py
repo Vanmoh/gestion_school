@@ -87,6 +87,8 @@ class BackupArchive(TimeStampedModel):
     manifest = models.JSONField(default=dict, blank=True)
     notes = models.TextField(blank=True)
     restore_log = models.TextField(blank=True)
+    restore_phase = models.CharField(max_length=120, blank=True)
+    restore_progress = models.PositiveSmallIntegerField(default=0)
     restored_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

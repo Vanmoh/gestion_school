@@ -379,6 +379,21 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     return scope == 'global' ? 'Globale plateforme' : 'Etablissement';
   }
 
+  int _progressValue(Map<String, dynamic> row) {
+    final raw = row['restore_progress'];
+    final parsed = raw is int ? raw : int.tryParse(raw?.toString() ?? '');
+    if (parsed == null) {
+      return 0;
+    }
+    if (parsed < 0) {
+      return 0;
+    }
+    if (parsed > 100) {
+      return 100;
+    }
+    return parsed;
+  }
+
   @override
   Widget build(BuildContext context) {
     final selectedEtab = ref.watch(etablissementProvider).selected;
@@ -564,31 +579,64 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
               final canDownload = (row['file_path']?.toString().isNotEmpty ?? false);
               final restoreLog = (row['restore_log']?.toString() ?? '').trim();
               final isFailed = statusValue == 'failed';
+              final isRunning = statusValue == 'running' || statusValue == 'pending';
+              final progress = _progressValue(row);
+              final phase = (row['restore_phase']?.toString() ?? '').trim();
               return Card(
-                child: ListTile(
-                  title: Text(row['filename']?.toString().isNotEmpty == true
-                      ? row['filename'].toString()
-                      : 'Archive #${row['id']}'),
-                  subtitle: Text(
-                    isFailed && restoreLog.isNotEmpty
-                        ? '${_scopeLabel(row['scope']?.toString() ?? '')} • Statut: $statusValue\nErreur: ${restoreLog.split("\n").first}'
-                        : '${_scopeLabel(row['scope']?.toString() ?? '')} • Statut: $statusValue',
-                  ),
-                  isThreeLine: isFailed && restoreLog.isNotEmpty,
-                  trailing: Wrap(
-                    spacing: 8,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (canDownload)
-                        IconButton(
-                          tooltip: 'Télécharger',
-                          onPressed: _busy ? null : () => _downloadBackup(row),
-                          icon: const Icon(Icons.download_outlined),
-                        ),
-                      IconButton(
-                        tooltip: 'Restaurer',
-                        onPressed: _busy ? null : () => _restoreFromArchive(row),
-                        icon: const Icon(Icons.settings_backup_restore_outlined),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              row['filename']?.toString().isNotEmpty == true
+                                  ? row['filename'].toString()
+                                  : 'Archive #${row['id']}',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                          if (canDownload)
+                            IconButton(
+                              tooltip: 'Télécharger',
+                              onPressed: _busy ? null : () => _downloadBackup(row),
+                              icon: const Icon(Icons.download_outlined),
+                            ),
+                          IconButton(
+                            tooltip: 'Restaurer',
+                            onPressed: _busy ? null : () => _restoreFromArchive(row),
+                            icon: const Icon(Icons.settings_backup_restore_outlined),
+                          ),
+                        ],
                       ),
+                      Text(
+                        '${_scopeLabel(row['scope']?.toString() ?? '')} • Statut: $statusValue',
+                      ),
+                      if (isRunning) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: LinearProgressIndicator(
+                                value: progress / 100.0,
+                                minHeight: 8,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Text('$progress%'),
+                          ],
+                        ),
+                        if (phase.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text('Etape: $phase'),
+                        ],
+                      ],
+                      if (isFailed && restoreLog.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text('Erreur: ${restoreLog.split("\n").first}'),
+                      ],
                     ],
                   ),
                 ),
