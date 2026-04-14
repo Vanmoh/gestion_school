@@ -46,6 +46,7 @@ class _ChatPanelState extends State<ChatPanel> {
   List<Map<String, dynamic>> _users = <Map<String, dynamic>>[];
   final Map<int, bool> _presenceByUser = <int, bool>{};
   final Map<int, bool> _typingByConversation = <int, bool>{};
+  final Map<int, Timer> _typingExpiryByConversation = <int, Timer>{};
   final Map<int, int> _lastReadByConversation = <int, int>{};
 
   WebSocketChannel? _channel;
@@ -74,6 +75,10 @@ class _ChatPanelState extends State<ChatPanel> {
   @override
   void dispose() {
     _typingStopTimer?.cancel();
+    for (final timer in _typingExpiryByConversation.values) {
+      timer.cancel();
+    }
+    _typingExpiryByConversation.clear();
     _reconnectTimer?.cancel();
     _heartbeatTimer?.cancel();
     _presenceRefreshTimer?.cancel();
@@ -92,6 +97,48 @@ class _ChatPanelState extends State<ChatPanel> {
   }
 
   String _asString(dynamic value) => value?.toString() ?? '';
+
+  String _formatMessageTime(dynamic rawIso) {
+    final raw = _asString(rawIso).trim();
+    if (raw.isEmpty) {
+      return '';
+    }
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) {
+      return '';
+    }
+    final local = parsed.toLocal();
+    final now = DateTime.now();
+    final sameDay =
+        local.year == now.year && local.month == now.month && local.day == now.day;
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    if (sameDay) {
+      return '$hh:$mm';
+    }
+    final dd = local.day.toString().padLeft(2, '0');
+    final mo = local.month.toString().padLeft(2, '0');
+    return '$dd/$mo $hh:$mm';
+  }
+
+  void _setTypingState(int conversationId, bool isTyping) {
+    _typingExpiryByConversation[conversationId]?.cancel();
+    if (isTyping) {
+      _typingExpiryByConversation[conversationId] = Timer(
+        const Duration(seconds: 4),
+        () {
+          if (!mounted) {
+            return;
+          }
+          setState(() => _typingByConversation[conversationId] = false);
+          _typingExpiryByConversation.remove(conversationId);
+        },
+      );
+    } else {
+      _typingExpiryByConversation.remove(conversationId);
+    }
+    _typingByConversation[conversationId] = isTyping;
+  }
 
   String _extractApiError(Object error) {
     if (error is DioException) {
@@ -757,7 +804,7 @@ class _ChatPanelState extends State<ChatPanel> {
         final isTyping = data['is_typing'] == true;
         if (mounted) {
           setState(() {
-            _typingByConversation[conversationId] = isTyping;
+            _setTypingState(conversationId, isTyping);
             if (userId > 0) {
               _presenceByUser[userId] = true;
             }
@@ -835,6 +882,23 @@ class _ChatPanelState extends State<ChatPanel> {
         widget.onUnreadChanged?.call(_sumUnread(_conversations));
         if (_selectedConversationId == conversationId) {
           _scrollToBottom();
+        }
+        if (!mine && _selectedConversationId != conversationId && mounted) {
+          final senderName = _asString(data['sender_name']).trim();
+          final senderLabel = senderName.isNotEmpty ? senderName : 'Nouveau message';
+          final contentPreview = _asString(data['content']).trim();
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                duration: const Duration(seconds: 2),
+                content: Text(
+                  contentPreview.isEmpty
+                      ? senderLabel
+                      : '$senderLabel: $contentPreview',
+                ),
+              ),
+            );
         }
         if (!existedBefore) {
           _reloadConversationsOnly();
@@ -1731,6 +1795,7 @@ class _ChatPanelState extends State<ChatPanel> {
               final mine = _currentUserId != null &&
                   _asInt(message['sender'] ?? message['sender_id']) == _currentUserId;
               final messageId = _asInt(message['id']);
+                final messageTime = _formatMessageTime(message['created_at']);
               final lastRead = _lastReadByConversation[conversationId] ?? 0;
               final isLastMine = mine && index == _messages.length - 1;
               return Align(
@@ -1755,9 +1820,17 @@ class _ChatPanelState extends State<ChatPanel> {
                       ),
                       const SizedBox(height: 2),
                       Text(_asString(message['content'])),
-                      if (isLastMine)
+                      if (messageTime.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 3),
+                          child: Text(
+                            messageTime,
+                            style: Theme.of(context).textTheme.labelSmall,
+                          ),
+                        ),
+                      if (isLastMine)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
                           child: Text(
                             lastRead >= messageId ? 'Lu' : 'Envoye',
                             style: Theme.of(context).textTheme.labelSmall,
