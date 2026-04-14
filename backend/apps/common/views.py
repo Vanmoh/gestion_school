@@ -625,7 +625,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         for entry in payload:
             if not isinstance(entry, dict):
                 continue
-            model_label = str(entry.get("model") or "")
+            model_label = str(entry.get("model") or "").strip().lower()
             fields = entry.get("fields")
             if not isinstance(fields, dict):
                 continue
@@ -644,8 +644,13 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 seen_values = seen_by_spec[(spec_model_label, field_name)]
 
                 while True:
-                    collision_in_payload = new_value in seen_values
-                    collision_in_db = model_cls.objects.filter(**{field_name: new_value}).exclude(pk=pk_value).exists()
+                    normalized_candidate = new_value.strip().lower()
+                    collision_in_payload = normalized_candidate in seen_values
+                    collision_in_db = (
+                        model_cls.objects.filter(**{f"{field_name}__iexact": new_value})
+                        .exclude(pk=pk_value)
+                        .exists()
+                    )
                     if not collision_in_payload and not collision_in_db:
                         break
 
@@ -659,7 +664,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                     key = f"{model_label}.{field_name}"
                     rewrite_stats[key] = rewrite_stats.get(key, 0) + 1
 
-                seen_values.add(new_value)
+                seen_values.add(new_value.strip().lower())
 
         return payload, rewrite_stats
 
