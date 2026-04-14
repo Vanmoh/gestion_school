@@ -632,6 +632,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
     def _restore_from_archive(self, backup: BackupArchive, archive_path: Path, actor=None):
         self._set_restore_progress(backup, progress=3, phase="Preparation de l'archive")
         restore_notes = []
+        is_global_restore = backup.scope == BackupArchive.Scope.GLOBAL
         with tempfile.TemporaryDirectory(prefix="restore_backup_") as tmp:
             tmp_path = Path(tmp)
             with zipfile.ZipFile(archive_path, "r") as zf:
@@ -643,14 +644,24 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 raise ValueError("Archive invalide: data.json manquant.")
 
             payload = json.loads(data_json.read_text(encoding="utf-8"))
-            payload, orphan_stats = self._drop_orphan_foreign_key_relations(payload)
+            self._set_restore_progress(backup, progress=20, phase="Verification integrite")
+            payload, orphan_stats = self._drop_orphan_foreign_key_relations(
+                payload,
+                check_db=not is_global_restore,
+            )
             if orphan_stats:
                 orphan_details = ", ".join(f"{k}: {v}" for k, v in orphan_stats.items())
                 restore_notes.append(f"Lignes orphelines ignorees ({orphan_details}).")
-            payload, rewrite_stats = self._resolve_unique_field_conflicts(payload)
-            if rewrite_stats:
-                details = ", ".join(f"{k}: {v}" for k, v in rewrite_stats.items())
-                restore_notes.append(f"Identifiants uniques adaptes ({details}).")
+
+            if is_global_restore:
+                restore_notes.append("Preparation globale optimisee (verification DB ignoree).")
+            else:
+                self._set_restore_progress(backup, progress=24, phase="Adaptation des identifiants")
+                payload, rewrite_stats = self._resolve_unique_field_conflicts(payload)
+                if rewrite_stats:
+                    details = ", ".join(f"{k}: {v}" for k, v in rewrite_stats.items())
+                    restore_notes.append(f"Identifiants uniques adaptes ({details}).")
+
             data_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             self._set_restore_progress(backup, progress=28, phase="Donnees preparees")
 
@@ -826,7 +837,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
         return payload, rewrite_stats
 
-    def _drop_orphan_foreign_key_relations(self, payload):
+    def _drop_orphan_foreign_key_relations(self, payload, *, check_db=True):
         if not isinstance(payload, list):
             return payload, {}
 
@@ -876,6 +887,9 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         db_fk_cache = {}
 
         def _exists_in_db(target_label: str, pk_value: str) -> bool:
+            if not check_db:
+                return False
+
             cache_key = (target_label, pk_value)
             if cache_key in db_fk_cache:
                 return db_fk_cache[cache_key]
