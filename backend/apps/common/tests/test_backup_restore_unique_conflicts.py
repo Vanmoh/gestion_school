@@ -1,3 +1,5 @@
+import json
+
 from django.test import TestCase
 
 from apps.accounts.models import User, UserRole
@@ -142,3 +144,50 @@ class BackupRestoreUniqueConflictTests(TestCase):
         self.assertNotEqual(rewritten_payload[0]["fields"]["username"], "existing_user")
         self.assertNotEqual(rewritten_payload[1]["fields"]["matricule"], "MAT-001")
         self.assertNotEqual(rewritten_payload[2]["fields"]["employee_code"], "EMP-001")
+
+    def test_establishment_backup_includes_users_referenced_by_teacher(self):
+        external_user = User.objects.create_user(
+            username="teacher_external",
+            password="pass1234",
+            role=UserRole.TEACHER,
+            etablissement=None,
+        )
+        Teacher.objects.create(
+            user=external_user,
+            employee_code="EMP-EXT-001",
+            hire_date="2026-04-14",
+            salary_base="0.00",
+            hourly_rate="0.00",
+            etablissement=self.etablissement,
+        )
+
+        payload_json = self.viewset._serialize_etablissement(self.etablissement)
+        payload = json.loads(payload_json)
+
+        user_entry_pks = {
+            entry["pk"]
+            for entry in payload
+            if str(entry.get("model") or "").lower().endswith("accounts.user")
+        }
+        self.assertIn(external_user.id, user_entry_pks)
+
+    def test_drop_orphan_user_relations_removes_orphan_teacher_rows(self):
+        payload = [
+            {
+                "model": "school.teacher",
+                "pk": 999,
+                "fields": {
+                    "user": 999999,
+                    "employee_code": "EMP-MISSING",
+                    "hire_date": "2026-04-14",
+                    "salary_base": "0.00",
+                    "hourly_rate": "0.00",
+                    "etablissement": self.etablissement.id,
+                },
+            }
+        ]
+
+        cleaned_payload, dropped_stats = self.viewset._drop_orphan_user_relations(payload)
+
+        self.assertEqual(cleaned_payload, [])
+        self.assertEqual(dropped_stats.get("school.teacher"), 1)

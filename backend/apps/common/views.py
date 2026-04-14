@@ -475,6 +475,15 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         return json.dumps(merged, ensure_ascii=False)
 
     def _serialize_etablissement(self, etablissement) -> str:
+        from apps.accounts.models import User
+
+        scoped_user_ids = set(
+            User.objects.filter(etablissement=etablissement).values_list("pk", flat=True)
+        )
+
+        # Include users referenced by establishment-scoped rows even if those
+        # users are not attached to the same establishment.
+        referenced_user_ids = set()
         serialized_payload = []
         for model in apps.get_models():
             opts = model._meta
@@ -489,14 +498,35 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             if model.__name__ == "Etablissement":
                 queryset = model.objects.filter(pk=etablissement.pk)
             elif opts.app_label == "accounts" and model.__name__ == "User":
-                queryset = model.objects.filter(etablissement=etablissement)
+                queryset = model.objects.filter(Q(etablissement=etablissement) | Q(pk__in=scoped_user_ids))
             elif "etablissement" in field_names:
                 queryset = model.objects.filter(etablissement=etablissement)
+
+                user_field = next(
+                    (
+                        field
+                        for field in opts.fields
+                        if field.name == "user"
+                        and isinstance(field, (models.ForeignKey, models.OneToOneField))
+                        and getattr(getattr(field, "remote_field", None), "model", None) is User
+                    ),
+                    None,
+                )
+                if user_field is not None:
+                    referenced_user_ids.update(
+                        queryset.exclude(user_id__isnull=True).values_list("user_id", flat=True)
+                    )
 
             if queryset is None or not queryset.exists():
                 continue
 
             serialized_payload.append(serializers.serialize("json", queryset.order_by("pk")))
+
+        missing_referenced_user_ids = referenced_user_ids - scoped_user_ids
+        if missing_referenced_user_ids:
+            user_queryset = User.objects.filter(pk__in=missing_referenced_user_ids).order_by("pk")
+            if user_queryset.exists():
+                serialized_payload.append(serializers.serialize("json", user_queryset))
 
         if not serialized_payload:
             return "[]"
@@ -613,6 +643,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 raise ValueError("Archive invalide: data.json manquant.")
 
             payload = json.loads(data_json.read_text(encoding="utf-8"))
+            payload, orphan_stats = self._drop_orphan_user_relations(payload)
+            if orphan_stats:
+                orphan_details = ", ".join(f"{k}: {v}" for k, v in orphan_stats.items())
+                restore_notes.append(f"Lignes orphelines ignorees ({orphan_details}).")
             payload, rewrite_stats = self._resolve_unique_field_conflicts(payload)
             if rewrite_stats:
                 details = ", ".join(f"{k}: {v}" for k, v in rewrite_stats.items())
@@ -791,6 +825,91 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 seen_values.add(new_value.strip().lower())
 
         return payload, rewrite_stats
+
+    def _drop_orphan_user_relations(self, payload):
+        if not isinstance(payload, list):
+            return payload, {}
+
+        from apps.accounts.models import User
+
+        def _normalize_model_label(value: str) -> str:
+            normalized = str(value or "").strip().lower()
+            parts = [part for part in normalized.split(".") if part]
+            if len(parts) >= 2:
+                return ".".join(parts[-2:])
+            return normalized
+
+        user_linked_models = set()
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            user_field = next(
+                (
+                    field
+                    for field in opts.fields
+                    if field.name == "user"
+                    and isinstance(field, (models.ForeignKey, models.OneToOneField))
+                    and getattr(getattr(field, "remote_field", None), "model", None) is User
+                ),
+                None,
+            )
+            if user_field is not None:
+                user_linked_models.add(opts.label_lower)
+
+        payload_user_ids = set()
+        referenced_user_ids = set()
+
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            model_label = _normalize_model_label(entry.get("model"))
+            fields = entry.get("fields")
+            if not isinstance(fields, dict):
+                continue
+
+            if model_label == "accounts.user":
+                pk = entry.get("pk")
+                if pk not in (None, ""):
+                    payload_user_ids.add(str(pk))
+                continue
+
+            if model_label in user_linked_models:
+                user_id = fields.get("user")
+                if user_id not in (None, ""):
+                    referenced_user_ids.add(str(user_id))
+
+        if not referenced_user_ids:
+            return payload, {}
+
+        missing_user_ids = referenced_user_ids - payload_user_ids
+        if not missing_user_ids:
+            return payload, {}
+
+        existing_db_user_ids = {
+            str(pk)
+            for pk in User.objects.filter(pk__in=list(missing_user_ids)).values_list("pk", flat=True)
+        }
+        allowed_user_ids = payload_user_ids | existing_db_user_ids
+
+        cleaned_payload = []
+        dropped_stats = {}
+        for entry in payload:
+            if not isinstance(entry, dict):
+                cleaned_payload.append(entry)
+                continue
+
+            model_label = _normalize_model_label(entry.get("model"))
+            fields = entry.get("fields")
+            if model_label in user_linked_models and isinstance(fields, dict):
+                user_id = fields.get("user")
+                if user_id not in (None, "") and str(user_id) not in allowed_user_ids:
+                    dropped_stats[model_label] = dropped_stats.get(model_label, 0) + 1
+                    continue
+
+            cleaned_payload.append(entry)
+
+        return cleaned_payload, dropped_stats
 
     def _clear_global_scope_data(self):
         # Preserve backup history rows while cleaning platform data.
