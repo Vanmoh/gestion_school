@@ -54,6 +54,7 @@ class ConversationSerializer(serializers.ModelSerializer):
     unread_count = serializers.SerializerMethodField()
     is_group_admin = serializers.SerializerMethodField()
     group_participants = serializers.SerializerMethodField()
+    other_last_read_message_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
@@ -68,6 +69,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "unread_count",
             "is_group_admin",
             "group_participants",
+            "other_last_read_message_id",
         ]
 
     def _current_participant(self, obj):
@@ -140,6 +142,16 @@ class ConversationSerializer(serializers.ModelSerializer):
                 }
             )
         return payload
+
+    def get_other_last_read_message_id(self, obj):
+        user = self.context["request"].user
+        participant_ids = list(
+            obj.participants.exclude(user=user).values_list("last_read_message_id", flat=True)
+        )
+        participant_ids = [value for value in participant_ids if value is not None]
+        if not participant_ids:
+            return None
+        return max(participant_ids)
 
 
 class DirectConversationCreateSerializer(serializers.Serializer):
