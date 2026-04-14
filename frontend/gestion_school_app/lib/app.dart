@@ -358,7 +358,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   bool _sidebarCollapsed = false;
   String? _hoveredKey;
   int _chatUnread = 0;
-  int _lastNotifiedUnread = 0;
+  bool _chatPanelOpen = false;
+  final Map<int, int> _chatUnreadByConversation = <int, int>{};
+  final Set<String> _seenShellMessageKeys = <String>{};
   Timer? _chatUnreadTimer;
   WebSocketChannel? _chatChannel;
   StreamSubscription<dynamic>? _chatChannelSub;
@@ -367,6 +369,15 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   bool _chatWsAwaitingPong = false;
   String? _chatWsBaseUrl;
   String? _chatWsToken;
+
+  int _shellAsInt(dynamic value) {
+    if (value is int) return value;
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  String _shellAsString(dynamic value) => value?.toString() ?? '';
+
+  String _shellMessageKey(int conversationId, int messageId) => '$conversationId:$messageId';
 
   static const _items = [
     _AdminMenuItem(
@@ -782,13 +793,30 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       }
 
       if (event == 'message') {
-        final senderId = data['sender_id'] is int
-            ? data['sender_id'] as int
-            : int.tryParse('${data['sender_id']}');
+        final senderId = _shellAsInt(data['sender_id']);
+        final conversationId = _shellAsInt(data['conversation_id']);
+        final messageId = _shellAsInt(data['message_id']);
         final currentUserId = ref.read(authControllerProvider).value?.id;
-        if (senderId != null && currentUserId != null && senderId != currentUserId) {
-          if (mounted) {
-            setState(() => _chatUnread = _chatUnread + 1);
+        final isExternalMessage = currentUserId != null && senderId > 0 && senderId != currentUserId;
+        if (isExternalMessage && conversationId > 0 && messageId > 0) {
+          final messageKey = _shellMessageKey(conversationId, messageId);
+          if (!_seenShellMessageKeys.contains(messageKey)) {
+            _seenShellMessageKeys.add(messageKey);
+            if (!_chatPanelOpen && mounted) {
+              final senderName = _shellAsString(data['sender_name']).trim();
+              final contentPreview = _shellAsString(data['content']).trim();
+              final title = senderName.isNotEmpty ? senderName : 'Nouveau message';
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      contentPreview.isEmpty ? title : '$title: $contentPreview',
+                    ),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+            }
           }
         }
         _refreshChatUnread();
@@ -817,37 +845,38 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         rows = const [];
       }
 
+      final nextUnreadByConversation = <int, int>{};
       var unread = 0;
       for (final row in rows) {
         if (row is Map) {
+          final conversationId = _shellAsInt(row['id']);
           final raw = row['unread_count'];
-          unread += raw is int ? raw : int.tryParse(raw?.toString() ?? '') ?? 0;
+          final unreadCount = raw is int ? raw : int.tryParse(raw?.toString() ?? '') ?? 0;
+          if (conversationId > 0) {
+            nextUnreadByConversation[conversationId] = unreadCount;
+          }
+          unread += unreadCount;
         }
       }
 
       if (!mounted) {
         return;
       }
-      final previous = _chatUnread;
-      setState(() => _chatUnread = unread);
-
-      if (unread > previous && previous >= _lastNotifiedUnread && mounted) {
-        _lastNotifiedUnread = unread;
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(
-              content: Text('Nouveaux messages recus.'),
-              duration: Duration(seconds: 2),
-            ),
-          );
-      }
+      setState(() {
+        _chatUnread = unread;
+        _chatUnreadByConversation
+          ..clear()
+          ..addAll(nextUnreadByConversation);
+      });
     } catch (_) {
       // Keep shell stable if chat API is temporarily unavailable.
     }
   }
 
   Future<void> _openChatPanel() async {
+    if (mounted) {
+      setState(() => _chatPanelOpen = true);
+    }
     await showDialog<void>(
       context: context,
       builder: (_) {
@@ -867,6 +896,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (!mounted) {
       return;
     }
+    setState(() => _chatPanelOpen = false);
     await _refreshChatUnread();
   }
 
