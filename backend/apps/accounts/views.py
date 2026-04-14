@@ -3,9 +3,10 @@ from rest_framework import generics, permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from apps.school.models import Etablissement
+from apps.school.models import Etablissement, ParentProfile
 from .permissions import IsAdminOrDirector
 from .serializers import RegisterSerializer, UserSerializer
+from .models import UserRole
 from apps.common.pagination import StandardResultsSetPagination
 
 User = get_user_model()
@@ -137,14 +138,31 @@ class UserViewSet(viewsets.ModelViewSet):
         return qs.filter(etablissement=getattr(user, "etablissement", None))
 
     def perform_create(self, serializer):
-        serializer.save(etablissement=self._resolve_target_etablissement())
+        user = serializer.save(etablissement=self._resolve_target_etablissement())
+        self._sync_parent_profile(user)
 
     def perform_update(self, serializer):
         target_etablissement = self._resolve_target_etablissement()
         if getattr(self.request.user, "role", None) == "super_admin":
-            serializer.save()
+            user = serializer.save()
+            self._sync_parent_profile(user)
             return
-        serializer.save(etablissement=target_etablissement)
+        user = serializer.save(etablissement=target_etablissement)
+        self._sync_parent_profile(user)
+
+    def _sync_parent_profile(self, user):
+        if not user:
+            return
+        if getattr(user, "role", None) != UserRole.PARENT:
+            return
+
+        parent_profile, _ = ParentProfile.objects.get_or_create(
+            user=user,
+            defaults={"etablissement": user.etablissement},
+        )
+        if parent_profile.etablissement_id != user.etablissement_id:
+            parent_profile.etablissement = user.etablissement
+            parent_profile.save(update_fields=["etablissement", "updated_at"])
 
     def get_permissions(self):
         if self.action in ["me"]:

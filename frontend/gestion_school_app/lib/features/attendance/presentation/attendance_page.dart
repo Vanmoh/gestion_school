@@ -1,6 +1,12 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:printing/printing.dart';
 
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/attendance_student.dart';
@@ -22,12 +28,316 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   DateTime _selectedDate = DateTime.now();
   bool _isAbsent = true;
   bool _isLate = false;
+  bool _sheetLoading = false;
+  bool _sheetSaving = false;
+  List<Map<String, dynamic>> _sheetClassrooms = [];
+  List<Map<String, dynamic>> _sheetItems = [];
+  int? _sheetSelectedClassroomId;
+  DateTime _sheetSelectedDate = DateTime.now();
+  bool _sheetLocked = false;
+  String _sheetValidatedByName = '';
+  String? _sheetValidatedAt;
+
+  bool _sheetBootstrapped = false;
+
+  static const _sheetReadRoles = {
+    'super_admin',
+    'director',
+    'supervisor',
+    'teacher',
+    'accountant',
+  };
+  static const _sheetWriteRoles = {
+    'super_admin',
+    'director',
+    'supervisor',
+    'teacher',
+  };
+  static const _sheetValidateRoles = {
+    'super_admin',
+    'director',
+    'supervisor',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _sheetBootstrapped) {
+        return;
+      }
+      final role = ref.read(authControllerProvider).valueOrNull?.role;
+      if (role != null && _sheetReadRoles.contains(role)) {
+        _sheetBootstrapped = true;
+        _loadSheetClassrooms();
+      }
+    });
+  }
 
   @override
   void dispose() {
     _reasonController.dispose();
     _conduiteController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadSheetClassrooms() async {
+    setState(() {
+      _sheetLoading = true;
+    });
+    try {
+      final rows = await ref.read(attendanceRepositoryProvider).fetchSheetClassrooms();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _sheetClassrooms = rows;
+        if (_sheetClassrooms.isEmpty) {
+          _sheetSelectedClassroomId = null;
+          _sheetItems = [];
+          _sheetLocked = false;
+          _sheetValidatedByName = '';
+          _sheetValidatedAt = null;
+        } else {
+          final exists = _sheetClassrooms.any(
+            (row) => _asInt(row['id']) == _sheetSelectedClassroomId,
+          );
+          if (!exists) {
+            _sheetSelectedClassroomId = _asInt(_sheetClassrooms.first['id']);
+          }
+        }
+      });
+      if (_sheetSelectedClassroomId != null) {
+        await _loadClassSheet();
+      }
+    } catch (error) {
+      _showMessage(_sheetErrorMessage(error, fallback: 'Erreur chargement classes (fiche).'));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sheetLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadClassSheet() async {
+    final classroomId = _sheetSelectedClassroomId;
+    if (classroomId == null) {
+      return;
+    }
+    setState(() {
+      _sheetLoading = true;
+    });
+    try {
+      final payload = await ref
+          .read(attendanceRepositoryProvider)
+          .fetchClassSheet(
+            classroomId: classroomId,
+            date: _apiDate(_sheetSelectedDate),
+          );
+      if (!mounted) {
+        return;
+      }
+      final rowsRaw = payload['items'];
+      final rows = rowsRaw is List
+          ? rowsRaw
+                .whereType<Map>()
+                .map((row) => Map<String, dynamic>.from(row))
+                .toList()
+          : <Map<String, dynamic>>[];
+      setState(() {
+        _sheetItems = rows;
+        _sheetLocked = payload['is_locked'] == true;
+        _sheetValidatedByName = payload['validated_by_name']?.toString() ?? '';
+        _sheetValidatedAt = payload['validated_at']?.toString();
+      });
+    } catch (error) {
+      _showMessage(_sheetErrorMessage(error, fallback: 'Erreur chargement fiche.'));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sheetLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _saveClassSheet() async {
+    final classroomId = _sheetSelectedClassroomId;
+    if (classroomId == null) {
+      _showMessage('Sélectionnez une classe.');
+      return;
+    }
+    setState(() {
+      _sheetSaving = true;
+    });
+    try {
+      final items = _sheetItems
+          .map(
+            (row) => {
+              'student': row['student'],
+              'is_absent': row['is_absent'] == true,
+              'is_late': row['is_late'] == true,
+              'reason': (row['reason'] ?? '').toString(),
+            },
+          )
+          .toList(growable: false);
+      final result = await ref
+          .read(attendanceRepositoryProvider)
+          .saveClassSheet(
+            classroomId: classroomId,
+            date: _apiDate(_sheetSelectedDate),
+            items: items,
+          );
+      if (!mounted) {
+        return;
+      }
+      _showMessage(
+        result['detail']?.toString() ?? 'Fiche de présence enregistrée.',
+        isSuccess: true,
+      );
+      ref.invalidate(attendancesProvider);
+      ref.invalidate(attendanceMonthlyStatsProvider);
+      await _loadClassSheet();
+    } catch (error) {
+      _showMessage(_sheetErrorMessage(error, fallback: 'Erreur enregistrement fiche.'));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sheetSaving = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _setClassSheetLock(bool lock) async {
+    final classroomId = _sheetSelectedClassroomId;
+    if (classroomId == null) {
+      _showMessage('Sélectionnez une classe.');
+      return;
+    }
+
+    setState(() {
+      _sheetSaving = true;
+    });
+    try {
+      final result = await ref
+          .read(attendanceRepositoryProvider)
+          .setClassSheetLock(
+            classroomId: classroomId,
+            date: _apiDate(_sheetSelectedDate),
+            lock: lock,
+          );
+
+      if (!mounted) {
+        return;
+      }
+      _showMessage(
+        result['detail']?.toString() ??
+            (lock ? 'Fiche validée.' : 'Fiche déverrouillée.'),
+        isSuccess: true,
+      );
+      await _loadClassSheet();
+    } catch (error) {
+      _showMessage(_sheetErrorMessage(error, fallback: 'Erreur validation fiche.'));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sheetSaving = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _exportClassSheetPdf() async {
+    final classroomId = _sheetSelectedClassroomId;
+    if (classroomId == null) {
+      _showMessage('Sélectionnez une classe.');
+      return;
+    }
+    try {
+      final bytes = await ref
+          .read(attendanceRepositoryProvider)
+          .exportClassSheet(
+            classroomId: classroomId,
+            date: _apiDate(_sheetSelectedDate),
+            format: 'pdf',
+          );
+      if (bytes.isEmpty) {
+        _showMessage('Export PDF vide.');
+        return;
+      }
+      await Printing.layoutPdf(
+        onLayout: (_) async => Uint8List.fromList(bytes),
+      );
+    } catch (error) {
+      _showMessage(_sheetErrorMessage(error, fallback: 'Erreur export PDF.'));
+    }
+  }
+
+  Future<void> _exportClassSheetExcel() async {
+    final classroomId = _sheetSelectedClassroomId;
+    if (classroomId == null) {
+      _showMessage('Sélectionnez une classe.');
+      return;
+    }
+    try {
+      final bytes = await ref
+          .read(attendanceRepositoryProvider)
+          .exportClassSheet(
+            classroomId: classroomId,
+            date: _apiDate(_sheetSelectedDate),
+            format: 'xlsx',
+          );
+      if (bytes.isEmpty) {
+        _showMessage('Export Excel vide.');
+        return;
+      }
+
+      final fileName =
+          'presence_classe_${_sheetSelectedClassroomId}_${_apiDate(_sheetSelectedDate)}.xlsx';
+      final savePath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Enregistrer la fiche Excel',
+        fileName: fileName,
+      );
+
+      if (savePath == null) {
+        if (!mounted) {
+          return;
+        }
+        _showMessage('Export Excel prêt (${bytes.length} octets).', isSuccess: true);
+        return;
+      }
+
+      final file = File(savePath);
+      await file.writeAsBytes(bytes, flush: true);
+      if (!mounted) {
+        return;
+      }
+      _showMessage('Fichier Excel exporté.', isSuccess: true);
+    } catch (error) {
+      _showMessage(_sheetErrorMessage(error, fallback: 'Erreur export Excel.'));
+    }
+  }
+
+  String _sheetErrorMessage(Object error, {required String fallback}) {
+    if (error is DioException) {
+      final statusCode = error.response?.statusCode;
+      if (statusCode == 404) {
+        return 'L\'API utilisée ne contient pas encore la fiche de présence par classe. '
+            'Redémarre le backend local ou reconfigure l\'URL API vers le serveur mis à jour.';
+      }
+
+      final data = error.response?.data;
+      if (data is Map<String, dynamic>) {
+        final detail = data['detail']?.toString().trim();
+        if (detail != null && detail.isNotEmpty) {
+          return detail;
+        }
+      }
+    }
+    return '$fallback ${error.toString()}';
   }
 
   void _showMessage(String message, {bool isSuccess = false}) {
@@ -58,6 +368,11 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     final userRole = authState.valueOrNull?.role;
     final canEditConduite =
         userRole == 'supervisor' || userRole == 'super_admin';
+    final isReadOnlyMode = userRole == 'accountant';
+    final canUseSheet = userRole != null && _sheetReadRoles.contains(userRole);
+    final canWriteSheet = userRole != null && _sheetWriteRoles.contains(userRole);
+    final canValidateSheet =
+      userRole != null && _sheetValidateRoles.contains(userRole);
 
     ref.listen<AsyncValue<void>>(attendanceMutationProvider, (prev, next) {
       if (prev?.isLoading == true && !next.isLoading && mounted) {
@@ -147,6 +462,221 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
             ),
           ),
           const SizedBox(height: 16),
+          if (canUseSheet)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Fiche de présence par classe',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 10),
+                    if (_sheetLocked)
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF3E0),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFFFFCC80)),
+                        ),
+                        child: Text(
+                          'Fiche verrouillée'
+                          '${_sheetValidatedByName.isNotEmpty ? ' • par $_sheetValidatedByName' : ''}'
+                          '${_sheetValidatedAt != null ? ' • $_sheetValidatedAt' : ''}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    if (_sheetLocked) const SizedBox(height: 10),
+                    if (_sheetLoading) const LinearProgressIndicator(),
+                    if (_sheetClassrooms.isEmpty && !_sheetLoading)
+                      const Text('Aucune classe accessible pour cette fiche.'),
+                    if (_sheetClassrooms.isNotEmpty) ...[
+                      DropdownButtonFormField<int>(
+                        initialValue: _sheetSelectedClassroomId,
+                        decoration: const InputDecoration(labelText: 'Classe'),
+                        items: _sheetClassrooms
+                            .map(
+                              (row) => DropdownMenuItem<int>(
+                                value: _asInt(row['id']),
+                                child: Text(
+                                  '${row['name'] ?? '-'}'
+                                  '${(row['academic_year_name']?.toString().isNotEmpty ?? false) ? ' • ${row['academic_year_name']}' : ''}',
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: _sheetLoading
+                            ? null
+                            : (value) async {
+                                if (value == null) {
+                                  return;
+                                }
+                                setState(() {
+                                  _sheetSelectedClassroomId = value;
+                                });
+                                await _loadClassSheet();
+                              },
+                      ),
+                      const SizedBox(height: 8),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Date de la fiche'),
+                        subtitle: Text(_formatDate(_sheetSelectedDate)),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.calendar_month),
+                          onPressed: _sheetLoading
+                              ? null
+                              : () async {
+                                  final picked = await showDatePicker(
+                                    context: context,
+                                    initialDate: _sheetSelectedDate,
+                                    firstDate: DateTime(2020),
+                                    lastDate: DateTime(2100),
+                                  );
+                                  if (picked != null) {
+                                    setState(() {
+                                      _sheetSelectedDate = picked;
+                                    });
+                                    await _loadClassSheet();
+                                  }
+                                },
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      if (_sheetItems.isEmpty && !_sheetLoading)
+                        const Text('Aucun élève trouvé pour cette classe/date.')
+                      else
+                        ..._sheetItems.map((row) {
+                          final studentName =
+                              row['student_full_name']?.toString().trim().isNotEmpty ==
+                                  true
+                              ? row['student_full_name'].toString()
+                              : 'Élève';
+                          final matricule = row['student_matricule']?.toString() ?? '';
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '$studentName${matricule.isNotEmpty ? ' ($matricule)' : ''}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  SwitchListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    title: const Text('Absent'),
+                                    value: row['is_absent'] == true,
+                                    onChanged: (canWriteSheet && !_sheetLocked)
+                                        ? (value) {
+                                            setState(() {
+                                              row['is_absent'] = value;
+                                            });
+                                          }
+                                        : null,
+                                  ),
+                                  SwitchListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    title: const Text('Retard'),
+                                    value: row['is_late'] == true,
+                                    onChanged: (canWriteSheet && !_sheetLocked)
+                                        ? (value) {
+                                            setState(() {
+                                              row['is_late'] = value;
+                                            });
+                                          }
+                                        : null,
+                                  ),
+                                  TextFormField(
+                                    initialValue: row['reason']?.toString() ?? '',
+                                    enabled: canWriteSheet && !_sheetLocked,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Motif / remarque',
+                                    ),
+                                    onChanged: (value) {
+                                      row['reason'] = value;
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: _sheetLoading ? null : _exportClassSheetPdf,
+                              icon: const Icon(Icons.picture_as_pdf_outlined),
+                              label: const Text('Export PDF'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: _sheetLoading ? null : _exportClassSheetExcel,
+                              icon: const Icon(Icons.table_view_outlined),
+                              label: const Text('Export Excel'),
+                            ),
+                            if (canValidateSheet)
+                              OutlinedButton.icon(
+                                onPressed: (_sheetSaving || _sheetLoading)
+                                    ? null
+                                    : () => _setClassSheetLock(!_sheetLocked),
+                                icon: Icon(
+                                  _sheetLocked
+                                      ? Icons.lock_open_outlined
+                                      : Icons.verified_outlined,
+                                ),
+                                label: Text(
+                                  _sheetLocked
+                                      ? 'Déverrouiller'
+                                      : 'Valider & verrouiller',
+                                ),
+                              ),
+                            FilledButton.icon(
+                              onPressed: (!canWriteSheet ||
+                                      _sheetSaving ||
+                                      _sheetLoading ||
+                                      _sheetLocked)
+                                  ? null
+                                  : _saveClassSheet,
+                              icon: _sheetSaving
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.save),
+                              label: const Text('Enregistrer la fiche'),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (!canWriteSheet)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            'Lecture seule: ce role peut consulter la fiche sans modifier.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          if (canUseSheet) const SizedBox(height: 16),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -215,6 +745,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                     ),
                     TextFormField(
                       controller: _reasonController,
+                      enabled: !isReadOnlyMode,
                       decoration: const InputDecoration(
                         labelText: 'Motif / remarque',
                       ),
@@ -235,7 +766,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                     ),
                     const SizedBox(height: 12),
                     FilledButton(
-                      onPressed: mutationState.isLoading
+                      onPressed: (mutationState.isLoading || isReadOnlyMode)
                           ? null
                           : () async {
                               final studentId = _selectedStudentId;
@@ -280,6 +811,13 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                             )
                           : const Text('Enregistrer'),
                     ),
+                    if (isReadOnlyMode) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Mode lecture seule: le comptable peut consulter sans modifier.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -354,4 +892,11 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   }
 
   String _apiDate(DateTime value) => _formatDate(value);
+
+  int _asInt(dynamic value) {
+    if (value is int) {
+      return value;
+    }
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
 }

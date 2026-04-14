@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../auth/presentation/auth_controller.dart';
 
 class CommunicationPage extends ConsumerStatefulWidget {
   const CommunicationPage({super.key});
@@ -35,6 +36,11 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
   List<Map<String, dynamic>> _announcements = [];
   List<Map<String, dynamic>> _notifications = [];
   List<Map<String, dynamic>> _smsProviders = [];
+
+  bool _isCommunicationReadOnlyRole() {
+    final role = ref.read(authControllerProvider).value?.role;
+    return role != 'super_admin' && role != 'director' && role != 'supervisor';
+  }
 
   @override
   void initState() {
@@ -117,6 +123,11 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
     Map<String, dynamic> data,
     String success,
   ) async {
+    if (_isCommunicationReadOnlyRole()) {
+      _showMessage('Mode lecture seule: operation non autorisee.');
+      return false;
+    }
+
     setState(() => _saving = true);
     try {
       await ref.read(dioProvider).post(endpoint, data: data);
@@ -135,6 +146,11 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
   }
 
   Future<bool> _delete(String endpoint, String success) async {
+    if (_isCommunicationReadOnlyRole()) {
+      _showMessage('Mode lecture seule: suppression non autorisee.');
+      return false;
+    }
+
     setState(() => _saving = true);
     try {
       await ref.read(dioProvider).delete(endpoint);
@@ -396,6 +412,12 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
       );
     }
 
+    final authUser = ref.watch(authControllerProvider).value;
+    final isReadOnlyMode =
+      authUser?.role != 'super_admin' &&
+      authUser?.role != 'director' &&
+      authUser?.role != 'supervisor';
+
     final colorScheme = Theme.of(context).colorScheme;
 
     final filteredAnnouncements = _filteredRows(
@@ -456,7 +478,9 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
               ),
               const SizedBox(height: 10),
               FilledButton(
-                onPressed: _saving ? null : _createAnnouncement,
+                onPressed: (_saving || isReadOnlyMode)
+                    ? null
+                    : _createAnnouncement,
                 child: const Text('Publier annonce'),
               ),
             ],
@@ -515,7 +539,9 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
               ),
               const SizedBox(height: 10),
               FilledButton.tonal(
-                onPressed: _saving ? null : _createNotification,
+                onPressed: (_saving || isReadOnlyMode)
+                    ? null
+                    : _createNotification,
                 child: const Text('Creer notification'),
               ),
             ],
@@ -555,7 +581,9 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                 },
               ),
               FilledButton.tonal(
-                onPressed: _saving ? null : _createSmsProvider,
+                onPressed: (_saving || isReadOnlyMode)
+                    ? null
+                    : _createSmsProvider,
                 child: const Text('Enregistrer config SMS'),
               ),
             ],
@@ -624,6 +652,10 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                               return;
                             }
                             if (value == 'delete') {
+                              if (isReadOnlyMode) {
+                                _showMessage('Mode lecture seule: suppression non autorisee.');
+                                return;
+                              }
                               await _confirmDelete(
                                 title: 'Supprimer annonce',
                                 message: 'Supprimer cette annonce ?',
@@ -695,6 +727,10 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                               return;
                             }
                             if (value == 'delete') {
+                              if (isReadOnlyMode) {
+                                _showMessage('Mode lecture seule: suppression non autorisee.');
+                                return;
+                              }
                               await _confirmDelete(
                                 title: 'Supprimer notification',
                                 message: 'Supprimer cette notification ?',
@@ -768,6 +804,10 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                               return;
                             }
                             if (value == 'delete') {
+                              if (isReadOnlyMode) {
+                                _showMessage('Mode lecture seule: suppression non autorisee.');
+                                return;
+                              }
                               await _confirmDelete(
                                 title: 'Supprimer provider SMS',
                                 message: 'Supprimer cette configuration SMS ?',
@@ -819,6 +859,13 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                       'Annonces, notifications et configuration de diffusion SMS.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
+                    if (isReadOnlyMode) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Mode lecture seule: consultation uniquement pour ce profil.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ],
                 ),
               ),

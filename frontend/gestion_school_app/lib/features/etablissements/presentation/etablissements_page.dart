@@ -27,9 +27,29 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
   final _addressController = TextEditingController();
   final _phoneController = TextEditingController();
   final _emailController = TextEditingController();
+  final _principalSignatureLabelController = TextEditingController(
+    text: 'Le Principal',
+  );
+  final _cashierSignatureLabelController = TextEditingController(
+    text: 'Signature caissier',
+  );
+  final _parentSignatureLabelController = TextEditingController(
+    text: 'Signature parent / eleve',
+  );
+  final _principalSignatureScaleController = TextEditingController(text: '100');
+  final _stampScaleController = TextEditingController(text: '100');
 
   Uint8List? _logoBytes;
   String? _logoFileName;
+  Uint8List? _stampBytes;
+  String? _stampFileName;
+  Uint8List? _principalSignatureBytes;
+  String? _principalSignatureFileName;
+  Uint8List? _cashierSignatureBytes;
+  String? _cashierSignatureFileName;
+
+  String _principalSignaturePosition = 'right';
+  String _stampPosition = 'right';
 
   @override
   void initState() {
@@ -43,6 +63,11 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     _addressController.dispose();
     _phoneController.dispose();
     _emailController.dispose();
+    _principalSignatureLabelController.dispose();
+    _cashierSignatureLabelController.dispose();
+    _parentSignatureLabelController.dispose();
+    _principalSignatureScaleController.dispose();
+    _stampScaleController.dispose();
     super.dispose();
   }
 
@@ -143,7 +168,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
       );
   }
 
-  Future<void> _pickLogo() async {
+  Future<void> _pickImage({
+    required void Function(Uint8List bytes, String fileName) onPicked,
+  }) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.image,
       withData: true,
@@ -158,10 +185,43 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
       return;
     }
 
-    setState(() {
-      _logoBytes = bytes;
-      _logoFileName = file.name;
-    });
+    setState(() => onPicked(bytes, file.name));
+  }
+
+  Future<void> _pickLogo() async {
+    await _pickImage(
+      onPicked: (bytes, fileName) {
+        _logoBytes = bytes;
+        _logoFileName = fileName;
+      },
+    );
+  }
+
+  Future<void> _pickStamp() async {
+    await _pickImage(
+      onPicked: (bytes, fileName) {
+        _stampBytes = bytes;
+        _stampFileName = fileName;
+      },
+    );
+  }
+
+  Future<void> _pickPrincipalSignature() async {
+    await _pickImage(
+      onPicked: (bytes, fileName) {
+        _principalSignatureBytes = bytes;
+        _principalSignatureFileName = fileName;
+      },
+    );
+  }
+
+  Future<void> _pickCashierSignature() async {
+    await _pickImage(
+      onPicked: (bytes, fileName) {
+        _cashierSignatureBytes = bytes;
+        _cashierSignatureFileName = fileName;
+      },
+    );
   }
 
   void _clearForm() {
@@ -169,8 +229,21 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     _addressController.clear();
     _phoneController.clear();
     _emailController.clear();
+    _principalSignatureLabelController.text = 'Le Principal';
+    _cashierSignatureLabelController.text = 'Signature caissier';
+    _parentSignatureLabelController.text = 'Signature parent / eleve';
+    _principalSignatureScaleController.text = '100';
+    _stampScaleController.text = '100';
+    _principalSignaturePosition = 'right';
+    _stampPosition = 'right';
     _logoBytes = null;
     _logoFileName = null;
+    _stampBytes = null;
+    _stampFileName = null;
+    _principalSignatureBytes = null;
+    _principalSignatureFileName = null;
+    _cashierSignatureBytes = null;
+    _cashierSignatureFileName = null;
     _selectedId = null;
   }
 
@@ -181,8 +254,26 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
       _addressController.text = (row['address'] ?? '').toString();
       _phoneController.text = (row['phone'] ?? '').toString();
       _emailController.text = (row['email'] ?? '').toString();
+        _principalSignatureLabelController.text =
+          (row['principal_signature_label'] ?? 'Le Principal').toString();
+        _cashierSignatureLabelController.text =
+          (row['cashier_signature_label'] ?? 'Signature caissier').toString();
+        _parentSignatureLabelController.text =
+          (row['parent_signature_label'] ?? 'Signature parent / eleve').toString();
+        _principalSignatureScaleController.text =
+          (row['principal_signature_scale'] ?? 100).toString();
+        _stampScaleController.text = (row['stamp_scale'] ?? 100).toString();
+        _principalSignaturePosition =
+          (row['principal_signature_position'] ?? 'right').toString();
+        _stampPosition = (row['stamp_position'] ?? 'right').toString();
       _logoBytes = null;
       _logoFileName = null;
+        _stampBytes = null;
+        _stampFileName = null;
+        _principalSignatureBytes = null;
+        _principalSignatureFileName = null;
+        _cashierSignatureBytes = null;
+        _cashierSignatureFileName = null;
     });
   }
 
@@ -197,11 +288,24 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     final address = _addressController.text.trim();
     final phone = _phoneController.text.trim();
     final email = _emailController.text.trim();
+    final principalScale = int.tryParse(
+      _principalSignatureScaleController.text.trim(),
+    );
+    final stampScale = int.tryParse(_stampScaleController.text.trim());
 
     if (name.isEmpty || address.isEmpty || phone.isEmpty || email.isEmpty) {
       _showMessage(
         'Tous les champs sont obligatoires: nom, adresse, telephone, email.',
       );
+      return;
+    }
+
+    if (principalScale == null || principalScale < 40 || principalScale > 200) {
+      _showMessage('Echelle signature direction invalide (40 a 200).');
+      return;
+    }
+    if (stampScale == null || stampScale < 40 || stampScale > 200) {
+      _showMessage('Echelle cachet invalide (40 a 200).');
       return;
     }
 
@@ -218,10 +322,32 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         'address': address,
         'phone': phone,
         'email': email,
+        'principal_signature_label': _principalSignatureLabelController.text.trim(),
+        'cashier_signature_label': _cashierSignatureLabelController.text.trim(),
+        'parent_signature_label': _parentSignatureLabelController.text.trim(),
+        'principal_signature_position': _principalSignaturePosition,
+        'stamp_position': _stampPosition,
+        'principal_signature_scale': principalScale,
+        'stamp_scale': stampScale,
         if (_logoBytes != null)
           'logo': MultipartFile.fromBytes(
             _logoBytes!,
             filename: _logoFileName ?? 'logo.png',
+          ),
+        if (_stampBytes != null)
+          'stamp_image': MultipartFile.fromBytes(
+            _stampBytes!,
+            filename: _stampFileName ?? 'stamp.png',
+          ),
+        if (_principalSignatureBytes != null)
+          'principal_signature_image': MultipartFile.fromBytes(
+            _principalSignatureBytes!,
+            filename: _principalSignatureFileName ?? 'principal_signature.png',
+          ),
+        if (_cashierSignatureBytes != null)
+          'cashier_signature_image': MultipartFile.fromBytes(
+            _cashierSignatureBytes!,
+            filename: _cashierSignatureFileName ?? 'cashier_signature.png',
           ),
       });
 
@@ -354,6 +480,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     final selected = _rows
         .where((row) => _asInt(row['id']) == _selectedId)
         .toList();
+    final selectedRow = selected.isNotEmpty ? selected.first : null;
     final selectedName = selected.isNotEmpty
         ? (selected.first['name'] ?? '').toString()
         : '-';
@@ -419,6 +546,120 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                           : 'Logo: $_logoFileName',
                     ),
                   ),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _pickStamp,
+                    icon: const Icon(Icons.approval_outlined),
+                    label: Text(
+                      _stampFileName == null
+                          ? 'Choisir cachet'
+                          : 'Cachet: $_stampFileName',
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _pickPrincipalSignature,
+                    icon: const Icon(Icons.draw_outlined),
+                    label: Text(
+                      _principalSignatureFileName == null
+                          ? 'Signature direction'
+                          : 'Direction: $_principalSignatureFileName',
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _pickCashierSignature,
+                    icon: const Icon(Icons.edit_note_outlined),
+                    label: Text(
+                      _cashierSignatureFileName == null
+                          ? 'Signature caissier'
+                          : 'Caissier: $_cashierSignatureFileName',
+                    ),
+                  ),
+                  SizedBox(
+                    width: 260,
+                    child: TextField(
+                      controller: _principalSignatureLabelController,
+                      decoration: const InputDecoration(
+                        labelText: 'Libelle signature direction',
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 260,
+                    child: TextField(
+                      controller: _cashierSignatureLabelController,
+                      decoration: const InputDecoration(
+                        labelText: 'Libelle signature caissier',
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 260,
+                    child: TextField(
+                      controller: _parentSignatureLabelController,
+                      decoration: const InputDecoration(
+                        labelText: 'Libelle signature parent/eleve',
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 210,
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _principalSignaturePosition,
+                      decoration: const InputDecoration(
+                        labelText: 'Position signature direction',
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'left', child: Text('Gauche')),
+                        DropdownMenuItem(value: 'center', child: Text('Centre')),
+                        DropdownMenuItem(value: 'right', child: Text('Droite')),
+                      ],
+                      onChanged: _saving
+                          ? null
+                          : (value) {
+                              if (value == null) return;
+                              setState(() => _principalSignaturePosition = value);
+                            },
+                    ),
+                  ),
+                  SizedBox(
+                    width: 210,
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _stampPosition,
+                      decoration: const InputDecoration(
+                        labelText: 'Position cachet',
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'left', child: Text('Gauche')),
+                        DropdownMenuItem(value: 'center', child: Text('Centre')),
+                        DropdownMenuItem(value: 'right', child: Text('Droite')),
+                      ],
+                      onChanged: _saving
+                          ? null
+                          : (value) {
+                              if (value == null) return;
+                              setState(() => _stampPosition = value);
+                            },
+                    ),
+                  ),
+                  SizedBox(
+                    width: 160,
+                    child: TextField(
+                      controller: _principalSignatureScaleController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Echelle signature %',
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 160,
+                    child: TextField(
+                      controller: _stampScaleController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Echelle cachet %',
+                      ),
+                    ),
+                  ),
                   FilledButton.icon(
                     onPressed: _saving ? null : _save,
                     icon: const Icon(Icons.save_outlined),
@@ -438,6 +679,61 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                     icon: const Icon(Icons.delete_outline),
                     label: const Text('Supprimer'),
                   ),
+                  if (selectedRow != null) ...[
+                    const SizedBox(width: 6),
+                    Text(
+                      'Apercu actif: $selectedName',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    if ((selectedRow['logo'] ?? '').toString().isNotEmpty)
+                      SizedBox(
+                        width: 56,
+                        height: 56,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            (selectedRow['logo'] ?? '').toString(),
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    if ((selectedRow['stamp_image'] ?? '').toString().isNotEmpty)
+                      SizedBox(
+                        width: 56,
+                        height: 56,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            (selectedRow['stamp_image'] ?? '').toString(),
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    if ((selectedRow['principal_signature_image'] ?? '').toString().isNotEmpty)
+                      SizedBox(
+                        width: 110,
+                        height: 42,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            (selectedRow['principal_signature_image'] ?? '').toString(),
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                      ),
+                    if ((selectedRow['cashier_signature_image'] ?? '').toString().isNotEmpty)
+                      SizedBox(
+                        width: 110,
+                        height: 42,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            (selectedRow['cashier_signature_image'] ?? '').toString(),
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                      ),
+                  ],
                 ],
               ),
             ),
@@ -475,7 +771,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                           ),
                           title: Text((row['name'] ?? '').toString()),
                           subtitle: Text(
-                            '${(row['address'] ?? '').toString()} • ${(row['phone'] ?? '').toString()} • ${(row['email'] ?? '').toString()}',
+                            '${(row['address'] ?? '').toString()} • ${(row['phone'] ?? '').toString()} • ${(row['email'] ?? '').toString()}\n'
+                            'Direction: ${(row['principal_signature_label'] ?? 'Le Principal').toString()} • '
+                            'Caissier: ${(row['cashier_signature_label'] ?? 'Signature caissier').toString()}',
                           ),
                           trailing: IconButton(
                             onPressed: _saving ? null : () => _fillForm(row),

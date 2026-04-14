@@ -28,6 +28,11 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
   String _status = 'open';
   bool _parentNotified = false;
 
+  bool _isDisciplineReadOnlyRole() {
+    final role = ref.read(authControllerProvider).value?.role;
+    return role != 'super_admin' && role != 'director' && role != 'supervisor' && role != 'teacher';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -115,6 +120,11 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
   }
 
   Future<void> _createIncident() async {
+    if (_isDisciplineReadOnlyRole()) {
+      _showMessage('Mode lecture seule: creation d\'incident non autorisee.');
+      return;
+    }
+
     final studentId = _selectedStudentId;
     final category = _categoryController.text.trim();
     final description = _descriptionController.text.trim();
@@ -185,6 +195,11 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
     final studentById = {for (final s in _students) _asInt(s['id']): s};
     final authUser = ref.watch(authControllerProvider).value;
     final isTeacherUser = authUser?.role == 'teacher';
+    final isReadOnlyMode =
+      authUser?.role != 'super_admin' &&
+      authUser?.role != 'director' &&
+      authUser?.role != 'supervisor' &&
+      authUser?.role != 'teacher';
 
     return ListView(
       padding: const EdgeInsets.all(18),
@@ -199,6 +214,13 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
           const SizedBox(height: 6),
           Text(
             'Affichage limité aux élèves de vos classes.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+        if (isReadOnlyMode) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Mode lecture seule: consultation uniquement pour ce profil.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -225,7 +247,9 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                         ),
                       )
                       .toList(),
-                  onChanged: (value) =>
+                    onChanged: isReadOnlyMode
+                      ? null
+                      : (value) =>
                       setState(() => _selectedStudentId = value),
                 ),
                 const SizedBox(height: 10),
@@ -234,7 +258,9 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                   title: const Text('Date de l\'incident'),
                   subtitle: Text(_apiDate(_incidentDate)),
                   trailing: const Icon(Icons.calendar_month),
-                  onTap: () async {
+                  onTap: isReadOnlyMode
+                      ? null
+                      : () async {
                     final picked = await showDatePicker(
                       context: context,
                       initialDate: _incidentDate,
@@ -246,11 +272,13 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                 ),
                 TextField(
                   controller: _categoryController,
+                  enabled: !isReadOnlyMode,
                   decoration: const InputDecoration(labelText: 'Catégorie'),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: _descriptionController,
+                  enabled: !isReadOnlyMode,
                   minLines: 2,
                   maxLines: 4,
                   decoration: const InputDecoration(labelText: 'Description *'),
@@ -264,7 +292,9 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                     DropdownMenuItem(value: 'medium', child: Text('Moyenne')),
                     DropdownMenuItem(value: 'high', child: Text('Élevée')),
                   ],
-                  onChanged: (value) =>
+                    onChanged: isReadOnlyMode
+                      ? null
+                      : (value) =>
                       setState(() => _severity = value ?? 'medium'),
                 ),
                 const SizedBox(height: 10),
@@ -275,12 +305,15 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                     DropdownMenuItem(value: 'open', child: Text('Ouvert')),
                     DropdownMenuItem(value: 'resolved', child: Text('Traité')),
                   ],
-                  onChanged: (value) =>
+                    onChanged: isReadOnlyMode
+                      ? null
+                      : (value) =>
                       setState(() => _status = value ?? 'open'),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: _sanctionController,
+                  enabled: !isReadOnlyMode,
                   minLines: 1,
                   maxLines: 3,
                   decoration: const InputDecoration(
@@ -292,10 +325,12 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                   contentPadding: EdgeInsets.zero,
                   value: _parentNotified,
                   title: const Text('Parent informé'),
-                  onChanged: (value) => setState(() => _parentNotified = value),
+                  onChanged: isReadOnlyMode
+                      ? null
+                      : (value) => setState(() => _parentNotified = value),
                 ),
                 FilledButton(
-                  onPressed: _saving ? null : _createIncident,
+                  onPressed: (_saving || isReadOnlyMode) ? null : _createIncident,
                   child: const Text('Enregistrer incident'),
                 ),
               ],

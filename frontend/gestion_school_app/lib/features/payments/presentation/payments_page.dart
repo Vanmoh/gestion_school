@@ -1,9 +1,11 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
+import '../../auth/presentation/auth_controller.dart';
 import '../domain/payment.dart';
 import '../domain/student_fee.dart';
 import 'payments_controller.dart';
@@ -23,14 +25,191 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   final _amountController = TextEditingController();
   final _methodController = TextEditingController(text: 'Especes');
   final _referenceController = TextEditingController();
+  final _payrollMonthController = TextEditingController();
+  final _timeEntryNotesController = TextEditingController();
 
   int? _selectedFeeId;
   int? _selectedPaymentId;
+  int? _selectedTeacherId;
   String _methodFilter = 'all';
   int _currentPage = 1;
   int _pageSize = 25;
   String _searchTerm = '';
   Timer? _searchDebounce;
+  DateTime _timeEntryDate = DateTime.now();
+  TimeOfDay _timeEntryCheckIn = const TimeOfDay(hour: 8, minute: 0);
+  TimeOfDay _timeEntryCheckOut = const TimeOfDay(hour: 10, minute: 0);
+  bool _financeBusy = false;
+  List<Map<String, dynamic>> _financeTeachers = [];
+  List<Map<String, dynamic>> _financeTimeEntries = [];
+  List<Map<String, dynamic>> _financePayrolls = [];
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _payrollMonthController.text =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}';
+    Future<void>.microtask(_loadTeacherFinanceSection);
+  }
+
+  bool _isTeacherFinanceVisible(String? role) {
+    return role == 'super_admin' || role == 'supervisor' || role == 'accountant';
+  }
+
+  bool _isTeacherFinanceReadOnly(String? role) {
+    return role == 'accountant';
+  }
+
+  String _toApiDate(DateTime value) {
+    return '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
+  }
+
+  String _toApiTime(TimeOfDay value) {
+    return '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}:00';
+  }
+
+  int _timeToMinutes(TimeOfDay value) {
+    return value.hour * 60 + value.minute;
+  }
+
+  String _time24(TimeOfDay value) {
+    return '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _extractApiErrorMessage(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+
+      if (data is Map<String, dynamic>) {
+        for (final entry in data.entries) {
+          final value = entry.value;
+          if (value is List && value.isNotEmpty) {
+            return value.map((item) => item.toString()).join(' | ');
+          }
+          if (value is String && value.trim().isNotEmpty) {
+            return value.trim();
+          }
+        }
+      }
+
+      if (data is List && data.isNotEmpty) {
+        return data.map((item) => item.toString()).join(' | ');
+      }
+
+      if (data is String && data.trim().isNotEmpty) {
+        return data.trim();
+      }
+
+      final status = error.response?.statusCode;
+      if (status != null) {
+        return 'Requete refusee (HTTP $status).';
+      }
+
+      return error.message ?? error.toString();
+    }
+
+    return error.toString();
+  }
+
+  String _teacherFinanceLabel(Map<String, dynamic> row) {
+    final fullName = (row['user_full_name']?.toString().trim() ?? '');
+    final code = (row['employee_code']?.toString().trim() ?? '');
+    final rate = row['hourly_rate']?.toString() ?? '0';
+    final name = fullName.isNotEmpty ? fullName : 'Enseignant #${row['id']}';
+    return '$name${code.isNotEmpty ? ' ($code)' : ''} • ${_formatMoney(double.tryParse(rate) ?? 0)}/h';
+  }
+
+  Future<void> _loadTeacherFinanceSection() async {
+    final authUser = ref.read(authControllerProvider).value;
+    if (!_isTeacherFinanceVisible(authUser?.role)) {
+      return;
+    }
+
+    try {
+      final repo = ref.read(paymentsRepositoryProvider);
+      final results = await Future.wait([
+        repo.fetchTeachers(),
+        repo.fetchTeacherTimeEntries(),
+        repo.fetchTeacherPayrolls(month: _payrollMonthController.text.trim()),
+      ]);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _financeTeachers = results[0] as List<Map<String, dynamic>>;
+        _financeTimeEntries = results[1] as List<Map<String, dynamic>>;
+        _financePayrolls = results[2] as List<Map<String, dynamic>>;
+        _selectedTeacherId ??= _financeTeachers.isNotEmpty
+            ? (_financeTeachers.first['id'] as num?)?.toInt()
+            : null;
+      });
+    } catch (error) {
+      _showMessage('Erreur chargement pointage enseignants: $error');
+    }
+  }
+
+  Future<void> _createTeacherTimeEntry() async {
+    final teacherId = _selectedTeacherId;
+    if (teacherId == null) {
+      _showMessage('Selectionnez un enseignant.');
+      return;
+    }
+
+    final checkInMinutes = _timeToMinutes(_timeEntryCheckIn);
+    final checkOutMinutes = _timeToMinutes(_timeEntryCheckOut);
+    if (checkOutMinutes <= checkInMinutes) {
+      _showMessage("L'heure de sortie doit etre apres l'heure d'entree.");
+      return;
+    }
+
+    setState(() => _financeBusy = true);
+    try {
+      await ref
+          .read(paymentsRepositoryProvider)
+          .createTeacherTimeEntry(
+            teacherId: teacherId,
+            entryDate: _toApiDate(_timeEntryDate),
+            checkInTime: _toApiTime(_timeEntryCheckIn),
+            checkOutTime: _toApiTime(_timeEntryCheckOut),
+            notes: _timeEntryNotesController.text.trim(),
+          );
+      _timeEntryNotesController.clear();
+      _showMessage('Pointage enseignant enregistre avec succes.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur pointage enseignant: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) {
+        setState(() => _financeBusy = false);
+      }
+    }
+  }
+
+  Future<void> _generateTeacherPayroll() async {
+    final month = _payrollMonthController.text.trim();
+    if (!RegExp(r'^\d{4}-\d{2}$').hasMatch(month)) {
+      _showMessage('Mois invalide. Utilisez le format YYYY-MM.');
+      return;
+    }
+
+    setState(() => _financeBusy = true);
+    try {
+      await ref
+          .read(paymentsRepositoryProvider)
+          .generateTeacherPayroll(month: month);
+      _showMessage('Paie horaire generee avec succes.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur generation paie horaire: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _financeBusy = false);
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -39,6 +218,8 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     _amountController.dispose();
     _methodController.dispose();
     _referenceController.dispose();
+    _payrollMonthController.dispose();
+    _timeEntryNotesController.dispose();
     super.dispose();
   }
 
@@ -56,6 +237,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
         ref.read(paymentsPaginatedProvider(query).future),
         ref.read(feesProvider.future),
       ]);
+      await _loadTeacherFinanceSection();
     } catch (_) {
       // Keep pull-to-refresh responsive even when API is temporarily unavailable.
     }
@@ -515,6 +697,9 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final authUser = ref.watch(authControllerProvider).value;
+    final isTeacherFinanceVisible = _isTeacherFinanceVisible(authUser?.role);
+    final isTeacherFinanceReadOnly = _isTeacherFinanceReadOnly(authUser?.role);
     final query = PaymentsPageQuery(
       page: _currentPage,
       pageSize: _pageSize,
@@ -1315,6 +1500,237 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                       ],
                     ),
                   ),
+                  if (isTeacherFinanceVisible) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Pointage enseignants & paie horaire',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            isTeacherFinanceReadOnly
+                                ? 'Mode lecture seule (Comptable): consultation uniquement.'
+                                : 'Saisie entree/sortie + generation paie horaire mensuelle.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              SizedBox(
+                                width: 420,
+                                child: DropdownButtonFormField<int>(
+                                  initialValue: _selectedTeacherId,
+                                  decoration: const InputDecoration(labelText: 'Enseignant'),
+                                  items: _financeTeachers
+                                      .map(
+                                        (row) => DropdownMenuItem<int>(
+                                          value: (row['id'] as num).toInt(),
+                                          child: Text(_teacherFinanceLabel(row)),
+                                        ),
+                                      )
+                                      .toList(growable: false),
+                                  onChanged: (value) {
+                                    setState(() => _selectedTeacherId = value);
+                                  },
+                                ),
+                              ),
+                              SizedBox(
+                                width: 170,
+                                child: TextFormField(
+                                  initialValue: _toApiDate(_timeEntryDate),
+                                  readOnly: true,
+                                  decoration: const InputDecoration(labelText: 'Date pointage'),
+                                  onTap: isTeacherFinanceReadOnly
+                                      ? null
+                                      : () async {
+                                          final picked = await showDatePicker(
+                                            context: context,
+                                            firstDate: DateTime(2020),
+                                            lastDate: DateTime(2100),
+                                            initialDate: _timeEntryDate,
+                                          );
+                                          if (picked != null && mounted) {
+                                            setState(() => _timeEntryDate = picked);
+                                          }
+                                        },
+                                ),
+                              ),
+                              SizedBox(
+                                width: 160,
+                                child: OutlinedButton.icon(
+                                  onPressed: isTeacherFinanceReadOnly
+                                      ? null
+                                      : () async {
+                                          final picked = await showTimePicker(
+                                            context: context,
+                                            initialTime: _timeEntryCheckIn,
+                                          );
+                                          if (picked != null && mounted) {
+                                            setState(() => _timeEntryCheckIn = picked);
+                                          }
+                                        },
+                                  icon: const Icon(Icons.login_rounded),
+                                  label: Text('Entree ${_time24(_timeEntryCheckIn)}'),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 160,
+                                child: OutlinedButton.icon(
+                                  onPressed: isTeacherFinanceReadOnly
+                                      ? null
+                                      : () async {
+                                          final picked = await showTimePicker(
+                                            context: context,
+                                            initialTime: _timeEntryCheckOut,
+                                          );
+                                          if (picked != null && mounted) {
+                                            setState(() => _timeEntryCheckOut = picked);
+                                          }
+                                        },
+                                  icon: const Icon(Icons.logout_rounded),
+                                  label: Text('Sortie ${_time24(_timeEntryCheckOut)}'),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              SizedBox(
+                                width: 360,
+                                child: TextField(
+                                  controller: _timeEntryNotesController,
+                                  decoration: const InputDecoration(labelText: 'Note pointage (optionnel)'),
+                                ),
+                              ),
+                              FilledButton.icon(
+                                onPressed: (isTeacherFinanceReadOnly || _financeBusy)
+                                    ? null
+                                    : _createTeacherTimeEntry,
+                                icon: const Icon(Icons.access_time_filled_outlined),
+                                label: const Text('Enregistrer pointage'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              SizedBox(
+                                width: 180,
+                                child: TextField(
+                                  controller: _payrollMonthController,
+                                  decoration: const InputDecoration(labelText: 'Mois paie (YYYY-MM)'),
+                                ),
+                              ),
+                              FilledButton.tonalIcon(
+                                onPressed: (isTeacherFinanceReadOnly || _financeBusy)
+                                    ? null
+                                    : _generateTeacherPayroll,
+                                icon: const Icon(Icons.calculate_outlined),
+                                label: const Text('Generer paie horaire'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: _loadTeacherFinanceSection,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Actualiser'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Synthese paie horaire (${_financePayrolls.length})',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          if (_financePayrolls.isEmpty)
+                            const Text('Aucune paie horaire generee pour ce mois.')
+                          else
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: DataTable(
+                                columns: const [
+                                  DataColumn(label: Text('Enseignant')),
+                                  DataColumn(label: Text('Mois')),
+                                  DataColumn(label: Text('H. attribuees')),
+                                  DataColumn(label: Text('H. travaillees')),
+                                  DataColumn(label: Text('Taux horaire')),
+                                  DataColumn(label: Text('Montant')),
+                                ],
+                                rows: _financePayrolls.map((row) {
+                                  final teacherName = row['teacher_full_name']?.toString() ?? 'Enseignant';
+                                  final month = row['month']?.toString() ?? '-';
+                                  final attributed = row['hours_attributed']?.toString() ?? '0';
+                                  final worked = row['hours_worked']?.toString() ?? '0';
+                                  final rate = double.tryParse(row['hourly_rate']?.toString() ?? '0') ?? 0;
+                                  final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
+
+                                  return DataRow(
+                                    cells: [
+                                      DataCell(Text(teacherName)),
+                                      DataCell(Text(month)),
+                                      DataCell(Text(attributed)),
+                                      DataCell(Text(worked)),
+                                      DataCell(Text('${_formatMoney(rate)}/h')),
+                                      DataCell(Text(_formatMoney(amount))),
+                                    ],
+                                  );
+                                }).toList(growable: false),
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Derniers pointages (${_financeTimeEntries.length})',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          if (_financeTimeEntries.isEmpty)
+                            const Text('Aucun pointage enseignant enregistre.')
+                          else
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: DataTable(
+                                columns: const [
+                                  DataColumn(label: Text('Enseignant')),
+                                  DataColumn(label: Text('Date')),
+                                  DataColumn(label: Text('Entree')),
+                                  DataColumn(label: Text('Sortie')),
+                                  DataColumn(label: Text('Heures')),
+                                ],
+                                rows: _financeTimeEntries.take(20).map((row) {
+                                  return DataRow(
+                                    cells: [
+                                      DataCell(Text(row['teacher_full_name']?.toString() ?? '-')),
+                                      DataCell(Text(row['entry_date']?.toString() ?? '-')),
+                                      DataCell(Text(row['check_in_time']?.toString() ?? '-')),
+                                      DataCell(Text(row['check_out_time']?.toString() ?? '-')),
+                                      DataCell(Text(row['worked_hours']?.toString() ?? '0')),
+                                    ],
+                                  );
+                                }).toList(growable: false),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
                   if (selectedPayment != null) ...[
                     const SizedBox(height: 12),
                     Container(

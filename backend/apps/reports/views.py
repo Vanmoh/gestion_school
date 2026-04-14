@@ -78,6 +78,70 @@ def _etablissement_logo_path(student: Student) -> str | None:
     return None
 
 
+def _student_etablissement(student: Student | None) -> Etablissement | None:
+    if student is None:
+        return None
+    etablissement = getattr(student, "etablissement", None)
+    if etablissement is None and getattr(student, "classroom", None) is not None:
+        etablissement = getattr(student.classroom, "etablissement", None)
+    return etablissement
+
+
+def _payment_etablissement(payment: Payment | None) -> Etablissement | None:
+    if payment is None:
+        return None
+    etablissement = getattr(payment, "etablissement", None)
+    if etablissement is not None:
+        return etablissement
+    fee = getattr(payment, "fee", None)
+    student = getattr(fee, "student", None) if fee is not None else None
+    return _student_etablissement(student)
+
+
+def _etablissement_media_field_path(etablissement: Etablissement | None, field_name: str) -> str | None:
+    if etablissement is None:
+        return None
+
+    media_field = getattr(etablissement, field_name, None)
+    if not media_field:
+        return None
+
+    try:
+        direct_path = Path(getattr(media_field, "path", "") or "")
+    except Exception:
+        direct_path = None
+
+    if direct_path and direct_path.exists():
+        return str(direct_path)
+
+    media_name = str(getattr(media_field, "name", "") or "").strip()
+    media_root = str(getattr(settings, "MEDIA_ROOT", "") or "").strip()
+    if media_name and media_root:
+        candidate = Path(media_root) / media_name
+        if candidate.exists():
+            return str(candidate)
+
+    return None
+
+
+def _safe_scale_percent(value, default: int = 100) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(40, min(200, parsed))
+
+
+def _positioned_x(position: str, *, min_x: float, max_x: float, box_width: float, default_x: float) -> float:
+    if max_x <= min_x:
+        return min_x
+    if position == "left":
+        return min_x
+    if position == "center":
+        return min_x + max(0.0, (max_x - min_x - box_width) / 2.0)
+    return min(max(default_x, min_x), max_x - box_width)
+
+
 def _school_signature_asset_path() -> str | None:
     candidates = [
         Path(settings.BASE_DIR) / "assets" / "images" / "str_signature.png",
@@ -450,25 +514,42 @@ def _draw_student_card_template(
     number_label_font = 8.8 if width >= 120 else 6.9 if width >= 85 else 5.6 if width >= 72 else 4.8
     number_value_font = number_label_font * 1.02
 
-    signature_asset_path = _pdf_compatible_image_path(
-        _school_signature_asset_path(),
-        cache_prefix="signature",
-    )
-    stamp_asset_path = _pdf_compatible_image_path(
-        _school_stamp_asset_path(),
-        cache_prefix="stamp",
-    )
+    etablissement = _student_etablissement(student)
+    signature_source = _etablissement_media_field_path(etablissement, "principal_signature_image") or _school_signature_asset_path()
+    stamp_source = _etablissement_media_field_path(etablissement, "stamp_image") or _school_stamp_asset_path()
+    signature_asset_path = _pdf_compatible_image_path(signature_source, cache_prefix="signature")
+    stamp_asset_path = _pdf_compatible_image_path(stamp_source, cache_prefix="stamp")
+    signature_label = str(getattr(etablissement, "principal_signature_label", "") or "").strip() or "Le Principal"
+    signature_position = str(getattr(etablissement, "principal_signature_position", "") or "right").strip().lower()
+    stamp_position = str(getattr(etablissement, "stamp_position", "") or "right").strip().lower()
+    signature_scale = _safe_scale_percent(getattr(etablissement, "principal_signature_scale", 100)) / 100.0
+    stamp_scale = _safe_scale_percent(getattr(etablissement, "stamp_scale", 100)) / 100.0
 
-    stamp_d = max(9.5, min(22.0, footer_h * 1.02))
-    stamp_x = content_x + content_w - stamp_d - max(0.25, content_w * 0.002)
+    stamp_d = max(9.5, min(28.0, footer_h * 1.02 * stamp_scale))
+    stamp_x = _positioned_x(
+        stamp_position,
+        min_x=content_x + max(0.15, content_w * 0.004),
+        max_x=content_x + content_w - max(0.15, content_w * 0.004),
+        box_width=stamp_d,
+        default_x=content_x + content_w - stamp_d - max(0.25, content_w * 0.002),
+    )
     stamp_y = footer_y + max(0.2, (footer_h - stamp_d) * 0.54)
 
-    signature_w = max(13.0, min(34.0, content_w * 0.30))
-    signature_h = max(4.3, min(9.0, footer_h * 0.48))
-    signature_x = stamp_x - signature_w - max(0.9, content_w * 0.015)
+    signature_w = max(13.0, min(40.0, content_w * 0.30 * signature_scale))
+    signature_h = max(4.3, min(11.0, footer_h * 0.48 * signature_scale))
+    signature_x = _positioned_x(
+        signature_position,
+        min_x=content_x + max(0.15, content_w * 0.004),
+        max_x=content_x + content_w - max(0.15, content_w * 0.004),
+        box_width=signature_w,
+        default_x=stamp_x - signature_w - max(0.9, content_w * 0.015),
+    )
     signature_y = footer_y + max(0.18, footer_h * 0.30)
 
-    number_max_x = max(number_x + 12.0, signature_x - max(0.8, content_w * 0.01))
+    if signature_position == "right":
+        number_max_x = max(number_x + 12.0, signature_x - max(0.8, content_w * 0.01))
+    else:
+        number_max_x = max(number_x + 12.0, content_x + (content_w * 0.58))
     number_line_w = max(8.0, number_max_x - number_x)
 
     pdf.set_xy(number_x, number_y)
@@ -515,7 +596,7 @@ def _draw_student_card_template(
     pdf.set_xy(signature_x, signature_y + signature_h + max(0.18, footer_h * 0.02))
     pdf.set_text_color(44, 48, 59)
     pdf.set_font("Helvetica", "B", 5.9 if width >= 85 else 4.8)
-    pdf.cell(signature_w, max(1.8, footer_h * 0.2), _pdf_text("Le Principal"), align="C")
+    pdf.cell(signature_w, max(1.8, footer_h * 0.2), _pdf_text(signature_label), align="C")
 
     if stamp_asset_path:
         try:
@@ -969,6 +1050,76 @@ def _build_bulletin_rows(
     return rows, average, coef_sum
 
 
+def _subject_name_key(name: str) -> str:
+    return " ".join(str(name or "").strip().lower().split())
+
+
+def _deduplicate_bulletin_subjects(
+    *,
+    subjects,
+    student_note_by_subject: dict[int, float],
+    exam_note_by_subject: dict[int, float],
+    class_average_by_subject: dict[int, float],
+):
+    grouped: dict[str, dict] = {}
+
+    for subject in subjects:
+        key = _subject_name_key(getattr(subject, "name", ""))
+        if not key:
+            key = f"id:{subject.id}"
+
+        entry = grouped.get(key)
+        if entry is None:
+            grouped[key] = {
+                "subject": subject,
+                "ids": [subject.id],
+            }
+            continue
+
+        entry["ids"].append(subject.id)
+        try:
+            current_coef = float(entry["subject"].coefficient)
+            new_coef = float(subject.coefficient)
+            if new_coef > current_coef:
+                entry["subject"].coefficient = subject.coefficient
+        except Exception:
+            pass
+
+    deduped_subjects = []
+    merged_student_note_by_subject: dict[int, float] = {}
+    merged_exam_note_by_subject: dict[int, float] = {}
+    merged_class_average_by_subject: dict[int, float] = {}
+
+    for entry in grouped.values():
+        subject = entry["subject"]
+        ids = entry["ids"]
+        rep_id = subject.id
+        deduped_subjects.append(subject)
+
+        class_notes = [student_note_by_subject[sid] for sid in ids if sid in student_note_by_subject]
+        if class_notes:
+            merged_student_note_by_subject[rep_id] = max(class_notes)
+
+        exam_notes = [exam_note_by_subject[sid] for sid in ids if sid in exam_note_by_subject]
+        if exam_notes:
+            merged_exam_note_by_subject[rep_id] = max(exam_notes)
+
+        class_averages = [class_average_by_subject[sid] for sid in ids if sid in class_average_by_subject]
+        if class_averages:
+            merged_class_average_by_subject[rep_id] = round(
+                sum(class_averages) / len(class_averages),
+                2,
+            )
+
+    deduped_subjects.sort(key=lambda subject: (str(subject.name or "").lower(), subject.id))
+    return (
+        deduped_subjects,
+        merged_student_note_by_subject,
+        merged_exam_note_by_subject,
+        merged_class_average_by_subject,
+    )
+
+
 def _term_variants(term: str) -> list[str]:
     raw = str(term or "").strip().upper()
     if not raw:
@@ -1179,7 +1330,18 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
     ):
         exam_note_by_subject.setdefault(exam_result.subject_id, float(exam_result.score))
 
-    subjects = Subject.objects.filter(id__in=subject_ids).order_by("name", "id")
+    subjects = list(Subject.objects.filter(id__in=subject_ids).order_by("name", "id"))
+    (
+        subjects,
+        student_note_by_subject,
+        exam_note_by_subject,
+        class_average_by_subject,
+    ) = _deduplicate_bulletin_subjects(
+        subjects=subjects,
+        student_note_by_subject=student_note_by_subject,
+        exam_note_by_subject=exam_note_by_subject,
+        class_average_by_subject=class_average_by_subject,
+    )
 
     conduite_note = float(student.conduite if student.conduite is not None else 18)
     conduite_coef = 2.0
@@ -1443,14 +1605,27 @@ class PaymentReceiptPdfView(APIView):
             "fee__student__parent",
             "fee__student__parent__user",
             "fee__student__classroom",
+            "fee__student__etablissement",
+            "fee__student__classroom__etablissement",
             "fee__academic_year",
             "received_by",
+            "etablissement",
         ).get(id=payment_id)
         _ensure_payment_access(request, payment)
 
         student = payment.fee.student
         school = _school_identity_for_student(student) if student else _school_identity()
         logo_path = (_etablissement_logo_path(student) if student else None) or _school_logo_path()
+        etablissement = _payment_etablissement(payment)
+        cashier_signature_source = _etablissement_media_field_path(etablissement, "cashier_signature_image") or _school_signature_asset_path()
+        stamp_source = _etablissement_media_field_path(etablissement, "stamp_image") or _school_stamp_asset_path()
+        cashier_signature_path = _pdf_compatible_image_path(cashier_signature_source, cache_prefix="receipt_cashier_signature")
+        stamp_asset_path = _pdf_compatible_image_path(stamp_source, cache_prefix="receipt_stamp")
+        cashier_signature_label = str(getattr(etablissement, "cashier_signature_label", "") or "").strip() or "Signature caissier"
+        parent_signature_label = str(getattr(etablissement, "parent_signature_label", "") or "").strip() or "Signature parent / eleve"
+        stamp_position = str(getattr(etablissement, "stamp_position", "") or "right").strip().lower()
+        stamp_scale = _safe_scale_percent(getattr(etablissement, "stamp_scale", 100)) / 100.0
+        signature_scale = _safe_scale_percent(getattr(etablissement, "principal_signature_scale", 100)) / 100.0
 
         student_user = student.user if student else None
         student_name = student_user.get_full_name().strip() if student_user else ""
@@ -1670,33 +1845,63 @@ class PaymentReceiptPdfView(APIView):
         pdf.line(left_sign_x1, signature_y, left_sign_x2, signature_y)
         pdf.line(right_sign_x1, signature_y, right_sign_x2, signature_y)
 
+        cashier_signature_w = max(14.0, min(34.0, (left_sign_x2 - left_sign_x1) * 0.88 * signature_scale))
+        cashier_signature_h = max(3.6, min(9.2, 4.6 * signature_scale))
+        cashier_signature_x = left_sign_x1 + max(0.0, ((left_sign_x2 - left_sign_x1) - cashier_signature_w) / 2.0)
+        cashier_signature_y = signature_y - cashier_signature_h - 0.8
+        if cashier_signature_path:
+            try:
+                pdf.image(
+                    cashier_signature_path,
+                    x=cashier_signature_x,
+                    y=cashier_signature_y,
+                    w=cashier_signature_w,
+                    h=cashier_signature_h,
+                )
+            except Exception:
+                cashier_signature_path = None
+
         pdf.set_xy(left_sign_x1, signature_y + 0.6)
         pdf.set_font("Helvetica", "B", 7.3)
         pdf.set_text_color(66, 72, 84)
-        pdf.cell(left_sign_x2 - left_sign_x1, 3.4, _pdf_text("Signature caissier"), align="C")
+        pdf.cell(left_sign_x2 - left_sign_x1, 3.4, _pdf_text(cashier_signature_label), align="C")
 
         pdf.set_xy(right_sign_x1, signature_y + 0.6)
-        pdf.cell(right_sign_x2 - right_sign_x1, 3.4, _pdf_text("Signature parent / eleve"), align="C")
+        pdf.cell(right_sign_x2 - right_sign_x1, 3.4, _pdf_text(parent_signature_label), align="C")
 
-        stamp_size = 18
-        stamp_x = content_x + content_w - stamp_size - 1.4
+        stamp_size = max(12.0, min(28.0, 18 * stamp_scale))
+        stamp_default_x = content_x + content_w - stamp_size - 1.4
+        stamp_x = _positioned_x(
+            stamp_position,
+            min_x=content_x + 1.2,
+            max_x=content_x + content_w - 1.2,
+            box_width=stamp_size,
+            default_x=stamp_default_x,
+        )
         stamp_y = page_y + page_h - stamp_size - 13.0
-        pdf.set_draw_color(31, 90, 161)
-        pdf.set_line_width(0.24)
-        try:
-            pdf.ellipse(stamp_x, stamp_y, stamp_size, stamp_size)
-            pdf.ellipse(stamp_x + 2.8, stamp_y + 2.8, stamp_size - 5.6, stamp_size - 5.6)
-        except Exception:
-            pdf.rect(stamp_x, stamp_y, stamp_size, stamp_size)
-            pdf.rect(stamp_x + 2.8, stamp_y + 2.8, stamp_size - 5.6, stamp_size - 5.6)
+        if stamp_asset_path:
+            try:
+                pdf.image(stamp_asset_path, x=stamp_x, y=stamp_y, w=stamp_size, h=stamp_size)
+            except Exception:
+                stamp_asset_path = None
 
-        pdf.set_text_color(31, 90, 161)
-        pdf.set_xy(stamp_x, stamp_y + 6.0)
-        pdf.set_font("Helvetica", "B", 7.8)
-        pdf.cell(stamp_size, 3.2, _pdf_text(school["short"])[:12], align="C")
-        pdf.set_xy(stamp_x, stamp_y + 9.6)
-        pdf.set_font("Helvetica", "B", 6.5)
-        pdf.cell(stamp_size, 2.8, _pdf_text(school["city"])[:12], align="C")
+        if not stamp_asset_path:
+            pdf.set_draw_color(31, 90, 161)
+            pdf.set_line_width(0.24)
+            try:
+                pdf.ellipse(stamp_x, stamp_y, stamp_size, stamp_size)
+                pdf.ellipse(stamp_x + 2.8, stamp_y + 2.8, stamp_size - 5.6, stamp_size - 5.6)
+            except Exception:
+                pdf.rect(stamp_x, stamp_y, stamp_size, stamp_size)
+                pdf.rect(stamp_x + 2.8, stamp_y + 2.8, stamp_size - 5.6, stamp_size - 5.6)
+
+            pdf.set_text_color(31, 90, 161)
+            pdf.set_xy(stamp_x, stamp_y + 6.0)
+            pdf.set_font("Helvetica", "B", 7.8)
+            pdf.cell(stamp_size, 3.2, _pdf_text(school["short"])[:12], align="C")
+            pdf.set_xy(stamp_x, stamp_y + 9.6)
+            pdf.set_font("Helvetica", "B", 6.5)
+            pdf.cell(stamp_size, 2.8, _pdf_text(school["city"])[:12], align="C")
 
         return pdf_output_response(pdf, f"receipt_{payment.id}.pdf")
 

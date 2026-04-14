@@ -1,18 +1,52 @@
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 from django.db import models
+from django.core.validators import MinValueValidator, MaxValueValidator
 from apps.common.models import TimeStampedModel
 
 
 # Nouveau modèle pour la gestion multi-établissements
 class Etablissement(TimeStampedModel):
+    POSITION_LEFT = "left"
+    POSITION_CENTER = "center"
+    POSITION_RIGHT = "right"
+    POSITION_CHOICES = [
+        (POSITION_LEFT, "Gauche"),
+        (POSITION_CENTER, "Centre"),
+        (POSITION_RIGHT, "Droite"),
+    ]
+
     name = models.CharField(max_length=255, unique=True)
     address = models.CharField(max_length=255, blank=True)
     phone = models.CharField(max_length=30, blank=True)
     email = models.EmailField(blank=True)
     logo = models.ImageField(upload_to="etablissements/logos/", blank=True, null=True)
+    stamp_image = models.ImageField(upload_to="etablissements/stamps/", blank=True, null=True)
+    principal_signature_image = models.ImageField(upload_to="etablissements/signatures/", blank=True, null=True)
+    cashier_signature_image = models.ImageField(upload_to="etablissements/signatures/", blank=True, null=True)
+    principal_signature_label = models.CharField(max_length=120, blank=True, default="Le Principal")
+    cashier_signature_label = models.CharField(max_length=120, blank=True, default="Signature caissier")
+    parent_signature_label = models.CharField(max_length=120, blank=True, default="Signature parent / eleve")
+    principal_signature_position = models.CharField(
+        max_length=10,
+        choices=POSITION_CHOICES,
+        default=POSITION_RIGHT,
+    )
+    stamp_position = models.CharField(
+        max_length=10,
+        choices=POSITION_CHOICES,
+        default=POSITION_RIGHT,
+    )
+    principal_signature_scale = models.PositiveSmallIntegerField(
+        default=100,
+        validators=[MinValueValidator(40), MaxValueValidator(200)],
+    )
+    stamp_scale = models.PositiveSmallIntegerField(
+        default=100,
+        validators=[MinValueValidator(40), MaxValueValidator(200)],
+    )
 
     def __str__(self):
         return self.name
@@ -28,30 +62,13 @@ class AcademicYear(TimeStampedModel):
         return self.name
 
 
-class Level(TimeStampedModel):
-    name = models.CharField(max_length=100, unique=True)
-
-    def __str__(self):
-        return self.name
-
-
-class Section(TimeStampedModel):
-    name = models.CharField(max_length=100, unique=True)
-
-    def __str__(self):
-        return self.name
-
-
-
 class ClassRoom(TimeStampedModel):
     name = models.CharField(max_length=50)
-    level = models.ForeignKey(Level, on_delete=models.PROTECT, related_name="classes")
-    section = models.ForeignKey(Section, on_delete=models.PROTECT, related_name="classes")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="classes")
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="classes", null=True, blank=True)
 
     class Meta:
-        unique_together = ("name", "level", "section", "academic_year")
+        unique_together = ("name", "academic_year", "etablissement")
 
     def __str__(self):
         return f"{self.name} - {self.academic_year}"
@@ -59,11 +76,27 @@ class ClassRoom(TimeStampedModel):
 
 class Subject(TimeStampedModel):
     name = models.CharField(max_length=100)
-    code = models.CharField(max_length=20, unique=True)
+    code = models.CharField(max_length=20)
     coefficient = models.DecimalField(max_digits=4, decimal_places=2, default=1)
+    classroom = models.ForeignKey(
+        ClassRoom,
+        on_delete=models.PROTECT,
+        related_name="subjects",
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["classroom", "code"],
+                name="uniq_subject_code_per_classroom",
+            )
+        ]
 
     def __str__(self):
-        return f"{self.code} - {self.name}"
+        class_name = self.classroom.name if self.classroom else "Classe non definie"
+        return f"{self.code} - {self.name} ({class_name})"
 
 
 class Teacher(TimeStampedModel):
@@ -71,6 +104,7 @@ class Teacher(TimeStampedModel):
     employee_code = models.CharField(max_length=30, unique=True)
     hire_date = models.DateField()
     salary_base = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    hourly_rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="teachers", null=True, blank=True)
 
     def __str__(self):
@@ -227,6 +261,93 @@ class StudentAcademicHistory(TimeStampedModel):
     rank = models.PositiveIntegerField(default=0)
 
 
+class PromotionRunStatus(models.TextChoices):
+    SIMULATED = "simulated", "Simulation"
+    EXECUTED = "executed", "Execute"
+
+
+class PromotionDecisionType(models.TextChoices):
+    PROMOTED = "promoted", "Promu"
+    REPEATED = "repeated", "Redouble"
+    ARCHIVED = "archived", "Archive"
+
+
+class PromotionRun(TimeStampedModel):
+    etablissement = models.ForeignKey(
+        "Etablissement",
+        on_delete=models.PROTECT,
+        related_name="promotion_runs",
+        null=True,
+        blank=True,
+    )
+    source_academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name="promotion_runs_source",
+    )
+    target_academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name="promotion_runs_target",
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=PromotionRunStatus.choices,
+        default=PromotionRunStatus.SIMULATED,
+    )
+    min_average = models.DecimalField(max_digits=5, decimal_places=2, default=10)
+    min_conduite = models.DecimalField(max_digits=5, decimal_places=2, default=10)
+    executed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="promotion_runs",
+    )
+    total_students = models.PositiveIntegerField(default=0)
+    promoted_count = models.PositiveIntegerField(default=0)
+    repeated_count = models.PositiveIntegerField(default=0)
+    archived_count = models.PositiveIntegerField(default=0)
+    payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["etablissement", "-created_at"], name="promrun_etab_created_idx"),
+            models.Index(fields=["status", "-created_at"], name="promrun_status_created_idx"),
+        ]
+
+
+class PromotionDecision(TimeStampedModel):
+    run = models.ForeignKey(PromotionRun, on_delete=models.CASCADE, related_name="decisions")
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="promotion_decisions")
+    source_classroom = models.ForeignKey(
+        ClassRoom,
+        on_delete=models.PROTECT,
+        related_name="promotion_decisions_source",
+    )
+    target_classroom = models.ForeignKey(
+        ClassRoom,
+        on_delete=models.PROTECT,
+        related_name="promotion_decisions_target",
+        null=True,
+        blank=True,
+    )
+    decision = models.CharField(max_length=20, choices=PromotionDecisionType.choices)
+    average = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    conduite = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    rank = models.PositiveIntegerField(default=0)
+    reason = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        unique_together = ("run", "student")
+        indexes = [
+            models.Index(fields=["run", "decision"], name="promdec_run_decision_idx"),
+            models.Index(fields=["source_classroom", "decision"], name="promdec_source_decision_idx"),
+        ]
+
+
 class Grade(TimeStampedModel):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="grades")
     subject = models.ForeignKey(Subject, on_delete=models.PROTECT, related_name="grades")
@@ -291,6 +412,31 @@ class Attendance(TimeStampedModel):
         indexes = [
             models.Index(fields=["student", "date"], name="attendance_student_date_idx"),
             models.Index(fields=["date", "is_absent"], name="attendance_date_abs_idx"),
+        ]
+
+
+class AttendanceSheetValidation(TimeStampedModel):
+    classroom = models.ForeignKey(
+        ClassRoom,
+        on_delete=models.CASCADE,
+        related_name="attendance_sheet_validations",
+    )
+    date = models.DateField()
+    is_locked = models.BooleanField(default=True)
+    validated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="validated_attendance_sheets",
+    )
+    validated_at = models.DateTimeField(null=True, blank=True)
+    notes = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        unique_together = ("classroom", "date")
+        indexes = [
+            models.Index(fields=["classroom", "date"], name="attsheet_class_date_idx"),
         ]
 
 
@@ -406,9 +552,56 @@ class Expense(TimeStampedModel):
 class TeacherPayroll(TimeStampedModel):
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="payrolls")
     month = models.DateField()
+    hours_attributed = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    hours_worked = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    hourly_rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
-    paid_on = models.DateField()
+    paid_on = models.DateField(null=True, blank=True)
     paid_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    notes = models.TextField(blank=True)
+
+
+class TeacherTimeEntry(TimeStampedModel):
+    teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="time_entries")
+    etablissement = models.ForeignKey(
+        'Etablissement',
+        on_delete=models.PROTECT,
+        related_name="teacher_time_entries",
+        null=True,
+        blank=True,
+    )
+    entry_date = models.DateField()
+    check_in_time = models.TimeField()
+    check_out_time = models.TimeField()
+    worked_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    notes = models.CharField(max_length=255, blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recorded_teacher_time_entries",
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["teacher", "entry_date"], name="ttentry_teacher_date_idx"),
+            models.Index(fields=["etablissement", "entry_date"], name="ttentry_etab_date_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.teacher and self.etablissement_id is None:
+            self.etablissement = self.teacher.etablissement
+
+        start_dt = datetime.combine(self.entry_date, self.check_in_time)
+        end_dt = datetime.combine(self.entry_date, self.check_out_time)
+        duration = end_dt - start_dt
+        duration_hours = Decimal(str(max(duration.total_seconds(), 0) / 3600)).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+        self.worked_hours = duration_hours
+        super().save(*args, **kwargs)
 
 
 class Announcement(TimeStampedModel):

@@ -12,9 +12,7 @@ from apps.school.models import (
     Etablissement,
     Grade,
     GradeValidation,
-    Level,
     ParentProfile,
-    Section,
     Student,
     Subject,
     Teacher,
@@ -101,20 +99,13 @@ class GradesAndBulletinsApiTests(APITestCase):
             end_date=date(2026, 6, 30),
             is_active=True,
         )
-        self.level = Level.objects.create(name="5eme")
-        self.section = Section.objects.create(name="A")
-
         self.class_a = ClassRoom.objects.create(
             name="5A",
-            level=self.level,
-            section=self.section,
             academic_year=self.year,
             etablissement=self.etablissement_main,
         )
         self.class_b = ClassRoom.objects.create(
             name="5B",
-            level=self.level,
-            section=self.section,
             academic_year=self.year,
             etablissement=self.etablissement_main,
         )

@@ -44,6 +44,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   Set<int> _teacherAssignmentIds = <int>{};
   Set<int> _teacherClassroomIds = <int>{};
 
+  bool _isTimetableReadOnlyRole() {
+    final role = ref.read(authControllerProvider).value?.role;
+    return role == 'teacher' || role == 'supervisor';
+  }
+
   static const List<String> _dayOrder = [
     'MON',
     'TUE',
@@ -383,6 +388,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _publishSelectedClass({required bool lockAfterPublish}) async {
+    if (_isTimetableReadOnlyRole()) {
+      _showMessage('Mode lecture seule: publication non autorisee.');
+      return;
+    }
+
     if (!_requireScheduleApiSupported('publication du planning')) {
       return;
     }
@@ -420,6 +430,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _setSelectedClassLock({required bool lock}) async {
+    if (_isTimetableReadOnlyRole()) {
+      _showMessage('Mode lecture seule: verrouillage non autorise.');
+      return;
+    }
+
     if (!_requireScheduleApiSupported('verrouillage du planning')) {
       return;
     }
@@ -457,6 +472,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _unpublishSelectedClass() async {
+    if (_isTimetableReadOnlyRole()) {
+      _showMessage('Mode lecture seule: operation non autorisee.');
+      return;
+    }
+
     if (!_requireScheduleApiSupported('retour en brouillon')) {
       return;
     }
@@ -749,6 +769,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _openDuplicateScheduleDialog() async {
+    if (_isTimetableReadOnlyRole()) {
+      _showMessage('Mode lecture seule: duplication non autorisee.');
+      return;
+    }
+
     if (!_requireScheduleApiSupported('duplication de planning')) {
       return;
     }
@@ -1061,6 +1086,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     Map<String, dynamic>? slot,
     int? forceClassroomId,
   }) async {
+    if (_isTimetableReadOnlyRole()) {
+      _showMessage('Mode lecture seule: modification des horaires non autorisee.');
+      return;
+    }
+
     if (!_requireScheduleApiSupported('gestion des horaires')) {
       return;
     }
@@ -1420,6 +1450,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _openSlotBatchFloatingWindow({int? forceClassroomId}) async {
+    if (_isTimetableReadOnlyRole()) {
+      _showMessage('Mode lecture seule: ajout d\'horaire non autorise.');
+      return;
+    }
+
     if (!_requireScheduleApiSupported('ajout en lot des horaires')) {
       return;
     }
@@ -1905,6 +1940,11 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   Future<void> _deleteSlot(Map<String, dynamic> slot) async {
+    if (_isTimetableReadOnlyRole()) {
+      _showMessage('Mode lecture seule: suppression non autorisee.');
+      return;
+    }
+
     if (!_requireScheduleApiSupported('suppression d\'horaire')) {
       return;
     }
@@ -2089,6 +2129,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       );
     }
 
+    final authUser = ref.watch(authControllerProvider).value;
+    final isReadOnlyMode =
+        authUser?.role == 'teacher' || authUser?.role == 'supervisor';
+
     final assignmentById = _assignmentById();
     final assignmentsByClass = _assignmentsByClass(assignmentById);
     final slotsByClass = _slotsByClass(assignmentById);
@@ -2257,6 +2301,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               if (!_isTeacherUser)
                 FilledButton.tonalIcon(
                   onPressed: (_saving || !_scheduleApiSupported)
+                      || isReadOnlyMode
                       ? null
                       : _openDuplicateScheduleDialog,
                   icon: const Icon(Icons.copy_all_outlined),
@@ -2301,7 +2346,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       (_saving ||
                           !_scheduleApiSupported ||
                           selectedClassId == null ||
-                          selectedAssignments.isEmpty)
+                      selectedAssignments.isEmpty ||
+                      isReadOnlyMode)
                       ? null
                       : () => _publishSelectedClass(lockAfterPublish: true),
                   icon: const Icon(Icons.publish),
@@ -2312,7 +2358,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       (_saving ||
                           !_scheduleApiSupported ||
                           selectedClassId == null ||
-                          selectedAssignments.isEmpty)
+                      selectedAssignments.isEmpty ||
+                      isReadOnlyMode)
                       ? null
                       : () => _publishSelectedClass(lockAfterPublish: false),
                   icon: const Icon(Icons.cloud_upload_outlined),
@@ -2323,7 +2370,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       (_saving ||
                           !_scheduleApiSupported ||
                           selectedClassId == null ||
-                          !selectedIsPublished)
+                      !selectedIsPublished ||
+                      isReadOnlyMode)
                       ? null
                       : () => _setSelectedClassLock(lock: !selectedIsLocked),
                   icon: Icon(
@@ -2340,7 +2388,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       (_saving ||
                           !_scheduleApiSupported ||
                           selectedClassId == null ||
-                          !selectedIsPublished)
+                      !selectedIsPublished ||
+                      isReadOnlyMode)
                       ? null
                       : _unpublishSelectedClass,
                   icon: const Icon(Icons.unpublished_outlined),
@@ -2591,7 +2640,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                           onPressed:
                               (_saving ||
                                   !_scheduleApiSupported ||
-                                  classIsLocked)
+                              classIsLocked ||
+                              isReadOnlyMode)
                               ? null
                               : () =>
                                     _openSlotDialog(forceClassroomId: classId),
@@ -2640,6 +2690,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                           'Vue pedagogique basee sur les affectations enseignants/matieres/classes.',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
+                        if (isReadOnlyMode) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            'Mode lecture seule: consultation uniquement pour ce profil.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -2706,7 +2763,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       (_saving ||
                           !_scheduleApiSupported ||
                           selectedClassId == null ||
-                          selectedIsLocked)
+                          selectedIsLocked ||
+                          isReadOnlyMode)
                       ? null
                       : () => _openSlotBatchFloatingWindow(
                           forceClassroomId: selectedClassId,

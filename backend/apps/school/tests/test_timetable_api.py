@@ -8,8 +8,6 @@ from apps.accounts.models import User, UserRole
 from apps.school.models import (
     AcademicYear,
     ClassRoom,
-    Level,
-    Section,
     Subject,
     Teacher,
     TeacherAssignment,
@@ -35,19 +33,12 @@ class TeacherScheduleSlotApiTests(APITestCase):
             end_date=date(2026, 6, 30),
             is_active=True,
         )
-        self.level = Level.objects.create(name="6eme")
-        self.section = Section.objects.create(name="A")
-
         self.class_a = ClassRoom.objects.create(
             name="6A",
-            level=self.level,
-            section=self.section,
             academic_year=self.year,
         )
         self.class_b = ClassRoom.objects.create(
             name="6B",
-            level=self.level,
-            section=self.section,
             academic_year=self.year,
         )
 
