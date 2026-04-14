@@ -36,6 +36,7 @@ class _ChatPanelState extends State<ChatPanel> {
   bool _sending = false;
   bool _loadingOlderMessages = false;
   bool _hasMoreMessages = true;
+  String? _sendError;
   int? _currentUserId;
   int? _selectedConversationId;
   int? _oldestMessageId;
@@ -91,6 +92,38 @@ class _ChatPanelState extends State<ChatPanel> {
   }
 
   String _asString(dynamic value) => value?.toString() ?? '';
+
+  String _extractApiError(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map) {
+        final detail = data['detail']?.toString().trim();
+        if (detail != null && detail.isNotEmpty) {
+          return detail;
+        }
+        for (final value in data.values) {
+          if (value is List && value.isNotEmpty) {
+            return value.map((item) => item.toString()).join(' | ');
+          }
+          if (value is String && value.trim().isNotEmpty) {
+            return value.trim();
+          }
+        }
+      }
+      if (data is String && data.trim().isNotEmpty) {
+        return data.trim();
+      }
+      final statusCode = error.response?.statusCode;
+      if (statusCode != null) {
+        return 'Erreur serveur HTTP $statusCode.';
+      }
+      final message = error.message?.trim();
+      if (message != null && message.isNotEmpty) {
+        return message;
+      }
+    }
+    return error.toString();
+  }
 
   String _roleLabel(String role) {
     switch (role) {
@@ -351,6 +384,7 @@ class _ChatPanelState extends State<ChatPanel> {
           _messages = <Map<String, dynamic>>[];
           _oldestMessageId = null;
           _hasMoreMessages = true;
+          _sendError = null;
         }
       });
       widget.onUnreadChanged?.call(_sumUnread(_conversations));
@@ -818,6 +852,7 @@ class _ChatPanelState extends State<ChatPanel> {
           _conversations = <Map<String, dynamic>>[conversation, ..._conversations];
         }
         _selectedConversationId = cid;
+        _sendError = null;
       });
       await _loadMessages(cid);
     } catch (_) {
@@ -830,14 +865,17 @@ class _ChatPanelState extends State<ChatPanel> {
 
   Future<void> _sendMessage() async {
     final conversationId = _selectedConversationId;
-    final content = _messageController.text.trim();
+    final draft = _messageController.text;
+    final content = draft.trim();
     if (conversationId == null || content.isEmpty || _sending) {
       return;
     }
 
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      _sendError = null;
+    });
     _typingStopTimer?.cancel();
-    _messageController.clear();
     _onInputChanged('');
 
     try {
@@ -848,8 +886,13 @@ class _ChatPanelState extends State<ChatPanel> {
       final msg = Map<String, dynamic>.from(resp.data as Map);
       if (!mounted) return;
       setState(() {
+        _messageController.clear();
         _messages = <Map<String, dynamic>>[..._messages, msg];
         _oldestMessageId = _messages.isNotEmpty ? _asInt(_messages.first['id']) : null;
+        final messageId = _asInt(msg['id']);
+        if (messageId > 0) {
+          _lastReadByConversation[conversationId] = messageId;
+        }
 
         _conversations = _conversations.map((row) {
           if (_asInt(row['id']) != conversationId) return row;
@@ -866,13 +909,23 @@ class _ChatPanelState extends State<ChatPanel> {
           if (bid == conversationId) return 1;
           return 0;
         });
+        _sendError = null;
       });
       widget.onUnreadChanged?.call(_sumUnread(_conversations));
       _scrollToBottom();
-    } catch (_) {
+      unawaited(_loadMessages(conversationId, reset: true));
+    } catch (error) {
       if (!mounted) return;
+      final message = _extractApiError(error);
+      setState(() {
+        _sendError = message;
+        _messageController.value = TextEditingValue(
+          text: draft,
+          selection: TextSelection.collapsed(offset: draft.length),
+        );
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Echec envoi du message.')),
+        SnackBar(content: Text('Echec envoi du message: $message')),
       );
     } finally {
       if (mounted) {
@@ -1046,6 +1099,7 @@ class _ChatPanelState extends State<ChatPanel> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   onTap: () async {
                     setState(() => _selectedConversationId = id);
+                    setState(() => _sendError = null);
                     await _loadMessages(id);
                   },
                   title: Row(
@@ -1710,25 +1764,45 @@ class _ChatPanelState extends State<ChatPanel> {
         const Divider(height: 1),
         Padding(
           padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: TextField(
-                  controller: _messageController,
-                  minLines: 1,
-                  maxLines: 4,
-                  onChanged: _onInputChanged,
-                  onSubmitted: (_) => _sendMessage(),
-                  decoration: const InputDecoration(
-                    hintText: 'Ecrire un message...',
-                    border: OutlineInputBorder(),
+              if (_sendError != null) ...[
+                Text(
+                  _sendError!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              IconButton.filled(
-                onPressed: _sending ? null : _sendMessage,
-                icon: const Icon(Icons.send_rounded),
+                const SizedBox(height: 8),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _messageController,
+                      minLines: 1,
+                      maxLines: 4,
+                      onChanged: _onInputChanged,
+                      onSubmitted: (_) => _sendMessage(),
+                      decoration: const InputDecoration(
+                        hintText: 'Ecrire un message...',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filled(
+                    onPressed: _sending ? null : _sendMessage,
+                    icon: _sending
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send_rounded),
+                  ),
+                ],
               ),
             ],
           ),

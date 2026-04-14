@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+import threading
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -21,6 +22,27 @@ from .serializers import (
 )
 
 User = get_user_model()
+
+
+def _broadcast_rest_message_async(participant_user_ids, ws_message):
+    def job():
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is None:
+                return
+            for user_id in participant_user_ids:
+                async_to_sync(channel_layer.group_send)(
+                    f"chat_user_{user_id}",
+                    {
+                        "type": "chat.message",
+                        "message": ws_message,
+                    },
+                )
+        except Exception:
+            return
+
+    worker = threading.Thread(target=job, name="chat-rest-broadcast", daemon=True)
+    worker.start()
 
 
 def _allowed_users_queryset(request):
@@ -521,6 +543,7 @@ class ConversationSendMessageView(APIView):
 
     @transaction.atomic
     def post(self, request, conversation_id):
+        _touch_presence(request.user)
         participant = ConversationParticipant.objects.select_for_update().filter(
             conversation_id=conversation_id,
             user=request.user,
@@ -541,33 +564,27 @@ class ConversationSendMessageView(APIView):
             sender=request.user,
             content=content,
         )
+        participant.last_read_message = message
+        participant.save(update_fields=["last_read_message", "updated_at"])
         conversation.save(update_fields=["updated_at"])
         payload = ChatMessageSerializer(message).data
 
         # Realtime fan-out for recipients when message is sent via REST.
-        channel_layer = get_channel_layer()
-        if channel_layer is not None:
-            participant_user_ids = list(
-                ConversationParticipant.objects.filter(conversation=conversation)
-                .exclude(user=request.user)
-                .values_list("user_id", flat=True)
-            )
-            sender_name = request.user.get_full_name().strip() or request.user.username
-            ws_message = {
-                "conversation_id": conversation.id,
-                "message_id": message.id,
-                "sender_id": request.user.id,
-                "sender_name": sender_name,
-                "content": message.content,
-                "created_at": message.created_at.isoformat(),
-            }
-            for user_id in participant_user_ids:
-                async_to_sync(channel_layer.group_send)(
-                    f"chat_user_{user_id}",
-                    {
-                        "type": "chat.message",
-                        "message": ws_message,
-                    },
-                )
+        participant_user_ids = list(
+            ConversationParticipant.objects.filter(conversation=conversation)
+            .exclude(user=request.user)
+            .values_list("user_id", flat=True)
+        )
+        sender_name = request.user.get_full_name().strip() or request.user.username
+        ws_message = {
+            "conversation_id": conversation.id,
+            "message_id": message.id,
+            "sender_id": request.user.id,
+            "sender_name": sender_name,
+            "content": message.content,
+            "created_at": message.created_at.isoformat(),
+        }
+        if participant_user_ids:
+            _broadcast_rest_message_async(participant_user_ids, ws_message)
 
         return Response(payload, status=status.HTTP_201_CREATED)
