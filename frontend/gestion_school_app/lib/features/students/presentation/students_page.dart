@@ -121,6 +121,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   List<Map<String, dynamic>> _fees = [];
   List<Map<String, dynamic>> _payments = [];
 
+  bool _isStudentsReadOnlyRole() {
+    final role = ref.read(authControllerProvider).value?.role;
+    return role == 'supervisor';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -445,6 +450,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _registerStudent() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: creation eleve non autorisee.');
+      return false;
+    }
+
     final username = _usernameController.text.trim();
     final firstName = _firstNameController.text.trim();
     final lastName = _lastNameController.text.trim();
@@ -510,6 +520,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<void> _toggleArchive(Student student) async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: archivage non autorise.');
+      return;
+    }
+
     final confirmed = await _confirmToggleArchive(student);
     if (!confirmed || !mounted) return;
 
@@ -566,6 +581,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _saveStudentAssignments() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: modification profil non autorisee.');
+      return false;
+    }
+
     final student = _selectedStudent;
     if (student == null) return false;
 
@@ -647,6 +667,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _updateStudentPhoto() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: mise a jour photo non autorisee.');
+      return false;
+    }
+
     final student = _selectedStudent;
     if (student == null) return false;
 
@@ -679,6 +704,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _createHistoryEntry() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: ajout historique non autorise.');
+      return false;
+    }
+
     final student = _selectedStudent;
     final yearId = _historyYearId;
     final classroomId = _historyClassroomId;
@@ -722,6 +752,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _createDisciplineIncident() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: incident disciplinaire non autorise.');
+      return false;
+    }
+
     final student = _selectedStudent;
     if (student == null) return false;
 
@@ -763,6 +798,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<void> _toggleIncidentStatus(Map<String, dynamic> incident) async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: changement statut incident non autorise.');
+      return;
+    }
+
     final student = _selectedStudent;
     if (student == null) return;
 
@@ -798,6 +838,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _createAttendanceEntry() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: saisie absence/retard non autorisee.');
+      return false;
+    }
+
     final student = _selectedStudent;
     if (student == null) return false;
 
@@ -837,6 +882,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _createStudentFeeEntry() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: creation de frais non autorisee.');
+      return false;
+    }
+
     final student = _selectedStudent;
     final academicYearId = _feeAcademicYearId;
     if (student == null || academicYearId == null) {
@@ -875,6 +925,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _createPaymentEntry() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: enregistrement paiement non autorise.');
+      return false;
+    }
+
     final student = _selectedStudent;
     final feeId = _paymentFeeId;
     if (student == null || feeId == null) {
@@ -1195,7 +1250,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int?>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -1421,7 +1476,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int?>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -1442,7 +1497,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int?>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -1554,7 +1609,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -1790,7 +1845,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int?>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -2227,7 +2282,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int?>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -2592,6 +2647,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   @override
   Widget build(BuildContext context) {
     final authUser = ref.watch(authControllerProvider).value;
+    final isStudentsReadOnly = authUser?.role == 'supervisor';
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
     final scopedEtablissementId = authUser?.role == 'super_admin'
         ? selectedEtablissement?.id
@@ -2666,6 +2722,14 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       controller: _pageScrollController,
       padding: EdgeInsets.all(pagePadding),
       children: [
+        if (isStudentsReadOnly)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(
+              'Mode lecture seule: consultation des eleves uniquement pour ce profil.',
+              style: textTheme.bodySmall,
+            ),
+          ),
         _buildStudentsDashboardCard(
           textTheme: textTheme,
           colorScheme: colorScheme,
@@ -3989,7 +4053,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       ..._classrooms.map(
                         (row) => DropdownMenuItem<int?>(
                           value: _asInt(row['id']),
-                          child: Text('${row['name']} (ID ${row['id']})'),
+                          child: Text('${row['name']}'),
                         ),
                       ),
                     ],
@@ -4934,14 +4998,21 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   String _parentLabel(Map<String, dynamic> row) {
+    final fullName = (row['user_full_name'] ?? '').toString().trim();
+    if (fullName.isNotEmpty) {
+      return fullName;
+    }
+
     final first = (row['user_first_name'] ?? row['first_name'] ?? '')
         .toString();
     final last = (row['user_last_name'] ?? row['last_name'] ?? '').toString();
     final name = '$first $last'.trim();
+    final username = (row['user_username'] ?? '').toString().trim();
     final user = (row['user'] ?? '').toString();
-    if (name.isNotEmpty) return '$name (ID ${row['id']})';
-    if (user.isNotEmpty) return '$user (ID ${row['id']})';
-    return 'Parent ID ${row['id']}';
+    if (name.isNotEmpty) return name;
+    if (username.isNotEmpty) return username;
+    if (user.isNotEmpty) return user;
+    return 'Parent';
   }
 
   bool _matchesClassPanelQuery({

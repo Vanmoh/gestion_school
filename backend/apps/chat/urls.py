@@ -1,0 +1,39 @@
+from django.urls import path
+
+from .views import (
+    ChatUsersView,
+    ConversationListView,
+    ConversationMessagesView,
+    ConversationPresenceView,
+    ConversationMarkReadView,
+    ConversationSendMessageView,
+    ConversationCloseView,
+    DirectConversationCreateView,
+    GroupConversationCreateView,
+    GroupConversationManageView,
+    GroupConversationLeaveView,
+    GroupConversationAddMemberView,
+    GroupConversationRemoveMemberView,
+    GroupConversationPromoteAdminView,
+    GroupConversationDemoteAdminView,
+    GroupConversationTransferAdminView,
+)
+
+urlpatterns = [
+    path("users/", ChatUsersView.as_view(), name="chat-users"),
+    path("conversations/", ConversationListView.as_view(), name="chat-conversations"),
+    path("conversations/direct/", DirectConversationCreateView.as_view(), name="chat-conversations-direct"),
+    path("conversations/group/", GroupConversationCreateView.as_view(), name="chat-conversations-group"),
+    path("conversations/<int:conversation_id>/group/", GroupConversationManageView.as_view(), name="chat-conversation-group-manage"),
+    path("conversations/<int:conversation_id>/group/leave/", GroupConversationLeaveView.as_view(), name="chat-conversation-group-leave"),
+    path("conversations/<int:conversation_id>/group/add-member/", GroupConversationAddMemberView.as_view(), name="chat-conversation-group-add-member"),
+    path("conversations/<int:conversation_id>/group/remove-member/", GroupConversationRemoveMemberView.as_view(), name="chat-conversation-group-remove-member"),
+    path("conversations/<int:conversation_id>/group/promote-admin/", GroupConversationPromoteAdminView.as_view(), name="chat-conversation-group-promote-admin"),
+    path("conversations/<int:conversation_id>/group/demote-admin/", GroupConversationDemoteAdminView.as_view(), name="chat-conversation-group-demote-admin"),
+    path("conversations/<int:conversation_id>/group/transfer-admin/", GroupConversationTransferAdminView.as_view(), name="chat-conversation-group-transfer-admin"),
+    path("conversations/<int:conversation_id>/messages/", ConversationMessagesView.as_view(), name="chat-conversation-messages"),
+    path("conversations/<int:conversation_id>/presence/", ConversationPresenceView.as_view(), name="chat-conversation-presence"),
+    path("conversations/<int:conversation_id>/send/", ConversationSendMessageView.as_view(), name="chat-conversation-send"),
+    path("conversations/<int:conversation_id>/mark-read/", ConversationMarkReadView.as_view(), name="chat-conversation-mark-read"),
+    path("conversations/<int:conversation_id>/close/", ConversationCloseView.as_view(), name="chat-conversation-close"),
+]

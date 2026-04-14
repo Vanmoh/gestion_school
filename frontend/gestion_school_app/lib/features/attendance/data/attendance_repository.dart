@@ -56,6 +56,90 @@ class AttendanceRepository {
     }).toList();
   }
 
+  Future<List<Map<String, dynamic>>> fetchSheetClassrooms() async {
+    final response = await dio.get('/attendances/sheet_classrooms/');
+    final rows = _extractRows(response.data);
+    return rows
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> fetchClassSheet({
+    required int classroomId,
+    required String date,
+  }) async {
+    final response = await dio.get(
+      '/attendances/class-sheet/',
+      queryParameters: {'classroom': classroomId, 'date': date},
+    );
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> saveClassSheet({
+    required int classroomId,
+    required String date,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    final response = await dio.post(
+      '/attendances/class-sheet/',
+      data: {'classroom': classroomId, 'date': date, 'items': items},
+    );
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> setClassSheetLock({
+    required int classroomId,
+    required String date,
+    required bool lock,
+    String notes = '',
+  }) async {
+    final response = await dio.post(
+      '/attendances/class-sheet-validate/',
+      data: {
+        'classroom': classroomId,
+        'date': date,
+        'lock': lock,
+        'notes': notes,
+      },
+    );
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<List<int>> exportClassSheet({
+    required int classroomId,
+    required String date,
+    required String format,
+  }) async {
+    final response = await dio.get(
+      '/attendances/class-sheet-export/',
+      queryParameters: {
+        'classroom': classroomId,
+        'date': date,
+        'format': format,
+      },
+      options: Options(responseType: ResponseType.bytes),
+    );
+
+    final data = response.data;
+    if (data is List<int>) {
+      return data;
+    }
+    if (data is List<dynamic>) {
+      return data.whereType<int>().toList(growable: false);
+    }
+    return const <int>[];
+  }
+
   Future<AttendanceMonthlyStats> fetchMonthlyStats({String? month}) async {
     final response = await dio.get(
       '/attendances/monthly_stats/',

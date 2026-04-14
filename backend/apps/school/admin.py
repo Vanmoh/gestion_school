@@ -3,6 +3,7 @@ from .models import (
     AcademicYear,
     Announcement,
     Attendance,
+    AttendanceSheetValidation,
     Book,
     Borrow,
     CanteenMenu,
@@ -17,11 +18,9 @@ from .models import (
     Expense,
     Grade,
     GradeValidation,
-    Level,
     Notification,
     ParentProfile,
     Payment,
-    Section,
     StockItem,
     StockMovement,
     Student,
@@ -39,8 +38,6 @@ from .models import (
 )
 
 admin.site.register(AcademicYear)
-admin.site.register(Level)
-admin.site.register(Section)
 admin.site.register(ClassRoom)
 admin.site.register(Subject)
 admin.site.register(Teacher)
@@ -53,6 +50,7 @@ admin.site.register(StudentAcademicHistory)
 admin.site.register(Grade)
 admin.site.register(GradeValidation)
 admin.site.register(Attendance)
+admin.site.register(AttendanceSheetValidation)
 admin.site.register(TeacherAttendance)
 admin.site.register(DisciplineIncident)
 admin.site.register(StudentFee)

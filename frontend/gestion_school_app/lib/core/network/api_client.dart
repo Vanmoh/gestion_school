@@ -24,6 +24,13 @@ bool _sameBaseUrl(String left, String right) {
   return l == r;
 }
 
+bool _isAttendanceSheetEndpoint(String path) {
+  return path.contains('/attendances/sheet_classrooms/') ||
+      path.contains('/attendances/class-sheet/') ||
+      path.contains('/attendances/class-sheet-validate/') ||
+      path.contains('/attendances/class-sheet-export/');
+}
+
 final dioProvider = Provider<Dio>((ref) {
   final tokenStorage = ref.read(tokenStorageProvider);
   final dio = Dio(
@@ -174,6 +181,10 @@ final dioProvider = Provider<Dio>((ref) {
             _isIdempotentMethod(request.method) &&
             request.extra['retried_network'] != true;
 
+        final is404 = error.response?.statusCode == 404;
+        final canFallbackOnSheet404 =
+          is404 && _isAttendanceSheetEndpoint(request.path);
+
         final hadCustomBaseUrl = request.extra['had_custom_base_url'] == true;
         final usedBaseUrl =
             request.extra['effective_base_url']?.toString() ?? '';
@@ -184,8 +195,9 @@ final dioProvider = Provider<Dio>((ref) {
             request.extra['retried_with_default_base_url'] != true;
 
         if (fallbackToDefaultAvailable &&
-            _isTransientNetworkError(error) &&
-            _isIdempotentMethod(request.method)) {
+          ((_isTransientNetworkError(error) &&
+              _isIdempotentMethod(request.method)) ||
+            canFallbackOnSheet404)) {
           final fallbackOptions = request.copyWith(
             baseUrl: ApiConstants.baseUrl,
           );

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/presentation/auth_controller.dart';
+import '../domain/exam_models.dart';
 import 'exams_controller.dart';
 
 class ExamsPage extends ConsumerStatefulWidget {
@@ -94,6 +96,9 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final authUser = ref.watch(authControllerProvider).value;
+    final isReadOnlyMode =
+        authUser?.role == 'supervisor' || authUser?.role == 'accountant';
     final sessionsAsync = ref.watch(examSessionsProvider);
     final planningsAsync = ref.watch(examPlanningsProvider);
     final resultsAsync = ref.watch(examResultsProvider);
@@ -105,6 +110,22 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     final supervisorsAsync = ref.watch(examSupervisorsProvider);
     final mutationState = ref.watch(examMutationProvider);
     final planningsSnapshot = planningsAsync.valueOrNull ?? const [];
+    final sessionLabelById = {
+      for (final s in sessionsAsync.valueOrNull ?? const <ExamSessionItem>[])
+        s.id: '[${s.term}] ${s.title}',
+    };
+    final classroomLabelById = {
+      for (final c in classroomsAsync.valueOrNull ?? const <OptionItem>[])
+        c.id: c.label,
+    };
+    final subjectLabelById = {
+      for (final s in subjectsAsync.valueOrNull ?? const <OptionItem>[])
+        s.id: s.label,
+    };
+    final studentLabelById = {
+      for (final s in studentsAsync.valueOrNull ?? const <OptionItem>[])
+        s.id: s.label,
+    };
     final sessionsCount = sessionsAsync.valueOrNull?.length ?? 0;
     final planningsCount = planningsAsync.valueOrNull?.length ?? 0;
     final resultsCount = resultsAsync.valueOrNull?.length ?? 0;
@@ -142,6 +163,13 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                       'Sessions, plannings et publication des resultats.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
+                    if (isReadOnlyMode) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Mode lecture seule: consultation uniquement pour ce profil.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -245,7 +273,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   ),
                   const SizedBox(height: 10),
                   FilledButton(
-                    onPressed: mutationState.isLoading
+                    onPressed: (mutationState.isLoading || isReadOnlyMode)
                         ? null
                         : () async {
                             final academicYear = _selectedAcademicYear;
@@ -370,7 +398,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   ),
                   const SizedBox(height: 10),
                   FilledButton.tonal(
-                    onPressed: mutationState.isLoading
+                    onPressed: (mutationState.isLoading || isReadOnlyMode)
                         ? null
                         : () async {
                             final session = _selectedPlanningSession;
@@ -485,7 +513,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   ),
                   const SizedBox(height: 10),
                   FilledButton.tonal(
-                    onPressed: mutationState.isLoading
+                    onPressed: (mutationState.isLoading || isReadOnlyMode)
                         ? null
                         : () async {
                             final session = _selectedResultSession;
@@ -583,7 +611,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   ),
                   const SizedBox(height: 10),
                   FilledButton.tonal(
-                    onPressed: mutationState.isLoading
+                    onPressed: (mutationState.isLoading || isReadOnlyMode)
                         ? null
                         : () async {
                             final planning = _selectedInvigilationPlanning;
@@ -633,7 +661,9 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     (p) => Card(
                       child: ListTile(
                         title: Text(
-                          'Session #${p.sessionId} / Classe #${p.classroomId} / Matière #${p.subjectId}',
+                          '${sessionLabelById[p.sessionId] ?? 'Session'} / '
+                          '${classroomLabelById[p.classroomId] ?? 'Classe'} / '
+                          '${subjectLabelById[p.subjectId] ?? 'Matière'}',
                         ),
                         subtitle: Text(
                           '${p.examDate} • ${p.startTime} - ${p.endTime}',
@@ -685,7 +715,9 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     (r) => Card(
                       child: ListTile(
                         title: Text(
-                          'Session #${r.sessionId} / Élève #${r.studentId} / Matière #${r.subjectId}',
+                          '${sessionLabelById[r.sessionId] ?? 'Session'} / '
+                          '${studentLabelById[r.studentId] ?? 'Élève'} / '
+                          '${subjectLabelById[r.subjectId] ?? 'Matière'}',
                         ),
                         subtitle: Text('Score: ${r.score.toStringAsFixed(2)}'),
                       ),

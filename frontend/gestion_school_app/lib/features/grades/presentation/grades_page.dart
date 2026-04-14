@@ -2823,7 +2823,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                 .map(
                   (c) => DropdownMenuItem<int>(
                     value: _asInt(c['id']),
-                    child: Text('${c['name']} (ID ${c['id']})'),
+                    child: Text('${c['name']}'),
                   ),
                 )
                 .toList(),

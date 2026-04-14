@@ -111,7 +111,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
               'user': userId,
               'employee_code': employeeCode,
               'hire_date': _apiDate(_hireDate),
-              'salary_base': salary,
+              'hourly_rate': salary,
             },
           );
 
@@ -281,8 +281,8 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                   (profile['hire_date'] ?? '-').toString(),
                 ),
                 _detailLine(
-                  'Salaire de base',
-                  _formatMoney(profile['salary_base']),
+                  'Taux horaire',
+                  _formatMoney(profile['hourly_rate']),
                 ),
               ],
             ),
@@ -303,7 +303,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
       text: (profile['employee_code'] ?? '').toString(),
     );
     final salaryController = TextEditingController(
-      text: (profile['salary_base'] ?? '').toString(),
+      text: (profile['hourly_rate'] ?? '').toString(),
     );
     DateTime selectedDate =
         _parseApiDate((profile['hire_date'] ?? '').toString()) ??
@@ -334,7 +334,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                         decimal: true,
                       ),
                       decoration: const InputDecoration(
-                        labelText: 'Salaire de base',
+                        labelText: 'Taux horaire',
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -400,7 +400,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
             '/teachers/$profileId/',
             data: {
               'employee_code': employeeCode,
-              'salary_base': salary,
+              'hourly_rate': salary,
               'hire_date': _apiDate(selectedDate),
             },
           );
@@ -1982,7 +1982,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                         decimal: true,
                       ),
                       decoration: const InputDecoration(
-                        labelText: 'Salaire de base',
+                        labelText: 'Taux horaire',
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -2053,7 +2053,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                                     'user': userId,
                                     'employee_code': employeeCode,
                                     'hire_date': _apiDate(hireDate),
-                                    'salary_base': salary,
+                                    'hourly_rate': salary,
                                   },
                                 );
                             if (context.mounted) {
@@ -2445,8 +2445,8 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           (selectedProfile['hire_date'] ?? '-').toString(),
                         ),
                         _metricChip(
-                          'Salaire base',
-                          _formatMoney(selectedProfile['salary_base']),
+                          'Taux horaire',
+                          _formatMoney(selectedProfile['hourly_rate']),
                         ),
                         _metricChip(
                           'Affectations',
@@ -2530,7 +2530,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                             decimal: true,
                           ),
                           decoration: const InputDecoration(
-                            labelText: 'Salaire de base',
+                            labelText: 'Taux horaire',
                           ),
                         ),
                       ),

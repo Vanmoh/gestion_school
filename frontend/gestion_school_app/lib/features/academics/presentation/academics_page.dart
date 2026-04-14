@@ -13,29 +13,30 @@ class AcademicsPage extends ConsumerStatefulWidget {
 }
 
 class _AcademicsPageState extends ConsumerState<AcademicsPage> {
+  static const int _rowsPerPage = 8;
   final _yearNameController = TextEditingController();
   DateTime _yearStart = DateTime(DateTime.now().year, 9, 1);
   DateTime _yearEnd = DateTime(DateTime.now().year + 1, 7, 31);
   bool _yearActive = true;
 
-  final _levelNameController = TextEditingController();
-  final _sectionNameController = TextEditingController();
-
   final _subjectNameController = TextEditingController();
-  final _subjectCodeController = TextEditingController();
   final _subjectCoefController = TextEditingController(text: '1');
+  final _classSearchController = TextEditingController();
+  final _subjectSearchController = TextEditingController();
 
   final _classNameController = TextEditingController();
   int? _selectedYearId;
-  int? _selectedLevelId;
-  int? _selectedSectionId;
+  int? _selectedSubjectClassroomId;
+  String _classQuery = '';
+  String _subjectQuery = '';
+  int? _subjectFilterClassroomId;
+  int _classPage = 1;
+  int _subjectPage = 1;
 
   bool _loading = true;
   bool _saving = false;
 
   List<Map<String, dynamic>> _years = [];
-  List<Map<String, dynamic>> _levels = [];
-  List<Map<String, dynamic>> _sections = [];
   List<Map<String, dynamic>> _subjects = [];
   List<Map<String, dynamic>> _classrooms = [];
   int? _loadedEtablissementId;
@@ -49,11 +50,10 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
   @override
   void dispose() {
     _yearNameController.dispose();
-    _levelNameController.dispose();
-    _sectionNameController.dispose();
     _subjectNameController.dispose();
-    _subjectCodeController.dispose();
     _subjectCoefController.dispose();
+    _classSearchController.dispose();
+    _subjectSearchController.dispose();
     _classNameController.dispose();
     super.dispose();
   }
@@ -65,37 +65,54 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
       final dio = ref.read(dioProvider);
       final selectedEtablissement = ref.read(etablissementProvider).selected;
       final selectedEtablissementId = selectedEtablissement?.id;
-      final classroomsEndpoint = selectedEtablissementId == null
-          ? '/classrooms/'
-          : '/classrooms/?etablissement=$selectedEtablissementId';
+      final yearResult = await dio.get('/academic-years/');
+      List<Map<String, dynamic>> loadedSubjects = [];
+      List<Map<String, dynamic>> loadedClassrooms = [];
 
-      final results = await Future.wait([
-        dio.get('/academic-years/'),
-        dio.get('/levels/'),
-        dio.get('/sections/'),
-        dio.get('/subjects/'),
-        dio.get(classroomsEndpoint),
-      ]);
+      if (selectedEtablissementId != null) {
+        final results = await Future.wait([
+          dio.get('/subjects/?etablissement=$selectedEtablissementId'),
+          dio.get('/classrooms/?etablissement=$selectedEtablissementId'),
+        ]);
+        loadedSubjects = _extractRows(results[0].data);
+        loadedClassrooms = _extractRows(results[1].data);
+      }
 
       if (!mounted) return;
 
       setState(() {
-        _years = _extractRows(results[0].data);
-        _levels = _extractRows(results[1].data);
-        _sections = _extractRows(results[2].data);
-        _subjects = _extractRows(results[3].data);
-        _classrooms = _extractRows(results[4].data);
+        _years = _extractRows(yearResult.data);
+        _subjects = loadedSubjects;
+        _classrooms = loadedClassrooms;
         _loadedEtablissementId = selectedEtablissementId;
 
-        _selectedYearId ??= _years.isNotEmpty
-            ? _asInt(_years.first['id'])
-            : null;
-        _selectedLevelId ??= _levels.isNotEmpty
-            ? _asInt(_levels.first['id'])
-            : null;
-        _selectedSectionId ??= _sections.isNotEmpty
-            ? _asInt(_sections.first['id'])
-            : null;
+        final activeYear = _years.firstWhere(
+          (row) => row['is_active'] == true,
+          orElse: () => <String, dynamic>{},
+        );
+        _selectedYearId = activeYear.isEmpty ? null : _asInt(activeYear['id']);
+        if (_classrooms.isEmpty) {
+          _selectedSubjectClassroomId = null;
+          _subjectFilterClassroomId = null;
+        } else {
+          final selectedStillExists = _classrooms.any(
+            (row) => _asInt(row['id']) == _selectedSubjectClassroomId,
+          );
+          if (!selectedStillExists) {
+            _selectedSubjectClassroomId = _asInt(_classrooms.first['id']);
+          }
+
+          if (_subjectFilterClassroomId != null) {
+            final filterStillExists = _classrooms.any(
+              (row) => _asInt(row['id']) == _subjectFilterClassroomId,
+            );
+            if (!filterStillExists) {
+              _subjectFilterClassroomId = null;
+            }
+          }
+        }
+        _classPage = 1;
+        _subjectPage = 1;
       });
     } catch (error) {
       if (!mounted) return;
@@ -124,6 +141,51 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     } catch (error) {
       if (!mounted) return false;
       _showMessage('Erreur: $error');
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<bool> _patch(
+    String endpoint,
+    Map<String, dynamic> data,
+    String successMessage,
+  ) async {
+    setState(() => _saving = true);
+    try {
+      await ref.read(dioProvider).patch(endpoint, data: data);
+      if (!mounted) return false;
+      _showMessage(successMessage, isSuccess: true);
+      await _loadData();
+      return true;
+    } catch (error) {
+      if (!mounted) return false;
+      _showMessage('Erreur: $error');
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<bool> _delete(
+    String endpoint,
+    String successMessage,
+  ) async {
+    setState(() => _saving = true);
+    try {
+      await ref.read(dioProvider).delete(endpoint);
+      if (!mounted) return false;
+      _showMessage(successMessage, isSuccess: true);
+      await _loadData();
+      return true;
+    } catch (error) {
+      if (!mounted) return false;
+      _showMessage('Suppression refusée: $error');
       return false;
     } finally {
       if (mounted) {
@@ -351,118 +413,44 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     );
   }
 
-  Future<void> _openLevelForm() {
-    return _openFloatingPanel(
-      title: 'Créer un niveau',
-      contentBuilder: (panelContext, _) {
-        return Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            SizedBox(
-              width: 340,
-              child: TextField(
-                controller: _levelNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Niveau (ex: 6ème)',
-                ),
-              ),
-            ),
-            FilledButton.tonalIcon(
-              onPressed: _saving
-                  ? null
-                  : () => _submitFromPanel(
-                      panelContext: panelContext,
-                      action: () async {
-                        final name = _levelNameController.text.trim();
-                        if (name.isEmpty) {
-                          _showMessage('Renseigne le nom du niveau.');
-                          return false;
-                        }
-                        final success = await _post('/levels/', {
-                          'name': name,
-                        }, 'Niveau créé');
-                        if (success) {
-                          _levelNameController.clear();
-                        }
-                        return success;
-                      },
-                    ),
-              icon: const Icon(Icons.school_outlined),
-              label: const Text('Créer niveau'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _openSectionForm() {
-    return _openFloatingPanel(
-      title: 'Créer une section',
-      contentBuilder: (panelContext, _) {
-        return Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            SizedBox(
-              width: 340,
-              child: TextField(
-                controller: _sectionNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Section (ex: Collège)',
-                ),
-              ),
-            ),
-            FilledButton.tonalIcon(
-              onPressed: _saving
-                  ? null
-                  : () => _submitFromPanel(
-                      panelContext: panelContext,
-                      action: () async {
-                        final name = _sectionNameController.text.trim();
-                        if (name.isEmpty) {
-                          _showMessage('Renseigne le nom de la section.');
-                          return false;
-                        }
-                        final success = await _post('/sections/', {
-                          'name': name,
-                        }, 'Section créée');
-                        if (success) {
-                          _sectionNameController.clear();
-                        }
-                        return success;
-                      },
-                    ),
-              icon: const Icon(Icons.account_tree_outlined),
-              label: const Text('Créer section'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   Future<void> _openSubjectForm() {
     return _openFloatingPanel(
       title: 'Créer une matière',
-      contentBuilder: (panelContext, _) {
+      contentBuilder: (panelContext, refreshPanel) {
+        if (_classrooms.isEmpty) {
+          return const Text(
+            'Crée d’abord une classe. Chaque matière est maintenant liée à une classe.',
+          );
+        }
+
         return Wrap(
           spacing: 10,
           runSpacing: 10,
           children: [
+            SizedBox(
+              width: 320,
+              child: DropdownButtonFormField<int?>(
+                initialValue: _selectedSubjectClassroomId,
+                decoration: const InputDecoration(labelText: 'Classe'),
+                items: _classrooms
+                    .map(
+                      (row) => DropdownMenuItem<int?>(
+                        value: _asInt(row['id']),
+                        child: Text('${row['name']}'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  _selectedSubjectClassroomId = value;
+                  refreshPanel();
+                },
+              ),
+            ),
             SizedBox(
               width: 300,
               child: TextField(
                 controller: _subjectNameController,
                 decoration: const InputDecoration(labelText: 'Nom matière'),
-              ),
-            ),
-            SizedBox(
-              width: 220,
-              child: TextField(
-                controller: _subjectCodeController,
-                decoration: const InputDecoration(labelText: 'Code matière'),
               ),
             ),
             SizedBox(
@@ -481,14 +469,21 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                   : () => _submitFromPanel(
                       panelContext: panelContext,
                       action: () async {
+                        final classroomId = _selectedSubjectClassroomId;
+                        if (classroomId == null) {
+                          _showMessage('Sélectionne une classe pour la matière.');
+                          return false;
+                        }
+
                         final name = _subjectNameController.text.trim();
                         if (name.isEmpty) {
                           _showMessage('Renseigne le nom de la matière.');
                           return false;
                         }
+
                         final success = await _post('/subjects/', {
                           'name': name,
-                          'code': _subjectCodeController.text.trim(),
+                          'classroom': classroomId,
                           'coefficient':
                               double.tryParse(
                                 _subjectCoefController.text.trim(),
@@ -497,7 +492,6 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                         }, 'Matière créée');
                         if (success) {
                           _subjectNameController.clear();
-                          _subjectCodeController.clear();
                           _subjectCoefController.text = '1';
                         }
                         return success;
@@ -512,6 +506,362 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     );
   }
 
+  Future<void> _openEditClassroomForm(Map<String, dynamic> classroom) {
+    _classNameController.text = classroom['name']?.toString() ?? '';
+    _selectedYearId = _asInt(classroom['academic_year']);
+
+    return _openFloatingPanel(
+      title: 'Modifier classe',
+      contentBuilder: (panelContext, refreshPanel) {
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            SizedBox(
+              width: 260,
+              child: TextField(
+                controller: _classNameController,
+                decoration: const InputDecoration(labelText: 'Nom classe'),
+              ),
+            ),
+            SizedBox(
+              width: 260,
+              child: DropdownButtonFormField<int>(
+                initialValue: _selectedYearId,
+                decoration: const InputDecoration(labelText: 'Année scolaire'),
+                items: _years
+                    .map(
+                      (y) => DropdownMenuItem<int>(
+                        value: _asInt(y['id']),
+                        child: Text(_yearLabel(y)),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  _selectedYearId = value;
+                  refreshPanel();
+                },
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: _saving
+                  ? null
+                  : () => _submitFromPanel(
+                      panelContext: panelContext,
+                      action: () async {
+                        final selectedEtab =
+                            ref.read(etablissementProvider).selected;
+                        final id = _asInt(classroom['id']);
+                        final name = _classNameController.text.trim();
+                        if (selectedEtab == null || id <= 0) {
+                          _showMessage('Établissement actif introuvable.');
+                          return false;
+                        }
+                        if (name.isEmpty || _selectedYearId == null) {
+                          _showMessage('Renseigne le nom et l\'année.');
+                          return false;
+                        }
+                        return _patch(
+                          '/classrooms/$id/?etablissement=${selectedEtab.id}',
+                          {
+                            'name': name,
+                            'academic_year': _selectedYearId,
+                          },
+                          'Classe modifiée',
+                        );
+                      },
+                    ),
+              icon: const Icon(Icons.save_outlined),
+              label: const Text('Enregistrer'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _openClassroomDetails(Map<String, dynamic> classroom) {
+    final classId = _asInt(classroom['id']);
+    final yearLabel = _yearLabel(
+      _years.firstWhere(
+        (row) => _asInt(row['id']) == _asInt(classroom['academic_year']),
+        orElse: () => <String, dynamic>{},
+      ),
+    );
+    final subjectsCount = _subjects.where((s) => _asInt(s['classroom']) == classId).length;
+
+    return _openFloatingPanel(
+      title: 'Détail classe',
+      contentBuilder: (panelContext, refreshPanel) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Nom: ${classroom['name'] ?? '-'}'),
+            const SizedBox(height: 6),
+            Text('Année: $yearLabel'),
+            const SizedBox(height: 6),
+            Text('Établissement: ${ref.read(etablissementProvider).selected?.name ?? '-'}'),
+            const SizedBox(height: 6),
+            Text('Matières liées: $subjectsCount'),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _confirmDeleteClassroom(Map<String, dynamic> classroom) async {
+    final selectedEtab = ref.read(etablissementProvider).selected;
+    final id = _asInt(classroom['id']);
+    if (selectedEtab == null || id <= 0) {
+      _showMessage('Établissement actif introuvable.');
+      return;
+    }
+
+    Map<String, dynamic>? precheck;
+    try {
+      final response = await ref
+          .read(dioProvider)
+          .get('/classrooms/$id/delete-check/?etablissement=${selectedEtab.id}');
+      if (response.data is Map<String, dynamic>) {
+        precheck = Map<String, dynamic>.from(response.data as Map<String, dynamic>);
+      }
+    } catch (_) {
+      precheck = null;
+    }
+
+    final deps = (precheck?['dependencies'] is Map<String, dynamic>)
+        ? Map<String, dynamic>.from(precheck!['dependencies'] as Map<String, dynamic>)
+        : <String, dynamic>{};
+    final canDelete = precheck?['can_delete'] == true;
+
+    if (!mounted) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final depLines = <String>[];
+        if (deps.isNotEmpty) {
+          depLines.add('Dépendances détectées:');
+          depLines.add('Élèves: ${deps['students'] ?? 0}');
+          depLines.add('Matières: ${deps['subjects'] ?? 0}');
+          depLines.add('Affectations: ${deps['teacher_assignments'] ?? 0}');
+          depLines.add('Notes: ${deps['grades'] ?? 0}');
+          depLines.add('Validations: ${deps['grade_validations'] ?? 0}');
+          depLines.add('Plannings examens: ${deps['exam_plannings'] ?? 0}');
+          depLines.add('Historiques: ${deps['academic_history'] ?? 0}');
+        }
+        return AlertDialog(
+          title: const Text('Supprimer la classe ?'),
+          content: Text(
+            depLines.isEmpty
+                ? 'Confirmer la suppression de la classe ${classroom['name']} ? '
+                    'Cette action peut être refusée si des dépendances existent.'
+                : 'Classe ${classroom['name']}\n\n${depLines.join('\n')}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: canDelete ? () => Navigator.of(ctx).pop(true) : null,
+              child: const Text('Supprimer'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (ok != true) return;
+    await _delete(
+      '/classrooms/$id/?etablissement=${selectedEtab.id}',
+      'Classe supprimée',
+    );
+  }
+
+  Future<void> _openEditSubjectForm(Map<String, dynamic> subject) {
+    _subjectNameController.text = subject['name']?.toString() ?? '';
+    _subjectCoefController.text = (subject['coefficient'] ?? '1').toString();
+    _selectedSubjectClassroomId = _asInt(subject['classroom']);
+
+    return _openFloatingPanel(
+      title: 'Modifier matière',
+      contentBuilder: (panelContext, refreshPanel) {
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            SizedBox(
+              width: 320,
+              child: DropdownButtonFormField<int?>(
+                initialValue: _selectedSubjectClassroomId,
+                decoration: const InputDecoration(labelText: 'Classe'),
+                items: _classrooms
+                    .map(
+                      (row) => DropdownMenuItem<int?>(
+                        value: _asInt(row['id']),
+                        child: Text('${row['name']}'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  _selectedSubjectClassroomId = value;
+                  refreshPanel();
+                },
+              ),
+            ),
+            SizedBox(
+              width: 300,
+              child: TextField(
+                controller: _subjectNameController,
+                decoration: const InputDecoration(labelText: 'Nom matière'),
+              ),
+            ),
+            SizedBox(
+              width: 180,
+              child: TextField(
+                controller: _subjectCoefController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Coefficient'),
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: _saving
+                  ? null
+                  : () => _submitFromPanel(
+                      panelContext: panelContext,
+                      action: () async {
+                        final selectedEtab =
+                            ref.read(etablissementProvider).selected;
+                        final id = _asInt(subject['id']);
+                        final name = _subjectNameController.text.trim();
+                        final classroomId = _selectedSubjectClassroomId;
+                        if (selectedEtab == null || id <= 0) {
+                          _showMessage('Établissement actif introuvable.');
+                          return false;
+                        }
+                        if (name.isEmpty || classroomId == null) {
+                          _showMessage('Renseigne la classe et le nom.');
+                          return false;
+                        }
+                        return _patch(
+                          '/subjects/$id/?etablissement=${selectedEtab.id}',
+                          {
+                            'name': name,
+                            'classroom': classroomId,
+                            'coefficient':
+                                double.tryParse(_subjectCoefController.text.trim()) ?? 1,
+                          },
+                          'Matière modifiée',
+                        );
+                      },
+                    ),
+              icon: const Icon(Icons.save_outlined),
+              label: const Text('Enregistrer'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _openSubjectDetails(Map<String, dynamic> subject) {
+    final classroomName = subject['classroom_name']?.toString().trim().isNotEmpty == true
+        ? subject['classroom_name'].toString()
+        : _classrooms
+              .firstWhere(
+                (row) => _asInt(row['id']) == _asInt(subject['classroom']),
+                orElse: () => <String, dynamic>{},
+              )['name']
+              ?.toString() ??
+          '-';
+
+    return _openFloatingPanel(
+      title: 'Détail matière',
+      contentBuilder: (panelContext, refreshPanel) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Nom: ${subject['name'] ?? '-'}'),
+            const SizedBox(height: 6),
+            Text('Code: ${subject['code'] ?? '-'}'),
+            const SizedBox(height: 6),
+            Text('Coefficient: ${subject['coefficient'] ?? '-'}'),
+            const SizedBox(height: 6),
+            Text('Classe: $classroomName'),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _confirmDeleteSubject(Map<String, dynamic> subject) async {
+    final selectedEtab = ref.read(etablissementProvider).selected;
+    final id = _asInt(subject['id']);
+    if (selectedEtab == null || id <= 0) {
+      _showMessage('Établissement actif introuvable.');
+      return;
+    }
+
+    Map<String, dynamic>? precheck;
+    try {
+      final response = await ref
+          .read(dioProvider)
+          .get('/subjects/$id/delete-check/?etablissement=${selectedEtab.id}');
+      if (response.data is Map<String, dynamic>) {
+        precheck = Map<String, dynamic>.from(response.data as Map<String, dynamic>);
+      }
+    } catch (_) {
+      precheck = null;
+    }
+
+    final deps = (precheck?['dependencies'] is Map<String, dynamic>)
+        ? Map<String, dynamic>.from(precheck!['dependencies'] as Map<String, dynamic>)
+        : <String, dynamic>{};
+    final canDelete = precheck?['can_delete'] == true;
+
+    if (!mounted) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final depLines = <String>[];
+        if (deps.isNotEmpty) {
+          depLines.add('Dépendances détectées:');
+          depLines.add('Affectations: ${deps['teacher_assignments'] ?? 0}');
+          depLines.add('Notes: ${deps['grades'] ?? 0}');
+          depLines.add('Plannings examens: ${deps['exam_plannings'] ?? 0}');
+          depLines.add('Résultats examens: ${deps['exam_results'] ?? 0}');
+        }
+        return AlertDialog(
+          title: const Text('Supprimer la matière ?'),
+          content: Text(
+            depLines.isEmpty
+                ? 'Confirmer la suppression de la matière ${subject['name']} ? '
+                    'Cette action peut être refusée si des dépendances existent.'
+                : 'Matière ${subject['name']}\n\n${depLines.join('\n')}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: canDelete ? () => Navigator.of(ctx).pop(true) : null,
+              child: const Text('Supprimer'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (ok != true) return;
+    await _delete(
+      '/subjects/$id/?etablissement=${selectedEtab.id}',
+      'Matière supprimée',
+    );
+  }
+
   Future<void> _openClassroomForm() {
     return _openFloatingPanel(
       title: 'Créer une classe',
@@ -523,9 +873,9 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
           );
         }
 
-        if (_years.isEmpty || _levels.isEmpty || _sections.isEmpty) {
+        if (_years.isEmpty) {
           return const Text(
-            'Crée d’abord au moins une année scolaire, un niveau et une section.',
+            'Crée d’abord une année scolaire active.',
           );
         }
 
@@ -544,59 +894,17 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
             ),
             SizedBox(
               width: 260,
-              child: DropdownButtonFormField<int?>(
-                initialValue: _selectedYearId,
+              child: InputDecorator(
                 decoration: const InputDecoration(labelText: 'Année scolaire'),
-                items: _years
-                    .map(
-                      (y) => DropdownMenuItem<int?>(
-                        value: _asInt(y['id']),
-                        child: Text('${y['name']}'),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  _selectedYearId = value;
-                  refreshPanel();
-                },
-              ),
-            ),
-            SizedBox(
-              width: 220,
-              child: DropdownButtonFormField<int?>(
-                initialValue: _selectedLevelId,
-                decoration: const InputDecoration(labelText: 'Niveau'),
-                items: _levels
-                    .map(
-                      (l) => DropdownMenuItem<int?>(
-                        value: _asInt(l['id']),
-                        child: Text('${l['name']}'),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  _selectedLevelId = value;
-                  refreshPanel();
-                },
-              ),
-            ),
-            SizedBox(
-              width: 220,
-              child: DropdownButtonFormField<int?>(
-                initialValue: _selectedSectionId,
-                decoration: const InputDecoration(labelText: 'Section'),
-                items: _sections
-                    .map(
-                      (s) => DropdownMenuItem<int?>(
-                        value: _asInt(s['id']),
-                        child: Text('${s['name']}'),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  _selectedSectionId = value;
-                  refreshPanel();
-                },
+                child: Text(
+                  _years
+                          .firstWhere(
+                            (row) => _asInt(row['id']) == _selectedYearId,
+                            orElse: () => <String, dynamic>{},
+                          )['name']
+                          ?.toString() ??
+                      'Année active non définie',
+                ),
               ),
             ),
             FilledButton.icon(
@@ -606,12 +914,9 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                       panelContext: panelContext,
                       action: () async {
                         final name = _classNameController.text.trim();
-                        if (name.isEmpty ||
-                            _selectedYearId == null ||
-                            _selectedLevelId == null ||
-                            _selectedSectionId == null) {
+                        if (name.isEmpty || _selectedYearId == null) {
                           _showMessage(
-                            'Complète nom, année, niveau et section.',
+                            'Complète le nom et vérifie qu’une année active existe.',
                           );
                           return false;
                         }
@@ -621,8 +926,6 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                           {
                           'name': name,
                           'academic_year': _selectedYearId,
-                          'level': _selectedLevelId,
-                          'section': _selectedSectionId,
                           },
                           'Classe créée pour ${selectedEtablissement.name}',
                         );
@@ -662,9 +965,6 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     }
 
     final yearById = {for (final y in _years) _asInt(y['id']): y};
-    final levelById = {for (final l in _levels) _asInt(l['id']): l};
-    final sectionById = {for (final s in _sections) _asInt(s['id']): s};
-
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final activeYearRow = _years.firstWhere(
@@ -674,6 +974,40 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     final activeYearLabel = activeYearRow.isEmpty
         ? 'Non définie'
         : _yearLabel(activeYearRow);
+    final normalizedClassQuery = _classQuery.trim().toLowerCase();
+    final normalizedSubjectQuery = _subjectQuery.trim().toLowerCase();
+    final filteredClassrooms = _classrooms.where((row) {
+      if (normalizedClassQuery.isEmpty) return true;
+      final name = (row['name'] ?? '').toString().toLowerCase();
+      final yearName =
+          (yearById[_asInt(row['academic_year'])]?['name'] ?? '').toString().toLowerCase();
+      return name.contains(normalizedClassQuery) || yearName.contains(normalizedClassQuery);
+    }).toList();
+    final filteredSubjects = _subjects.where((row) {
+      if (_subjectFilterClassroomId != null &&
+          _asInt(row['classroom']) != _subjectFilterClassroomId) {
+        return false;
+      }
+      if (normalizedSubjectQuery.isEmpty) return true;
+      final name = (row['name'] ?? '').toString().toLowerCase();
+      final code = (row['code'] ?? '').toString().toLowerCase();
+      final className = (row['classroom_name'] ?? '').toString().toLowerCase();
+      return name.contains(normalizedSubjectQuery) ||
+          code.contains(normalizedSubjectQuery) ||
+          className.contains(normalizedSubjectQuery);
+    }).toList();
+    final classTotalPages = filteredClassrooms.isEmpty
+      ? 1
+      : ((filteredClassrooms.length - 1) ~/ _rowsPerPage) + 1;
+    final subjectTotalPages = filteredSubjects.isEmpty
+      ? 1
+      : ((filteredSubjects.length - 1) ~/ _rowsPerPage) + 1;
+    if (_classPage > classTotalPages) _classPage = classTotalPages;
+    if (_subjectPage > subjectTotalPages) _subjectPage = subjectTotalPages;
+    final classStart = (_classPage - 1) * _rowsPerPage;
+    final subjectStart = (_subjectPage - 1) * _rowsPerPage;
+    final pagedClassrooms = filteredClassrooms.skip(classStart).take(_rowsPerPage).toList();
+    final pagedSubjects = filteredSubjects.skip(subjectStart).take(_rowsPerPage).toList();
 
     return ListView(
       padding: const EdgeInsets.all(18),
@@ -719,7 +1053,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          'Configure années scolaires, niveaux, sections, matières et classes dans un flux rapide.',
+                          'Configure années scolaires, matières et classes dans un flux rapide.',
                           style: textTheme.bodyMedium,
                         ),
                         const SizedBox(height: 10),
@@ -783,15 +1117,11 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                             DropdownButtonFormField<int?>(
                               initialValue: selectedEtablissementId,
                               decoration: const InputDecoration(
-                                labelText: 'Filtre établissement (classes)',
+                                labelText: 'Établissement actif',
                                 border: OutlineInputBorder(),
                                 isDense: true,
                               ),
                               items: [
-                                const DropdownMenuItem<int?>(
-                                  value: null,
-                                  child: Text('Tous les établissements'),
-                                ),
                                 ...etablissements.map(
                                   (etab) => DropdownMenuItem<int?>(
                                     value: etab.id,
@@ -803,22 +1133,20 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                                   ? null
                                   : (value) async {
                                       if (value == null) {
+                                        _showMessage('Sélectionne un établissement actif.');
+                                        return;
+                                      }
+                                      final target = etablissements
+                                          .where((etab) => etab.id == value)
+                                          .cast<Etablissement?>()
+                                          .firstWhere(
+                                            (etab) => etab != null,
+                                            orElse: () => null,
+                                          );
+                                      if (target != null) {
                                         await ref
                                             .read(etablissementProvider)
-                                            .clearSelection();
-                                      } else {
-                                        final target = etablissements
-                                            .where((etab) => etab.id == value)
-                                            .cast<Etablissement?>()
-                                            .firstWhere(
-                                              (etab) => etab != null,
-                                              orElse: () => null,
-                                            );
-                                        if (target != null) {
-                                          await ref
-                                              .read(etablissementProvider)
-                                              .selectEtablissement(target);
-                                        }
+                                            .selectEtablissement(target);
                                       }
                                     },
                             ),
@@ -832,16 +1160,6 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                                 onPressed: _saving ? null : _openYearForm,
                                 icon: const Icon(Icons.calendar_month_outlined),
                                 label: const Text('Créer année'),
-                              ),
-                              FilledButton.tonalIcon(
-                                onPressed: _saving ? null : _openLevelForm,
-                                icon: const Icon(Icons.school_outlined),
-                                label: const Text('Créer niveau'),
-                              ),
-                              FilledButton.tonalIcon(
-                                onPressed: _saving ? null : _openSectionForm,
-                                icon: const Icon(Icons.account_tree_outlined),
-                                label: const Text('Créer section'),
                               ),
                               FilledButton.tonalIcon(
                                 onPressed: _saving ? null : _openSubjectForm,
@@ -881,18 +1199,6 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
               tone: colorScheme.primary,
             ),
             _moduleMetricCard(
-              title: 'Niveaux',
-              value: '${_levels.length}',
-              icon: Icons.layers_outlined,
-              tone: colorScheme.secondary,
-            ),
-            _moduleMetricCard(
-              title: 'Sections',
-              value: '${_sections.length}',
-              icon: Icons.account_tree_outlined,
-              tone: colorScheme.tertiary,
-            ),
-            _moduleMetricCard(
               title: 'Matières',
               value: '${_subjects.length}',
               icon: Icons.menu_book_outlined,
@@ -916,7 +1222,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                 Text('Résumé académique', style: textTheme.titleMedium),
                 const SizedBox(height: 4),
                 Text(
-                  'Années, niveaux, sections et matières sont globales. Les classes sont filtrées selon l’établissement actif.',
+                  'Les matières sont créées par classe, avec code et coefficient indépendants selon la classe.',
                   style: textTheme.bodySmall,
                 ),
                 const SizedBox(height: 10),
@@ -927,14 +1233,6 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                     _dashboardInfoChip(
                       icon: Icons.calendar_today_outlined,
                       label: 'Années: ${_years.length}',
-                    ),
-                    _dashboardInfoChip(
-                      icon: Icons.school_outlined,
-                      label: 'Niveaux: ${_levels.length}',
-                    ),
-                    _dashboardInfoChip(
-                      icon: Icons.account_tree_outlined,
-                      label: 'Sections: ${_sections.length}',
                     ),
                     _dashboardInfoChip(
                       icon: Icons.menu_book_outlined,
@@ -961,14 +1259,6 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                     ),
                     child: Column(
                       children: _classrooms.take(10).map((classroom) {
-                        final levelName =
-                            levelById[_asInt(classroom['level'])]?['name'] ??
-                            'Niveau ?';
-                        final sectionName =
-                            sectionById[_asInt(
-                              classroom['section'],
-                            )]?['name'] ??
-                            'Section ?';
                         final yearName =
                             yearById[_asInt(
                               classroom['academic_year'],
@@ -979,11 +1269,203 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                           dense: true,
                           title: Text('${classroom['name']}'),
                           subtitle: Text(
-                            '$levelName • $sectionName • $yearName',
+                            '$yearName',
                           ),
                         );
                       }).toList(),
                     ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Text('Classes', style: textTheme.titleMedium),
+                    const Spacer(),
+                    FilledButton.tonalIcon(
+                      onPressed: _saving ? null : _openClassroomForm,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Ajouter classe'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _classSearchController,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    labelText: 'Rechercher une classe',
+                  ),
+                  onChanged: (value) => setState(() {
+                    _classQuery = value;
+                    _classPage = 1;
+                  }),
+                ),
+                const SizedBox(height: 10),
+                if (filteredClassrooms.isEmpty)
+                  const Text('Aucune classe trouvée pour l’établissement actif.')
+                else
+                  ...pagedClassrooms.map((classroom) {
+                    final yearName =
+                        yearById[_asInt(classroom['academic_year'])]?['name'] ??
+                        'Année ?';
+                    final classId = _asInt(classroom['id']);
+                    final subjectsCount =
+                        _subjects.where((s) => _asInt(s['classroom']) == classId).length;
+
+                    return Card(
+                      child: ListTile(
+                        title: Text('${classroom['name']}'),
+                        subtitle: Text('$yearName • $subjectsCount matières'),
+                        trailing: PopupMenuButton<String>(
+                          onSelected: (value) {
+                            if (value == 'view') {
+                              _openClassroomDetails(classroom);
+                            } else if (value == 'edit') {
+                              _openEditClassroomForm(classroom);
+                            } else if (value == 'delete') {
+                              _confirmDeleteClassroom(classroom);
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(value: 'view', child: Text('Afficher')),
+                            PopupMenuItem(value: 'edit', child: Text('Modifier')),
+                            PopupMenuItem(value: 'delete', child: Text('Supprimer')),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+                if (filteredClassrooms.isNotEmpty)
+                  _buildPager(
+                    page: _classPage,
+                    totalPages: classTotalPages,
+                    onPrevious: _classPage > 1
+                        ? () => setState(() => _classPage -= 1)
+                        : null,
+                    onNext: _classPage < classTotalPages
+                        ? () => setState(() => _classPage += 1)
+                        : null,
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Text('Matières', style: textTheme.titleMedium),
+                    const Spacer(),
+                    FilledButton.tonalIcon(
+                      onPressed: _saving ? null : _openSubjectForm,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Ajouter matière'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<int?>(
+                  initialValue: _subjectFilterClassroomId,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.filter_list),
+                    labelText: 'Filtrer par classe',
+                  ),
+                  items: [
+                    const DropdownMenuItem<int?>(
+                      value: null,
+                      child: Text('Toutes les classes'),
+                    ),
+                    ..._classrooms.map(
+                      (row) => DropdownMenuItem<int?>(
+                        value: _asInt(row['id']),
+                        child: Text('${row['name']}'),
+                      ),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    setState(() {
+                      _subjectFilterClassroomId = value;
+                      _subjectPage = 1;
+                    });
+                  },
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _subjectSearchController,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    labelText: 'Rechercher une matière',
+                  ),
+                  onChanged: (value) => setState(() {
+                    _subjectQuery = value;
+                    _subjectPage = 1;
+                  }),
+                ),
+                const SizedBox(height: 10),
+                if (filteredSubjects.isEmpty)
+                  const Text('Aucune matière trouvée pour l’établissement actif.')
+                else
+                  ...pagedSubjects.map((subject) {
+                    final className =
+                        subject['classroom_name']?.toString().trim().isNotEmpty == true
+                        ? subject['classroom_name'].toString()
+                        : _classrooms
+                                  .firstWhere(
+                                    (row) =>
+                                        _asInt(row['id']) == _asInt(subject['classroom']),
+                                    orElse: () => <String, dynamic>{},
+                                  )['name']
+                                  ?.toString() ??
+                              '-';
+                    return Card(
+                      child: ListTile(
+                        title: Text('${subject['name']}'),
+                        subtitle: Text(
+                          'Code ${subject['code'] ?? '-'} • Coef ${subject['coefficient'] ?? '-'} • Classe $className',
+                        ),
+                        trailing: PopupMenuButton<String>(
+                          onSelected: (value) {
+                            if (value == 'view') {
+                              _openSubjectDetails(subject);
+                            } else if (value == 'edit') {
+                              _openEditSubjectForm(subject);
+                            } else if (value == 'delete') {
+                              _confirmDeleteSubject(subject);
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(value: 'view', child: Text('Afficher')),
+                            PopupMenuItem(value: 'edit', child: Text('Modifier')),
+                            PopupMenuItem(value: 'delete', child: Text('Supprimer')),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+                if (filteredSubjects.isNotEmpty)
+                  _buildPager(
+                    page: _subjectPage,
+                    totalPages: subjectTotalPages,
+                    onPrevious: _subjectPage > 1
+                        ? () => setState(() => _subjectPage -= 1)
+                        : null,
+                    onNext: _subjectPage < subjectTotalPages
+                        ? () => setState(() => _subjectPage += 1)
+                        : null,
                   ),
               ],
             ),
@@ -1025,6 +1507,34 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildPager({
+    required int page,
+    required int totalPages,
+    required VoidCallback? onPrevious,
+    required VoidCallback? onNext,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          Text('Page $page/$totalPages'),
+          const SizedBox(width: 10),
+          IconButton(
+            onPressed: onPrevious,
+            icon: const Icon(Icons.chevron_left),
+            tooltip: 'Précédent',
+          ),
+          IconButton(
+            onPressed: onNext,
+            icon: const Icon(Icons.chevron_right),
+            tooltip: 'Suivant',
+          ),
+        ],
       ),
     );
   }

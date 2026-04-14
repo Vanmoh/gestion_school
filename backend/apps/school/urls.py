@@ -19,11 +19,10 @@ from .views import (
     ExamSessionViewSet,
     ExpenseViewSet,
     GradeViewSet,
-    LevelViewSet,
     NotificationViewSet,
     ParentProfileViewSet,
     PaymentViewSet,
-    SectionViewSet,
+    PromotionRunViewSet,
     StockItemViewSet,
     StockMovementViewSet,
     StudentAcademicHistoryViewSet,
@@ -35,6 +34,7 @@ from .views import (
     TeacherAttendanceViewSet,
     TeacherAssignmentViewSet,
     TeacherAvailabilitySlotViewSet,
+    TeacherTimeEntryViewSet,
     TimetablePublicationViewSet,
     TeacherScheduleSlotViewSet,
     TeacherPayrollViewSet,
@@ -45,8 +45,6 @@ router = DefaultRouter()
 router.register(r"etablissements", EtablissementViewSet, basename="etablissements")
 router.register(r"dashboard", DashboardViewSet, basename="dashboard")
 router.register(r"academic-years", AcademicYearViewSet)
-router.register(r"levels", LevelViewSet)
-router.register(r"sections", SectionViewSet)
 router.register(r"classrooms", ClassRoomViewSet)
 router.register(r"subjects", SubjectViewSet)
 router.register(r"teachers", TeacherViewSet)
@@ -60,9 +58,11 @@ router.register(r"student-history", StudentAcademicHistoryViewSet)
 router.register(r"grades", GradeViewSet)
 router.register(r"attendances", AttendanceViewSet)
 router.register(r"teacher-attendances", TeacherAttendanceViewSet)
+router.register(r"teacher-time-entries", TeacherTimeEntryViewSet)
 router.register(r"discipline-incidents", DisciplineIncidentViewSet)
 router.register(r"fees", StudentFeeViewSet)
 router.register(r"payments", PaymentViewSet)
+router.register(r"promotion-runs", PromotionRunViewSet, basename="promotion-runs")
 router.register(r"expenses", ExpenseViewSet)
 router.register(r"teacher-payrolls", TeacherPayrollViewSet)
 router.register(r"announcements", AnnouncementViewSet)

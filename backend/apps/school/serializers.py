@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 from rest_framework import serializers
 from .term_utils import normalize_term
@@ -21,11 +22,11 @@ from .models import (
     Expense,
     Grade,
     GradeValidation,
-    Level,
     Notification,
     ParentProfile,
     Payment,
-    Section,
+    PromotionDecision,
+    PromotionRun,
     StockItem,
     StockMovement,
     Student,
@@ -39,6 +40,7 @@ from .models import (
     TeacherAssignment,
     TeacherAvailabilitySlot,
     TeacherScheduleSlot,
+    TeacherTimeEntry,
     TimetablePublication,
     TeacherPayroll,
 )
@@ -52,35 +54,54 @@ class AcademicYearSerializer(serializers.ModelSerializer):
 
 class EtablissementSerializer(serializers.ModelSerializer):
     logo = serializers.ImageField(required=False, allow_null=True)
+    stamp_image = serializers.ImageField(required=False, allow_null=True)
+    principal_signature_image = serializers.ImageField(required=False, allow_null=True)
+    cashier_signature_image = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = Etablissement
-        fields = ['id', 'name', 'address', 'phone', 'email', 'logo']
+        fields = [
+            'id',
+            'name',
+            'address',
+            'phone',
+            'email',
+            'logo',
+            'stamp_image',
+            'principal_signature_image',
+            'cashier_signature_image',
+            'principal_signature_label',
+            'cashier_signature_label',
+            'parent_signature_label',
+            'principal_signature_position',
+            'stamp_position',
+            'principal_signature_scale',
+            'stamp_scale',
+        ]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        for key in ('principal_signature_scale', 'stamp_scale'):
+            value = attrs.get(key)
+            if value is None:
+                continue
+            if value < 40 or value > 200:
+                raise serializers.ValidationError({key: 'La valeur doit etre comprise entre 40 et 200.'})
+        return attrs
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get("request")
-        if not instance.logo:
-            data["logo"] = None
-            return data
-
-        if request is None:
-            data["logo"] = instance.logo.url
-        else:
-            data["logo"] = request.build_absolute_uri(instance.logo.url)
+        for field_name in ("logo", "stamp_image", "principal_signature_image", "cashier_signature_image"):
+            field = getattr(instance, field_name, None)
+            if not field:
+                data[field_name] = None
+                continue
+            if request is None:
+                data[field_name] = field.url
+            else:
+                data[field_name] = request.build_absolute_uri(field.url)
         return data
-
-
-class LevelSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Level
-        fields = "__all__"
-
-
-class SectionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Section
-        fields = "__all__"
 
 
 class ClassRoomSerializer(serializers.ModelSerializer):
@@ -92,6 +113,64 @@ class ClassRoomSerializer(serializers.ModelSerializer):
 
 
 class SubjectSerializer(serializers.ModelSerializer):
+    classroom_name = serializers.SerializerMethodField(read_only=True)
+
+    @staticmethod
+    def _base_subject_code(name):
+        compact = re.sub(r"[^A-Za-z0-9]+", "", (name or "").upper())
+        if not compact:
+            return "MAT"
+        return compact[:8]
+
+    def _next_available_subject_code(self, classroom, base_code):
+        candidate = base_code[:20]
+        suffix = 2
+        while True:
+            existing = Subject.objects.filter(classroom=classroom, code__iexact=candidate)
+            if self.instance is not None:
+                existing = existing.exclude(pk=self.instance.pk)
+            if not existing.exists():
+                return candidate
+
+            suffix_text = str(suffix)
+            stem = base_code[: max(1, 20 - len(suffix_text))]
+            candidate = f"{stem}{suffix_text}"
+            suffix += 1
+
+    def get_classroom_name(self, obj):
+        classroom = obj.classroom
+        return classroom.name if classroom else ""
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        classroom = attrs.get("classroom") or getattr(self.instance, "classroom", None)
+        provided_code = (attrs.get("code") or "").strip()
+        current_code = (getattr(self.instance, "code", "") or "").strip()
+        code = provided_code or current_code
+        name = (attrs.get("name") or getattr(self.instance, "name", "") or "").strip()
+
+        if not classroom:
+            raise serializers.ValidationError({"classroom": "La classe est obligatoire pour une matiere."})
+
+        if not code:
+            base_code = self._base_subject_code(name)
+            code = self._next_available_subject_code(classroom, base_code)
+            attrs["code"] = code
+
+        existing = Subject.objects.filter(classroom=classroom, code__iexact=code)
+        if self.instance is not None:
+            existing = existing.exclude(pk=self.instance.pk)
+        if existing.exists():
+            if provided_code:
+                raise serializers.ValidationError(
+                    {"code": "Ce code matiere existe deja pour cette classe."}
+                )
+
+            base_code = self._base_subject_code(name)
+            attrs["code"] = self._next_available_subject_code(classroom, base_code)
+
+        return attrs
+
     class Meta:
         model = Subject
         fields = "__all__"
@@ -428,6 +507,26 @@ class TimetablePublicationSerializer(serializers.ModelSerializer):
 
 class ParentProfileSerializer(serializers.ModelSerializer):
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    user_full_name = serializers.SerializerMethodField(read_only=True)
+    user_username = serializers.SerializerMethodField(read_only=True)
+    user_first_name = serializers.SerializerMethodField(read_only=True)
+    user_last_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_user_full_name(self, obj):
+        user = obj.user
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    def get_user_username(self, obj):
+        return obj.user.username if obj.user else ""
+
+    def get_user_first_name(self, obj):
+        return obj.user.first_name if obj.user else ""
+
+    def get_user_last_name(self, obj):
+        return obj.user.last_name if obj.user else ""
 
     class Meta:
         model = ParentProfile
@@ -726,6 +825,39 @@ class TeacherAttendanceSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class TeacherTimeEntrySerializer(serializers.ModelSerializer):
+    teacher_full_name = serializers.SerializerMethodField(read_only=True)
+    teacher_employee_code = serializers.SerializerMethodField(read_only=True)
+
+    def get_teacher_full_name(self, obj):
+        teacher = obj.teacher
+        user = teacher.user if teacher else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_teacher_employee_code(self, obj):
+        teacher = obj.teacher
+        return teacher.employee_code if teacher else ""
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        check_in_time = attrs.get("check_in_time") or getattr(self.instance, "check_in_time", None)
+        check_out_time = attrs.get("check_out_time") or getattr(self.instance, "check_out_time", None)
+
+        if check_in_time and check_out_time and check_out_time <= check_in_time:
+            raise serializers.ValidationError(
+                {"check_out_time": "L'heure de sortie doit être après l'heure d'entrée."}
+            )
+
+        return attrs
+
+    class Meta:
+        model = TeacherTimeEntry
+        fields = "__all__"
+
+
 class DisciplineIncidentSerializer(serializers.ModelSerializer):
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
@@ -839,6 +971,21 @@ class ExpenseSerializer(serializers.ModelSerializer):
 
 
 class TeacherPayrollSerializer(serializers.ModelSerializer):
+    teacher_full_name = serializers.SerializerMethodField(read_only=True)
+    teacher_employee_code = serializers.SerializerMethodField(read_only=True)
+
+    def get_teacher_full_name(self, obj):
+        teacher = obj.teacher
+        user = teacher.user if teacher else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_teacher_employee_code(self, obj):
+        teacher = obj.teacher
+        return teacher.employee_code if teacher else ""
+
     class Meta:
         model = TeacherPayroll
         fields = "__all__"
@@ -1028,4 +1175,40 @@ class StockItemSerializer(serializers.ModelSerializer):
 class StockMovementSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockMovement
+        fields = "__all__"
+
+
+class PromotionDecisionSerializer(serializers.ModelSerializer):
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.SerializerMethodField(read_only=True)
+    source_classroom_name = serializers.SerializerMethodField(read_only=True)
+    target_classroom_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_student_full_name(self, obj):
+        student = obj.student
+        user = student.user if student else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_student_matricule(self, obj):
+        return obj.student.matricule if obj.student else ""
+
+    def get_source_classroom_name(self, obj):
+        return obj.source_classroom.name if obj.source_classroom else ""
+
+    def get_target_classroom_name(self, obj):
+        return obj.target_classroom.name if obj.target_classroom else ""
+
+    class Meta:
+        model = PromotionDecision
+        fields = "__all__"
+
+
+class PromotionRunSerializer(serializers.ModelSerializer):
+    decisions = PromotionDecisionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PromotionRun
         fields = "__all__"

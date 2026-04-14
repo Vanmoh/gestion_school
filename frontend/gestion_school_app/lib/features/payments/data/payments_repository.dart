@@ -158,4 +158,81 @@ class PaymentsRepository {
 
   String receiptUrl(int paymentId) =>
       '${ApiConstants.baseUrl}/reports/receipt/$paymentId/';
+
+  String _normalizeMonthDate(String month) {
+    final cleaned = month.trim();
+    if (RegExp(r'^\d{4}-\d{2}$').hasMatch(cleaned)) {
+      return '$cleaned-01';
+    }
+    return cleaned;
+  }
+
+  Future<List<Map<String, dynamic>>> fetchTeachers() async {
+    final response = await dio.get(
+      '/teachers/',
+      queryParameters: {
+        'page_size': 500,
+        'ordering': 'user__last_name,user__first_name',
+      },
+    );
+    final rows = _extractRows(response.data);
+    return rows.whereType<Map<String, dynamic>>().toList(growable: false);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchTeacherTimeEntries() async {
+    final response = await dio.get('/teacher-time-entries/');
+    final rows = _extractRows(response.data);
+    return rows.whereType<Map<String, dynamic>>().toList(growable: false);
+  }
+
+  Future<void> createTeacherTimeEntry({
+    required int teacherId,
+    required String entryDate,
+    required String checkInTime,
+    required String checkOutTime,
+    String notes = '',
+  }) async {
+    await dio.post(
+      '/teacher-time-entries/',
+      data: {
+        'teacher': teacherId,
+        'entry_date': entryDate,
+        'check_in_time': checkInTime,
+        'check_out_time': checkOutTime,
+        'notes': notes,
+      },
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> fetchTeacherPayrolls({String? month}) async {
+    final query = <String, dynamic>{};
+    if (month != null && month.trim().isNotEmpty) {
+      query['month'] = _normalizeMonthDate(month);
+    }
+    final response = await dio.get('/teacher-payrolls/', queryParameters: query);
+    final rows = _extractRows(response.data);
+    return rows.whereType<Map<String, dynamic>>().toList(growable: false);
+  }
+
+  Future<List<Map<String, dynamic>>> generateTeacherPayroll({
+    required String month,
+    int? teacherId,
+  }) async {
+    final response = await dio.post(
+      '/teacher-payrolls/generate_monthly/',
+      data: {
+        'month': month,
+        if (teacherId != null) 'teacher': teacherId,
+      },
+    );
+
+    final data = response.data;
+    if (data is Map<String, dynamic> && data['results'] is List<dynamic>) {
+      return (data['results'] as List<dynamic>)
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
+    }
+
+    return const <Map<String, dynamic>>[];
+  }
 }

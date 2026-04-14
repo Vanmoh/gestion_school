@@ -89,6 +89,59 @@ if [[ "$migrate_rc" -ne 0 ]]; then
     fi
 
     docker_compose exec -T backend python manage.py migrate --noinput
+  elif grep -q "Table 'school_promotionrun' already exists" "$migrate_log_file" || grep -q "Table 'school_promotiondecision' already exists" "$migrate_log_file"; then
+    log "Schéma passation déjà présent détecté, tentative de rattrapage de la migration school.0018..."
+
+    if [[ "$(all_columns_exist "from django.db import connection; tables=set(connection.introspection.table_names()); print('1' if {'school_promotionrun','school_promotiondecision'}.issubset(tables) else '0')")" == "1" ]]; then
+      docker_compose exec -T backend python manage.py migrate school 0018 --fake
+      docker_compose exec -T backend python manage.py migrate --noinput
+    else
+      echo "Erreur: les tables de passation sont incohérentes (présence partielle)."
+      cat "$migrate_log_file"
+      rm -f "$migrate_log_file"
+      exit 1
+    fi
+  elif grep -q "Table 'school_attendancesheetvalidation' already exists" "$migrate_log_file"; then
+    log "Schéma de validation des fiches de présence déjà présent détecté, tentative de rattrapage de la migration school.0025..."
+
+    if [[ "$(all_columns_exist "from django.db import connection; tables=set(connection.introspection.table_names()); print('1' if 'school_attendancesheetvalidation' in tables else '0')")" == "1" ]]; then
+      docker_compose exec -T backend python manage.py migrate school 0025 --fake
+      docker_compose exec -T backend python manage.py migrate --noinput
+    else
+      echo "Erreur: la table school_attendancesheetvalidation est incohérente ou absente."
+      cat "$migrate_log_file"
+      rm -f "$migrate_log_file"
+      exit 1
+    fi
+  elif grep -q "Table 'chat_conversation' already exists" "$migrate_log_file" || grep -q "Table 'chat_chatmessage' already exists" "$migrate_log_file" || grep -q "Table 'chat_conversationparticipant' already exists" "$migrate_log_file" || grep -q "Table 'chat_chatpresence' already exists" "$migrate_log_file"; then
+    log "Schéma chat déjà présent détecté, tentative de rattrapage des migrations chat..."
+
+    if [[ "$(all_columns_exist "from django.db import connection; tables=set(connection.introspection.table_names()); needed={'chat_conversation','chat_chatmessage','chat_conversationparticipant','chat_chatpresence'}; print('1' if needed.issubset(tables) else '0')")" == "1" ]]; then
+      docker_compose exec -T backend python manage.py migrate chat 0001 --fake
+
+      if [[ "$(all_columns_exist "from django.db import connection; cursor=connection.cursor(); cols={c.name for c in connection.introspection.get_table_description(cursor, 'chat_conversationparticipant')}; print('1' if 'is_admin' in cols else '0')")" == "1" ]]; then
+        docker_compose exec -T backend python manage.py migrate chat 0002 --fake
+      fi
+
+      docker_compose exec -T backend python manage.py migrate --noinput
+    else
+      echo "Erreur: les tables chat sont incohérentes (présence partielle)."
+      cat "$migrate_log_file"
+      rm -f "$migrate_log_file"
+      exit 1
+    fi
+  elif grep -q "Duplicate column name 'is_admin'" "$migrate_log_file"; then
+    log "Colonne chat_conversationparticipant.is_admin déjà présente, tentative de rattrapage de la migration chat.0002..."
+
+    if [[ "$(all_columns_exist "from django.db import connection; cursor=connection.cursor(); cols={c.name for c in connection.introspection.get_table_description(cursor, 'chat_conversationparticipant')}; print('1' if 'is_admin' in cols else '0')")" == "1" ]]; then
+      docker_compose exec -T backend python manage.py migrate chat 0002 --fake
+      docker_compose exec -T backend python manage.py migrate --noinput
+    else
+      echo "Erreur: la colonne is_admin est absente malgré l'erreur duplicate."
+      cat "$migrate_log_file"
+      rm -f "$migrate_log_file"
+      exit 1
+    fi
   else
     echo "Erreur: échec des migrations."
     cat "$migrate_log_file"

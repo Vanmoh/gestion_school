@@ -1,9 +1,12 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'models/etablissement.dart';
 import 'screens/etablissement_selection_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import 'core/constants/branding.dart';
 import 'core/network/api_client.dart';
 import 'core/theme/app_theme.dart';
@@ -16,7 +19,9 @@ import 'features/auth/presentation/auth_controller.dart';
 import 'features/auth/domain/auth_user.dart';
 import 'features/auth/presentation/login_page.dart';
 import 'features/canteen/presentation/canteen_page.dart';
+import 'features/chat/presentation/chat_panel.dart';
 import 'features/backup/presentation/backup_restore_page.dart';
+import 'features/promotion/presentation/promotion_page.dart';
 import 'features/dashboard/presentation/dashboard_controller.dart';
 import 'features/dashboard/presentation/dashboard_page.dart';
 import 'features/exams/presentation/exams_controller.dart';
@@ -346,10 +351,22 @@ class _AdminShell extends ConsumerStatefulWidget {
 }
 
 class _AdminShellState extends ConsumerState<_AdminShell> {
+  static const Duration _chatWsHeartbeatInterval = Duration(seconds: 20);
+
   String _selectedKey = 'dashboard';
   final Map<String, bool> _expandedGroups = {};
   bool _sidebarCollapsed = false;
   String? _hoveredKey;
+  int _chatUnread = 0;
+  int _lastNotifiedUnread = 0;
+  Timer? _chatUnreadTimer;
+  WebSocketChannel? _chatChannel;
+  StreamSubscription<dynamic>? _chatChannelSub;
+  Timer? _chatWsReconnectTimer;
+  Timer? _chatWsHeartbeatTimer;
+  bool _chatWsAwaitingPong = false;
+  String? _chatWsBaseUrl;
+  String? _chatWsToken;
 
   static const _items = [
     _AdminMenuItem(
@@ -381,6 +398,12 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       label: 'Notes & Bulletins',
       icon: Icons.auto_stories_outlined,
       view: GradesPage(),
+    ),
+    _AdminMenuItem(
+      keyName: 'promotion',
+      label: 'Passation & Archivage',
+      icon: Icons.trending_up_outlined,
+      view: PromotionPage(),
     ),
     _AdminMenuItem(
       keyName: 'attendance',
@@ -495,7 +518,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     _AdminMenuGroup(
       keyName: 'academique',
       title: 'Académique',
-      itemKeys: ['academics', 'grades', 'exams', 'timetable'],
+      itemKeys: ['academics', 'grades', 'promotion', 'exams', 'timetable'],
       collapsible: true,
     ),
     _AdminMenuGroup(
@@ -526,15 +549,95 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   ];
 
   bool _isItemVisibleForRole(String key, String? role) {
+    if (role == 'parent' || role == 'student') {
+      const parentStudentKeys = {
+        'reports',
+      };
+      return parentStudentKeys.contains(key);
+    }
+
+    if (role == 'teacher') {
+      const teacherKeys = {
+        'attendance',
+        'grades',
+        'timetable',
+        'discipline',
+      };
+      return teacherKeys.contains(key);
+    }
+
+    if (role == 'accountant') {
+      const accountantKeys = {
+        'dashboard',
+        'attendance',
+        'exams',
+        'finance',
+        'reports',
+      };
+      return accountantKeys.contains(key);
+    }
+
+    if (role == 'supervisor') {
+      const supervisorKeys = {
+        'dashboard',
+        'students',
+        'attendance',
+        'teacher_attendance',
+        'discipline',
+        'finance',
+        'timetable',
+        'exams',
+        'reports',
+        'communication',
+      };
+      return supervisorKeys.contains(key);
+    }
+
     if (key == 'etablissements') {
       return role == 'super_admin';
     }
     return true;
   }
 
+  bool _isItemReadOnlyForRole(String key, String? role) {
+    if (role == 'parent' || role == 'student') {
+      return true;
+    }
+
+    if (role == 'teacher') {
+      return key == 'timetable';
+    }
+
+    if (role == 'accountant') {
+      return key == 'dashboard' ||
+          key == 'attendance' ||
+          key == 'exams' ||
+          key == 'reports';
+    }
+
+    if (role == 'supervisor') {
+      return key == 'dashboard' ||
+          key == 'students' ||
+          key == 'timetable' ||
+          key == 'exams' ||
+          key == 'reports';
+    }
+
+    return false;
+  }
+
+  String _firstVisibleKeyForRole(String? role) {
+    for (final item in _items) {
+      if (_isItemVisibleForRole(item.keyName, role)) {
+        return item.keyName;
+      }
+    }
+    return 'dashboard';
+  }
+
   _AdminMenuItem _selectedItemForRole(String? role) {
     final isVisible = _isItemVisibleForRole(_selectedKey, role);
-    final targetKey = isVisible ? _selectedKey : 'dashboard';
+    final targetKey = isVisible ? _selectedKey : _firstVisibleKeyForRole(role);
     return _items.firstWhere((item) => item.keyName == targetKey);
   }
 
@@ -547,16 +650,244 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       }
     }
     Future.microtask(_warmUpAdminData);
+    Future.microtask(_refreshChatUnread);
+    Future.microtask(_initChatUnreadRealtime);
+    _chatUnreadTimer = Timer.periodic(
+      const Duration(seconds: 25),
+      (_) => _refreshChatUnread(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _chatUnreadTimer?.cancel();
+    _chatWsReconnectTimer?.cancel();
+    _chatWsHeartbeatTimer?.cancel();
+    _chatChannelSub?.cancel();
+    _chatChannel?.sink.close();
+    super.dispose();
+  }
+
+  String _chatWsUrlFromApiBase(String apiBase, String token) {
+    final base = Uri.parse(apiBase.trim());
+    final wsScheme = base.scheme == 'https' ? 'wss' : 'ws';
+
+    var path = base.path;
+    if (path.endsWith('/')) {
+      path = path.substring(0, path.length - 1);
+    }
+    if (path.endsWith('/api')) {
+      path = path.substring(0, path.length - 4);
+    }
+
+    return Uri(
+      scheme: wsScheme,
+      host: base.host,
+      port: base.hasPort ? base.port : null,
+      path: '$path/ws/chat/stream/',
+      queryParameters: <String, String>{'token': token},
+    ).toString();
+  }
+
+  Future<void> _initChatUnreadRealtime() async {
+    try {
+      final storage = ref.read(tokenStorageProvider);
+      final token = await storage.accessToken();
+      if (token == null || token.isEmpty) {
+        _chatWsReconnectTimer ??= Timer(
+          const Duration(seconds: 2),
+          () {
+            _chatWsReconnectTimer = null;
+            _initChatUnreadRealtime();
+          },
+        );
+        return;
+      }
+      final storedBase = (await storage.apiBaseUrl()) ?? '';
+      final activeBase = ref.read(dioProvider).options.baseUrl.trim();
+      final base = activeBase.isNotEmpty ? activeBase : storedBase;
+      _connectChatUnreadWs(base, token);
+    } catch (_) {
+      // Fallback polling remains active.
+    }
+  }
+
+  void _connectChatUnreadWs(String baseUrl, String token) {
+    _chatWsBaseUrl = baseUrl;
+    _chatWsToken = token;
+    _chatWsReconnectTimer?.cancel();
+    _chatWsHeartbeatTimer?.cancel();
+    _chatWsAwaitingPong = false;
+    _chatChannelSub?.cancel();
+    _chatChannel?.sink.close();
+
+    final wsUrl = _chatWsUrlFromApiBase(baseUrl, token);
+    _chatChannel = WebSocketChannel.connect(Uri.parse(wsUrl));
+    _chatChannelSub = _chatChannel!.stream.listen(
+      _handleChatUnreadWsEvent,
+      onError: (_) => _scheduleChatUnreadReconnect(),
+      onDone: _scheduleChatUnreadReconnect,
+    );
+    _startChatUnreadHeartbeat();
+  }
+
+  void _startChatUnreadHeartbeat() {
+    _chatWsHeartbeatTimer?.cancel();
+    _chatWsHeartbeatTimer = Timer.periodic(_chatWsHeartbeatInterval, (_) {
+      if (_chatChannel == null) {
+        return;
+      }
+      if (_chatWsAwaitingPong) {
+        _chatChannel?.sink.close();
+        _scheduleChatUnreadReconnect();
+        return;
+      }
+      _chatWsAwaitingPong = true;
+      _chatChannel?.sink.add(jsonEncode(<String, dynamic>{'action': 'ping'}));
+    });
+  }
+
+  void _scheduleChatUnreadReconnect() {
+    if (!mounted || _chatWsReconnectTimer != null) {
+      return;
+    }
+    _chatWsHeartbeatTimer?.cancel();
+    final base = _chatWsBaseUrl;
+    final token = _chatWsToken;
+    if (base == null || token == null || token.isEmpty) {
+      return;
+    }
+    _chatWsReconnectTimer = Timer(const Duration(seconds: 4), () {
+      _chatWsReconnectTimer = null;
+      _connectChatUnreadWs(base, token);
+    });
+  }
+
+  void _handleChatUnreadWsEvent(dynamic payload) {
+    try {
+      final data = jsonDecode(payload.toString());
+      if (data is! Map) {
+        return;
+      }
+      final event = (data['event'] ?? '').toString();
+      if (event == 'pong') {
+        _chatWsAwaitingPong = false;
+        return;
+      }
+
+      if (event == 'connected') {
+        _chatWsAwaitingPong = false;
+        _refreshChatUnread();
+        return;
+      }
+
+      if (event == 'message') {
+        final senderId = data['sender_id'] is int
+            ? data['sender_id'] as int
+            : int.tryParse('${data['sender_id']}');
+        final currentUserId = ref.read(authControllerProvider).value?.id;
+        if (senderId != null && currentUserId != null && senderId != currentUserId) {
+          if (mounted) {
+            setState(() => _chatUnread = _chatUnread + 1);
+          }
+        }
+        _refreshChatUnread();
+        return;
+      }
+
+      if (event == 'read_receipt') {
+        _refreshChatUnread();
+      }
+    } catch (_) {
+      // Ignore malformed websocket payloads.
+    }
+  }
+
+  Future<void> _refreshChatUnread() async {
+    try {
+      final dio = ref.read(dioProvider);
+      final resp = await dio.get('/chat/conversations/');
+      final data = resp.data;
+      List rows;
+      if (data is List) {
+        rows = data;
+      } else if (data is Map && data['results'] is List) {
+        rows = data['results'] as List;
+      } else {
+        rows = const [];
+      }
+
+      var unread = 0;
+      for (final row in rows) {
+        if (row is Map) {
+          final raw = row['unread_count'];
+          unread += raw is int ? raw : int.tryParse(raw?.toString() ?? '') ?? 0;
+        }
+      }
+
+      if (!mounted) {
+        return;
+      }
+      final previous = _chatUnread;
+      setState(() => _chatUnread = unread);
+
+      if (unread > previous && previous >= _lastNotifiedUnread && mounted) {
+        _lastNotifiedUnread = unread;
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Nouveaux messages recus.'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+      }
+    } catch (_) {
+      // Keep shell stable if chat API is temporarily unavailable.
+    }
+  }
+
+  Future<void> _openChatPanel() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) {
+        return ChatPanel(
+          dio: ref.read(dioProvider),
+          tokenStorage: ref.read(tokenStorageProvider),
+          onUnreadChanged: (value) {
+            if (!mounted) {
+              return;
+            }
+            setState(() => _chatUnread = value);
+          },
+        );
+      },
+    );
+
+    if (!mounted) {
+      return;
+    }
+    await _refreshChatUnread();
   }
 
   Future<void> _warmUpAdminData() async {
     try {
-      await Future.wait<void>([
+      final role = ref.read(authControllerProvider).value?.role;
+      final warmups = <Future<void>>[
         ref.read(dashboardStatsProvider.future).then((_) {}),
-        ref.read(studentsProvider.future).then((_) {}),
-        ref.read(usersProvider.future).then((_) {}),
-        ref.read(paymentsProvider.future).then((_) {}),
-      ]);
+      ];
+
+      if (_isItemVisibleForRole('students', role)) {
+        warmups.add(ref.read(studentsProvider.future).then((_) {}));
+      }
+      if (_isItemVisibleForRole('users', role)) {
+        warmups.add(ref.read(usersProvider.future).then((_) {}));
+      }
+      if (_isItemVisibleForRole('finance', role)) {
+        warmups.add(ref.read(paymentsProvider.future).then((_) {}));
+      }
+
+      await Future.wait<void>(warmups);
     } catch (_) {
       // Keep UI responsive even if one warm-up request fails.
     }
@@ -619,6 +950,13 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     final compact = !closeDrawerOnItemTap && _sidebarCollapsed;
 
     for (final group in _groups) {
+      final visibleKeys = group.itemKeys
+          .where((key) => _isItemVisibleForRole(key, role))
+          .toList();
+      if (visibleKeys.isEmpty) {
+        continue;
+      }
+
       final isExpanded = _expandedGroups[group.keyName] ?? true;
 
       if (compact) {
@@ -666,19 +1004,15 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       }
 
       if (!group.collapsible || isExpanded) {
-        final visibleKeys = group.itemKeys
-            .where((key) => _isItemVisibleForRole(key, role))
-            .toList();
-        if (visibleKeys.isEmpty) {
-          continue;
-        }
         widgets.addAll(
           visibleKeys.map((key) {
             final item = _items.firstWhere((element) => element.keyName == key);
             final selected = _selectedKey == item.keyName;
             return _SidebarItem(
               icon: item.icon,
-              label: item.label,
+              label: _isItemReadOnlyForRole(item.keyName, role)
+                  ? '${item.label} (Lecture seule)'
+                  : item.label,
               compact: compact,
               selected: selected,
               hovered: _hoveredKey == item.keyName,
@@ -714,7 +1048,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         if (!mounted) {
           return;
         }
-        setState(() => _selectedKey = 'dashboard');
+        setState(() => _selectedKey = _firstVisibleKeyForRole(user?.role));
       });
     }
 
@@ -1113,15 +1447,17 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                                     ),
                                   ),
                                   const SizedBox(width: 8),
-                                  const _TopBarIconBubble(
+                                  _TopBarIconBubble(
                                     icon: Icons.notifications_none_rounded,
                                   ),
                                   const SizedBox(width: 8),
-                                  const _TopBarIconBubble(
+                                  _TopBarIconBubble(
                                     icon: Icons.mail_outline_rounded,
+                                    badge: _chatUnread,
+                                    onTap: _openChatPanel,
                                   ),
                                   const SizedBox(width: 8),
-                                  const _TopBarIconBubble(
+                                  _TopBarIconBubble(
                                     icon: Icons.insights_rounded,
                                   ),
                                   const SizedBox(width: 10),
@@ -1272,20 +1608,63 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
 class _TopBarIconBubble extends StatelessWidget {
   final IconData icon;
+  final VoidCallback? onTap;
+  final int badge;
 
-  const _TopBarIconBubble({required this.icon});
+  const _TopBarIconBubble({required this.icon, this.onTap, this.badge = 0});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 34,
-      height: 34,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        color: Colors.white.withValues(alpha: 0.1),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: SizedBox(
+        width: 34,
+        height: 34,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  color: Colors.white.withValues(alpha: 0.1),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                ),
+                child: Icon(
+                  icon,
+                  size: 18,
+                  color: Colors.white.withValues(alpha: 0.9),
+                ),
+              ),
+            ),
+            if (badge > 0)
+              Positioned(
+                right: -3,
+                top: -3,
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEF4444),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: Colors.white, width: 1),
+                  ),
+                  child: Center(
+                    child: Text(
+                      badge > 99 ? '99+' : '$badge',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
-      child: Icon(icon, size: 18, color: Colors.white.withValues(alpha: 0.9)),
     );
   }
 }
@@ -1440,23 +1819,7 @@ class _AccountantShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return RequireEtablissementSelection(
-      child: const _RoleShell(
-        title: '${SchoolBranding.appName} - Comptabilité',
-        tabs: [
-          Tab(text: 'Dashboard'),
-          Tab(text: 'Absences'),
-          Tab(text: 'Examens'),
-          Tab(text: 'Paiements'),
-          Tab(text: 'Rapports'),
-        ],
-        views: [
-          DashboardPage(),
-          AttendancePage(),
-          ExamsPage(),
-          PaymentsPage(),
-          ReportsPage(),
-        ],
-      ),
+      child: const _AdminShell(),
     );
   }
 }
@@ -1466,7 +1829,7 @@ class _TeacherShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return const RequireEtablissementSelection(child: _TeacherShellTabs());
+    return const RequireEtablissementSelection(child: _AdminShell());
   }
 }
 
@@ -1648,15 +2011,7 @@ class _SupervisorShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return RequireEtablissementSelection(
-      child: const _RoleShell(
-        title: '${SchoolBranding.appName} - Surveillant',
-        tabs: [
-          Tab(text: 'Dashboard'),
-          Tab(text: 'Élèves'),
-          Tab(text: 'Absences'),
-        ],
-        views: [DashboardPage(), StudentsPage(), AttendancePage()],
-      ),
+      child: const _AdminShell(),
     );
   }
 }
@@ -1669,11 +2024,7 @@ class _ParentStudentShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return RequireEtablissementSelection(
-      child: _RoleShell(
-        title: '${SchoolBranding.appName} - $roleLabel',
-        tabs: const [Tab(text: 'Rapports')],
-        views: const [ReportsPage()],
-      ),
+      child: const _AdminShell(),
     );
   }
 }

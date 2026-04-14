@@ -41,6 +41,7 @@ dependencies:
   printing: ^5.14.2
   file_picker: ^10.3.2
   google_fonts: ^8.0.2
+  web_socket_channel: ^3.0.3
 
 dev_dependencies:
   flutter_test:

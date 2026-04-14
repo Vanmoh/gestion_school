@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -29,6 +30,9 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
   List<Map<String, dynamic>> _rows = [];
   Timer? _historyAutoRefreshTimer;
   DateTime? _forcePollingUntil;
+
+  static const Duration _backupConnectTimeout = Duration(minutes: 2);
+  static const Duration _backupTransferTimeout = Duration(minutes: 10);
 
   String _createScope = 'etablissement';
   bool _includeMedia = true;
@@ -58,7 +62,10 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     }
     try {
       final response = await _requestWithBackupFallback(
-        (base) => ref.read(dioProvider).get('$base/'),
+        (base) => ref.read(dioProvider).get(
+          '$base/',
+          options: _backupRequestOptions(),
+        ),
       );
       final data = response.data;
       final List<dynamic> raw =
@@ -137,7 +144,11 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       }
 
       await _requestWithBackupFallback(
-        (base) => ref.read(dioProvider).post('$base/', data: payload),
+        (base) => ref.read(dioProvider).post(
+          '$base/',
+          data: payload,
+          options: _backupRequestOptions(),
+        ),
       );
       _showMessage('Sauvegarde créée avec succès.', isSuccess: true);
       await _loadRows();
@@ -155,7 +166,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       final response = await _requestWithBackupFallback(
         (base) => ref.read(dioProvider).get(
           '$base/$id/download/',
-          options: Options(responseType: ResponseType.bytes),
+          options: _backupRequestOptions(responseType: ResponseType.bytes),
         ),
       );
       final bytes = _toBytes(response.data);
@@ -172,6 +183,10 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       );
 
       if (savePath == null) {
+        if (kIsWeb) {
+          _showMessage('Telechargement effectue avec succes.', isSuccess: true);
+          return;
+        }
         _showMessage('Téléchargement annulé.');
         return;
       }
@@ -190,7 +205,10 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       _forcePollingUntil = DateTime.now().add(const Duration(minutes: 2));
       _syncHistoryAutoRefresh();
       await _requestWithBackupFallback(
-        (base) => ref.read(dioProvider).post('$base/$id/restore/'),
+        (base) => ref.read(dioProvider).post(
+          '$base/$id/restore/',
+          options: _backupRequestOptions(),
+        ),
       );
       _showMessage('Restauration lancée en arrière-plan.', isSuccess: true);
       await _loadRows();
@@ -223,6 +241,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
         (base) => ref.read(dioProvider).post(
           '$base/upload-restore/',
           data: _buildRestoreFormData(selectedEtab),
+          options: _backupRequestOptions(),
         ),
       );
       _showMessage('Archive envoyée. Restauration lancée en arrière-plan.', isSuccess: true);
@@ -276,12 +295,58 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     try {
       await task();
     } catch (error) {
-      _showMessage('Opération impossible: $error');
+      _showMessage('Operation impossible: ${_extractOperationError(error)}');
     } finally {
       if (mounted) {
         setState(() => _busy = false);
       }
     }
+  }
+
+  Options _backupRequestOptions({ResponseType? responseType}) {
+    return Options(
+      connectTimeout: _backupConnectTimeout,
+      sendTimeout: _backupTransferTimeout,
+      receiveTimeout: _backupTransferTimeout,
+      responseType: responseType,
+    );
+  }
+
+  String _extractOperationError(Object error) {
+    if (error is DioException) {
+      if (error.type == DioExceptionType.connectionTimeout) {
+        return 'Connexion au serveur trop lente. Reessayez dans quelques instants.';
+      }
+      if (error.type == DioExceptionType.receiveTimeout ||
+          error.type == DioExceptionType.sendTimeout) {
+        return 'Operation longue interrompue par delai depasse. Reessayez.';
+      }
+
+      final data = error.response?.data;
+      if (data is Map<String, dynamic>) {
+        for (final entry in data.entries) {
+          final value = entry.value;
+          if (value is List && value.isNotEmpty) {
+            return value.map((item) => item.toString()).join(' | ');
+          }
+          if (value is String && value.trim().isNotEmpty) {
+            return value.trim();
+          }
+        }
+      }
+      if (data is String && data.trim().isNotEmpty) {
+        return data.trim();
+      }
+
+      final status = error.response?.statusCode;
+      if (status != null) {
+        return 'Erreur serveur HTTP $status.';
+      }
+      if ((error.message ?? '').trim().isNotEmpty) {
+        return error.message!.trim();
+      }
+    }
+    return error.toString();
   }
 
   Uint8List _toBytes(dynamic data) {
