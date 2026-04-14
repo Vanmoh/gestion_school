@@ -579,6 +579,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             with transaction.atomic():
                 from django.core.management import call_command
 
+                if backup.scope == BackupArchive.Scope.GLOBAL:
+                    self._clear_global_scope_data(keep_backup_id=backup.id)
+                    restore_notes.append("Donnees globales existantes nettoyees.")
+
                 # For establishment restores, remove current scoped data first to
                 # avoid duplicate PK / unique constraint conflicts on loaddata.
                 if backup.scope == BackupArchive.Scope.ETABLISSEMENT and backup.etablissement_id:
@@ -706,6 +710,34 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         # Second pass once most child rows are gone.
         for model in retry_models:
             model.objects.filter(etablissement=etablissement).delete()
+
+    def _clear_global_scope_data(self, keep_backup_id: int | None = None):
+        scoped_models = []
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin"}:
+                continue
+            if model is BackupArchive:
+                continue
+
+            scoped_models.append(model)
+
+        retry_models = []
+        for model in reversed(scoped_models):
+            try:
+                model.objects.all().delete()
+            except ProtectedError:
+                retry_models.append(model)
+
+        for model in retry_models:
+            model.objects.all().delete()
+
+        backup_qs = BackupArchive.objects.all()
+        if keep_backup_id is not None:
+            backup_qs = backup_qs.exclude(pk=keep_backup_id)
+        backup_qs.delete()
 
     def _run_restore_in_background(self, backup_id: int, archive_path: str, actor_id: int | None):
         def job():
