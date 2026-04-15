@@ -181,13 +181,38 @@ class _RequireEtablissementSelectionState
   }
 }
 
-class EtablissementSelectionScreen extends ConsumerWidget {
+class EtablissementSelectionScreen extends ConsumerStatefulWidget {
   final FutureOr<void> Function(Etablissement) onSelected;
 
   const EtablissementSelectionScreen({super.key, required this.onSelected});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<EtablissementSelectionScreen> createState() =>
+      _EtablissementSelectionScreenState();
+}
+
+class _EtablissementSelectionScreenState
+    extends ConsumerState<EtablissementSelectionScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ambientController;
+
+  @override
+  void initState() {
+    super.initState();
+    _ambientController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 9),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ambientController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final screenHeight = MediaQuery.sizeOf(context).height;
     final screenWidth = MediaQuery.sizeOf(context).width;
@@ -199,15 +224,15 @@ class EtablissementSelectionScreen extends ConsumerWidget {
         : (rawEtabCount > 4 ? 4 : rawEtabCount);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF2F6FB),
+      backgroundColor: const Color(0xFFEFF4FB),
       appBar: PreferredSize(
         preferredSize: Size.fromHeight(veryCompact ? 48 : (compact ? 56 : 64)),
         child: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              begin: Alignment.topLeft,
+              begin: Alignment.centerLeft,
               end: Alignment.bottomRight,
-              colors: [Color(0xFF245B95), Color(0xFF143B6B)],
+              colors: [Color(0xFF0F355D), Color(0xFF114C77), Color(0xFF156A8D)],
             ),
           ),
           child: SafeArea(
@@ -219,8 +244,11 @@ class EtablissementSelectionScreen extends ConsumerWidget {
                     width: veryCompact ? 30 : 34,
                     height: veryCompact ? 30 : 34,
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(9),
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.30),
+                      ),
                     ),
                     child: const Icon(
                       Icons.school,
@@ -235,7 +263,7 @@ class EtablissementSelectionScreen extends ConsumerWidget {
                       color: Colors.white,
                       fontSize: veryCompact ? 18 : (compact ? 21 : 24),
                       fontWeight: FontWeight.w800,
-                      letterSpacing: 0.2,
+                      letterSpacing: 0.4,
                     ),
                   ),
                   const Spacer(),
@@ -257,6 +285,7 @@ class EtablissementSelectionScreen extends ConsumerWidget {
                         color: Colors.white,
                         fontSize: veryCompact ? 10 : 11,
                         fontWeight: FontWeight.w600,
+                        letterSpacing: 0.2,
                       ),
                     ),
                   ),
@@ -268,35 +297,65 @@ class EtablissementSelectionScreen extends ConsumerWidget {
       ),
       body: Stack(
         children: [
-          Positioned(
-            left: -110,
-            bottom: -90,
-            child: Container(
-              width: screenWidth * 0.45,
-              height: screenWidth * 0.38,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0x55C9DBF5), Color(0x00C9DBF5)],
-                ),
-                borderRadius: BorderRadius.circular(260),
-              ),
+          IgnorePointer(
+            child: CustomPaint(
+              size: Size.infinite,
+              painter: _LuxuryBackdropPainter(),
             ),
           ),
-          Positioned(
-            right: -80,
-            top: 70,
-            child: Container(
-              width: size.width * 0.34,
-              height: size.width * 0.28,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0x66D9E8FB), Color(0x00D9E8FB)],
-                ),
-                borderRadius: BorderRadius.circular(220),
-              ),
-            ),
+          AnimatedBuilder(
+            animation: _ambientController,
+            builder: (context, _) {
+              final pulse = _ambientController.value;
+              return Stack(
+                children: [
+                  Positioned(
+                    left: -130 + (22 * pulse),
+                    bottom: -95 + (16 * pulse),
+                    child: Container(
+                      width: screenWidth * 0.48,
+                      height: screenWidth * 0.40,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0x66BFD8F6), Color(0x00BFD8F6)],
+                        ),
+                        borderRadius: BorderRadius.circular(280),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: -70 + (18 * pulse),
+                    top: 66 - (12 * pulse),
+                    child: Container(
+                      width: size.width * 0.36,
+                      height: size.width * 0.29,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0x66D7F0EE), Color(0x00D7F0EE)],
+                        ),
+                        borderRadius: BorderRadius.circular(240),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: size.width * 0.30,
+                    top: -80 + (15 * pulse),
+                    child: Container(
+                      width: size.width * 0.22,
+                      height: size.width * 0.18,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0x44FFE1C8), Color(0x00FFE1C8)],
+                        ),
+                        borderRadius: BorderRadius.circular(200),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
           SafeArea(
             child: Center(
@@ -310,77 +369,108 @@ class EtablissementSelectionScreen extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Container(
-                        padding: EdgeInsets.fromLTRB(
-                          veryCompact ? 12 : 16,
-                          veryCompact ? 10 : 14,
-                          veryCompact ? 12 : 16,
-                          veryCompact ? 9 : 12,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.90),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFFD5E2F1)),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x18315B89),
-                              blurRadius: 16,
-                              offset: Offset(0, 7),
+                      _AnimatedReveal(
+                        delay: const Duration(milliseconds: 80),
+                        child: Container(
+                          padding: EdgeInsets.fromLTRB(
+                            veryCompact ? 12 : 18,
+                            veryCompact ? 11 : 16,
+                            veryCompact ? 12 : 18,
+                            veryCompact ? 11 : 14,
+                          ),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(20),
+                            gradient: const LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [Color(0xFDFEFFFE), Color(0xF0F7FEFF)],
                             ),
-                          ],
-                        ),
-                        child: Column(
-                          children: [
-                            Text(
-                              'Bienvenue sur la plateforme de Gestion Scolaire OUMAR BAH',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: veryCompact
-                                    ? 16
-                                    : (compact ? 20 : 25),
-                                fontWeight: FontWeight.w900,
-                                color: const Color(0xFF1F3F67),
-                                letterSpacing: 0.15,
+                            border: Border.all(color: const Color(0xFFD3E2F2)),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x12324F73),
+                                blurRadius: 20,
+                                offset: Offset(0, 10),
                               ),
-                            ),
-                            SizedBox(height: veryCompact ? 3 : 5),
-                            Text(
-                              'Sélectionnez un établissement pour accéder à la gestion.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: veryCompact
-                                    ? 11
-                                    : (compact ? 13 : 14),
-                                fontWeight: FontWeight.w500,
-                                color: const Color(0xFF4A607E),
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE6F1FC),
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(color: const Color(0xFFC6DBF2)),
+                                ),
+                                child: const Text(
+                                  'ENTREE OFFICIELLE',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1.1,
+                                    color: Color(0xFF24557F),
+                                  ),
+                                ),
                               ),
-                            ),
-                            SizedBox(height: veryCompact ? 8 : 10),
-                            Wrap(
-                              alignment: WrapAlignment.center,
-                              spacing: 8,
-                              runSpacing: 6,
-                              children: [
-                                _InfoPill(
-                                  icon: Icons.domain,
-                                  label:
-                                      '$etabCount etablissements disponibles',
+                              SizedBox(height: veryCompact ? 6 : 8),
+                              Text(
+                                'Bienvenue sur la plateforme de Gestion Scolaire OUMAR BAH',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: veryCompact ? 16 : (compact ? 21 : 27),
+                                  fontWeight: FontWeight.w900,
+                                  color: const Color(0xFF163E63),
+                                  letterSpacing: 0.2,
+                                  height: 1.15,
                                 ),
-                                const _InfoPill(
-                                  icon: Icons.verified_user,
-                                  label: 'Acces securise',
+                              ),
+                              SizedBox(height: veryCompact ? 4 : 6),
+                              Text(
+                                'Sélectionnez un établissement pour accéder à la gestion.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: veryCompact ? 11 : (compact ? 13 : 14),
+                                  fontWeight: FontWeight.w500,
+                                  color: const Color(0xFF476584),
                                 ),
-                              ],
-                            ),
-                          ],
+                              ),
+                              SizedBox(height: veryCompact ? 9 : 11),
+                              Wrap(
+                                alignment: WrapAlignment.center,
+                                spacing: 8,
+                                runSpacing: 6,
+                                children: [
+                                  _StatChip(
+                                    icon: Icons.domain,
+                                    label: '$etabCount etablissements disponibles',
+                                  ),
+                                  const _StatChip(
+                                    icon: Icons.verified_user,
+                                    label: 'Acces securise',
+                                  ),
+                                  const _StatChip(
+                                    icon: Icons.bolt,
+                                    label: 'Acces rapide',
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                       SizedBox(height: veryCompact ? 6 : 10),
                       Expanded(
-                        child: EtablissementSelector(
-                          onSelected: (etab) async {
-                            await onSelected(etab);
-                          },
+                        child: _AnimatedReveal(
+                          delay: const Duration(milliseconds: 180),
+                          child: EtablissementSelector(
+                            onSelected: (etab) async {
+                              await widget.onSelected(etab);
+                            },
+                          ),
                         ),
                       ),
                     ],
@@ -395,25 +485,25 @@ class EtablissementSelectionScreen extends ConsumerWidget {
   }
 }
 
-class _InfoPill extends StatelessWidget {
+class _StatChip extends StatelessWidget {
   final IconData icon;
   final String label;
 
-  const _InfoPill({required this.icon, required this.label});
+  const _StatChip({required this.icon, required this.label});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFFEAF2FC),
+        color: const Color(0xFFEAF3FD),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFFD0DEEF)),
+        border: Border.all(color: const Color(0xFFC9DDF3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: const Color(0xFF26588D)),
+          Icon(icon, size: 14, color: const Color(0xFF1F5788)),
           const SizedBox(width: 6),
           Text(
             label,
@@ -427,4 +517,75 @@ class _InfoPill extends StatelessWidget {
       ),
     );
   }
+}
+
+class _AnimatedReveal extends StatefulWidget {
+  final Widget child;
+  final Duration delay;
+
+  const _AnimatedReveal({required this.child, required this.delay});
+
+  @override
+  State<_AnimatedReveal> createState() => _AnimatedRevealState();
+}
+
+class _AnimatedRevealState extends State<_AnimatedReveal> {
+  bool _visible = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Timer(widget.delay, () {
+      if (mounted) {
+        setState(() => _visible = true);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: _visible ? 1 : 0),
+      duration: const Duration(milliseconds: 620),
+      curve: Curves.easeOutCubic,
+      child: widget.child,
+      builder: (context, value, child) {
+        final t = value.clamp(0.0, 1.0).toDouble();
+        return AnimatedOpacity(
+          opacity: t,
+          duration: const Duration(milliseconds: 220),
+          child: Transform.translate(
+            offset: Offset(0, (1 - t) * 24),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LuxuryBackdropPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final gridPaint = Paint()
+      ..color = const Color(0x163B6B92)
+      ..strokeWidth = 1;
+    const spacing = 28.0;
+    for (double x = 0; x <= size.width; x += spacing) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+    }
+    for (double y = 0; y <= size.height; y += spacing) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    final dotPaint = Paint()..color = const Color(0x1A6E9FC7);
+    for (double y = 18; y < size.height; y += 56) {
+      for (double x = 18; x < size.width; x += 56) {
+        canvas.drawCircle(Offset(x, y), 1.2, dotPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

@@ -1,8 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:printing/printing.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../../core/network/token_storage.dart';
@@ -26,6 +30,23 @@ class ChatPanel extends StatefulWidget {
 class _ChatPanelState extends State<ChatPanel> {
   static const int _pageSize = 50;
   static const Duration _heartbeatInterval = Duration(seconds: 20);
+  static const List<String> _allowedAttachmentExtensions = <String>[
+    'jpg',
+    'jpeg',
+    'png',
+    'webp',
+    'gif',
+    'pdf',
+    'doc',
+    'docx',
+    'xls',
+    'xlsx',
+    'ppt',
+    'pptx',
+    'txt',
+    'csv',
+    'zip',
+  ];
 
   final TextEditingController _messageController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
@@ -58,6 +79,9 @@ class _ChatPanelState extends State<ChatPanel> {
   Timer? _heartbeatTimer;
   Timer? _typingStopTimer;
   Timer? _presenceRefreshTimer;
+  CancelToken? _activeUploadCancelToken;
+  String? _activeUploadClientMessageId;
+  int? _activeUploadConversationId;
   bool _wsConnected = false;
   bool _awaitingPong = false;
   int _wsReconnectAttempt = 0;
@@ -84,6 +108,10 @@ class _ChatPanelState extends State<ChatPanel> {
         error.type == DioExceptionType.sendTimeout ||
         error.type == DioExceptionType.receiveTimeout ||
         error.type == DioExceptionType.connectionError;
+  }
+
+  bool _isCancelledError(Object error) {
+    return error is DioException && error.type == DioExceptionType.cancel;
   }
 
   String _newClientMessageId(int conversationId) {
@@ -146,6 +174,7 @@ class _ChatPanelState extends State<ChatPanel> {
   @override
   void dispose() {
     _storeCurrentDraft();
+    _activeUploadCancelToken?.cancel('panel_disposed');
     _typingStopTimer?.cancel();
     for (final timer in _typingExpiryByConversation.values) {
       timer.cancel();
@@ -932,9 +961,14 @@ class _ChatPanelState extends State<ChatPanel> {
           'conversation': conversationId,
           'sender': senderId,
           'sender_name': _asString(data['sender_name']),
+          'message_type': _asString(data['message_type']),
           'content': _asString(data['content']),
           'created_at': _asString(data['created_at']),
           'client_message_id': _asString(data['client_message_id']),
+          'attachment_url': _asString(data['attachment_url']),
+          'attachment_name': _asString(data['attachment_name']),
+          'attachment_size': _asInt(data['attachment_size']),
+          'attachment_mime_type': _asString(data['attachment_mime_type']),
         };
 
         if (!mounted) return;
@@ -1053,13 +1087,33 @@ class _ChatPanelState extends State<ChatPanel> {
     }
 
     final clientMessageId = _newClientMessageId(conversationId);
+    final localMessageId = -DateTime.now().microsecondsSinceEpoch;
+    final localMessage = <String, dynamic>{
+      'id': localMessageId,
+      'conversation': conversationId,
+      'sender': _currentUserId,
+      'sender_name': 'Moi',
+      'content': content,
+      'created_at': DateTime.now().toIso8601String(),
+      'client_message_id': clientMessageId,
+      'is_local_pending': true,
+    };
 
     setState(() {
       _sending = true;
       _sendError = null;
+      _messages = <Map<String, dynamic>>[..._messages, localMessage];
+      _conversations = _conversations.map((row) {
+        if (_asInt(row['id']) != conversationId) return row;
+        final next = Map<String, dynamic>.from(row);
+        next['last_message'] = localMessage;
+        next['unread_count'] = 0;
+        return next;
+      }).toList(growable: false);
     });
     _typingStopTimer?.cancel();
     _onInputChanged('');
+    _scrollToBottom();
 
     try {
       Response<dynamic> resp;
@@ -1093,8 +1147,19 @@ class _ChatPanelState extends State<ChatPanel> {
         _draftByConversation[conversationId] = '';
         _messageController.clear();
         final dedupeKey = _messageKey(conversationId, msgId);
-        if (msgId > 0 && !_seenMessageKeys.contains(dedupeKey)) {
+        var replacedPending = false;
+        _messages = _messages.map((row) {
+          if (_asString(row['client_message_id']) == clientMessageId) {
+            replacedPending = true;
+            return msg;
+          }
+          return row;
+        }).toList(growable: false);
+
+        if (!replacedPending && msgId > 0 && !_seenMessageKeys.contains(dedupeKey)) {
           _messages = <Map<String, dynamic>>[..._messages, msg];
+        }
+        if (msgId > 0) {
           _seenMessageKeys.add(dedupeKey);
         }
         _oldestMessageId = _messages.isNotEmpty ? _asInt(_messages.first['id']) : null;
@@ -1124,6 +1189,19 @@ class _ChatPanelState extends State<ChatPanel> {
       if (!mounted) return;
       final message = _extractApiError(error);
       setState(() {
+        final cleanedMessages = _messages
+            .where((row) => _asString(row['client_message_id']) != clientMessageId)
+            .toList(growable: false);
+        _messages = cleanedMessages;
+        final fallbackLast = cleanedMessages.isNotEmpty ? cleanedMessages.last : null;
+        _conversations = _conversations.map((row) {
+          if (_asInt(row['id']) != conversationId) return row;
+          final next = Map<String, dynamic>.from(row);
+          if (fallbackLast != null) {
+            next['last_message'] = fallbackLast;
+          }
+          return next;
+        }).toList(growable: false);
         _sendError = message;
         _messageController.value = TextEditingValue(
           text: draft,
@@ -1152,6 +1230,23 @@ class _ChatPanelState extends State<ChatPanel> {
     return 'Conversation #${_asInt(row['id'])}';
   }
 
+  String _conversationPreview(Map<String, dynamic> row) {
+    final lastMessage = row['last_message'];
+    if (lastMessage is! Map) {
+      return '';
+    }
+    final content = _asString(lastMessage['content']).trim();
+    final attachmentName = _asString(lastMessage['attachment_name']).trim();
+    final messageType = _asString(lastMessage['message_type']).trim();
+    if (attachmentName.isNotEmpty || messageType == 'file') {
+      if (content.isNotEmpty) {
+        return 'Fichier: $attachmentName - $content';
+      }
+      return attachmentName.isNotEmpty ? 'Fichier: $attachmentName' : 'Piece jointe';
+    }
+    return content;
+  }
+
   bool _conversationOnline(Map<String, dynamic> row) {
     final counterpart = row['counterpart'];
     if (counterpart is! Map) return false;
@@ -1165,6 +1260,944 @@ class _ChatPanelState extends State<ChatPanel> {
     return mine ? 'Moi' : _asString(message['sender_name']);
   }
 
+  String _outgoingStatusLabel(Map<String, dynamic> message, int lastReadMessageId) {
+    if (message['upload_failed'] == true) {
+      return 'Echec';
+    }
+    if (message['is_local_pending'] == true) {
+      final progress = _asInt(message['upload_progress']);
+      if (progress > 0 && progress < 100) {
+        return 'Envoi... $progress%';
+      }
+      return 'Envoi...';
+    }
+    final messageId = _asInt(message['id']);
+    if (messageId > 0 && lastReadMessageId >= messageId) {
+      return 'Lu';
+    }
+    return 'Recu';
+  }
+
+  void _updatePendingMessageProgress(String clientMessageId, int progress) {
+    if (!mounted) {
+      return;
+    }
+    final bounded = progress.clamp(0, 100);
+    setState(() {
+      _messages = _messages.map((row) {
+        if (_asString(row['client_message_id']) != clientMessageId) {
+          return row;
+        }
+        final next = Map<String, dynamic>.from(row);
+        next['upload_progress'] = bounded;
+        return next;
+      }).toList(growable: false);
+
+      _conversations = _conversations.map((row) {
+        if (_asInt(row['id']) != _selectedConversationId) {
+          return row;
+        }
+        final lastMessage = row['last_message'];
+        if (lastMessage is! Map || _asString(lastMessage['client_message_id']) != clientMessageId) {
+          return row;
+        }
+        final next = Map<String, dynamic>.from(row);
+        next['last_message'] = <String, dynamic>{
+          ...Map<String, dynamic>.from(lastMessage),
+          'upload_progress': bounded,
+        };
+        return next;
+      }).toList(growable: false);
+    });
+  }
+
+  void _removePendingUploadMessage(String clientMessageId, int conversationId) {
+    final cleanedMessages = _messages
+        .where((row) => _asString(row['client_message_id']) != clientMessageId)
+        .toList(growable: false);
+    _messages = cleanedMessages;
+    final fallbackLast = cleanedMessages.isNotEmpty ? cleanedMessages.last : null;
+    _conversations = _conversations.map((row) {
+      if (_asInt(row['id']) != conversationId) return row;
+      final next = Map<String, dynamic>.from(row);
+      if (fallbackLast != null) {
+        next['last_message'] = fallbackLast;
+      }
+      return next;
+    }).toList(growable: false);
+  }
+
+  void _cancelActiveUpload() {
+    final token = _activeUploadCancelToken;
+    if (token == null || token.isCancelled) {
+      return;
+    }
+    token.cancel('user_cancelled_upload');
+  }
+
+  void _markUploadMessageFailed(String clientMessageId, int conversationId, String errorMessage) {
+    _messages = _messages.map((row) {
+      if (_asString(row['client_message_id']) != clientMessageId) {
+        return row;
+      }
+      final next = Map<String, dynamic>.from(row);
+      next['is_local_pending'] = false;
+      next['upload_failed'] = true;
+      next['upload_progress'] = 0;
+      next['upload_error'] = errorMessage;
+      return next;
+    }).toList(growable: false);
+
+    _conversations = _conversations.map((row) {
+      if (_asInt(row['id']) != conversationId) return row;
+      final lastMessage = row['last_message'];
+      if (lastMessage is! Map || _asString(lastMessage['client_message_id']) != clientMessageId) {
+        return row;
+      }
+      final next = Map<String, dynamic>.from(row);
+      next['last_message'] = <String, dynamic>{
+        ...Map<String, dynamic>.from(lastMessage),
+        'is_local_pending': false,
+        'upload_failed': true,
+        'upload_progress': 0,
+        'upload_error': errorMessage,
+      };
+      return next;
+    }).toList(growable: false);
+  }
+
+  Future<void> _retryFailedFileUpload(Map<String, dynamic> message) async {
+    final conversationId = _selectedConversationId;
+    final clientMessageId = _asString(message['client_message_id']).trim();
+    final attachmentName = _asString(message['attachment_name']).trim();
+    final attachmentBytes = message['attachment_bytes'];
+    if (conversationId == null ||
+        clientMessageId.isEmpty ||
+        attachmentName.isEmpty ||
+        attachmentBytes is! Uint8List ||
+        attachmentBytes.isEmpty ||
+        _sending) {
+      return;
+    }
+
+    await _uploadAttachment(
+      conversationId: conversationId,
+      clientMessageId: clientMessageId,
+      attachmentName: attachmentName,
+      attachmentSize: _asInt(message['attachment_size']),
+      content: _asString(message['content']).trim(),
+      bytes: attachmentBytes,
+      reuseExistingPendingMessage: true,
+      restoreComposerOnFailure: true,
+      draftOnFailure: _messageController.text,
+    );
+  }
+
+  Future<void> _showImagePreview(Map<String, dynamic> message) async {
+    final attachmentBytes = message['attachment_bytes'];
+    final attachmentUrl = _asString(message['attachment_url']).trim();
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        Widget imageChild;
+        if (attachmentBytes is Uint8List && attachmentBytes.isNotEmpty) {
+          imageChild = Image.memory(attachmentBytes, fit: BoxFit.contain);
+        } else if (attachmentUrl.isNotEmpty) {
+          imageChild = Image.network(
+            attachmentUrl,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => const Center(
+              child: Icon(Icons.broken_image_outlined, size: 48),
+            ),
+          );
+        } else {
+          imageChild = const Center(child: Icon(Icons.image_outlined, size: 48));
+        }
+
+        return Dialog(
+          insetPadding: const EdgeInsets.all(18),
+          child: Container(
+            width: 900,
+            height: 700,
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _asString(message['attachment_name']).trim().isNotEmpty
+                            ? _asString(message['attachment_name']).trim()
+                            : 'Image',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Telecharger',
+                      onPressed: message['is_local_pending'] == true
+                          ? null
+                          : () => _downloadAttachment(message),
+                      icon: const Icon(Icons.download_outlined),
+                    ),
+                    IconButton(
+                      tooltip: 'Fermer',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: InteractiveViewer(
+                    minScale: 0.8,
+                    maxScale: 4,
+                    child: Center(child: imageChild),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<Uint8List> _loadAttachmentBytes(Map<String, dynamic> message) async {
+    final attachmentBytes = message['attachment_bytes'];
+    if (attachmentBytes is Uint8List && attachmentBytes.isNotEmpty) {
+      return attachmentBytes;
+    }
+
+    final messageId = _asInt(message['id']);
+    if (messageId <= 0) {
+      throw Exception('Piece jointe indisponible.');
+    }
+
+    final response = await widget.dio.get(
+      '/chat/messages/$messageId/download/',
+      options: Options(responseType: ResponseType.bytes),
+    );
+    final data = response.data;
+    if (data is Uint8List) {
+      return data;
+    }
+    if (data is List<int>) {
+      return Uint8List.fromList(data);
+    }
+    return Uint8List.fromList(List<int>.from(data as List));
+  }
+
+  Future<void> _showPdfPreview(Map<String, dynamic> message) async {
+    try {
+      final bytes = await _loadAttachmentBytes(message);
+      if (!mounted) {
+        return;
+      }
+
+      await showDialog<void>(
+        context: context,
+        builder: (context) {
+          return Dialog(
+            insetPadding: const EdgeInsets.all(18),
+            child: SizedBox(
+              width: 960,
+              height: 760,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 8, 0),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _asString(message['attachment_name']).trim().isNotEmpty
+                                ? _asString(message['attachment_name']).trim()
+                                : 'PDF',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Telecharger',
+                          onPressed: message['is_local_pending'] == true
+                              ? null
+                              : () => _downloadAttachment(message),
+                          icon: const Icon(Icons.download_outlined),
+                        ),
+                        IconButton(
+                          tooltip: 'Fermer',
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: PdfPreview(
+                      build: (_) async => bytes,
+                      canChangePageFormat: false,
+                      canChangeOrientation: false,
+                      allowPrinting: false,
+                      allowSharing: false,
+                      useActions: false,
+                      loadingWidget: const Center(child: CircularProgressIndicator()),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Apercu PDF impossible: ${_extractApiError(error)}')),
+      );
+    }
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes <= 0) {
+      return '0 o';
+    }
+    const units = <String>['o', 'Ko', 'Mo', 'Go'];
+    var size = bytes.toDouble();
+    var unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex += 1;
+    }
+    final precision = size >= 10 || unitIndex == 0 ? 0 : 1;
+    return '${size.toStringAsFixed(precision)} ${units[unitIndex]}';
+  }
+
+  bool _messageHasAttachment(Map<String, dynamic> message) {
+    return _asString(message['message_type']) == 'file' ||
+        _asString(message['attachment_name']).trim().isNotEmpty ||
+        _asString(message['attachment_url']).trim().isNotEmpty;
+  }
+
+  bool _isImageAttachment(Map<String, dynamic> message) {
+    final mime = _asString(message['attachment_mime_type']).trim().toLowerCase();
+    if (mime.startsWith('image/')) {
+      return true;
+    }
+    final name = _asString(message['attachment_name']).trim().toLowerCase();
+    return name.endsWith('.jpg') ||
+        name.endsWith('.jpeg') ||
+        name.endsWith('.png') ||
+        name.endsWith('.webp') ||
+        name.endsWith('.gif');
+  }
+
+  bool _isPdfAttachment(Map<String, dynamic> message) {
+    final mime = _asString(message['attachment_mime_type']).trim().toLowerCase();
+    if (mime.contains('pdf')) {
+      return true;
+    }
+    final name = _asString(message['attachment_name']).trim().toLowerCase();
+    return name.endsWith('.pdf');
+  }
+
+  bool _isAttachmentOnlyMessage(Map<String, dynamic> message) {
+    return _messageHasAttachment(message) && _asString(message['content']).trim().isEmpty;
+  }
+
+  bool _shouldGroupAttachmentMessages(
+    Map<String, dynamic> current,
+    Map<String, dynamic>? other,
+  ) {
+    if (other == null) {
+      return false;
+    }
+    final currentSender = _asInt(current['sender'] ?? current['sender_id']);
+    final otherSender = _asInt(other['sender'] ?? other['sender_id']);
+    if (currentSender <= 0 || currentSender != otherSender) {
+      return false;
+    }
+    return _isAttachmentOnlyMessage(current) && _isAttachmentOnlyMessage(other);
+  }
+
+  BorderRadius _messageBubbleRadius({
+    required bool mine,
+    required bool groupedWithPrevious,
+    required bool groupedWithNext,
+  }) {
+    const large = Radius.circular(12);
+    const small = Radius.circular(5);
+    if (mine) {
+      return BorderRadius.only(
+        topLeft: large,
+        topRight: groupedWithPrevious ? small : large,
+        bottomLeft: large,
+        bottomRight: groupedWithNext ? small : large,
+      );
+    }
+    return BorderRadius.only(
+      topLeft: groupedWithPrevious ? small : large,
+      topRight: large,
+      bottomLeft: groupedWithNext ? small : large,
+      bottomRight: large,
+    );
+  }
+
+  Widget _attachmentIcon(Map<String, dynamic> message) {
+    if (_isImageAttachment(message)) {
+      return const Icon(Icons.image_outlined);
+    }
+    final mime = _asString(message['attachment_mime_type']).trim().toLowerCase();
+    if (mime.contains('pdf')) {
+      return const Icon(Icons.picture_as_pdf_outlined);
+    }
+    if (mime.contains('sheet') || mime.contains('excel') || mime.contains('csv')) {
+      return const Icon(Icons.table_chart_outlined);
+    }
+    if (mime.contains('word') || mime.contains('document')) {
+      return const Icon(Icons.description_outlined);
+    }
+    if (mime.contains('presentation') || mime.contains('powerpoint')) {
+      return const Icon(Icons.slideshow_outlined);
+    }
+    if (mime.contains('zip')) {
+      return const Icon(Icons.folder_zip_outlined);
+    }
+    return const Icon(Icons.attach_file_outlined);
+  }
+
+  Future<MultipartFile?> _buildMultipartFile({
+    String? path,
+    Uint8List? bytes,
+    String? fileName,
+  }) async {
+    if (bytes != null && bytes.isNotEmpty) {
+      return MultipartFile.fromBytes(
+        bytes,
+        filename: (fileName != null && fileName.trim().isNotEmpty)
+            ? fileName.trim()
+            : 'piece_jointe_${DateTime.now().millisecondsSinceEpoch}',
+      );
+    }
+
+    final normalizedPath = path?.trim() ?? '';
+    if (normalizedPath.isEmpty) {
+      return null;
+    }
+    if (kIsWeb) {
+      throw Exception('Upload web impossible: le fichier doit etre disponible en memoire.');
+    }
+    return MultipartFile.fromFile(
+      normalizedPath,
+      filename: (fileName != null && fileName.trim().isNotEmpty)
+          ? fileName.trim()
+          : 'piece_jointe_${DateTime.now().millisecondsSinceEpoch}',
+    );
+  }
+
+  Future<void> _downloadAttachment(Map<String, dynamic> message) async {
+    try {
+      final messageId = _asInt(message['id']);
+      if (messageId <= 0) {
+        return;
+      }
+      final bytes = await _loadAttachmentBytes(message);
+      final fileName = _asString(message['attachment_name']).trim().isNotEmpty
+          ? _asString(message['attachment_name']).trim()
+          : 'piece_jointe_$messageId';
+      final savePath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Enregistrer le fichier',
+        fileName: fileName,
+        bytes: bytes,
+      );
+      if (savePath == null && !kIsWeb) {
+        return;
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Fichier telecharge: $fileName')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Telechargement impossible: ${_extractApiError(error)}')),
+      );
+    }
+  }
+
+  Future<void> _openAttachment(Map<String, dynamic> message) async {
+    if (_isImageAttachment(message)) {
+      await _showImagePreview(message);
+      return;
+    }
+    if (_isPdfAttachment(message)) {
+      await _showPdfPreview(message);
+      return;
+    }
+    await _downloadAttachment(message);
+  }
+
+  List<Map<String, dynamic>> _attachmentRunForMessageIndex(int messageIndex) {
+    if (messageIndex < 0 || messageIndex >= _messages.length) {
+      return const <Map<String, dynamic>>[];
+    }
+    final current = _messages[messageIndex];
+    if (!_isAttachmentOnlyMessage(current)) {
+      return const <Map<String, dynamic>>[];
+    }
+    final senderId = _asInt(current['sender'] ?? current['sender_id']);
+    if (senderId <= 0) {
+      return const <Map<String, dynamic>>[];
+    }
+
+    var start = messageIndex;
+    while (start > 0) {
+      final prev = _messages[start - 1];
+      final prevSender = _asInt(prev['sender'] ?? prev['sender_id']);
+      if (prevSender != senderId || !_isAttachmentOnlyMessage(prev)) {
+        break;
+      }
+      start -= 1;
+    }
+
+    var end = messageIndex;
+    while (end + 1 < _messages.length) {
+      final next = _messages[end + 1];
+      final nextSender = _asInt(next['sender'] ?? next['sender_id']);
+      if (nextSender != senderId || !_isAttachmentOnlyMessage(next)) {
+        break;
+      }
+      end += 1;
+    }
+
+    return _messages.sublist(start, end + 1);
+  }
+
+  bool _isRetriableFailedAttachment(Map<String, dynamic> message) {
+    if (message['upload_failed'] != true) {
+      return false;
+    }
+    final attachmentBytes = message['attachment_bytes'];
+    if (attachmentBytes is! Uint8List || attachmentBytes.isEmpty) {
+      return false;
+    }
+    return _asString(message['client_message_id']).trim().isNotEmpty &&
+        _asString(message['attachment_name']).trim().isNotEmpty;
+  }
+
+  Future<void> _retryFailedAttachmentBatchFrom(int messageIndex) async {
+    if (_sending) {
+      return;
+    }
+    final conversationId = _selectedConversationId;
+    if (conversationId == null) {
+      return;
+    }
+
+    final run = _attachmentRunForMessageIndex(messageIndex);
+    final failedMessages = run.where(_isRetriableFailedAttachment).toList(growable: false);
+    if (failedMessages.length < 2) {
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _sending = true;
+        _sendError = null;
+      });
+    }
+
+    try {
+      for (final message in failedMessages) {
+        if (!mounted || _selectedConversationId != conversationId) {
+          break;
+        }
+        final keepGoing = await _uploadAttachment(
+          conversationId: conversationId,
+          clientMessageId: _asString(message['client_message_id']).trim(),
+          attachmentName: _asString(message['attachment_name']).trim(),
+          attachmentSize: _asInt(message['attachment_size']),
+          content: _asString(message['content']).trim(),
+          bytes: message['attachment_bytes'] as Uint8List,
+          reuseExistingPendingMessage: true,
+          manageSendingState: false,
+        );
+        if (!keepGoing) {
+          break;
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sending = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _showImageGalleryAt(int messageIndex) async {
+    if (messageIndex < 0 || messageIndex >= _messages.length) {
+      return;
+    }
+    final run = _attachmentRunForMessageIndex(messageIndex)
+        .where(_isImageAttachment)
+        .toList(growable: false);
+    if (run.length <= 1) {
+      await _showImagePreview(_messages[messageIndex]);
+      return;
+    }
+
+    final targetMessage = _messages[messageIndex];
+    final targetClientId = _asString(targetMessage['client_message_id']).trim();
+    var initialPage = run.indexWhere(
+      (row) => _asString(row['client_message_id']).trim() == targetClientId,
+    );
+    if (initialPage < 0) {
+      final targetId = _asInt(targetMessage['id']);
+      initialPage = run.indexWhere((row) => _asInt(row['id']) == targetId);
+    }
+    if (initialPage < 0) {
+      initialPage = 0;
+    }
+
+    final pageController = PageController(initialPage: initialPage);
+    var currentPage = initialPage;
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (context) {
+          return StatefulBuilder(
+            builder: (context, setGalleryState) {
+              final currentMessage = run[currentPage];
+              return Dialog(
+                insetPadding: const EdgeInsets.all(18),
+                child: SizedBox(
+                  width: 980,
+                  height: 760,
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 8, 0),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${currentPage + 1}/${run.length} - '
+                                '${_asString(currentMessage['attachment_name']).trim().isNotEmpty ? _asString(currentMessage['attachment_name']).trim() : 'Image'}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Telecharger',
+                              onPressed: currentMessage['is_local_pending'] == true
+                                  ? null
+                                  : () => _downloadAttachment(currentMessage),
+                              icon: const Icon(Icons.download_outlined),
+                            ),
+                            IconButton(
+                              tooltip: 'Fermer',
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.close),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: PageView.builder(
+                          controller: pageController,
+                          itemCount: run.length,
+                          onPageChanged: (value) {
+                            setGalleryState(() {
+                              currentPage = value;
+                            });
+                          },
+                          itemBuilder: (context, pageIndex) {
+                            final imageMessage = run[pageIndex];
+                            final attachmentBytes = imageMessage['attachment_bytes'];
+                            final attachmentUrl = _asString(imageMessage['attachment_url']).trim();
+                            Widget imageChild;
+                            if (attachmentBytes is Uint8List && attachmentBytes.isNotEmpty) {
+                              imageChild = Image.memory(attachmentBytes, fit: BoxFit.contain);
+                            } else if (attachmentUrl.isNotEmpty) {
+                              imageChild = Image.network(
+                                attachmentUrl,
+                                fit: BoxFit.contain,
+                                errorBuilder: (_, __, ___) => const Center(
+                                  child: Icon(Icons.broken_image_outlined, size: 48),
+                                ),
+                              );
+                            } else {
+                              imageChild = const Center(
+                                child: Icon(Icons.image_outlined, size: 48),
+                              );
+                            }
+                            return InteractiveViewer(
+                              minScale: 0.8,
+                              maxScale: 4,
+                              child: Center(child: imageChild),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      pageController.dispose();
+    }
+  }
+
+  Future<bool> _uploadAttachment({
+    required int conversationId,
+    required String clientMessageId,
+    required String attachmentName,
+    required int attachmentSize,
+    required String content,
+    String? path,
+    Uint8List? bytes,
+    bool reuseExistingPendingMessage = false,
+    bool clearComposerOnSuccess = false,
+    bool restoreComposerOnFailure = false,
+    bool manageSendingState = true,
+    String? draftOnFailure,
+  }) async {
+    final multipart = await _buildMultipartFile(
+      path: path,
+      bytes: bytes,
+      fileName: attachmentName,
+    );
+    if (multipart == null) {
+      if (!mounted) {
+        return true;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Fichier invalide.')),
+      );
+      return true;
+    }
+
+    final draft = draftOnFailure ?? _messageController.text;
+    final cancelToken = CancelToken();
+    final localMessage = <String, dynamic>{
+      'id': -DateTime.now().microsecondsSinceEpoch,
+      'conversation': conversationId,
+      'sender': _currentUserId,
+      'sender_name': 'Moi',
+      'message_type': 'file',
+      'content': content,
+      'created_at': DateTime.now().toIso8601String(),
+      'client_message_id': clientMessageId,
+      'attachment_name': attachmentName,
+      'attachment_size': attachmentSize,
+      'attachment_mime_type': '',
+      'attachment_bytes': bytes,
+      'upload_progress': 0,
+      'upload_failed': false,
+      'upload_error': null,
+      'is_local_pending': true,
+    };
+
+    if (!mounted) {
+      return false;
+    }
+
+    setState(() {
+      if (manageSendingState) {
+        _sending = true;
+      }
+      _sendError = null;
+      _activeUploadCancelToken = cancelToken;
+      _activeUploadClientMessageId = clientMessageId;
+      _activeUploadConversationId = conversationId;
+      if (reuseExistingPendingMessage) {
+        _messages = _messages.map((row) {
+          if (_asString(row['client_message_id']) != clientMessageId) {
+            return row;
+          }
+          return <String, dynamic>{
+            ...Map<String, dynamic>.from(row),
+            ...localMessage,
+            'id': row['id'],
+          };
+        }).toList(growable: false);
+      } else {
+        _messages = <Map<String, dynamic>>[..._messages, localMessage];
+      }
+      _conversations = _conversations.map((row) {
+        if (_asInt(row['id']) != conversationId) {
+          return row;
+        }
+        final next = Map<String, dynamic>.from(row);
+        next['last_message'] = localMessage;
+        next['unread_count'] = 0;
+        return next;
+      }).toList(growable: false);
+    });
+    _scrollToBottom();
+
+    try {
+      final response = await widget.dio.post(
+        '/chat/conversations/$conversationId/send-file/',
+        data: FormData.fromMap(<String, dynamic>{
+          'file': multipart,
+          'content': content,
+          'client_message_id': clientMessageId,
+        }),
+        cancelToken: cancelToken,
+        onSendProgress: (sent, total) {
+          if (total <= 0) {
+            return;
+          }
+          final percent = ((sent / total) * 100).round();
+          _updatePendingMessageProgress(clientMessageId, percent);
+        },
+      );
+      final msg = Map<String, dynamic>.from(response.data as Map);
+      final msgId = _asInt(msg['id']);
+      if (!mounted) {
+        return false;
+      }
+      setState(() {
+        if (clearComposerOnSuccess) {
+          _draftByConversation[conversationId] = '';
+          _messageController.clear();
+        }
+        _messages = _messages.map((row) {
+          if (_asString(row['client_message_id']) == clientMessageId) {
+            return msg;
+          }
+          return row;
+        }).toList(growable: false);
+        if (msgId > 0) {
+          _seenMessageKeys.add(_messageKey(conversationId, msgId));
+        }
+        _conversations = _conversations.map((row) {
+          if (_asInt(row['id']) != conversationId) {
+            return row;
+          }
+          final next = Map<String, dynamic>.from(row);
+          next['last_message'] = msg;
+          next['unread_count'] = 0;
+          return next;
+        }).toList(growable: false);
+      });
+      widget.onUnreadChanged?.call(_sumUnread(_conversations));
+      return true;
+    } catch (error) {
+      if (!mounted) {
+        return false;
+      }
+      final cancelled = _isCancelledError(error);
+      final errorMessage = cancelled ? 'Envoi du fichier annule.' : _extractApiError(error);
+      setState(() {
+        if (cancelled) {
+          _removePendingUploadMessage(clientMessageId, conversationId);
+        } else {
+          _markUploadMessageFailed(clientMessageId, conversationId, errorMessage);
+          _sendError = errorMessage;
+          if (restoreComposerOnFailure) {
+            _messageController.value = TextEditingValue(
+              text: draft,
+              selection: TextSelection.collapsed(offset: draft.length),
+            );
+          }
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(cancelled ? errorMessage : 'Echec envoi du fichier: $errorMessage'),
+        ),
+      );
+      return !cancelled;
+    } finally {
+      if (mounted) {
+        setState(() {
+          if (manageSendingState) {
+            _sending = false;
+          }
+          if (identical(_activeUploadCancelToken, cancelToken)) {
+            _activeUploadCancelToken = null;
+            _activeUploadClientMessageId = null;
+            _activeUploadConversationId = null;
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _sendFile() async {
+    final conversationId = _selectedConversationId;
+    if (conversationId == null || _sending) {
+      return;
+    }
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: _allowedAttachmentExtensions,
+      allowMultiple: true,
+      withData: true,
+    );
+    final pickedFiles = result?.files.where((file) => file.name.trim().isNotEmpty).toList() ??
+        const <PlatformFile>[];
+    if (pickedFiles.isEmpty) {
+      return;
+    }
+
+    final draft = _messageController.text;
+    final trimmedDraft = draft.trim();
+
+    if (mounted) {
+      setState(() {
+        _sending = true;
+        _sendError = null;
+      });
+    }
+
+    try {
+      for (var index = 0; index < pickedFiles.length; index += 1) {
+        if (!mounted || _selectedConversationId != conversationId) {
+          break;
+        }
+        final picked = pickedFiles[index];
+        final keepGoing = await _uploadAttachment(
+          conversationId: conversationId,
+          clientMessageId: _newClientMessageId(conversationId),
+          attachmentName: picked.name,
+          attachmentSize: picked.size,
+          content: index == 0 ? trimmedDraft : '',
+          path: picked.path,
+          bytes: picked.bytes,
+          clearComposerOnSuccess: index == 0,
+          restoreComposerOnFailure: index == 0,
+          manageSendingState: false,
+          draftOnFailure: draft,
+        );
+        if (!keepGoing) {
+          break;
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sending = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final filteredUsers = _users;
@@ -1172,7 +2205,7 @@ class _ChatPanelState extends State<ChatPanel> {
     final filteredConversations = _conversations.where((row) {
       if (conversationQuery.isEmpty) return true;
       final text = _conversationTitle(row).toLowerCase();
-      final lastMessage = _asString((row['last_message'] as Map?)?['content']).toLowerCase();
+      final lastMessage = _conversationPreview(row).toLowerCase();
       return text.contains(conversationQuery) || lastMessage.contains(conversationQuery);
     }).toList(growable: false);
 
@@ -1321,7 +2354,7 @@ class _ChatPanelState extends State<ChatPanel> {
                     ],
                   ),
                   subtitle: Text(
-                    _asString((row['last_message'] as Map?)?['content'] ?? ''),
+                    _conversationPreview(row),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -1962,34 +2995,221 @@ class _ChatPanelState extends State<ChatPanel> {
               }
 
               final message = _messages[index - 1];
+        final messageIndex = index - 1;
+              final previousMessage = index > 1 ? _messages[index - 2] : null;
+              final nextMessage = index < _messages.length ? _messages[index] : null;
               final mine = _currentUserId != null &&
                   _asInt(message['sender'] ?? message['sender_id']) == _currentUserId;
-              final messageId = _asInt(message['id']);
-                final messageTime = _formatMessageTime(message['created_at']);
+              final groupedWithPrevious =
+                  _shouldGroupAttachmentMessages(message, previousMessage);
+              final groupedWithNext = _shouldGroupAttachmentMessages(message, nextMessage);
+              final showSender = !groupedWithPrevious;
+                final attachmentRun = _attachmentRunForMessageIndex(messageIndex);
+                final failedBatch = attachmentRun
+                  .where(_isRetriableFailedAttachment)
+                  .toList(growable: false);
+                final failedBatchCount = failedBatch.length;
+                final firstFailedClientMessageId = failedBatchCount > 0
+                  ? _asString(failedBatch.first['client_message_id']).trim()
+                  : '';
+                final showBatchRetryAction = message['upload_failed'] == true &&
+                  failedBatchCount > 1 &&
+                  _asString(message['client_message_id']).trim() == firstFailedClientMessageId;
+              final messageTime = _formatMessageTime(message['created_at']);
               final lastRead = _lastReadByConversation[conversationId] ?? 0;
-              final isLastMine = mine && index == _messages.length - 1;
               return Align(
                 alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
                 child: Container(
-                  margin: const EdgeInsets.symmetric(vertical: 5),
+                  margin: EdgeInsets.only(
+                    top: groupedWithPrevious ? 2 : 5,
+                    bottom: groupedWithNext ? 2 : 5,
+                  ),
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
                   constraints: const BoxConstraints(maxWidth: 520),
                   decoration: BoxDecoration(
                     color: mine
                         ? Theme.of(context).colorScheme.primaryContainer
                         : Theme.of(context).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: _messageBubbleRadius(
+                      mine: mine,
+                      groupedWithPrevious: groupedWithPrevious,
+                      groupedWithNext: groupedWithNext,
+                    ),
                   ),
                   child: Column(
                     crossAxisAlignment:
                         mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        _senderLabel(message),
-                        style: Theme.of(context).textTheme.labelSmall,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(_asString(message['content'])),
+                      if (showSender)
+                        Text(
+                          _senderLabel(message),
+                          style: Theme.of(context).textTheme.labelSmall,
+                        ),
+                      if (showSender)
+                        const SizedBox(height: 2),
+                      if (_messageHasAttachment(message))
+                        Column(
+                          crossAxisAlignment:
+                              mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                          children: [
+                            if (_isImageAttachment(message))
+                              Builder(
+                                builder: (context) {
+                                  final attachmentBytes = message['attachment_bytes'];
+                                  final attachmentUrl = _asString(message['attachment_url']).trim();
+                                  Widget imageChild;
+                                  if (attachmentBytes is Uint8List && attachmentBytes.isNotEmpty) {
+                                    imageChild = Image.memory(
+                                      attachmentBytes,
+                                      fit: BoxFit.cover,
+                                      width: 220,
+                                      height: 180,
+                                    );
+                                  } else if (attachmentUrl.isNotEmpty) {
+                                    imageChild = Image.network(
+                                      attachmentUrl,
+                                      fit: BoxFit.cover,
+                                      width: 220,
+                                      height: 180,
+                                      errorBuilder: (_, __, ___) => Container(
+                                        width: 220,
+                                        height: 180,
+                                        color: Theme.of(context).colorScheme.surface,
+                                        alignment: Alignment.center,
+                                        child: const Icon(Icons.broken_image_outlined),
+                                      ),
+                                    );
+                                  } else {
+                                    imageChild = Container(
+                                      width: 220,
+                                      height: 180,
+                                      color: Theme.of(context).colorScheme.surface,
+                                      alignment: Alignment.center,
+                                      child: const Icon(Icons.image_outlined),
+                                    );
+                                  }
+
+                                  return ClipRRect(
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: InkWell(
+                                      onTap: message['is_local_pending'] == true
+                                          ? null
+                                          : () => _showImageGalleryAt(messageIndex),
+                                      child: imageChild,
+                                    ),
+                                  );
+                                },
+                              ),
+                            const SizedBox(height: 6),
+                            InkWell(
+                              onTap: message['is_local_pending'] == true
+                                  ? null
+                                  : () => _openAttachment(message),
+                              borderRadius: BorderRadius.circular(10),
+                              child: Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.65),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: Theme.of(context).dividerColor.withValues(alpha: 0.35),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _attachmentIcon(message),
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            _asString(message['attachment_name']).trim().isNotEmpty
+                                                ? _asString(message['attachment_name']).trim()
+                                                : 'Piece jointe',
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            _formatFileSize(_asInt(message['attachment_size'])),
+                                            style: Theme.of(context).textTheme.labelSmall,
+                                          ),
+                                          if (_isPdfAttachment(message) &&
+                                              message['is_local_pending'] != true)
+                                            Text(
+                                              'Apercu PDF disponible',
+                                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                                color: Theme.of(context).colorScheme.primary,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          if (message['is_local_pending'] == true)
+                                            Text(
+                                              'Upload: ${_asInt(message['upload_progress'])}%',
+                                              style: Theme.of(context).textTheme.labelSmall,
+                                            ),
+                                          if (message['upload_failed'] == true)
+                                            Text(
+                                              (_asString(message['upload_error']).trim().isNotEmpty)
+                                                  ? _asString(message['upload_error']).trim()
+                                                  : 'Echec de l\'upload',
+                                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                                color: Theme.of(context).colorScheme.error,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (message['is_local_pending'] != true) ...[
+                                      const SizedBox(width: 8),
+                                      if (message['upload_failed'] == true)
+                                        IconButton(
+                                          tooltip: 'Reessayer',
+                                          onPressed: _sending ? null : () => _retryFailedFileUpload(message),
+                                          icon: const Icon(Icons.refresh_rounded),
+                                        )
+                                      else
+                                        const Icon(Icons.download_outlined),
+                                    ] else ...[
+                                      const SizedBox(width: 8),
+                                      IconButton(
+                                        tooltip: 'Annuler l\'upload',
+                                        onPressed: _asString(message['client_message_id']) == _activeUploadClientMessageId
+                                            ? _cancelActiveUpload
+                                            : null,
+                                        icon: const Icon(Icons.close_rounded),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                            if (showBatchRetryAction)
+                              Align(
+                                alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: TextButton.icon(
+                                    onPressed: _sending
+                                        ? null
+                                        : () => _retryFailedAttachmentBatchFrom(messageIndex),
+                                    icon: const Icon(Icons.playlist_add_check_rounded, size: 18),
+                                    label: Text('Reessayer le lot ($failedBatchCount)'),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      if (_messageHasAttachment(message) && _asString(message['content']).trim().isNotEmpty)
+                        const SizedBox(height: 6),
+                      if (_asString(message['content']).trim().isNotEmpty)
+                        Text(_asString(message['content'])),
                       if (messageTime.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 3),
@@ -1998,11 +3218,11 @@ class _ChatPanelState extends State<ChatPanel> {
                             style: Theme.of(context).textTheme.labelSmall,
                           ),
                         ),
-                      if (isLastMine)
+                      if (mine)
                         Padding(
                           padding: const EdgeInsets.only(top: 2),
                           child: Text(
-                            lastRead >= messageId ? 'Lu' : 'Envoye',
+                            _outgoingStatusLabel(message, lastRead),
                             style: Theme.of(context).textTheme.labelSmall,
                           ),
                         ),
@@ -2048,6 +3268,18 @@ class _ChatPanelState extends State<ChatPanel> {
               ],
               Row(
                 children: [
+                  IconButton(
+                    tooltip: 'Envoyer un fichier',
+                    onPressed: _sending ? null : _sendFile,
+                    icon: const Icon(Icons.attach_file_rounded),
+                  ),
+                  if (_activeUploadCancelToken != null) ...[
+                    IconButton(
+                      tooltip: 'Annuler l\'upload en cours',
+                      onPressed: _cancelActiveUpload,
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
                   Expanded(
                     child: TextField(
                       controller: _messageController,

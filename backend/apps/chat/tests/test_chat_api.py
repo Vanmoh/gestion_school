@@ -1,5 +1,6 @@
 from datetime import date
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -105,6 +106,71 @@ class ChatSendMessageApiTests(APITestCase):
         self.assertEqual(first.data["id"], message.id)
         self.assertEqual(second.data["id"], message.id)
         self.assertEqual(second.data["client_message_id"], "client-msg-001")
+
+    def test_send_file_creates_file_message(self):
+        upload = SimpleUploadedFile(
+            "bulletin.txt",
+            b"contenu de test",
+            content_type="text/plain",
+        )
+
+        response = self.client.post(
+            f"/api/chat/conversations/{self.conversation.id}/send-file/",
+            {"file": upload, "content": "Piece jointe", "client_message_id": "file-msg-001"},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(ChatMessage.objects.count(), 1)
+        message = ChatMessage.objects.get()
+        self.assertEqual(message.message_type, ChatMessage.MessageType.FILE)
+        self.assertEqual(message.attachment_name, "bulletin.txt")
+        self.assertEqual(message.content, "Piece jointe")
+        self.assertEqual(response.data["attachment_name"], "bulletin.txt")
+        self.assertTrue(response.data["attachment_url"])
+
+    def test_download_attachment_requires_participant(self):
+        upload = SimpleUploadedFile(
+            "bulletin.txt",
+            b"contenu de test",
+            content_type="text/plain",
+        )
+        message = ChatMessage.objects.create(
+            conversation=self.conversation,
+            sender=self.sender,
+            message_type=ChatMessage.MessageType.FILE,
+            attachment=upload,
+            attachment_name="bulletin.txt",
+            attachment_size=len(b"contenu de test"),
+            attachment_mime_type="text/plain",
+        )
+
+        outsider = User.objects.create_user(
+            username="outsider_chat",
+            password="pass1234",
+            role=UserRole.DIRECTOR,
+            etablissement=self.etablissement,
+        )
+        self.client.force_authenticate(outsider)
+        response = self.client.get(f"/api/chat/messages/{message.id}/download/")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_send_file_rejects_unsupported_type(self):
+        upload = SimpleUploadedFile(
+            "malware.exe",
+            b"dummy-binary",
+            content_type="application/octet-stream",
+        )
+
+        response = self.client.post(
+            f"/api/chat/conversations/{self.conversation.id}/send-file/",
+            {"file": upload},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("non autorise", str(response.data["detail"]).lower())
 
     def test_conversation_serializer_uses_other_participant_last_read_message(self):
         first_message = ChatMessage.objects.create(

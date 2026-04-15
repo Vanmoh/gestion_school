@@ -49,6 +49,10 @@ class ConversationParticipant(TimeStampedModel):
 
 
 class ChatMessage(TimeStampedModel):
+    class MessageType(models.TextChoices):
+        TEXT = "text", "Texte"
+        FILE = "file", "Fichier"
+
     conversation = models.ForeignKey(
         Conversation,
         on_delete=models.CASCADE,
@@ -59,7 +63,12 @@ class ChatMessage(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="chat_messages",
     )
-    content = models.TextField()
+    message_type = models.CharField(max_length=10, choices=MessageType.choices, default=MessageType.TEXT)
+    content = models.TextField(blank=True)
+    attachment = models.FileField(upload_to="chat_attachments/", null=True, blank=True)
+    attachment_name = models.CharField(max_length=255, blank=True)
+    attachment_size = models.PositiveIntegerField(default=0)
+    attachment_mime_type = models.CharField(max_length=120, blank=True)
     client_message_id = models.CharField(max_length=64, blank=True, null=True)
 
     class Meta:

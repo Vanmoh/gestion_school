@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.http import FileResponse
 import threading
 from django.db import transaction
 from django.db.models import Q
@@ -7,6 +8,7 @@ from datetime import timedelta
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from rest_framework import permissions, status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -22,6 +24,36 @@ from .serializers import (
 )
 
 User = get_user_model()
+
+_CHAT_ALLOWED_ATTACHMENT_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".txt",
+    ".csv",
+    ".zip",
+}
+_CHAT_ALLOWED_ATTACHMENT_MIME_PREFIXES = (
+    "image/",
+    "application/pdf",
+    "text/plain",
+    "text/csv",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+    "application/zip",
+    "application/x-zip-compressed",
+)
 
 
 def _broadcast_rest_message_async(participant_user_ids, ws_message):
@@ -72,6 +104,28 @@ def _conversation_queryset_for_user(request):
 
 def _ensure_participant(conversation_id, user):
     return ConversationParticipant.objects.filter(conversation_id=conversation_id, user=user).exists()
+
+
+def _chat_ws_message_from_instance(message, *, request=None):
+    serializer = ChatMessageSerializer(message, context={"request": request} if request else {})
+    payload = dict(serializer.data)
+    payload["conversation_id"] = message.conversation_id
+    payload["message_id"] = message.id
+    payload["sender_id"] = message.sender_id
+    payload["sender_name"] = payload.get("sender_name") or (message.sender.get_full_name().strip() or message.sender.username)
+    return payload
+
+
+def _is_allowed_chat_attachment(upload) -> bool:
+    raw_name = (getattr(upload, "name", "") or "").strip().lower()
+    extension = f".{raw_name.rsplit('.', 1)[-1]}" if "." in raw_name else ""
+    if extension and extension in _CHAT_ALLOWED_ATTACHMENT_EXTENSIONS:
+        return True
+
+    content_type = (getattr(upload, "content_type", "") or "").strip().lower()
+    if not content_type:
+        return False
+    return any(content_type.startswith(prefix) for prefix in _CHAT_ALLOWED_ATTACHMENT_MIME_PREFIXES)
 
 
 def _touch_presence(user):
@@ -172,7 +226,7 @@ class ConversationMessagesView(APIView):
 
         rows = list(query[:size])
         rows.reverse()
-        payload = ChatMessageSerializer(rows, many=True).data
+        payload = ChatMessageSerializer(rows, many=True, context={"request": request}).data
         return Response(payload)
 
 
@@ -587,7 +641,7 @@ class ConversationSendMessageView(APIView):
         participant.last_read_message = message
         participant.save(update_fields=["last_read_message", "updated_at"])
         conversation.save(update_fields=["updated_at"])
-        payload = ChatMessageSerializer(message).data
+        payload = ChatMessageSerializer(message, context={"request": request}).data
 
         # Realtime fan-out for recipients when message is sent via REST.
         participant_user_ids = list(
@@ -595,16 +649,107 @@ class ConversationSendMessageView(APIView):
             .exclude(user=request.user)
             .values_list("user_id", flat=True)
         )
-        sender_name = request.user.get_full_name().strip() or request.user.username
-        ws_message = {
-            "conversation_id": conversation.id,
-            "message_id": message.id,
-            "sender_id": request.user.id,
-            "sender_name": sender_name,
-            "content": message.content,
-            "created_at": message.created_at.isoformat(),
-        }
+        ws_message = _chat_ws_message_from_instance(message, request=request)
         if created and participant_user_ids:
             _broadcast_rest_message_async(participant_user_ids, ws_message)
 
         return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class ConversationSendFileView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    @transaction.atomic
+    def post(self, request, conversation_id):
+        _touch_presence(request.user)
+        participant = ConversationParticipant.objects.select_for_update().filter(
+            conversation_id=conversation_id,
+            user=request.user,
+        ).first()
+        if participant is None:
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
+
+        conversation = Conversation.objects.select_for_update().filter(id=conversation_id).first()
+        if conversation is None:
+            return Response({"detail": "Conversation introuvable."}, status=status.HTTP_404_NOT_FOUND)
+
+        upload = request.FILES.get("file")
+        if upload is None:
+            return Response({"detail": "Fichier manquant."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if getattr(upload, "size", 0) > 15 * 1024 * 1024:
+            return Response({"detail": "Fichier trop volumineux (max 15 Mo)."}, status=status.HTTP_400_BAD_REQUEST)
+        if not _is_allowed_chat_attachment(upload):
+            return Response(
+                {"detail": "Type de fichier non autorise. Utilisez image, PDF, Office, texte ou ZIP."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        content = str(request.data.get("content", "")).strip()
+        raw_client_message_id = str(request.data.get("client_message_id", "")).strip()
+        client_message_id = raw_client_message_id[:64] if raw_client_message_id else None
+
+        created = True
+        if client_message_id:
+            message = ChatMessage.objects.filter(
+                conversation=conversation,
+                sender=request.user,
+                client_message_id=client_message_id,
+            ).first()
+            if message is not None:
+                created = False
+            else:
+                message = ChatMessage.objects.create(
+                    conversation=conversation,
+                    sender=request.user,
+                    message_type=ChatMessage.MessageType.FILE,
+                    content=content,
+                    attachment=upload,
+                    attachment_name=(getattr(upload, "name", "") or "fichier").strip()[:255],
+                    attachment_size=int(getattr(upload, "size", 0) or 0),
+                    attachment_mime_type=(getattr(upload, "content_type", "") or "").strip()[:120],
+                    client_message_id=client_message_id,
+                )
+        else:
+            message = ChatMessage.objects.create(
+                conversation=conversation,
+                sender=request.user,
+                message_type=ChatMessage.MessageType.FILE,
+                content=content,
+                attachment=upload,
+                attachment_name=(getattr(upload, "name", "") or "fichier").strip()[:255],
+                attachment_size=int(getattr(upload, "size", 0) or 0),
+                attachment_mime_type=(getattr(upload, "content_type", "") or "").strip()[:120],
+            )
+
+        participant.last_read_message = message
+        participant.save(update_fields=["last_read_message", "updated_at"])
+        conversation.save(update_fields=["updated_at"])
+
+        payload = ChatMessageSerializer(message, context={"request": request}).data
+        participant_user_ids = list(
+            ConversationParticipant.objects.filter(conversation=conversation)
+            .exclude(user=request.user)
+            .values_list("user_id", flat=True)
+        )
+        ws_message = _chat_ws_message_from_instance(message, request=request)
+        if created and participant_user_ids:
+            _broadcast_rest_message_async(participant_user_ids, ws_message)
+
+        return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class ChatMessageDownloadView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, message_id):
+        message = ChatMessage.objects.select_related("conversation").filter(id=message_id).first()
+        if message is None or not message.attachment:
+            return Response({"detail": "Fichier introuvable."}, status=status.HTTP_404_NOT_FOUND)
+        if not _ensure_participant(message.conversation_id, request.user):
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
+
+        attachment = message.attachment
+        filename = (message.attachment_name or "piece_jointe").strip() or "piece_jointe"
+        return FileResponse(attachment.open("rb"), as_attachment=True, filename=filename)

@@ -39,6 +39,7 @@ class ChatUserLiteSerializer(serializers.ModelSerializer):
 
 class ChatMessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.SerializerMethodField()
+    attachment_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatMessage
@@ -47,13 +48,32 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "conversation",
             "sender",
             "sender_name",
+            "message_type",
             "content",
             "created_at",
             "client_message_id",
+            "attachment_url",
+            "attachment_name",
+            "attachment_size",
+            "attachment_mime_type",
         ]
 
     def get_sender_name(self, obj):
         return obj.sender.get_full_name().strip() or obj.sender.username
+
+    def get_attachment_url(self, obj):
+        attachment = getattr(obj, "attachment", None)
+        if not attachment:
+            return None
+        try:
+            url = attachment.url
+        except Exception:
+            return None
+
+        request = self.context.get("request") if isinstance(self.context, dict) else None
+        if request is None:
+            return url
+        return request.build_absolute_uri(url)
 
 
 class ConversationSerializer(serializers.ModelSerializer):
