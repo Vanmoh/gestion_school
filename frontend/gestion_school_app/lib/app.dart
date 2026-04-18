@@ -39,6 +39,8 @@ import 'features/students/presentation/students_controller.dart';
 import 'features/students/presentation/students_page.dart';
 import 'features/teachers/presentation/teachers_page.dart';
 import 'features/timetable/presentation/timetable_module_page.dart';
+import 'features/users/presentation/users_controller.dart';
+import 'features/users/presentation/users_page.dart';
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
 
@@ -88,6 +90,12 @@ Future<void> _invalidateRefreshProvidersForView(
     ref.invalidate(paymentsProvider);
     ref.invalidate(feesProvider);
     await ref.read(paymentsProvider.future);
+    return;
+  }
+
+  if (view is UsersPage) {
+    ref.invalidate(usersProvider);
+    await ref.read(usersProvider.future);
     return;
   }
 
@@ -176,6 +184,7 @@ class GestionSchoolApp extends ConsumerWidget {
             const _GlobalFeatureRefreshHost(child: PaymentsPage()),
         '/reports': (_) =>
             const _GlobalFeatureRefreshHost(child: ReportsPage()),
+        '/users': (_) => const _GlobalFeatureRefreshHost(child: UsersPage()),
       },
     );
   }
@@ -479,6 +488,12 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       view: BackupRestorePage(),
     ),
     _AdminMenuItem(
+      keyName: 'users',
+      label: 'Gestion des utilisateurs',
+      icon: Icons.group_outlined,
+      view: UsersPage(),
+    ),
+    _AdminMenuItem(
       keyName: 'etablissements',
       label: 'Gestion etablissements',
       icon: Icons.apartment_outlined,
@@ -544,6 +559,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       keyName: 'administration',
       title: 'Administration',
       itemKeys: [
+        'users',
         'etablissements',
         'communication',
         'reports',
@@ -910,6 +926,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
       if (_isItemVisibleForRole('students', role)) {
         warmups.add(ref.read(studentsProvider.future).then((_) {}));
+      }
+      if (_isItemVisibleForRole('users', role)) {
+        warmups.add(ref.read(usersProvider.future).then((_) {}));
       }
       if (_isItemVisibleForRole('finance', role)) {
         warmups.add(ref.read(paymentsProvider.future).then((_) {}));
