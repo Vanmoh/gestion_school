@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/api_client.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../models/etablissement.dart';
 import '../domain/user_account.dart';
@@ -31,6 +33,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   String _roleFilter = 'all';
   int? _selectedUserId;
   int? _selectedCreateEtablissementId;
+  int? _selectedCreateClassroomId;
+  final Set<int> _selectedCreateStudentIds = <int>{};
+  List<Map<String, dynamic>> _classroomOptions = const [];
+  List<Map<String, dynamic>> _studentOptions = const [];
+  bool _loadingCreationRefs = false;
+  int? _loadedCreationRefsEtablissementId;
   int _currentPage = 1;
   int _pageSize = 25;
   String _searchTerm = '';
@@ -45,6 +53,15 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     ('parent', 'Parent'),
     ('student', 'Eleve'),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncCreationReferences(force: true);
+    });
+  }
 
   @override
   void dispose() {
@@ -206,6 +223,241 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     _phoneController.clear();
     _selectedRole = 'teacher';
     _selectedCreateEtablissementId = null;
+    _selectedCreateClassroomId = null;
+    _selectedCreateStudentIds.clear();
+  }
+
+  bool _roleNeedsClassroom(String role) {
+    return role == 'student' || role == 'parent';
+  }
+
+  bool _roleNeedsStudents(String role) {
+    return role == 'parent';
+  }
+
+  List<Map<String, dynamic>> _extractRows(dynamic payload) {
+    if (payload is List) {
+      return payload
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList(growable: false);
+    }
+    if (payload is Map && payload['results'] is List) {
+      return (payload['results'] as List)
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList(growable: false);
+    }
+    return const <Map<String, dynamic>>[];
+  }
+
+  int _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? 0;
+    return 0;
+  }
+
+  String _studentDisplayName(Map<String, dynamic> row) {
+    final fullName = row['user_full_name']?.toString().trim() ?? '';
+    if (fullName.isNotEmpty) {
+      return fullName;
+    }
+    final firstName = row['user_first_name']?.toString().trim() ?? '';
+    final lastName = row['user_last_name']?.toString().trim() ?? '';
+    final fallback = '$firstName $lastName'.trim();
+    if (fallback.isNotEmpty) {
+      return fallback;
+    }
+    final username = row['user_username']?.toString().trim() ?? '';
+    if (username.isNotEmpty) {
+      return username;
+    }
+    return 'Eleve #${_asInt(row['id'])}';
+  }
+
+  String _classroomDisplayName(int? classroomId) {
+    if (classroomId == null) {
+      return 'Non selectionnee';
+    }
+    for (final row in _classroomOptions) {
+      if (_asInt(row['id']) == classroomId) {
+        final name = row['name']?.toString().trim() ?? '';
+        if (name.isNotEmpty) {
+          return name;
+        }
+      }
+    }
+    return 'Classe #$classroomId';
+  }
+
+  List<String> _selectedStudentNames() {
+    if (_selectedCreateStudentIds.isEmpty) {
+      return const <String>[];
+    }
+    final labels = <String>[];
+    for (final row in _studentOptions) {
+      final id = _asInt(row['id']);
+      if (_selectedCreateStudentIds.contains(id)) {
+        labels.add(_studentDisplayName(row));
+      }
+    }
+    return labels;
+  }
+
+  Future<void> _syncCreationReferences({bool force = false}) async {
+    final authUser = ref.read(authControllerProvider).value;
+    final selectedEtablissement = ref.read(etablissementProvider).selected;
+    final isSuperAdmin = authUser?.role == 'super_admin';
+    final etablissementId = isSuperAdmin
+        ? (_selectedCreateEtablissementId ?? selectedEtablissement?.id)
+        : selectedEtablissement?.id;
+
+    if (!_roleNeedsClassroom(_selectedRole)) {
+      if (!mounted) return;
+      setState(() {
+        _classroomOptions = const [];
+        _studentOptions = const [];
+        _selectedCreateClassroomId = null;
+        _selectedCreateStudentIds.clear();
+        _loadedCreationRefsEtablissementId = etablissementId;
+        _loadingCreationRefs = false;
+      });
+      return;
+    }
+
+    if (!force &&
+        !_loadingCreationRefs &&
+        _loadedCreationRefsEtablissementId == etablissementId) {
+      return;
+    }
+
+    if (etablissementId == null) {
+      if (!mounted) return;
+      setState(() {
+        _classroomOptions = const [];
+        _studentOptions = const [];
+        _selectedCreateClassroomId = null;
+        _selectedCreateStudentIds.clear();
+        _loadedCreationRefsEtablissementId = null;
+        _loadingCreationRefs = false;
+      });
+      return;
+    }
+
+    setState(() => _loadingCreationRefs = true);
+    final dio = ref.read(dioProvider);
+
+    try {
+      final responses = await Future.wait<Response<dynamic>>(<Future<Response<dynamic>>>[
+        dio.get('/classrooms/?etablissement=$etablissementId&page_size=500'),
+        dio.get('/students/?etablissement=$etablissementId&page_size=500'),
+      ]);
+
+      final classrooms = _extractRows(responses[0].data);
+      final students = _extractRows(responses[1].data);
+
+      if (!mounted) return;
+      setState(() {
+        _classroomOptions = classrooms;
+        _studentOptions = students;
+        final hasClassroomSelection = classrooms.any(
+          (row) => _asInt(row['id']) == _selectedCreateClassroomId,
+        );
+        if (!hasClassroomSelection) {
+          _selectedCreateClassroomId = null;
+        }
+
+        final allowedStudentIds = students
+            .map((row) => _asInt(row['id']))
+            .where((id) => id > 0)
+            .toSet();
+        _selectedCreateStudentIds.removeWhere((id) => !allowedStudentIds.contains(id));
+
+        _loadedCreationRefsEtablissementId = etablissementId;
+      });
+    } on DioException catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _classroomOptions = const [];
+        _studentOptions = const [];
+        _selectedCreateClassroomId = null;
+        _selectedCreateStudentIds.clear();
+        _loadedCreationRefsEtablissementId = etablissementId;
+      });
+      _showMessage('Impossible de charger classes/eleves pour cet etablissement.');
+    } finally {
+      if (mounted) {
+        setState(() => _loadingCreationRefs = false);
+      }
+    }
+  }
+
+  Future<void> _openStudentMultiSelectDialog() async {
+    if (_studentOptions.isEmpty) {
+      _showMessage('Aucun eleve disponible pour cet etablissement.');
+      return;
+    }
+
+    final selected = Set<int>.from(_selectedCreateStudentIds);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Selectionner un ou plusieurs eleves'),
+              content: SizedBox(
+                width: 460,
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _studentOptions.length,
+                  itemBuilder: (context, index) {
+                    final row = _studentOptions[index];
+                    final studentId = _asInt(row['id']);
+                    final label = _studentDisplayName(row);
+                    final classLabel = row['classroom_name']?.toString().trim() ?? '';
+                    return CheckboxListTile(
+                      dense: true,
+                      value: selected.contains(studentId),
+                      title: Text(label),
+                      subtitle: classLabel.isEmpty ? null : Text(classLabel),
+                      onChanged: (value) {
+                        setDialogState(() {
+                          if (value == true) {
+                            selected.add(studentId);
+                          } else {
+                            selected.remove(studentId);
+                          }
+                        });
+                      },
+                    );
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Annuler'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('Valider'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirmed == true && mounted) {
+      setState(() {
+        _selectedCreateStudentIds
+          ..clear()
+          ..addAll(selected);
+      });
+    }
   }
 
   Future<void> _createUser() async {
@@ -225,6 +477,15 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       return;
     }
 
+    if (_roleNeedsClassroom(_selectedRole) && _selectedCreateClassroomId == null) {
+      _showMessage('Selectionnez une classe pour ce role.');
+      return;
+    }
+    if (_roleNeedsStudents(_selectedRole) && _selectedCreateStudentIds.isEmpty) {
+      _showMessage('Selectionnez au moins un eleve pour ce parent.');
+      return;
+    }
+
     await ref
         .read(userMutationProvider.notifier)
         .createUser(
@@ -236,6 +497,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
           role: _selectedRole,
           phone: _phoneController.text.trim(),
           etablissementId: etablissementId,
+          classroomId: _roleNeedsClassroom(_selectedRole)
+              ? _selectedCreateClassroomId
+              : null,
+          studentIds: _roleNeedsStudents(_selectedRole)
+              ? _selectedCreateStudentIds.toList(growable: false)
+              : null,
         );
 
     final mutation = ref.read(userMutationProvider);
@@ -245,6 +512,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     }
 
     setState(_resetCreateForm);
+    unawaited(_syncCreationReferences(force: true));
     _showMessage('Utilisateur cree avec succes.', isSuccess: true);
   }
 
@@ -584,6 +852,18 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
     final allEtablissements = ref.watch(etablissementProvider).etablissements;
     final isSuperAdmin = authUser?.role == 'super_admin';
+
+    final effectiveCreateEtablissementId = isSuperAdmin
+        ? (_selectedCreateEtablissementId ?? selectedEtablissement?.id)
+        : selectedEtablissement?.id;
+    if (_roleNeedsClassroom(_selectedRole) &&
+        !_loadingCreationRefs &&
+        _loadedCreationRefsEtablissementId != effectiveCreateEtablissementId) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(_syncCreationReferences(force: true));
+      });
+    }
 
     final query = UsersPageQuery(
       page: _currentPage,
@@ -1165,7 +1445,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                           .toList(),
                                       onChanged: (value) {
                                         if (value != null) {
-                                          setState(() => _selectedRole = value);
+                                          setState(() {
+                                            _selectedRole = value;
+                                            _selectedCreateClassroomId = null;
+                                            _selectedCreateStudentIds.clear();
+                                          });
+                                          unawaited(_syncCreationReferences(force: true));
                                         }
                                       },
                                     ),
@@ -1194,7 +1479,10 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                               setState(() {
                                                 _selectedCreateEtablissementId =
                                                     value;
+                                                _selectedCreateClassroomId = null;
+                                                _selectedCreateStudentIds.clear();
                                               });
+                                              unawaited(_syncCreationReferences(force: true));
                                             },
                                       validator: (value) {
                                         if ((value ??
@@ -1226,6 +1514,155 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                 ],
                               ),
                               const SizedBox(height: 12),
+                              if (_roleNeedsClassroom(_selectedRole))
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                                  margin: const EdgeInsets.only(bottom: 12),
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.surface,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                                    ),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _selectedRole == 'student'
+                                            ? 'Champs supplementaires eleve'
+                                            : 'Champs supplementaires parent',
+                                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Wrap(
+                                        spacing: 10,
+                                        runSpacing: 10,
+                                        crossAxisAlignment: WrapCrossAlignment.center,
+                                        children: [
+                                          SizedBox(
+                                            width: 320,
+                                            child: DropdownButtonFormField<int>(
+                                              initialValue: _selectedCreateClassroomId,
+                                              decoration: const InputDecoration(
+                                                labelText: 'Classe (obligatoire)',
+                                              ),
+                                              items: _classroomOptions
+                                                  .map(
+                                                    (row) => DropdownMenuItem<int>(
+                                                      value: _asInt(row['id']),
+                                                      child: Text(
+                                                        row['name']?.toString() ??
+                                                            'Classe #${_asInt(row['id'])}',
+                                                      ),
+                                                    ),
+                                                  )
+                                                  .toList(),
+                                              onChanged: _loadingCreationRefs
+                                                  ? null
+                                                  : (value) {
+                                                      setState(
+                                                        () => _selectedCreateClassroomId = value,
+                                                      );
+                                                    },
+                                              validator: (value) {
+                                                if (_roleNeedsClassroom(_selectedRole) &&
+                                                    value == null) {
+                                                  return 'Classe requise';
+                                                }
+                                                return null;
+                                              },
+                                            ),
+                                          ),
+                                          if (_roleNeedsStudents(_selectedRole))
+                                            SizedBox(
+                                              width: 350,
+                                              child: FormField<Set<int>>(
+                                                initialValue: _selectedCreateStudentIds,
+                                                validator: (_) {
+                                                  if (_roleNeedsStudents(_selectedRole) &&
+                                                      _selectedCreateStudentIds.isEmpty) {
+                                                    return 'Selectionnez au moins un eleve';
+                                                  }
+                                                  return null;
+                                                },
+                                                builder: (field) {
+                                                  final selectedNames = _selectedStudentNames();
+                                                  return Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      OutlinedButton.icon(
+                                                        onPressed: _loadingCreationRefs
+                                                            ? null
+                                                            : () async {
+                                                                await _openStudentMultiSelectDialog();
+                                                                field.didChange(
+                                                                  Set<int>.from(_selectedCreateStudentIds),
+                                                                );
+                                                              },
+                                                        icon: const Icon(Icons.groups_2_outlined),
+                                                        label: Text(
+                                                          _selectedCreateStudentIds.isEmpty
+                                                              ? 'Selectionner les eleves (obligatoire)'
+                                                              : '${_selectedCreateStudentIds.length} eleve(s) selectionne(s)',
+                                                        ),
+                                                      ),
+                                                      if (selectedNames.isNotEmpty) ...[
+                                                        const SizedBox(height: 8),
+                                                        Wrap(
+                                                          spacing: 6,
+                                                          runSpacing: 6,
+                                                          children: selectedNames
+                                                              .map((name) => Chip(label: Text(name)))
+                                                              .toList(growable: false),
+                                                        ),
+                                                      ],
+                                                      if (field.errorText != null)
+                                                        Padding(
+                                                          padding: const EdgeInsets.only(top: 6),
+                                                          child: Text(
+                                                            field.errorText!,
+                                                            style: TextStyle(
+                                                              color: Theme.of(context).colorScheme.error,
+                                                              fontSize: 12,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        _selectedRole == 'student'
+                                            ? 'Un eleve doit obligatoirement etre associe a une classe.'
+                                            : 'Un parent doit avoir une classe de reference et au moins un eleve. Les eleves peuvent venir de classes differentes.',
+                                        style: Theme.of(context).textTheme.bodySmall,
+                                      ),
+                                      if (_selectedCreateClassroomId != null)
+                                        Padding(
+                                          padding: const EdgeInsets.only(top: 4),
+                                          child: Text(
+                                            'Classe selectionnee: ${_classroomDisplayName(_selectedCreateClassroomId)}',
+                                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              if (_roleNeedsClassroom(_selectedRole) && _loadingCreationRefs)
+                                const Padding(
+                                  padding: EdgeInsets.only(bottom: 10),
+                                  child: LinearProgressIndicator(minHeight: 2),
+                                ),
                               if (!isSuperAdmin &&
                                   selectedEtablissement != null)
                                 Padding(
