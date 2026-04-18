@@ -1,9 +1,13 @@
+from urllib.parse import parse_qs
+
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
 from django.utils import timezone
+
+from apps.school.models import Etablissement
 
 from .models import ChatMessage, ChatPresence, Conversation, ConversationParticipant
 
@@ -17,7 +21,13 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
 
         self.user = user
         self.user_group = f"chat_user_{self.user.id}"
-        self.etablissement_id = getattr(self.user, "etablissement_id", None)
+        self.scope_requested_etablissement_id = self._requested_etablissement_id_from_scope()
+        self.scope_requested_etablissement_present = self.scope_requested_etablissement_id is not None
+        self.etablissement_id = await self._active_etablissement_id()
+
+        if self.scope_requested_etablissement_present and self.etablissement_id is None:
+            await self.close(code=4403)
+            return
 
         await self.channel_layer.group_add(self.user_group, self.channel_name)
         for conversation_id in await self._conversation_ids_for_user():
@@ -195,10 +205,48 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
     async def chat_read_receipt(self, event):
         await self.send_json({"event": "read_receipt", **event["payload"]})
 
+    def _requested_etablissement_id_from_scope(self):
+        raw_query = self.scope.get("query_string", b"") or b""
+        try:
+            parsed = parse_qs(raw_query.decode("utf-8", errors="ignore"))
+        except Exception:
+            return None
+        raw_value = (parsed.get("etablissement_id") or [None])[0]
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed_value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed_value if parsed_value > 0 else None
+
+    @database_sync_to_async
+    def _active_etablissement_id(self):
+        user_role = getattr(self.user, "role", "")
+        user_etablissement_id = getattr(self.user, "etablissement_id", None)
+        if user_role != "super_admin":
+            return user_etablissement_id
+
+        requested_id = self.scope_requested_etablissement_id
+        if requested_id is not None:
+            if Etablissement.objects.filter(id=requested_id).exists():
+                return requested_id
+            return None
+
+        return user_etablissement_id
+
+    def _scoped_conversation_ids_queryset(self):
+        query = ConversationParticipant.objects.filter(user=self.user)
+        if self.etablissement_id is not None:
+            query = query.filter(conversation__etablissement_id=self.etablissement_id)
+        elif self.scope_requested_etablissement_present or getattr(self.user, "role", "") != "super_admin":
+            query = query.none()
+        return query
+
     @database_sync_to_async
     def _conversation_ids_for_user(self):
         return list(
-            ConversationParticipant.objects.filter(user=self.user)
+            self._scoped_conversation_ids_queryset()
             .values_list("conversation_id", flat=True)
             .distinct()
         )
@@ -209,10 +257,7 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
             conversation_id = int(conversation_id)
         except (TypeError, ValueError):
             return False
-        return ConversationParticipant.objects.filter(
-            user=self.user,
-            conversation_id=conversation_id,
-        ).exists()
+        return self._scoped_conversation_ids_queryset().filter(conversation_id=conversation_id).exists()
 
     @database_sync_to_async
     def _participant_user_ids(self, conversation_id):
@@ -230,11 +275,7 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
         return self._contact_user_ids_sync()
 
     def _contact_user_ids_sync(self):
-        conversation_ids = (
-            ConversationParticipant.objects.filter(user=self.user)
-            .values_list("conversation_id", flat=True)
-            .distinct()
-        )
+        conversation_ids = self._scoped_conversation_ids_queryset().values_list("conversation_id", flat=True).distinct()
         return list(
             ConversationParticipant.objects.filter(conversation_id__in=conversation_ids)
             .exclude(user=self.user)
@@ -278,15 +319,18 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
             return None
 
         with transaction.atomic():
-            participant = ConversationParticipant.objects.select_for_update().filter(
-                conversation_id=conversation_id,
-                user=self.user,
-            ).first()
-            if participant is None:
+            if not self._scoped_conversation_ids_queryset().filter(conversation_id=conversation_id).exists():
                 return None
 
             conversation = Conversation.objects.select_for_update().filter(id=conversation_id).first()
             if conversation is None:
+                return None
+
+            participant = ConversationParticipant.objects.select_for_update().filter(
+                conversation=conversation,
+                user=self.user,
+            ).first()
+            if participant is None:
                 return None
 
             created = True
@@ -339,6 +383,9 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
             return None
 
         with transaction.atomic():
+            if not self._scoped_conversation_ids_queryset().filter(conversation_id=conversation_id).exists():
+                return None
+
             participant = ConversationParticipant.objects.select_for_update().filter(
                 conversation_id=conversation_id,
                 user=self.user,

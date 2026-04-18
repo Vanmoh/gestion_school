@@ -6,10 +6,27 @@ import '../models/etablissement.dart';
 
 import '../screens/etablissement_details_screen.dart';
 
+enum EtablissementLayoutMode { grid, list }
+
+enum EtablissementSearchField { all, name, address, email }
+
+enum EtablissementSortMode { relevance, alphaAsc, alphaDesc }
+
 class EtablissementSelector extends ConsumerWidget {
   final FutureOr<void> Function(Etablissement) onSelected;
+  final String searchQuery;
+  final EtablissementLayoutMode layoutMode;
+  final EtablissementSearchField searchField;
+  final EtablissementSortMode sortMode;
 
-  const EtablissementSelector({super.key, required this.onSelected});
+  const EtablissementSelector({
+    super.key,
+    required this.onSelected,
+    this.searchQuery = '',
+    this.layoutMode = EtablissementLayoutMode.grid,
+    this.searchField = EtablissementSearchField.all,
+    this.sortMode = EtablissementSortMode.relevance,
+  });
 
   static String titleHeroTag(Etablissement etab) => 'etab-title-${etab.id}';
 
@@ -44,56 +61,228 @@ class EtablissementSelector extends ConsumerWidget {
     ];
   }
 
+  int _fieldScore(String value, String query) {
+    if (query.isEmpty) {
+      return 0;
+    }
+    final raw = value.toLowerCase().trim();
+    if (raw.isEmpty) {
+      return 0;
+    }
+    if (raw == query) {
+      return 140;
+    }
+    if (raw.startsWith(query)) {
+      return 96;
+    }
+    final index = raw.indexOf(query);
+    if (index >= 0) {
+      return 42 - index.clamp(0, 30);
+    }
+    return 0;
+  }
+
+  int _searchScore(Etablissement etab, String query) {
+    final name = etab.name;
+    final subtitle = _subtitle(etab);
+    final email = etab.email ?? '';
+    switch (searchField) {
+      case EtablissementSearchField.name:
+        return _fieldScore(name, query);
+      case EtablissementSearchField.address:
+        return _fieldScore(subtitle, query);
+      case EtablissementSearchField.email:
+        return _fieldScore(email, query);
+      case EtablissementSearchField.all:
+        return (_fieldScore(name, query) * 3) +
+            (_fieldScore(subtitle, query) * 2) +
+            _fieldScore(email, query);
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final etablissements = ref.watch(etablissementProvider).etablissements;
-    final displayEtablissements =
+    final seedEtablissements =
         (etablissements.isNotEmpty ? etablissements : _fallbackEtablissements())
             .take(4)
             .toList(growable: false);
+    final normalizedQuery = searchQuery.trim().toLowerCase();
+    final displayEtablissements = normalizedQuery.isEmpty
+        ? seedEtablissements
+        : seedEtablissements.where((etab) {
+            final name = etab.name.toLowerCase();
+            final address = _subtitle(etab).toLowerCase();
+            final email = (etab.email ?? '').toLowerCase();
+            switch (searchField) {
+              case EtablissementSearchField.name:
+                return name.contains(normalizedQuery);
+              case EtablissementSearchField.address:
+                return address.contains(normalizedQuery);
+              case EtablissementSearchField.email:
+                return email.contains(normalizedQuery);
+              case EtablissementSearchField.all:
+                final haystack = '$name $address $email';
+                return haystack.contains(normalizedQuery);
+            }
+          }).toList(growable: false);
+
+    final sortedEtablissements = <Etablissement>[...displayEtablissements];
+    switch (sortMode) {
+      case EtablissementSortMode.alphaAsc:
+        sortedEtablissements.sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        );
+        break;
+      case EtablissementSortMode.alphaDesc:
+        sortedEtablissements.sort(
+          (a, b) => b.name.toLowerCase().compareTo(a.name.toLowerCase()),
+        );
+        break;
+      case EtablissementSortMode.relevance:
+        if (normalizedQuery.isEmpty) {
+          sortedEtablissements.sort(
+            (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+          );
+        } else {
+          sortedEtablissements.sort((a, b) {
+            final scoreA = _searchScore(a, normalizedQuery);
+            final scoreB = _searchScore(b, normalizedQuery);
+            if (scoreA != scoreB) {
+              return scoreB.compareTo(scoreA);
+            }
+            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          });
+        }
+        break;
+    }
+
+    if (sortedEtablissements.isEmpty) {
+      return _NoSearchResultCard(query: searchQuery);
+    }
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         final height = constraints.maxHeight;
         final tightLayout = height < 720;
-        final crossAxisCount = width >= 520 ? 2 : 1;
+        final crossAxisCount = layoutMode == EtablissementLayoutMode.list
+            ? 1
+            : (width >= 520 ? 2 : 1);
         final spacing = tightLayout ? 6.0 : 10.0;
-        final rows = (displayEtablissements.length / crossAxisCount).ceil();
+        final rows = (sortedEtablissements.length / crossAxisCount).ceil();
         final usableWidth = width - spacing * (crossAxisCount - 1);
         final usableHeight = height - spacing * (rows - 1);
         final tileWidth = usableWidth / crossAxisCount;
         final tileHeight = usableHeight / rows;
         // Keep a safe range so cards stay readable on both short and tall screens.
-        final computedAspectRatio = ((tileWidth / tileHeight) * 1.18).clamp(
-          1.35,
-          2.80,
-        );
+        final computedAspectRatio = layoutMode == EtablissementLayoutMode.list
+            ? ((tileWidth / tileHeight) * 1.85).clamp(2.1, 4.3)
+            : ((tileWidth / tileHeight) * 1.18).clamp(1.35, 2.80);
 
         return Padding(
           padding: EdgeInsets.zero,
-          child: GridView.builder(
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: crossAxisCount,
-              mainAxisSpacing: spacing,
-              crossAxisSpacing: spacing,
-              childAspectRatio: computedAspectRatio,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            child: GridView.builder(
+              key: ValueKey<String>('${layoutMode.name}_${sortMode.name}_$normalizedQuery'),
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: crossAxisCount,
+                mainAxisSpacing: spacing,
+                crossAxisSpacing: spacing,
+                childAspectRatio: computedAspectRatio,
+              ),
+              itemCount: sortedEtablissements.length,
+              itemBuilder: (context, index) {
+                final etab = sortedEtablissements[index];
+                return _EtablissementTile(
+                  etab: etab,
+                  subtitle: _subtitle(etab),
+                  tightLayout: tightLayout,
+                  index: index,
+                  searchActive: normalizedQuery.isNotEmpty,
+                  normalizedQuery: normalizedQuery,
+                  searchField: searchField,
+                  onSelected: onSelected,
+                );
+              },
             ),
-            itemCount: displayEtablissements.length,
-            itemBuilder: (context, index) {
-              final etab = displayEtablissements[index];
-              return _EtablissementTile(
-                etab: etab,
-                subtitle: _subtitle(etab),
-                tightLayout: tightLayout,
-                index: index,
-                onSelected: onSelected,
-              );
-            },
           ),
         );
       },
+    );
+  }
+}
+
+class _NoSearchResultCard extends StatelessWidget {
+  final String query;
+
+  const _NoSearchResultCard({required this.query});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        width: 520,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFFFDFEFF), Color(0xFFF0F7FF)],
+          ),
+          border: Border.all(color: const Color(0xFFD0E1F3)),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x16345C85),
+              blurRadius: 16,
+              offset: Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE7F2FF),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(
+                Icons.search_off_rounded,
+                size: 28,
+                color: Color(0xFF2E6294),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Aucun établissement trouvé',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF1F4A74),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Aucun resultat pour "$query". Essayez un autre nom ou une autre adresse.',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF5A7592),
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -103,6 +292,9 @@ class _EtablissementTile extends StatefulWidget {
   final String subtitle;
   final bool tightLayout;
   final int index;
+  final bool searchActive;
+  final String normalizedQuery;
+  final EtablissementSearchField searchField;
   final FutureOr<void> Function(Etablissement) onSelected;
 
   const _EtablissementTile({
@@ -110,6 +302,9 @@ class _EtablissementTile extends StatefulWidget {
     required this.subtitle,
     required this.tightLayout,
     required this.index,
+    required this.searchActive,
+    required this.normalizedQuery,
+    required this.searchField,
     required this.onSelected,
   });
 
@@ -122,6 +317,46 @@ class _EtablissementTileState extends State<_EtablissementTile> {
   bool _hoverAccess = false;
   bool _hoverDetails = false;
   Offset _pointer = Offset.zero;
+
+  TextSpan _highlightedSpan({
+    required String text,
+    required TextStyle baseStyle,
+    required bool enabled,
+  }) {
+    final query = widget.normalizedQuery;
+    if (!enabled || query.isEmpty) {
+      return TextSpan(text: text, style: baseStyle);
+    }
+
+    final lower = text.toLowerCase();
+    final spans = <TextSpan>[];
+    var start = 0;
+    while (true) {
+      final index = lower.indexOf(query, start);
+      if (index < 0) {
+        if (start < text.length) {
+          spans.add(TextSpan(text: text.substring(start), style: baseStyle));
+        }
+        break;
+      }
+      if (index > start) {
+        spans.add(TextSpan(text: text.substring(start, index), style: baseStyle));
+      }
+      final end = (index + query.length).clamp(index, text.length);
+      spans.add(
+        TextSpan(
+          text: text.substring(index, end),
+          style: baseStyle.copyWith(
+            color: const Color(0xFF0F4C86),
+            backgroundColor: const Color(0x99D8EAFE),
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      );
+      start = end;
+    }
+    return TextSpan(children: spans);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -167,7 +402,10 @@ class _EtablissementTileState extends State<_EtablissementTile> {
                   colors: [Color(0xFFFEFFFF), Color(0xFFF2F8FE)],
                 ),
                 border: Border.all(
-                  color: _hovered ? const Color(0xFF8EB8DF) : const Color(0xFFD1E0F0),
+                  color: widget.searchActive
+                      ? const Color(0xFF78A7D1)
+                      : (_hovered ? const Color(0xFF8EB8DF) : const Color(0xFFD1E0F0)),
+                  width: widget.searchActive ? 1.4 : 1,
                 ),
                 boxShadow: [
                   BoxShadow(
@@ -175,6 +413,12 @@ class _EtablissementTileState extends State<_EtablissementTile> {
                     blurRadius: _hovered ? 20 : 12,
                     offset: Offset(0, _hovered ? 10 : 6),
                   ),
+                  if (widget.searchActive)
+                    const BoxShadow(
+                      color: Color(0x22598FC2),
+                      blurRadius: 10,
+                      offset: Offset(0, 4),
+                    ),
                 ],
               ),
               child: Stack(
@@ -251,29 +495,38 @@ class _EtablissementTileState extends State<_EtablissementTile> {
                                 tag: EtablissementSelector.titleHeroTag(widget.etab),
                                 child: Material(
                                   color: Colors.transparent,
-                                  child: Text(
-                                    widget.etab.name,
+                                  child: RichText(
                                     textAlign: TextAlign.center,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: tightLayout ? 13 : 16,
-                                      fontWeight: FontWeight.w900,
-                                      color: const Color(0xFF1B456D),
+                                    text: _highlightedSpan(
+                                      text: widget.etab.name,
+                                      enabled: widget.searchField == EtablissementSearchField.all ||
+                                          widget.searchField == EtablissementSearchField.name,
+                                      baseStyle: TextStyle(
+                                        fontSize: tightLayout ? 13 : 16,
+                                        fontWeight: FontWeight.w900,
+                                        color: const Color(0xFF1B456D),
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
                               SizedBox(height: tightLayout ? 1 : 2),
-                              Text(
-                                widget.subtitle,
+                              RichText(
                                 textAlign: TextAlign.center,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: tightLayout ? 10 : 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: const Color(0xFF5E7692),
+                                text: _highlightedSpan(
+                                  text: widget.subtitle,
+                                  enabled: widget.searchField == EtablissementSearchField.all ||
+                                      widget.searchField == EtablissementSearchField.address ||
+                                      widget.searchField == EtablissementSearchField.email,
+                                  baseStyle: TextStyle(
+                                    fontSize: tightLayout ? 10 : 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: const Color(0xFF5E7692),
+                                  ),
                                 ),
                               ),
                             ],

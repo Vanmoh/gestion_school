@@ -39,8 +39,6 @@ import 'features/students/presentation/students_controller.dart';
 import 'features/students/presentation/students_page.dart';
 import 'features/teachers/presentation/teachers_page.dart';
 import 'features/timetable/presentation/timetable_module_page.dart';
-import 'features/users/presentation/users_controller.dart';
-import 'features/users/presentation/users_page.dart';
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
 
@@ -90,12 +88,6 @@ Future<void> _invalidateRefreshProvidersForView(
     ref.invalidate(paymentsProvider);
     ref.invalidate(feesProvider);
     await ref.read(paymentsProvider.future);
-    return;
-  }
-
-  if (view is UsersPage) {
-    ref.invalidate(usersProvider);
-    await ref.read(usersProvider.future);
     return;
   }
 
@@ -184,7 +176,6 @@ class GestionSchoolApp extends ConsumerWidget {
             const _GlobalFeatureRefreshHost(child: PaymentsPage()),
         '/reports': (_) =>
             const _GlobalFeatureRefreshHost(child: ReportsPage()),
-        '/users': (_) => const _GlobalFeatureRefreshHost(child: UsersPage()),
       },
     );
   }
@@ -201,6 +192,18 @@ class _RoleShell extends ConsumerWidget {
     required this.title,
   });
 
+  String _userEtablissementLabel(AuthUser user) {
+    final name = user.etablissementName.trim();
+    if (name.isNotEmpty) {
+      return name;
+    }
+    final id = user.etablissementId;
+    if (id != null) {
+      return 'Etablissement #$id';
+    }
+    return 'etablissement associe a votre compte';
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
@@ -214,20 +217,25 @@ class _RoleShell extends ConsumerWidget {
       final userEtabId = authUser.etablissementId;
       if (userEtabId != null && etabProvider.selected?.id != userEtabId) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          final provider = ref.read(etablissementProvider);
-          final candidates = provider.etablissements
-              .where((item) => item.id == userEtabId)
-              .toList();
-          final target = candidates.isNotEmpty
-              ? candidates.first
-              : Etablissement(
-                  id: userEtabId,
-                  name: authUser.etablissementName.isNotEmpty
-                      ? authUser.etablissementName
-                      : 'Etablissement #$userEtabId',
-                );
-          provider.selectEtablissement(target);
+          if (!context.mounted) {
+            return;
+          }
+          final messenger = ScaffoldMessenger.of(context);
+          final concerned = _userEtablissementLabel(authUser);
+          messenger
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Ce compte appartient a "$concerned". Veuillez vous connecter sur cet etablissement.',
+                ),
+              ),
+            );
+          Navigator.of(
+            context,
+          ).pushNamedAndRemoveUntil('/', (route) => false);
         });
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
       }
     }
 
@@ -471,12 +479,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       view: BackupRestorePage(),
     ),
     _AdminMenuItem(
-      keyName: 'users',
-      label: 'Gestion des utilisateurs',
-      icon: Icons.group_outlined,
-      view: UsersPage(),
-    ),
-    _AdminMenuItem(
       keyName: 'etablissements',
       label: 'Gestion etablissements',
       icon: Icons.apartment_outlined,
@@ -542,7 +544,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       keyName: 'administration',
       title: 'Administration',
       itemKeys: [
-        'users',
         'etablissements',
         'communication',
         'reports',
@@ -910,9 +911,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       if (_isItemVisibleForRole('students', role)) {
         warmups.add(ref.read(studentsProvider.future).then((_) {}));
       }
-      if (_isItemVisibleForRole('users', role)) {
-        warmups.add(ref.read(usersProvider.future).then((_) {}));
-      }
       if (_isItemVisibleForRole('finance', role)) {
         warmups.add(ref.read(paymentsProvider.future).then((_) {}));
       }
@@ -1101,20 +1099,23 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       final userEtabId = user.etablissementId;
       if (userEtabId != null && selectedEtablissement?.id != userEtabId) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          final provider = ref.read(etablissementProvider);
-          final candidates = provider.etablissements
-              .where((item) => item.id == userEtabId)
-              .toList();
-          final target = candidates.isNotEmpty
-              ? candidates.first
-              : Etablissement(
-                  id: userEtabId,
-                  name: user.etablissementName.isNotEmpty
-                      ? user.etablissementName
-                      : 'Etablissement #$userEtabId',
-                );
-          provider.selectEtablissement(target);
+          if (!mounted) {
+            return;
+          }
+          final messenger = ScaffoldMessenger.of(context);
+          final concerned = _userEtablissementLabel(user);
+          messenger
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Ce compte appartient a "$concerned". Veuillez vous connecter sur cet etablissement.',
+                ),
+              ),
+            );
+          Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
         });
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
       }
     }
 
@@ -1613,6 +1614,18 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         ? etablissementName.trim()
         : 'Non défini';
     return 'Etablissement actif: $label';
+  }
+
+  String _userEtablissementLabel(AuthUser user) {
+    final name = user.etablissementName.trim();
+    if (name.isNotEmpty) {
+      return name;
+    }
+    final id = user.etablissementId;
+    if (id != null) {
+      return 'Etablissement #$id';
+    }
+    return 'etablissement associe a votre compte';
   }
 
   String _connectedRoleLabel(String? role) {
