@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+
 import '../../../core/models/paginated_result.dart';
 import '../domain/user_account.dart';
 
@@ -25,6 +26,8 @@ class UsersRepository {
         'detail',
         'message',
         'non_field_errors',
+        'classroom',
+        'students',
         'username',
         'email',
         'password',
@@ -134,6 +137,8 @@ class UsersRepository {
     required String role,
     required String phone,
     int? etablissementId,
+    int? classroomId,
+    List<int>? studentIds,
   }) async {
     try {
       await dio.post(
@@ -146,9 +151,9 @@ class UsersRepository {
           'password': password,
           'role': role,
           'phone': phone,
-          ...?(etablissementId == null
-              ? null
-              : {'etablissement': etablissementId}),
+          ...?(etablissementId == null ? null : {'etablissement': etablissementId}),
+          ...?(classroomId == null ? null : {'classroom': classroomId}),
+          ...?((studentIds == null || studentIds.isEmpty) ? null : {'students': studentIds}),
         },
       );
     } on DioException catch (error) {
@@ -176,9 +181,7 @@ class UsersRepository {
           'email': email,
           'role': role,
           'phone': phone,
-          ...?(etablissementId == null
-              ? null
-              : {'etablissement': etablissementId}),
+          ...?(etablissementId == null ? null : {'etablissement': etablissementId}),
         },
       );
     } on DioException catch (error) {
