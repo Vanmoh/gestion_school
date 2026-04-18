@@ -4,9 +4,58 @@ from django.utils import timezone
 from datetime import timedelta
 from rest_framework import serializers
 
+from apps.school.models import Etablissement
+
 from .models import ChatMessage, ChatPresence, Conversation, ConversationParticipant
 
 User = get_user_model()
+
+
+def _requested_chat_etablissement_id(request):
+    raw_value = request.headers.get("X-Etablissement-Id") or request.query_params.get("etablissement")
+    if raw_value in (None, ""):
+        return None
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _requested_chat_etablissement_name(request):
+    raw_name = request.headers.get("X-Etablissement-Name") or request.query_params.get("etablissement_name")
+    if raw_name is None:
+        return None
+    cleaned = str(raw_name).strip()
+    return cleaned or None
+
+
+def _requested_chat_etablissement(request):
+    requested_id = _requested_chat_etablissement_id(request)
+    if requested_id:
+        etablissement = Etablissement.objects.filter(id=requested_id).first()
+        if etablissement is not None:
+            return etablissement
+
+    requested_name = _requested_chat_etablissement_name(request)
+    if not requested_name:
+        return None
+
+    etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+    if etablissement is not None:
+        return etablissement
+
+    return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+
+def _chat_scope_etablissement(request):
+    user = request.user
+    if getattr(user, "role", "") != "super_admin":
+        return getattr(user, "etablissement", None)
+    requested_etablissement = _requested_chat_etablissement(request)
+    if requested_etablissement is not None:
+        return requested_etablissement
+    return getattr(user, "etablissement", None)
 
 
 def _presence_is_online(presence):
@@ -195,7 +244,8 @@ class DirectConversationCreateSerializer(serializers.Serializer):
         if target is None:
             raise serializers.ValidationError("Utilisateur introuvable.")
 
-        if request_user.etablissement_id and target.etablissement_id and request_user.etablissement_id != target.etablissement_id:
+        target_etablissement = _chat_scope_etablissement(self.context["request"])
+        if target_etablissement is not None and target.etablissement_id != target_etablissement.id:
             raise serializers.ValidationError("Utilisateur hors etablissement.")
 
         attrs["target_user"] = target
@@ -221,10 +271,11 @@ class GroupConversationCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Ajoutez au moins un participant.")
 
         query = User.objects.filter(id__in=participant_ids)
-        if getattr(request_user, "role", "") != "super_admin":
-            query = query.filter(etablissement=request_user.etablissement)
-        elif request_user.etablissement_id:
-            query = query.filter(etablissement=request_user.etablissement)
+        target_etablissement = _chat_scope_etablissement(self.context["request"])
+        if target_etablissement is not None:
+            query = query.filter(etablissement=target_etablissement)
+        elif getattr(request_user, "role", "") != "super_admin":
+            query = query.none()
 
         users = list(query)
         if len(users) != len(participant_ids):

@@ -195,6 +195,10 @@ class _EtablissementSelectionScreenState
     extends ConsumerState<EtablissementSelectionScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ambientController;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  EtablissementLayoutMode _layoutMode = EtablissementLayoutMode.grid;
+  Offset _spotlight = const Offset(0.52, 0.36);
 
   @override
   void initState() {
@@ -208,6 +212,7 @@ class _EtablissementSelectionScreenState
   @override
   void dispose() {
     _ambientController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -303,6 +308,24 @@ class _EtablissementSelectionScreenState
               painter: _LuxuryBackdropPainter(),
             ),
           ),
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOut,
+            left: (size.width * _spotlight.dx) - (size.width * 0.22),
+            top: (size.height * _spotlight.dy) - (size.width * 0.22),
+            child: IgnorePointer(
+              child: Container(
+                width: size.width * 0.44,
+                height: size.width * 0.44,
+                decoration: BoxDecoration(
+                  gradient: const RadialGradient(
+                    colors: [Color(0x44FFFFFF), Color(0x00FFFFFF)],
+                  ),
+                  borderRadius: BorderRadius.circular(1000),
+                ),
+              ),
+            ),
+          ),
           AnimatedBuilder(
             animation: _ambientController,
             builder: (context, _) {
@@ -357,21 +380,27 @@ class _EtablissementSelectionScreenState
               );
             },
           ),
-          SafeArea(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1060),
-                child: Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: veryCompact ? 10 : 14,
-                    vertical: veryCompact ? 4 : 8,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _AnimatedReveal(
-                        delay: const Duration(milliseconds: 80),
-                        child: Container(
+          MouseRegion(
+            onHover: (event) {
+              final nx = (event.localPosition.dx / size.width).clamp(0.0, 1.0);
+              final ny = (event.localPosition.dy / size.height).clamp(0.0, 1.0);
+              setState(() => _spotlight = Offset(nx, ny));
+            },
+            child: SafeArea(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1060),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: veryCompact ? 10 : 14,
+                      vertical: veryCompact ? 4 : 8,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _AnimatedReveal(
+                          delay: const Duration(milliseconds: 80),
+                          child: Container(
                           padding: EdgeInsets.fromLTRB(
                             veryCompact ? 12 : 18,
                             veryCompact ? 11 : 16,
@@ -458,22 +487,146 @@ class _EtablissementSelectionScreenState
                                   ),
                                 ],
                               ),
+                              SizedBox(height: veryCompact ? 9 : 12),
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 760),
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final compactSearchRow = constraints.maxWidth < 660;
+                                    final searchField = TextField(
+                                      controller: _searchController,
+                                      onChanged: (value) {
+                                        setState(() => _searchQuery = value.trim());
+                                      },
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF1C466E),
+                                      ),
+                                      decoration: InputDecoration(
+                                        hintText: 'Rechercher un etablissement...',
+                                        hintStyle: const TextStyle(
+                                          color: Color(0xFF6A84A1),
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                        filled: true,
+                                        fillColor: const Color(0xFFF3F9FF),
+                                        prefixIcon: const Icon(
+                                          Icons.search_rounded,
+                                          color: Color(0xFF2A5F8D),
+                                        ),
+                                        suffixIcon: _searchQuery.isEmpty
+                                            ? null
+                                            : IconButton(
+                                                tooltip: 'Effacer',
+                                                onPressed: () {
+                                                  _searchController.clear();
+                                                  setState(() => _searchQuery = '');
+                                                },
+                                                icon: const Icon(Icons.close_rounded),
+                                              ),
+                                        contentPadding: const EdgeInsets.symmetric(
+                                          horizontal: 14,
+                                          vertical: 12,
+                                        ),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(14),
+                                          borderSide: const BorderSide(
+                                            color: Color(0xFFC5DCF2),
+                                          ),
+                                        ),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(14),
+                                          borderSide: const BorderSide(
+                                            color: Color(0xFF4E83B3),
+                                            width: 1.5,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+
+                                    final layoutToggle = SegmentedButton<EtablissementLayoutMode>(
+                                      segments: const [
+                                        ButtonSegment<EtablissementLayoutMode>(
+                                          value: EtablissementLayoutMode.grid,
+                                          icon: Icon(Icons.grid_view_rounded, size: 16),
+                                          label: Text('Grille'),
+                                        ),
+                                        ButtonSegment<EtablissementLayoutMode>(
+                                          value: EtablissementLayoutMode.list,
+                                          icon: Icon(Icons.view_agenda_rounded, size: 16),
+                                          label: Text('Liste'),
+                                        ),
+                                      ],
+                                      selected: <EtablissementLayoutMode>{_layoutMode},
+                                      showSelectedIcon: false,
+                                      onSelectionChanged: (selection) {
+                                        if (selection.isEmpty) {
+                                          return;
+                                        }
+                                        setState(() => _layoutMode = selection.first);
+                                      },
+                                      style: ButtonStyle(
+                                        foregroundColor: WidgetStateProperty.resolveWith<Color>((states) {
+                                          if (states.contains(WidgetState.selected)) {
+                                            return Colors.white;
+                                          }
+                                          return const Color(0xFF2B5F8E);
+                                        }),
+                                        backgroundColor: WidgetStateProperty.resolveWith<Color>((states) {
+                                          if (states.contains(WidgetState.selected)) {
+                                            return const Color(0xFF2A5F99);
+                                          }
+                                          return const Color(0xFFEAF3FD);
+                                        }),
+                                        side: const WidgetStatePropertyAll(
+                                          BorderSide(color: Color(0xFFC5D9EF)),
+                                        ),
+                                      ),
+                                    );
+
+                                    if (compactSearchRow) {
+                                      return Column(
+                                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                                        children: [
+                                          searchField,
+                                          const SizedBox(height: 8),
+                                          Align(
+                                            alignment: Alignment.centerLeft,
+                                            child: layoutToggle,
+                                          ),
+                                        ],
+                                      );
+                                    }
+
+                                    return Row(
+                                      children: [
+                                        Expanded(child: searchField),
+                                        const SizedBox(width: 10),
+                                        layoutToggle,
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ),
                             ],
                           ),
                         ),
-                      ),
-                      SizedBox(height: veryCompact ? 6 : 10),
-                      Expanded(
-                        child: _AnimatedReveal(
-                          delay: const Duration(milliseconds: 180),
-                          child: EtablissementSelector(
-                            onSelected: (etab) async {
-                              await widget.onSelected(etab);
-                            },
+                        ),
+                        SizedBox(height: veryCompact ? 6 : 10),
+                        Expanded(
+                          child: _AnimatedReveal(
+                            delay: const Duration(milliseconds: 180),
+                            child: EtablissementSelector(
+                              searchQuery: _searchQuery,
+                              layoutMode: _layoutMode,
+                              onSelected: (etab) async {
+                                await widget.onSelected(etab);
+                              },
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),

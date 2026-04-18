@@ -12,6 +12,8 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.school.models import Etablissement
+
 from .models import ChatMessage, ChatPresence, Conversation, ConversationParticipant
 from .serializers import (
     ChatMessageSerializer,
@@ -80,10 +82,11 @@ def _broadcast_rest_message_async(participant_user_ids, ws_message):
 def _allowed_users_queryset(request):
     user = request.user
     query = User.objects.select_related("chat_presence", "etablissement").exclude(id=user.id)
-    if getattr(user, "role", "") != "super_admin":
-        query = query.filter(etablissement=user.etablissement)
-    elif user.etablissement_id:
-        query = query.filter(etablissement=user.etablissement)
+    target_etablissement = _chat_scope_etablissement(request)
+    if target_etablissement is not None:
+        query = query.filter(etablissement=target_etablissement)
+    elif _has_requested_chat_scope(request) or getattr(user, "role", "") != "super_admin":
+        query = query.none()
     return query.order_by("first_name", "last_name", "username")
 
 
@@ -95,15 +98,81 @@ def _conversation_queryset_for_user(request):
         .distinct()
         .order_by("-updated_at", "-id")
     )
-    if getattr(user, "role", "") != "super_admin":
-        query = query.filter(etablissement=user.etablissement)
-    elif user.etablissement_id:
-        query = query.filter(etablissement=user.etablissement)
+    target_etablissement = _chat_scope_etablissement(request)
+    if target_etablissement is not None:
+        query = query.filter(etablissement=target_etablissement)
+    elif _has_requested_chat_scope(request) or getattr(user, "role", "") != "super_admin":
+        query = query.none()
     return query
 
 
-def _ensure_participant(conversation_id, user):
-    return ConversationParticipant.objects.filter(conversation_id=conversation_id, user=user).exists()
+def _requested_chat_etablissement_id(request):
+    raw_value = request.headers.get("X-Etablissement-Id") or request.query_params.get("etablissement")
+    if raw_value in (None, ""):
+        return None
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _requested_chat_etablissement_name(request):
+    raw_name = request.headers.get("X-Etablissement-Name") or request.query_params.get("etablissement_name")
+    if raw_name is None:
+        return None
+    cleaned = str(raw_name).strip()
+    return cleaned or None
+
+
+def _has_requested_chat_scope(request):
+    return _requested_chat_etablissement_id(request) is not None or _requested_chat_etablissement_name(request) is not None
+
+
+def _requested_chat_etablissement(request):
+    requested_id = _requested_chat_etablissement_id(request)
+    if requested_id:
+        etablissement = Etablissement.objects.filter(id=requested_id).first()
+        if etablissement is not None:
+            return etablissement
+
+    requested_name = _requested_chat_etablissement_name(request)
+    if not requested_name:
+        return None
+
+    etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+    if etablissement is not None:
+        return etablissement
+
+    return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+
+def _chat_scope_etablissement(request):
+    user = request.user
+    if getattr(user, "role", "") != "super_admin":
+        return getattr(user, "etablissement", None)
+    requested_etablissement = _requested_chat_etablissement(request)
+    if requested_etablissement is not None:
+        return requested_etablissement
+    return getattr(user, "etablissement", None)
+
+
+def _scoped_conversation_queryset(request):
+    return _conversation_queryset_for_user(request)
+
+
+def _get_conversation_for_user(request, conversation_id, *, is_group=None, for_update=False):
+    query = _scoped_conversation_queryset(request)
+    if for_update:
+        query = query.select_for_update()
+    query = query.filter(id=conversation_id)
+    if is_group is not None:
+        query = query.filter(is_group=is_group)
+    return query.first()
+
+
+def _ensure_participant(request, conversation_id):
+    return _get_conversation_for_user(request, conversation_id) is not None
 
 
 def _chat_ws_message_from_instance(message, *, request=None):
@@ -186,13 +255,16 @@ class DirectConversationCreateView(APIView):
             Conversation.objects.filter(is_group=False, participants__user=request_user)
             .filter(participants__user=target_user)
             .distinct()
-            .first()
         )
+        target_etablissement = _chat_scope_etablissement(request) or target_user.etablissement
+        if target_etablissement is not None:
+            existing = existing.filter(etablissement=target_etablissement)
+        existing = existing.first()
         if existing:
             payload = ConversationSerializer(existing, context={"request": request}).data
             return Response(payload)
 
-        etablissement = request_user.etablissement or target_user.etablissement
+        etablissement = target_etablissement
         conversation = Conversation.objects.create(
             is_group=False,
             etablissement=etablissement,
@@ -207,10 +279,11 @@ class ConversationMessagesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, conversation_id):
-        if not _ensure_participant(conversation_id, request.user):
+        conversation = _get_conversation_for_user(request, conversation_id)
+        if conversation is None:
             return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
-        query = ChatMessage.objects.filter(conversation_id=conversation_id).select_related("sender").order_by("-id")
+        query = ChatMessage.objects.filter(conversation=conversation).select_related("sender").order_by("-id")
         before_id = request.query_params.get("before_id")
         if before_id:
             try:
@@ -234,13 +307,14 @@ class ConversationPresenceView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, conversation_id):
-        if not _ensure_participant(conversation_id, request.user):
+        conversation = _get_conversation_for_user(request, conversation_id)
+        if conversation is None:
             return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
         _touch_presence(request.user)
 
         rows = list(
-            ConversationParticipant.objects.filter(conversation_id=conversation_id)
+            ConversationParticipant.objects.filter(conversation=conversation)
             .exclude(user=request.user)
             .values(
                 "user_id",
@@ -276,7 +350,7 @@ class GroupConversationCreateView(APIView):
         title = serializer.validated_data["title"]
         participants = serializer.validated_data["participants"]
         request_user = request.user
-        etablissement = request_user.etablissement
+        etablissement = _chat_scope_etablissement(request)
         if etablissement is None and participants:
             etablissement = participants[0].etablissement
 
@@ -299,11 +373,8 @@ class GroupConversationManageView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def _conversation_or_403(self, request, conversation_id):
-        conversation = Conversation.objects.filter(id=conversation_id, is_group=True).first()
+        conversation = _get_conversation_for_user(request, conversation_id, is_group=True)
         if conversation is None:
-            return None, Response({"detail": "Groupe introuvable."}, status=status.HTTP_404_NOT_FOUND)
-        is_participant = ConversationParticipant.objects.filter(conversation=conversation, user=request.user).exists()
-        if not is_participant:
             return None, Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
         return conversation, None
 
@@ -376,9 +447,9 @@ class GroupConversationLeaveView(APIView):
 
     @transaction.atomic
     def post(self, request, conversation_id):
-        conversation = Conversation.objects.filter(id=conversation_id, is_group=True).first()
+        conversation = _get_conversation_for_user(request, conversation_id, is_group=True, for_update=True)
         if conversation is None:
-            return Response({"detail": "Groupe introuvable."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
         result = self._close_for_user(conversation, request.user)
         if not result.get("ok"):
@@ -391,9 +462,9 @@ class ConversationCloseView(APIView):
 
     @transaction.atomic
     def post(self, request, conversation_id):
-        conversation = Conversation.objects.select_for_update().filter(id=conversation_id).first()
+        conversation = _get_conversation_for_user(request, conversation_id, for_update=True)
         if conversation is None:
-            return Response({"detail": "Conversation introuvable."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
         leave_handler = GroupConversationLeaveView()
         result = leave_handler._close_for_user(conversation, request.user)
@@ -407,9 +478,9 @@ class GroupConversationAddMemberView(APIView):
 
     @transaction.atomic
     def post(self, request, conversation_id):
-        conversation = Conversation.objects.filter(id=conversation_id, is_group=True).first()
+        conversation = _get_conversation_for_user(request, conversation_id, is_group=True, for_update=True)
         if conversation is None:
-            return Response({"detail": "Groupe introuvable."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
         if not ConversationParticipant.objects.filter(conversation=conversation, user=request.user, is_admin=True).exists():
             return Response({"detail": "Action reservee aux admins du groupe."}, status=status.HTTP_403_FORBIDDEN)
@@ -438,9 +509,9 @@ class GroupConversationRemoveMemberView(APIView):
 
     @transaction.atomic
     def post(self, request, conversation_id):
-        conversation = Conversation.objects.filter(id=conversation_id, is_group=True).first()
+        conversation = _get_conversation_for_user(request, conversation_id, is_group=True, for_update=True)
         if conversation is None:
-            return Response({"detail": "Groupe introuvable."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
         if not ConversationParticipant.objects.filter(conversation=conversation, user=request.user, is_admin=True).exists():
             return Response({"detail": "Action reservee aux admins du groupe."}, status=status.HTTP_403_FORBIDDEN)
@@ -473,9 +544,9 @@ class GroupConversationPromoteAdminView(APIView):
 
     @transaction.atomic
     def post(self, request, conversation_id):
-        conversation = Conversation.objects.filter(id=conversation_id, is_group=True).first()
+        conversation = _get_conversation_for_user(request, conversation_id, is_group=True, for_update=True)
         if conversation is None:
-            return Response({"detail": "Groupe introuvable."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
         if not ConversationParticipant.objects.filter(conversation=conversation, user=request.user, is_admin=True).exists():
             return Response({"detail": "Action reservee aux admins du groupe."}, status=status.HTTP_403_FORBIDDEN)
@@ -499,9 +570,9 @@ class GroupConversationDemoteAdminView(APIView):
 
     @transaction.atomic
     def post(self, request, conversation_id):
-        conversation = Conversation.objects.filter(id=conversation_id, is_group=True).first()
+        conversation = _get_conversation_for_user(request, conversation_id, is_group=True, for_update=True)
         if conversation is None:
-            return Response({"detail": "Groupe introuvable."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
         if not ConversationParticipant.objects.filter(conversation=conversation, user=request.user, is_admin=True).exists():
             return Response({"detail": "Action reservee aux admins du groupe."}, status=status.HTTP_403_FORBIDDEN)
@@ -531,9 +602,9 @@ class GroupConversationTransferAdminView(APIView):
 
     @transaction.atomic
     def post(self, request, conversation_id):
-        conversation = Conversation.objects.filter(id=conversation_id, is_group=True).first()
+        conversation = _get_conversation_for_user(request, conversation_id, is_group=True, for_update=True)
         if conversation is None:
-            return Response({"detail": "Groupe introuvable."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
         requester = ConversationParticipant.objects.select_for_update().filter(
             conversation=conversation,
@@ -569,8 +640,12 @@ class ConversationMarkReadView(APIView):
 
     @transaction.atomic
     def post(self, request, conversation_id):
+        conversation = _get_conversation_for_user(request, conversation_id, for_update=True)
+        if conversation is None:
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
+
         participant = ConversationParticipant.objects.select_for_update().filter(
-            conversation_id=conversation_id,
+            conversation=conversation,
             user=request.user,
         ).first()
         if participant is None:
@@ -580,12 +655,12 @@ class ConversationMarkReadView(APIView):
         message = None
         if message_id is not None:
             try:
-                message = ChatMessage.objects.filter(conversation_id=conversation_id, id=int(message_id)).first()
+                message = ChatMessage.objects.filter(conversation=conversation, id=int(message_id)).first()
             except (TypeError, ValueError):
                 message = None
 
         if message is None:
-            message = ChatMessage.objects.filter(conversation_id=conversation_id).order_by("-id").first()
+            message = ChatMessage.objects.filter(conversation=conversation).order_by("-id").first()
 
         participant.last_read_message = message
         participant.save(update_fields=["last_read_message", "updated_at"])
@@ -598,8 +673,12 @@ class ConversationSendMessageView(APIView):
     @transaction.atomic
     def post(self, request, conversation_id):
         _touch_presence(request.user)
+        conversation = _get_conversation_for_user(request, conversation_id, for_update=True)
+        if conversation is None:
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
+
         participant = ConversationParticipant.objects.select_for_update().filter(
-            conversation_id=conversation_id,
+            conversation=conversation,
             user=request.user,
         ).first()
         if participant is None:
@@ -610,10 +689,6 @@ class ConversationSendMessageView(APIView):
             return Response({"detail": "Message vide."}, status=status.HTTP_400_BAD_REQUEST)
         raw_client_message_id = str(request.data.get("client_message_id", "")).strip()
         client_message_id = raw_client_message_id[:64] if raw_client_message_id else None
-
-        conversation = Conversation.objects.select_for_update().filter(id=conversation_id).first()
-        if conversation is None:
-            return Response({"detail": "Conversation introuvable."}, status=status.HTTP_404_NOT_FOUND)
 
         created = True
         if client_message_id:
@@ -663,16 +738,16 @@ class ConversationSendFileView(APIView):
     @transaction.atomic
     def post(self, request, conversation_id):
         _touch_presence(request.user)
+        conversation = _get_conversation_for_user(request, conversation_id, for_update=True)
+        if conversation is None:
+            return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
+
         participant = ConversationParticipant.objects.select_for_update().filter(
-            conversation_id=conversation_id,
+            conversation=conversation,
             user=request.user,
         ).first()
         if participant is None:
             return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
-
-        conversation = Conversation.objects.select_for_update().filter(id=conversation_id).first()
-        if conversation is None:
-            return Response({"detail": "Conversation introuvable."}, status=status.HTTP_404_NOT_FOUND)
 
         upload = request.FILES.get("file")
         if upload is None:
@@ -747,7 +822,7 @@ class ChatMessageDownloadView(APIView):
         message = ChatMessage.objects.select_related("conversation").filter(id=message_id).first()
         if message is None or not message.attachment:
             return Response({"detail": "Fichier introuvable."}, status=status.HTTP_404_NOT_FOUND)
-        if not _ensure_participant(message.conversation_id, request.user):
+        if not _ensure_participant(request, message.conversation_id):
             return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
         attachment = message.attachment

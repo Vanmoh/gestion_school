@@ -360,7 +360,11 @@ class _ChatPanelState extends State<ChatPanel> {
     }
   }
 
-  String _wsUrlFromApiBase(String apiBase, String token) {
+  String _wsUrlFromApiBase(
+    String apiBase,
+    String token, {
+    int? etablissementId,
+  }) {
     final base = Uri.parse(apiBase.trim());
     final wsScheme = base.scheme == 'https' ? 'wss' : 'ws';
 
@@ -373,14 +377,48 @@ class _ChatPanelState extends State<ChatPanel> {
     }
 
     final wsPath = '$path/ws/chat/stream/';
+    final queryParameters = <String, String>{'token': token};
+    if (etablissementId != null && etablissementId > 0) {
+      queryParameters['etablissement_id'] = etablissementId.toString();
+    }
     final uri = Uri(
       scheme: wsScheme,
       host: base.host,
       port: base.hasPort ? base.port : null,
       path: wsPath,
-      queryParameters: <String, String>{'token': token},
+      queryParameters: queryParameters,
     );
     return uri.toString();
+  }
+
+  Future<int?> _resolveWsEtablissementId() async {
+    final values = await Future.wait<String?>(<Future<String?>>[
+      widget.tokenStorage.selectedEtablissement(),
+      widget.tokenStorage.cachedUser(),
+    ]);
+
+    final selectedEtablissementRaw = values[0] ?? '';
+    final cachedUserRaw = values[1] ?? '';
+
+    if (selectedEtablissementRaw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(selectedEtablissementRaw) as Map<String, dynamic>;
+        return (decoded['id'] as num?)?.toInt();
+      } catch (_) {
+        // Ignore malformed cached establishment payload.
+      }
+    }
+
+    if (cachedUserRaw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(cachedUserRaw) as Map<String, dynamic>;
+        return (decoded['etablissementId'] as num?)?.toInt();
+      } catch (_) {
+        // Ignore malformed cached user payload.
+      }
+    }
+
+    return null;
   }
 
   Future<void> _bootstrap() async {
@@ -429,7 +467,7 @@ class _ChatPanelState extends State<ChatPanel> {
       if (token.isNotEmpty) {
         final activeBase = widget.dio.options.baseUrl.trim();
         final baseUrl = activeBase.isNotEmpty ? activeBase : storedBase;
-        _connectWs(baseUrl, token);
+        unawaited(_connectWs(baseUrl, token));
       }
 
       // Refresh once after websocket connect attempt so counterpart online
@@ -752,14 +790,19 @@ class _ChatPanelState extends State<ChatPanel> {
     widget.onUnreadChanged?.call(_sumUnread(_conversations));
   }
 
-  void _connectWs(String baseUrl, String token) {
+  Future<void> _connectWs(String baseUrl, String token) async {
     _wsBaseUrl = baseUrl;
     _wsToken = token;
     _reconnectTimer?.cancel();
     _channelSub?.cancel();
     _channel?.sink.close();
 
-    final wsUrl = _wsUrlFromApiBase(baseUrl, token);
+    final etablissementId = await _resolveWsEtablissementId();
+    final wsUrl = _wsUrlFromApiBase(
+      baseUrl,
+      token,
+      etablissementId: etablissementId,
+    );
     _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
     _channelSub = _channel!.stream.listen(
       _handleWsEvent,
@@ -824,7 +867,7 @@ class _ChatPanelState extends State<ChatPanel> {
     _wsReconnectAttempt += 1;
     _reconnectTimer = Timer(Duration(seconds: seconds), () {
       _reconnectTimer = null;
-      _connectWs(base, token);
+      unawaited(_connectWs(base, token));
     });
   }
 

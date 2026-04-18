@@ -114,6 +114,7 @@ class ClassRoomSerializer(serializers.ModelSerializer):
 
 class SubjectSerializer(serializers.ModelSerializer):
     classroom_name = serializers.SerializerMethodField(read_only=True)
+    code = serializers.CharField(required=False, allow_blank=True)
 
     @staticmethod
     def _base_subject_code(name):
@@ -174,6 +175,7 @@ class SubjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subject
         fields = "__all__"
+        validators = []
 
 
 

@@ -1,5 +1,7 @@
-const test = require('flutter_test');
+import 'package:flutter_test/flutter_test.dart';
 
-test('hello world!', () => {
-    expect(true).toBe(true);
-});
+void main() {
+    test('hello world', () {
+        expect(true, isTrue);
+    });
+}

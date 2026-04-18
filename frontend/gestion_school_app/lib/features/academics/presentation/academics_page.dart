@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 
 import '../../auth/presentation/auth_controller.dart';
 import '../../../models/etablissement.dart';
@@ -140,7 +141,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
       return true;
     } catch (error) {
       if (!mounted) return false;
-      _showMessage('Erreur: $error');
+      _showMessage('Erreur: ${_extractApiError(error)}');
       return false;
     } finally {
       if (mounted) {
@@ -163,7 +164,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
       return true;
     } catch (error) {
       if (!mounted) return false;
-      _showMessage('Erreur: $error');
+      _showMessage('Erreur: ${_extractApiError(error)}');
       return false;
     } finally {
       if (mounted) {
@@ -185,13 +186,41 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
       return true;
     } catch (error) {
       if (!mounted) return false;
-      _showMessage('Suppression refusée: $error');
+      _showMessage('Suppression refusée: ${_extractApiError(error)}');
       return false;
     } finally {
       if (mounted) {
         setState(() => _saving = false);
       }
     }
+  }
+
+  String _extractApiError(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map) {
+        for (final key in const ['detail', 'message', 'error']) {
+          final value = data[key];
+          if (value != null && value.toString().trim().isNotEmpty) {
+            return value.toString();
+          }
+        }
+        for (final entry in data.entries) {
+          final value = entry.value;
+          if (value is List && value.isNotEmpty) {
+            return '${entry.key}: ${value.first}';
+          }
+          if (value != null && value.toString().trim().isNotEmpty) {
+            return '${entry.key}: $value';
+          }
+        }
+      }
+      final status = error.response?.statusCode;
+      if (status != null) {
+        return 'HTTP $status';
+      }
+    }
+    return error.toString();
   }
 
   Future<void> _openFloatingPanel({
