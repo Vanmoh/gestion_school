@@ -2483,6 +2483,18 @@ class GradeViewSet(BaseModelViewSet):
     pagination_class = GradePagination
     filterset_fields = ["classroom", "academic_year", "term", "subject", "student"]
 
+    def _teacher_profile(self):
+        return Teacher.objects.select_related("etablissement").filter(user=self.request.user).first()
+
+    def _teacher_assignment_pairs(self):
+        teacher_profile = self._teacher_profile()
+        if not teacher_profile:
+            return set()
+        return set(
+            TeacherAssignment.objects.filter(teacher=teacher_profile)
+            .values_list("classroom_id", "subject_id")
+        )
+
     def _requested_etablissement_id(self):
         raw_value = (
             self.request.headers.get("X-Etablissement-Id")

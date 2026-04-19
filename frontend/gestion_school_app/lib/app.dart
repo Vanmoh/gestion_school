@@ -851,6 +851,23 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
   }
 
+  void _showConnectionInfo(AuthUser user, Etablissement? selectedEtablissement) {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            '${_activeEtablissementLabel(selectedEtablissement?.name)}\n${_welcomeConnectedUser(user)}',
+          ),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+  }
+
   List<Widget> _buildGroupedMenu(
     BuildContext context,
     ColorScheme scheme, {
@@ -1022,7 +1039,11 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (isMobile) {
       return Scaffold(
         appBar: AppBar(
-          title: Text(selectedItem.label),
+          title: Text(
+            selectedItem.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
           actions: [
             IconButton(
               onPressed: () {
@@ -1035,31 +1056,10 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
               },
               icon: const Icon(Icons.dark_mode_outlined),
             ),
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: SizedBox(
-                  width: 230,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        _activeEtablissementLabel(selectedEtablissement?.name),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelMedium,
-                      ),
-                      Text(
-                        _welcomeConnectedUser(user),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            IconButton(
+              tooltip: 'Informations session',
+              onPressed: () => _showConnectionInfo(user, selectedEtablissement),
+              icon: const Icon(Icons.info_outline_rounded),
             ),
             IconButton(
               onPressed: _logoutToLogin,
@@ -1077,13 +1077,17 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                     children: [
                       Icon(Icons.bolt_rounded, color: scheme.primary),
                       const SizedBox(width: 10),
-                      Text(
-                        selectedEtablissement?.name ?? SchoolBranding.appName,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1.3,
-                            ),
+                      Expanded(
+                        child: Text(
+                          selectedEtablissement?.name ?? SchoolBranding.appName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 1.3,
+                              ),
+                        ),
                       ),
                     ],
                   ),
