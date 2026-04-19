@@ -2565,11 +2565,27 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
   String _extractDioErrorMessage(DioException error) {
     final data = error.response?.data;
+    final statusCode = error.response?.statusCode;
+
+    String sanitizeServerText(String raw) {
+      final trimmed = raw.trim();
+      final lower = trimmed.toLowerCase();
+      if (lower.startsWith('<!doctype html') ||
+          lower.startsWith('<html') ||
+          lower.contains('<title>attributeerror') ||
+          lower.contains('<body')) {
+        if (statusCode != null && statusCode >= 500) {
+          return 'Erreur interne du serveur. Réessayez dans un instant.';
+        }
+        return 'Réponse serveur invalide. Veuillez réessayer.';
+      }
+      return trimmed;
+    }
 
     if (data is Map<String, dynamic>) {
       final detail = data['detail']?.toString().trim() ?? '';
       if (detail.isNotEmpty) {
-        return detail;
+        return sanitizeServerText(detail);
       }
 
       final parts = <String>[];
@@ -2590,7 +2606,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     }
 
     if (data is String && data.trim().isNotEmpty) {
-      return data.trim();
+      return sanitizeServerText(data);
+    }
+
+    if (statusCode != null && statusCode >= 500) {
+      return 'Erreur interne du serveur. Réessayez dans un instant.';
     }
 
     return error.message?.trim().isNotEmpty == true

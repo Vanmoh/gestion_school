@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../models/etablissement.dart';
 import '../domain/dashboard_stats.dart';
 import 'dashboard_controller.dart';
+import 'dashboard_shared_ui.dart';
 
 enum _DashboardScopePeriod { weekly, monthly, quarterly }
 
@@ -332,7 +332,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
             return Stack(
               children: [
                 const Positioned.fill(
-                  child: IgnorePointer(child: _DashboardBackdrop()),
+                  child: IgnorePointer(child: SharedDashboardBackdrop()),
                 ),
                 RefreshIndicator(
                   onRefresh: _refreshDashboard,
@@ -551,106 +551,6 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   }
 }
 
-class _DashboardBackdrop extends StatelessWidget {
-  const _DashboardBackdrop();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF0F172A), Color(0xFF162338), Color(0xFF1E293B)],
-        ),
-      ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: -160,
-            right: -110,
-            child: Container(
-              width: 380,
-              height: 380,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF8B5CF6).withValues(alpha: 0.18),
-              ),
-            ),
-          ),
-          Positioned(
-            left: -120,
-            bottom: -90,
-            child: Container(
-              width: 330,
-              height: 330,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF6366F1).withValues(alpha: 0.18),
-              ),
-            ),
-          ),
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white.withValues(alpha: 0.02),
-                    Colors.transparent,
-                    Colors.black.withValues(alpha: 0.1),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const Positioned.fill(
-            child: IgnorePointer(
-              child: RepaintBoundary(child: CustomPaint(painter: _StarDust())),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StarDust extends CustomPainter {
-  const _StarDust();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final starPaint = Paint()..style = PaintingStyle.fill;
-    final random = math.Random(42);
-
-    for (var i = 0; i < 95; i++) {
-      final x = random.nextDouble() * size.width;
-      final y = random.nextDouble() * size.height;
-      final r = (random.nextDouble() * 1.3) + 0.25;
-      final alpha = (random.nextDouble() * 0.22) + 0.04;
-      starPaint.color = Colors.white.withValues(alpha: alpha);
-      canvas.drawCircle(Offset(x, y), r, starPaint);
-    }
-
-    final hazePaint = Paint()
-      ..shader =
-          const RadialGradient(
-            colors: [Color(0x2E8B5CF6), Color(0x206366F1), Color(0x0010182A)],
-          ).createShader(
-            Rect.fromCircle(
-              center: Offset(size.width * 0.66, size.height * 0.26),
-              radius: size.shortestSide * 0.52,
-            ),
-          );
-
-    canvas.drawRect(Offset.zero & size, hazePaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
 class _StaggerReveal extends StatefulWidget {
   final int index;
   final Widget child;
@@ -687,61 +587,6 @@ class _StaggerRevealState extends State<_StaggerReveal> {
         duration: const Duration(milliseconds: 400),
         curve: Curves.easeOutCubic,
         child: widget.child,
-      ),
-    );
-  }
-}
-
-class _GlassCard extends StatelessWidget {
-  final Widget child;
-  final BorderRadius borderRadius;
-  final List<Color>? gradient;
-  final EdgeInsetsGeometry padding;
-
-  const _GlassCard({
-    required this.child,
-    this.borderRadius = const BorderRadius.all(Radius.circular(20)),
-    this.gradient,
-    this.padding = const EdgeInsets.all(14),
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: borderRadius,
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            borderRadius: borderRadius,
-            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors:
-                  gradient ??
-                  [
-                    Colors.white.withValues(alpha: 0.12),
-                    Colors.white.withValues(alpha: 0.06),
-                  ],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF6366F1).withValues(alpha: 0.14),
-                blurRadius: 24,
-                offset: const Offset(0, 8),
-              ),
-              BoxShadow(
-                color: const Color(0xFF8B5CF6).withValues(alpha: 0.08),
-                blurRadius: 18,
-                spreadRadius: -3,
-                offset: const Offset(0, -2),
-              ),
-            ],
-          ),
-          child: child,
-        ),
       ),
     );
   }
@@ -817,7 +662,7 @@ class _ExecutiveHighlightsStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCard(
+    return DashboardGlassCard(
       borderRadius: BorderRadius.circular(16),
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       child: Wrap(
@@ -892,7 +737,7 @@ class _DashboardHeroPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCard(
+    return DashboardGlassCard(
       borderRadius: BorderRadius.circular(20),
       gradient: [
         const Color(0xFF2C2E7D).withValues(alpha: 0.34),
@@ -1009,7 +854,7 @@ class _ContextRibbon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCard(
+    return DashboardGlassCard(
       borderRadius: BorderRadius.circular(16),
       gradient: [
         Colors.white.withValues(alpha: 0.08),
@@ -1120,7 +965,7 @@ class _DashboardVisualFilters extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCard(
+    return DashboardGlassCard(
       borderRadius: BorderRadius.circular(16),
       gradient: [
         Colors.white.withValues(alpha: 0.09),
@@ -1392,7 +1237,7 @@ class _KpiCard extends StatelessWidget {
               color: data.color,
             ),
           ),
-          _GlassCard(
+          DashboardGlassCard(
             borderRadius: borderRadius,
             gradient: [
               data.color.withValues(alpha: 0.2),
@@ -1696,7 +1541,7 @@ class _PanelShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCard(
+    return DashboardGlassCard(
       borderRadius: BorderRadius.circular(20),
       gradient: [
         Colors.white.withValues(alpha: 0.1),
