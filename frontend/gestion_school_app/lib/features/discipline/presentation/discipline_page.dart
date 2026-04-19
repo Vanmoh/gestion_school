@@ -195,6 +195,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
     final studentById = {for (final s in _students) _asInt(s['id']): s};
     final authUser = ref.watch(authControllerProvider).value;
     final isTeacherUser = authUser?.role == 'teacher';
+    final isTeacherReportingOnly = isTeacherUser;
     final isReadOnlyMode =
       authUser?.role != 'super_admin' &&
       authUser?.role != 'director' &&
@@ -213,7 +214,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
         if (isTeacherUser) ...[
           const SizedBox(height: 6),
           Text(
-            'Affichage limité aux élèves de vos classes.',
+            'Affichage limité aux élèves de vos classes. Vous pouvez déclarer un incident, sans appliquer de sanction ni le marquer comme traité.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -305,7 +306,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                     DropdownMenuItem(value: 'open', child: Text('Ouvert')),
                     DropdownMenuItem(value: 'resolved', child: Text('Traité')),
                   ],
-                    onChanged: isReadOnlyMode
+                    onChanged: (isReadOnlyMode || isTeacherReportingOnly)
                       ? null
                       : (value) =>
                       setState(() => _status = value ?? 'open'),
@@ -313,7 +314,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                 const SizedBox(height: 10),
                 TextField(
                   controller: _sanctionController,
-                  enabled: !isReadOnlyMode,
+                  enabled: !isReadOnlyMode && !isTeacherReportingOnly,
                   minLines: 1,
                   maxLines: 3,
                   decoration: const InputDecoration(
@@ -325,7 +326,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                   contentPadding: EdgeInsets.zero,
                   value: _parentNotified,
                   title: const Text('Parent informé'),
-                  onChanged: isReadOnlyMode
+                  onChanged: (isReadOnlyMode || isTeacherReportingOnly)
                       ? null
                       : (value) => setState(() => _parentNotified = value),
                 ),

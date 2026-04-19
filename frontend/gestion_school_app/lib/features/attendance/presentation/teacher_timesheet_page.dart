@@ -71,11 +71,24 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
   }
 
   bool _canAccess(String? role) {
-    return role == 'super_admin' || role == 'supervisor' || role == 'director';
+    return role == 'super_admin' ||
+        role == 'supervisor' ||
+        role == 'director' ||
+        role == 'teacher';
   }
 
   bool _isReadOnlyRole(String? role) {
     return role == 'director';
+  }
+
+  bool _isTeacherRole(String? role) {
+    return role == 'teacher';
+  }
+
+  int _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
   String _normalizePointageBusinessMessage(String raw) {
@@ -195,6 +208,7 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
     setState(() => _loading = true);
     try {
       final repo = ref.read(paymentsRepositoryProvider);
+      final authUser = ref.read(authControllerProvider).value;
       final results = await Future.wait([
         repo.fetchTeachers(),
         repo.fetchTeacherTimeEntries(),
@@ -202,11 +216,26 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
 
       if (!mounted) return;
 
+      var teachers = results[0] as List<Map<String, dynamic>>;
+      var timeEntries = results[1] as List<Map<String, dynamic>>;
+
+      if (_isTeacherRole(authUser?.role)) {
+        teachers = teachers
+            .where((row) => _asInt(row['user']) == (authUser?.id ?? 0))
+            .toList(growable: false);
+        final ownTeacherId = teachers.isNotEmpty ? _asInt(teachers.first['id']) : null;
+        timeEntries = ownTeacherId == null
+            ? const <Map<String, dynamic>>[]
+            : timeEntries
+                .where((row) => _asInt(row['teacher']) == ownTeacherId)
+                .toList(growable: false);
+      }
+
       setState(() {
-        _teachers = results[0] as List<Map<String, dynamic>>;
-        _timeEntries = results[1] as List<Map<String, dynamic>>;
+        _teachers = teachers;
+        _timeEntries = timeEntries;
         _selectedTeacherId ??= _teachers.isNotEmpty
-            ? (_teachers.first['id'] as num?)?.toInt()
+        ? _asInt(_teachers.first['id'])
             : null;
       });
     } catch (error) {
@@ -303,9 +332,10 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
   Widget build(BuildContext context) {
     final role = ref.watch(authControllerProvider).value?.role;
     final isReadOnlyRole = _isReadOnlyRole(role);
+    final isTeacherRole = _isTeacherRole(role);
     if (!_canAccess(role)) {
       return const Center(
-        child: Text('Acces reserve au super admin, au surveillant et au directeur.'),
+        child: Text('Acces reserve au super admin, au surveillant, au directeur et a l\'enseignant.'),
       );
     }
 
@@ -336,6 +366,20 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
             ),
             child: const Text(
               'Mode lecture seule: le role Directeur peut consulter, mais ne peut pas enregistrer de pointage.',
+            ),
+          ),
+        ],
+        if (isTeacherRole) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEAF4FF),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF9FC5F8)),
+            ),
+            child: const Text(
+              'Mode enseignant: vous pouvez consulter votre historique et enregistrer uniquement votre propre pointage.',
             ),
           ),
         ],
@@ -387,9 +431,11 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                               ),
                             )
                             .toList(growable: false),
-                        onChanged: (value) {
-                          setState(() => _selectedTeacherId = value);
-                        },
+                        onChanged: isTeacherRole
+                            ? null
+                            : (value) {
+                                setState(() => _selectedTeacherId = value);
+                              },
                       ),
                     ),
                     SizedBox(
@@ -1688,7 +1734,7 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
                                 final textStyle = _rowTextStyle(row);
                                 return DataRow(
                                   onSelectChanged: (_) => _showRowDetails(row),
-                                  color: MaterialStateProperty.resolveWith(
+                                  color: WidgetStateProperty.resolveWith(
                                     (_) => _rowHighlightColor(row),
                                   ),
                                   cells: [

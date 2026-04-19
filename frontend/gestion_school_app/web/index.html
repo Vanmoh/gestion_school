@@ -19,6 +19,10 @@
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="A new Flutter project.">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, minimum-scale=0.5, maximum-scale=5, user-scalable=yes, viewport-fit=cover"
+  >
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -34,6 +38,14 @@
 </head>
 <body>
   <style>
+    html,
+    body,
+    flt-glass-pane,
+    flt-scene-host {
+      /* Keep app interactions while allowing pinch zoom on mobile browsers. */
+      touch-action: pan-x pan-y pinch-zoom !important;
+    }
+
     :root {
       --bg-1: #eef4fb;
       --bg-2: #dfe9f6;

@@ -13,7 +13,7 @@ from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
@@ -54,6 +54,7 @@ from .models import (
     CanteenSubscription,
     ClassRoom,
     DisciplineIncident,
+    DisciplineStatus,
     Etablissement,
     ExamPlanning,
     ExamInvigilation,
@@ -363,6 +364,18 @@ class EtablissementScopedModelViewSet(BaseModelViewSet):
             return requested_etablissement
 
         return getattr(user, "etablissement", None)
+
+    def _teacher_profile(self):
+        return Teacher.objects.select_related("etablissement").filter(user=self.request.user).first()
+
+    def _teacher_assignment_pairs(self):
+        teacher_profile = self._teacher_profile()
+        if not teacher_profile:
+            return set()
+        return set(
+            TeacherAssignment.objects.filter(teacher=teacher_profile)
+            .values_list("classroom_id", "subject_id")
+        )
 
     def _filter_by_scope(self, queryset, field_name="etablissement"):
         user = self.request.user
@@ -2541,6 +2554,7 @@ class GradeViewSet(BaseModelViewSet):
     def _validate_grade_scope(self, serializer, instance=None):
         student = serializer.validated_data.get("student") or (instance.student if instance else None)
         classroom = serializer.validated_data.get("classroom") or (instance.classroom if instance else None)
+        subject = serializer.validated_data.get("subject") or (instance.subject if instance else None)
 
         if not student or not classroom:
             return
@@ -2551,6 +2565,18 @@ class GradeViewSet(BaseModelViewSet):
         if role == UserRole.PARENT:
             if not student.parent or student.parent.user_id != self.request.user.id:
                 raise ValidationError({"student": "Vous ne pouvez saisir que les notes de vos enfants."})
+        if role == UserRole.TEACHER:
+            allowed_pairs = self._teacher_assignment_pairs()
+            pair = (classroom.id if classroom else None, subject.id if subject else None)
+            if pair not in allowed_pairs:
+                raise ValidationError(
+                    {
+                        "subject": (
+                            "Acces refuse: vous ne pouvez saisir que les notes des matières "
+                            "et classes qui vous sont affectées."
+                        )
+                    }
+                )
 
         target_etablissement = self._resolve_target_etablissement()
         if target_etablissement is None:
@@ -2571,6 +2597,14 @@ class GradeViewSet(BaseModelViewSet):
             return queryset.filter(student__user_id=self.request.user.id)
         if role == UserRole.PARENT:
             return queryset.filter(student__parent__user_id=self.request.user.id)
+        if role == UserRole.TEACHER:
+            allowed_pairs = self._teacher_assignment_pairs()
+            if not allowed_pairs:
+                return queryset.none()
+            pair_filter = Q()
+            for classroom_id, subject_id in allowed_pairs:
+                pair_filter |= Q(classroom_id=classroom_id, subject_id=subject_id)
+            return queryset.filter(pair_filter)
 
         requested_etablissement = self._requested_etablissement()
         if requested_etablissement is not None:
@@ -3001,6 +3035,11 @@ class AttendanceViewSet(BaseModelViewSet):
             return queryset.filter(student__user_id=self.request.user.id)
         if role == UserRole.PARENT:
             return queryset.filter(student__parent__user_id=self.request.user.id)
+        if role == UserRole.TEACHER:
+            allowed_classroom_ids = self._teacher_allowed_classroom_ids()
+            if not allowed_classroom_ids:
+                return queryset.none()
+            return queryset.filter(student__classroom_id__in=allowed_classroom_ids)
 
         requested_etablissement = self._requested_etablissement()
         if requested_etablissement is not None:
@@ -3025,6 +3064,17 @@ class AttendanceViewSet(BaseModelViewSet):
         if role == UserRole.PARENT and student.parent_id:
             if student.parent.user_id != self.request.user.id:
                 raise ValidationError({"student": "Vous ne pouvez saisir que les absences de vos enfants."})
+        if role == UserRole.TEACHER:
+            allowed_classroom_ids = self._teacher_allowed_classroom_ids()
+            if student.classroom_id not in allowed_classroom_ids:
+                raise ValidationError(
+                    {
+                        "student": (
+                            "Acces refuse: vous ne pouvez saisir que les absences/retards "
+                            "des élèves de vos classes affectées."
+                        )
+                    }
+                )
 
         target_etablissement = self._resolve_target_etablissement()
         if target_etablissement and student.etablissement_id != target_etablissement.id:
@@ -3382,6 +3432,19 @@ class TeacherAttendanceViewSet(BaseModelViewSet):
 
         return getattr(user, "etablissement", None)
 
+    def _teacher_profile(self):
+        return Teacher.objects.select_related("etablissement").filter(user=self.request.user).first()
+
+    def _teacher_allowed_classroom_ids(self):
+        teacher_profile = self._teacher_profile()
+        if not teacher_profile:
+            return set()
+        return set(
+            TeacherAssignment.objects.filter(teacher=teacher_profile)
+            .values_list("classroom_id", flat=True)
+            .distinct()
+        )
+
     def get_queryset(self):
         queryset = super().get_queryset()
         role = getattr(self.request.user, "role", "")
@@ -3525,9 +3588,19 @@ class TeacherTimeEntryViewSet(BaseModelViewSet):
 
         return getattr(user, "etablissement", None)
 
+    def _request_teacher_profile(self):
+        user = self.request.user
+        if getattr(user, "role", None) != UserRole.TEACHER:
+            return None
+        return Teacher.objects.select_related("user", "etablissement").filter(user=user).first()
+
     def get_queryset(self):
         queryset = super().get_queryset()
         requested_etablissement = self._requested_etablissement()
+        teacher_profile = self._request_teacher_profile()
+
+        if teacher_profile is not None:
+            return queryset.filter(teacher=teacher_profile)
 
         if requested_etablissement is not None:
             return queryset.filter(teacher__etablissement=requested_etablissement)
@@ -3547,6 +3620,13 @@ class TeacherTimeEntryViewSet(BaseModelViewSet):
         teacher = serializer.validated_data.get("teacher") or (instance.teacher if instance else None)
         if not teacher:
             return
+
+        teacher_profile = self._request_teacher_profile()
+        if teacher_profile is not None and teacher.id != teacher_profile.id:
+            raise PermissionDenied(
+                "Acces refuse: un enseignant ne peut enregistrer que son propre pointage."
+            )
+
         target_etablissement = self._resolve_target_etablissement()
         if target_etablissement and teacher.etablissement_id != target_etablissement.id:
             raise ValidationError({"teacher": "L'enseignant n'appartient pas a l'etablissement actif."})
@@ -3561,6 +3641,27 @@ class TeacherTimeEntryViewSet(BaseModelViewSet):
     def perform_update(self, serializer):
         self._validate_scope(serializer, instance=self.get_object())
         serializer.save(etablissement=self._resolve_target_etablissement())
+
+    def update(self, request, *args, **kwargs):
+        if getattr(request.user, "role", None) == UserRole.TEACHER:
+            raise PermissionDenied(
+                "Acces refuse: un enseignant ne peut pas modifier un pointage existant."
+            )
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if getattr(request.user, "role", None) == UserRole.TEACHER:
+            raise PermissionDenied(
+                "Acces refuse: un enseignant ne peut pas modifier un pointage existant."
+            )
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if getattr(request.user, "role", None) == UserRole.TEACHER:
+            raise PermissionDenied(
+                "Acces refuse: un enseignant ne peut pas supprimer un pointage."
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 class DisciplineIncidentViewSet(BaseModelViewSet):
@@ -3629,6 +3730,11 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
             return queryset.filter(student__user_id=self.request.user.id)
         if role == UserRole.PARENT:
             return queryset.filter(student__parent__user_id=self.request.user.id)
+        if role == UserRole.TEACHER:
+            allowed_classroom_ids = self._teacher_allowed_classroom_ids()
+            if not allowed_classroom_ids:
+                return queryset.none()
+            return queryset.filter(student__classroom_id__in=allowed_classroom_ids)
 
         requested_etablissement = self._requested_etablissement()
         if requested_etablissement is not None:
@@ -3642,21 +3748,55 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
 
         return queryset.filter(student__etablissement=getattr(self.request.user, "etablissement", None))
 
-    def _validate_scope(self, serializer):
-        student = serializer.validated_data.get("student")
+    def _validate_scope(self, serializer, instance=None):
+        student = serializer.validated_data.get("student") or (instance.student if instance else None)
         if not student:
             return
+        role = getattr(self.request.user, "role", "")
+        if role == UserRole.TEACHER:
+            allowed_classroom_ids = self._teacher_allowed_classroom_ids()
+            if student.classroom_id not in allowed_classroom_ids:
+                raise ValidationError(
+                    {
+                        "student": (
+                            "Acces refuse: vous ne pouvez declarer que les incidents "
+                            "des élèves de vos classes affectées."
+                        )
+                    }
+                )
         target_etablissement = self._resolve_target_etablissement()
         if target_etablissement and student.etablissement_id != target_etablissement.id:
             raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
 
     def perform_create(self, serializer):
         self._validate_scope(serializer)
-        serializer.save()
+        if getattr(self.request.user, "role", "") == UserRole.TEACHER:
+            serializer.save(
+                reported_by=self.request.user,
+                status=DisciplineStatus.OPEN,
+                sanction="",
+                parent_notified=False,
+            )
+            return
+        serializer.save(reported_by=self.request.user)
 
     def perform_update(self, serializer):
-        self._validate_scope(serializer)
+        self._validate_scope(serializer, instance=self.get_object())
         serializer.save()
+
+    def update(self, request, *args, **kwargs):
+        if getattr(request.user, "role", None) == UserRole.TEACHER:
+            raise PermissionDenied(
+                "Acces refuse: un enseignant peut declarer un incident mais ne peut pas le valider ni le sanctionner."
+            )
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if getattr(request.user, "role", None) == UserRole.TEACHER:
+            raise PermissionDenied(
+                "Acces refuse: un enseignant peut declarer un incident mais ne peut pas le valider ni le sanctionner."
+            )
+        return super().partial_update(request, *args, **kwargs)
 
 
 class StudentFeeViewSet(BaseModelViewSet):
