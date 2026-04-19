@@ -830,6 +830,7 @@ class TeacherAttendanceSerializer(serializers.ModelSerializer):
 class TeacherTimeEntrySerializer(serializers.ModelSerializer):
     teacher_full_name = serializers.SerializerMethodField(read_only=True)
     teacher_employee_code = serializers.SerializerMethodField(read_only=True)
+    check_out_time = serializers.TimeField(required=False, allow_null=True)
 
     def get_teacher_full_name(self, obj):
         teacher = obj.teacher
@@ -845,8 +846,31 @@ class TeacherTimeEntrySerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        teacher = attrs.get("teacher") or getattr(self.instance, "teacher", None)
+        entry_date = attrs.get("entry_date") or getattr(self.instance, "entry_date", None)
         check_in_time = attrs.get("check_in_time") or getattr(self.instance, "check_in_time", None)
         check_out_time = attrs.get("check_out_time") or getattr(self.instance, "check_out_time", None)
+
+        if teacher and entry_date:
+            day_code = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][entry_date.weekday()]
+            if day_code == "SUN":
+                raise serializers.ValidationError(
+                    {"entry_date": "Le pointage enseignant est interdit le dimanche."}
+                )
+
+            has_slot = TeacherScheduleSlot.objects.filter(
+                assignment__teacher=teacher,
+                day_of_week=day_code,
+            ).exists()
+            if not has_slot:
+                raise serializers.ValidationError(
+                    {
+                        "entry_date": (
+                            "Aucun creneau d'emploi du temps pour cet enseignant ce jour. "
+                            "Le pointage est bloque."
+                        )
+                    }
+                )
 
         if check_in_time and check_out_time and check_out_time <= check_in_time:
             raise serializers.ValidationError(
@@ -975,6 +999,10 @@ class ExpenseSerializer(serializers.ModelSerializer):
 class TeacherPayrollSerializer(serializers.ModelSerializer):
     teacher_full_name = serializers.SerializerMethodField(read_only=True)
     teacher_employee_code = serializers.SerializerMethodField(read_only=True)
+    validation_stage = serializers.CharField(read_only=True)
+    is_fully_validated = serializers.BooleanField(read_only=True)
+    level_one_validated_by_name = serializers.SerializerMethodField(read_only=True)
+    level_two_validated_by_name = serializers.SerializerMethodField(read_only=True)
 
     def get_teacher_full_name(self, obj):
         teacher = obj.teacher
@@ -987,6 +1015,20 @@ class TeacherPayrollSerializer(serializers.ModelSerializer):
     def get_teacher_employee_code(self, obj):
         teacher = obj.teacher
         return teacher.employee_code if teacher else ""
+
+    def get_level_one_validated_by_name(self, obj):
+        user = obj.level_one_validated_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    def get_level_two_validated_by_name(self, obj):
+        user = obj.level_two_validated_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
 
     class Meta:
         model = TeacherPayroll

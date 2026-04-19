@@ -9,10 +9,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'core/constants/branding.dart';
 import 'core/network/api_client.dart';
+import 'core/providers/navigation_intents.dart';
 import 'core/theme/app_theme.dart';
 import 'features/attendance/presentation/attendance_controller.dart';
 import 'features/attendance/presentation/attendance_page.dart';
 import 'features/attendance/presentation/teacher_attendance_page.dart';
+import 'features/attendance/presentation/teacher_timesheet_page.dart';
 import 'features/academics/presentation/academics_page.dart';
 import 'features/activity_logs/presentation/activity_logs_page.dart';
 import 'features/auth/presentation/auth_controller.dart';
@@ -182,6 +184,8 @@ class GestionSchoolApp extends ConsumerWidget {
             const _GlobalFeatureRefreshHost(child: StudentsPage()),
         '/payments': (_) =>
             const _GlobalFeatureRefreshHost(child: PaymentsPage()),
+        '/timetable': (_) =>
+          const _GlobalFeatureRefreshHost(child: TimetableModulePage()),
         '/reports': (_) =>
             const _GlobalFeatureRefreshHost(child: ReportsPage()),
         '/users': (_) => const _GlobalFeatureRefreshHost(child: UsersPage()),
@@ -446,6 +450,12 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       view: TeacherAttendancePage(),
     ),
     _AdminMenuItem(
+      keyName: 'teacher_timesheet',
+      label: 'Emargement enseignants',
+      icon: Icons.access_time_rounded,
+      view: TeacherTimesheetPage(),
+    ),
+    _AdminMenuItem(
       keyName: 'discipline',
       label: 'Discipline',
       icon: Icons.gavel_outlined,
@@ -539,6 +549,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         'teachers',
         'attendance',
         'teacher_attendance',
+        'teacher_timesheet',
         'discipline',
       ],
       collapsible: true,
@@ -611,6 +622,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         'students',
         'attendance',
         'teacher_attendance',
+        'teacher_timesheet',
         'discipline',
         'finance',
         'timetable',
@@ -646,7 +658,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (role == 'supervisor') {
       return key == 'dashboard' ||
           key == 'students' ||
-          key == 'timetable' ||
           key == 'exams' ||
           key == 'reports';
     }
@@ -1088,8 +1099,22 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final user = ref.watch(authControllerProvider).value;
+    final pendingShellNavigationKey = ref.watch(adminShellNavigationKeyProvider);
     final etabProvider = ref.watch(etablissementProvider);
     final selectedEtablissement = etabProvider.selected;
+
+    if (pendingShellNavigationKey != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        if (_isItemVisibleForRole(pendingShellNavigationKey, user?.role)) {
+          _selectItem(pendingShellNavigationKey);
+        }
+        ref.read(adminShellNavigationKeyProvider.notifier).state = null;
+      });
+    }
+
     if (!_isItemVisibleForRole(_selectedKey, user?.role)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) {

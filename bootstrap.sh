@@ -39,9 +39,64 @@ docker_compose() {
   "${DOCKER_CMD[@]}" compose "$@"
 }
 
+compose_up_with_retries() {
+  local max_attempts=3
+  local attempt=1
+  local up_log
+
+  while [[ "$attempt" -le "$max_attempts" ]]; do
+    up_log="$(mktemp)"
+    set +e
+    docker_compose up -d --build 2>&1 | tee "$up_log"
+    local up_rc=${PIPESTATUS[0]}
+    set -e
+
+    if [[ "$up_rc" -eq 0 ]]; then
+      rm -f "$up_log"
+      return 0
+    fi
+
+    if grep -qiE "failed to resolve source metadata|lookup registry-1\.docker\.io|i/o timeout|temporary failure in name resolution" "$up_log"; then
+      rm -f "$up_log"
+      if [[ "$attempt" -lt "$max_attempts" ]]; then
+        log "Echec reseau Docker Hub detecte (tentative ${attempt}/${max_attempts}). Nouvelle tentative dans 8s..."
+        sleep 8
+        ((attempt++))
+        continue
+      fi
+
+      echo "Erreur: impossible de joindre Docker Hub apres ${max_attempts} tentatives."
+      echo "Cause probable: DNS/reseau intermittent (ex: registry-1.docker.io)."
+      echo "Action conseillee: relancez ./bootstrap.sh, ou configurez des DNS stables pour Docker (1.1.1.1 / 8.8.8.8)."
+      return 1
+    fi
+
+    cat "$up_log"
+    rm -f "$up_log"
+    return 1
+  done
+
+  return 1
+}
+
 all_columns_exist() {
   local checks_python="$1"
   docker_compose exec -T backend python manage.py shell -c "$checks_python"
+}
+
+mysql_query() {
+  local sql="$1"
+  docker_compose exec -T db sh -lc 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -e "$1"' -- "$sql"
+}
+
+school_0026_schema_complete() {
+  local payroll_cols timeentry_cols checkout_nullable
+
+  payroll_cols="$(mysql_query "USE gestion_school; SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='gestion_school' AND TABLE_NAME='school_teacherpayroll' AND COLUMN_NAME IN ('level_one_validated_at','level_one_validated_by_id','level_two_validated_at','level_two_validated_by_id');")"
+  timeentry_cols="$(mysql_query "USE gestion_school; SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='gestion_school' AND TABLE_NAME='school_teachertimeentry' AND COLUMN_NAME IN ('auto_closed_reason','is_auto_closed','late_minutes','tolerated_late_minutes');")"
+  checkout_nullable="$(mysql_query "USE gestion_school; SELECT COALESCE(MAX(CASE WHEN IS_NULLABLE='YES' THEN 1 ELSE 0 END), 0) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='gestion_school' AND TABLE_NAME='school_teachertimeentry' AND COLUMN_NAME='check_out_time';")"
+
+  [[ "$payroll_cols" == "4" && "$timeentry_cols" == "4" && "$checkout_nullable" == "1" ]]
 }
 
 if ! docker_compose version >/dev/null 2>&1; then
@@ -51,7 +106,7 @@ fi
 
 log "Démarrage de la stack backend (MySQL, Redis, Django, Celery)..."
 cd "$INFRA_DIR"
-docker_compose up -d --build
+compose_up_with_retries
 
 log "Attente de disponibilité du service backend..."
 ready=0
@@ -77,7 +132,13 @@ migrate_rc=${PIPESTATUS[0]}
 set -e
 
 if [[ "$migrate_rc" -ne 0 ]]; then
-  if grep -q "Duplicate column name 'etablissement_id'" "$migrate_log_file"; then
+  if grep -q "disk is full" "$migrate_log_file"; then
+    echo "Erreur: espace disque insuffisant pendant les migrations MySQL."
+    echo "Liberez de l'espace sur la partition racine puis relancez ./bootstrap.sh."
+    cat "$migrate_log_file"
+    rm -f "$migrate_log_file"
+    exit 1
+  elif grep -q "Duplicate column name 'etablissement_id'" "$migrate_log_file"; then
     log "Schéma existant détecté (colonnes etablissement_id déjà présentes), tentative de rattrapage des migrations..."
 
     if [[ "$(all_columns_exist "from django.db import connection; cols={c.name for c in connection.introspection.get_table_description(connection.cursor(), 'common_activitylog')}; print('1' if 'etablissement_id' in cols else '0')")" == "1" ]]; then
@@ -138,6 +199,19 @@ if [[ "$migrate_rc" -ne 0 ]]; then
       docker_compose exec -T backend python manage.py migrate --noinput
     else
       echo "Erreur: la colonne is_admin est absente malgré l'erreur duplicate."
+      cat "$migrate_log_file"
+      rm -f "$migrate_log_file"
+      exit 1
+    fi
+  elif grep -q "Duplicate column name 'level_one_validated_at'" "$migrate_log_file" || grep -q "Duplicate column name 'level_one_validated_by_id'" "$migrate_log_file" || grep -q "Duplicate column name 'level_two_validated_at'" "$migrate_log_file" || grep -q "Duplicate column name 'level_two_validated_by_id'" "$migrate_log_file" || grep -q "Duplicate column name 'auto_closed_reason'" "$migrate_log_file" || grep -q "Duplicate column name 'is_auto_closed'" "$migrate_log_file" || grep -q "Duplicate column name 'late_minutes'" "$migrate_log_file" || grep -q "Duplicate column name 'tolerated_late_minutes'" "$migrate_log_file"; then
+    log "Schéma pointage/paie enseignants déjà présent détecté, tentative de rattrapage de la migration school.0026..."
+
+    if school_0026_schema_complete; then
+      docker_compose exec -T backend python manage.py migrate school 0026 --fake
+      docker_compose exec -T backend python manage.py migrate --noinput
+    else
+      echo "Erreur: la migration school.0026 semble partiellement appliquée mais le schéma n'est pas complet."
+      echo "Complétez ou réparez le schéma school_teacherpayroll/school_teachertimeentry puis relancez ./bootstrap.sh."
       cat "$migrate_log_file"
       rm -f "$migrate_log_file"
       exit 1

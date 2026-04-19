@@ -46,7 +46,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
   bool _isTimetableReadOnlyRole() {
     final role = ref.read(authControllerProvider).value?.role;
-    return role == 'teacher' || role == 'supervisor';
+    return role == 'teacher';
   }
 
   static const List<String> _dayOrder = [
@@ -1870,6 +1870,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       var created = 0;
       var skippedConflicts = 0;
       var failed = 0;
+      final failedReasons = <String>{};
 
       for (final selection in selections) {
         final parts = selection.split('|');
@@ -1917,16 +1918,25 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             },
           );
           created += 1;
-        } catch (_) {
+        } catch (error) {
           failed += 1;
+          _markScheduleApiUnsupportedFromError(error);
+          final reason = _extractErrorMessage(error).trim();
+          if (reason.isNotEmpty) {
+            failedReasons.add(reason);
+          }
         }
       }
 
       if (!mounted) return;
-      _showMessage(
-        'Ajout en lot terminé: créés $created, conflits ignorés $skippedConflicts, échecs $failed.',
-        isSuccess: created > 0,
-      );
+      final summary =
+          'Ajout en lot terminé: créés $created, conflits ignorés $skippedConflicts, échecs $failed.';
+      if (failedReasons.isNotEmpty) {
+        final firstReason = failedReasons.first;
+        _showMessage('$summary Motif principal: $firstReason', isSuccess: created > 0);
+      } else {
+        _showMessage(summary, isSuccess: created > 0);
+      }
       await _loadData();
     } catch (error) {
       if (!mounted) return;
@@ -2130,8 +2140,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
 
     final authUser = ref.watch(authControllerProvider).value;
-    final isReadOnlyMode =
-        authUser?.role == 'teacher' || authUser?.role == 'supervisor';
+    final isReadOnlyMode = authUser?.role == 'teacher';
 
     final assignmentById = _assignmentById();
     final assignmentsByClass = _assignmentsByClass(assignmentById);
