@@ -29,6 +29,7 @@ class AttendanceRepository {
         id: map['id'] as int,
         fullName: map['user_full_name']?.toString() ?? 'Inconnu',
         matricule: map['matricule']?.toString() ?? '',
+        classroomId: (map['classroom'] as num?)?.toInt(),
       );
     }).toList();
   }

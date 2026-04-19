@@ -9,6 +9,7 @@ from apps.school.models import (
     AcademicYear,
     Attendance,
     ClassRoom,
+    DisciplineIncident,
     Etablissement,
     Grade,
     GradeValidation,
@@ -130,6 +131,11 @@ class GradesAndBulletinsApiTests(APITestCase):
             subject=self.subject_phy,
             classroom=self.class_a,
         )
+        TeacherAssignment.objects.create(
+            teacher=self.teacher_2,
+            subject=self.subject_math,
+            classroom=self.class_b,
+        )
 
         self.parent_user_1 = User.objects.create_user(
             username="parent_grade_1",
@@ -186,6 +192,20 @@ class GradesAndBulletinsApiTests(APITestCase):
             parent=self.parent_2,
             etablissement=self.etablissement_main,
         )
+        self.student_user_3 = User.objects.create_user(
+            username="student_grade_3",
+            password="student12345",
+            role=UserRole.STUDENT,
+            first_name="Student",
+            last_name="Three",
+            etablissement=self.etablissement_main,
+        )
+        self.student_3 = Student.objects.create(
+            user=self.student_user_3,
+            classroom=self.class_b,
+            parent=self.parent_2,
+            etablissement=self.etablissement_main,
+        )
 
         self.grade_1 = Grade.objects.create(
             student=self.student_1,
@@ -202,6 +222,14 @@ class GradesAndBulletinsApiTests(APITestCase):
             academic_year=self.year,
             term="T1",
             value=14,
+        )
+        self.grade_3 = Grade.objects.create(
+            student=self.student_3,
+            subject=self.subject_math,
+            classroom=self.class_b,
+            academic_year=self.year,
+            term="T1",
+            value=11,
         )
 
     def test_student_conduite_defaults_to_18(self):
@@ -277,6 +305,129 @@ class GradesAndBulletinsApiTests(APITestCase):
         results = self._results(response)
         student_ids = {_row["student"] for _row in results}
         self.assertEqual(student_ids, {self.student_1.id})
+
+    def test_teacher_attendance_is_scoped_to_assigned_classes_only(self):
+        Attendance.objects.create(
+            student=self.student_1,
+            date=date(2026, 1, 15),
+            is_absent=True,
+            is_late=False,
+            reason="Classe A",
+        )
+        Attendance.objects.create(
+            student=self.student_3,
+            date=date(2026, 1, 15),
+            is_absent=False,
+            is_late=True,
+            reason="Classe B",
+        )
+
+        self.client.force_authenticate(self.teacher_user)
+        response = self.client.get("/api/attendances/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = self._results(response)
+        student_ids = {_row["student"] for _row in results}
+        self.assertEqual(student_ids, {self.student_1.id})
+
+    def test_teacher_cannot_create_attendance_for_unassigned_class(self):
+        self.client.force_authenticate(self.teacher_user)
+
+        response = self.client.post(
+            "/api/attendances/",
+            {
+                "student": self.student_3.id,
+                "date": "2026-01-16",
+                "is_absent": True,
+                "is_late": False,
+                "reason": "Hors périmètre",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("student", response.data)
+
+    def test_teacher_grades_are_scoped_to_assigned_pairs_only(self):
+        self.client.force_authenticate(self.teacher_user)
+
+        response = self.client.get("/api/grades/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = self._results(response)
+        grade_ids = {_row["id"] for _row in results}
+        self.assertEqual(grade_ids, {self.grade_1.id, self.grade_2.id})
+
+    def test_teacher_cannot_create_grade_for_unassigned_classroom_subject_pair(self):
+        self.client.force_authenticate(self.teacher_user)
+
+        response = self.client.post(
+            "/api/grades/",
+            {
+                "student": self.student_3.id,
+                "subject": self.subject_math.id,
+                "classroom": self.class_b.id,
+                "academic_year": self.year.id,
+                "term": "T1",
+                "value": 13,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("subject", response.data)
+
+    def test_teacher_discipline_is_scoped_and_reporting_only(self):
+        incident_a = DisciplineIncident.objects.create(
+            student=self.student_1,
+            incident_date=date(2026, 1, 17),
+            category="Indiscipline",
+            description="Incident A",
+            reported_by=self.supervisor_user,
+        )
+        DisciplineIncident.objects.create(
+            student=self.student_3,
+            incident_date=date(2026, 1, 17),
+            category="Indiscipline",
+            description="Incident B",
+            reported_by=self.supervisor_user,
+            sanction="Mesure",
+            status="resolved",
+        )
+
+        self.client.force_authenticate(self.teacher_user)
+        list_response = self.client.get("/api/discipline-incidents/")
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        results = self._results(list_response)
+        incident_ids = {_row["id"] for _row in results}
+        self.assertEqual(incident_ids, {incident_a.id})
+
+        create_response = self.client.post(
+            "/api/discipline-incidents/",
+            {
+                "student": self.student_1.id,
+                "incident_date": "2026-01-18",
+                "category": "Indiscipline",
+                "description": "Signalement enseignant",
+                "severity": "high",
+                "sanction": "Ne doit pas être gardée",
+                "status": "resolved",
+                "parent_notified": True,
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        created = DisciplineIncident.objects.get(id=create_response.data["id"])
+        self.assertEqual(created.status, "open")
+        self.assertEqual(created.sanction, "")
+        self.assertFalse(created.parent_notified)
+
+        patch_response = self.client.patch(
+            f"/api/discipline-incidents/{created.id}/",
+            {"status": "resolved"},
+            format="json",
+        )
+        self.assertEqual(patch_response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_create_grade_normalizes_term_and_rejects_out_of_range_value(self):
         self.client.force_authenticate(self.admin_user)

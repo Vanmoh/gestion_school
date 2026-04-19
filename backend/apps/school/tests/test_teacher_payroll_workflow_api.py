@@ -37,6 +37,12 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
             coefficient=1,
             classroom=self.classroom,
         )
+        self.subject_other = Subject.objects.create(
+            name="Physique",
+            code="PHY",
+            coefficient=1,
+            classroom=self.classroom,
+        )
 
         self.supervisor = User.objects.create_user(
             username="supervisor_payroll",
@@ -71,10 +77,30 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
             hourly_rate=Decimal("1000.00"),
             etablissement=self.etablissement,
         )
+        self.other_teacher_user = User.objects.create_user(
+            username="teacher_other",
+            password="Pass1234!",
+            role=UserRole.TEACHER,
+            etablissement=self.etablissement,
+            first_name="Grace",
+            last_name="Hopper",
+        )
+        self.other_teacher = Teacher.objects.create(
+            user=self.other_teacher_user,
+            employee_code="ENS-PAY-02",
+            hire_date=date(2024, 9, 1),
+            hourly_rate=Decimal("1000.00"),
+            etablissement=self.etablissement,
+        )
 
         self.assignment = TeacherAssignment.objects.create(
             teacher=self.teacher,
             subject=self.subject,
+            classroom=self.classroom,
+        )
+        self.assignment_other = TeacherAssignment.objects.create(
+            teacher=self.other_teacher,
+            subject=self.subject_other,
             classroom=self.classroom,
         )
         TeacherScheduleSlot.objects.create(
@@ -82,6 +108,12 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
             day_of_week="MON",
             start_time="08:00",
             end_time="10:00",
+        )
+        TeacherScheduleSlot.objects.create(
+            assignment=self.assignment_other,
+            day_of_week="MON",
+            start_time="10:00",
+            end_time="12:00",
         )
 
     def _create_time_entry(self, payload):
@@ -172,6 +204,56 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
         )
         self.assertEqual(create_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertIn("lecture seule", str(create_response.data.get("detail", "")).lower())
+
+    def test_teacher_sees_only_own_time_entries_and_can_create_only_for_self(self):
+        self._create_time_entry(
+            {
+                "teacher": self.teacher.id,
+                "entry_date": "2026-04-06",
+                "check_in_time": "08:10:00",
+                "check_out_time": "10:00:00",
+            }
+        )
+        self._create_time_entry(
+            {
+                "teacher": self.other_teacher.id,
+                "entry_date": "2026-04-06",
+                "check_in_time": "10:05:00",
+                "check_out_time": "12:00:00",
+            }
+        )
+
+        self.client.force_authenticate(self.teacher_user)
+        list_response = self.client.get("/api/teacher-time-entries/")
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        results = list_response.data.get("results", list_response.data)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["teacher"], self.teacher.id)
+
+        own_create_response = self.client.post(
+            "/api/teacher-time-entries/",
+            {
+                "teacher": self.teacher.id,
+                "entry_date": "2026-04-13",
+                "check_in_time": "08:05:00",
+                "check_out_time": "10:00:00",
+            },
+            format="json",
+        )
+        self.assertEqual(own_create_response.status_code, status.HTTP_201_CREATED)
+
+        other_create_response = self.client.post(
+            "/api/teacher-time-entries/",
+            {
+                "teacher": self.other_teacher.id,
+                "entry_date": "2026-04-13",
+                "check_in_time": "10:05:00",
+                "check_out_time": "12:00:00",
+            },
+            format="json",
+        )
+        self.assertEqual(other_create_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("propre pointage", str(other_create_response.data.get("detail", "")).lower())
 
     def test_salary_generation_and_two_level_validation_workflow(self):
         self._create_time_entry(

@@ -373,6 +373,13 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     final canWriteSheet = userRole != null && _sheetWriteRoles.contains(userRole);
     final canValidateSheet =
       userRole != null && _sheetValidateRoles.contains(userRole);
+    final isTeacherRole = userRole == 'teacher';
+    final allowedClassroomIds = isTeacherRole
+      ? _sheetClassrooms
+        .map((row) => _asInt(row['id']))
+        .where((id) => id > 0)
+        .toSet()
+      : <int>{};
 
     ref.listen<AsyncValue<void>>(attendanceMutationProvider, (prev, next) {
       if (prev?.isLoading == true && !next.isLoading && mounted) {
@@ -677,6 +684,14 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
               ),
             ),
           if (canUseSheet) const SizedBox(height: 16),
+          if (isTeacherRole)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                'Périmètre enseignant: saisie et historique limités aux élèves de vos classes assignées.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -691,13 +706,28 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                       loading: () => const LinearProgressIndicator(),
                       error: (error, _) => Text('Erreur élèves: $error'),
                       data: (students) {
-                        if (students.isEmpty) {
+                        final scopedStudents = isTeacherRole
+                            ? students
+                                  .where(
+                                    (student) => student.classroomId != null &&
+                                        allowedClassroomIds.contains(student.classroomId),
+                                  )
+                                  .toList(growable: false)
+                            : students;
+
+                        if (scopedStudents.isEmpty) {
                           return const Text('Aucun élève disponible');
                         }
-                        _selectedStudentId ??= students.first.id;
+                        final scopedIds = scopedStudents
+                            .map((student) => student.id)
+                            .toSet();
+                        if (_selectedStudentId == null || !scopedIds.contains(_selectedStudentId)) {
+                          _selectedStudentId = scopedStudents.first.id;
+                        }
+
                         return DropdownButtonFormField<int>(
                           initialValue: _selectedStudentId,
-                          items: students
+                          items: scopedStudents
                               .map(
                                 (student) => DropdownMenuItem<int>(
                                   value: student.id,
@@ -835,11 +865,27 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
             ),
             error: (error, _) => Text('Erreur absences: $error'),
             data: (items) {
-              if (items.isEmpty) {
+              final scopedItems = isTeacherRole
+                  ? (() {
+                      final studentRows = studentsAsync.valueOrNull ?? const <AttendanceStudent>[];
+                      final allowedStudentIds = studentRows
+                          .where(
+                            (student) => student.classroomId != null &&
+                                allowedClassroomIds.contains(student.classroomId),
+                          )
+                          .map((student) => student.id)
+                          .toSet();
+                      return items
+                          .where((item) => allowedStudentIds.contains(item.studentId))
+                          .toList(growable: false);
+                    })()
+                  : items;
+
+              if (scopedItems.isEmpty) {
                 return const Text('Aucune donnée');
               }
               return Column(
-                children: items
+                children: scopedItems
                     .map(
                       (item) => Card(
                         child: ListTile(

@@ -26,6 +26,7 @@ import 'features/backup/presentation/backup_restore_page.dart';
 import 'features/promotion/presentation/promotion_page.dart';
 import 'features/dashboard/presentation/dashboard_controller.dart';
 import 'features/dashboard/presentation/dashboard_page.dart';
+import 'features/dashboard/presentation/role_dashboards.dart';
 import 'features/exams/presentation/exams_controller.dart';
 import 'features/exams/presentation/exams_page.dart';
 import 'features/communication/presentation/communication_page.dart';
@@ -172,11 +173,16 @@ class GestionSchoolApp extends ConsumerWidget {
             const RequireEtablissementSelection(child: _AdminShell()),
         '/home/admin': (_) =>
             const RequireEtablissementSelection(child: _AdminShell()),
-        '/home/accountant': (_) => const _AccountantShell(),
-        '/home/teacher': (_) => const _TeacherShell(),
-        '/home/supervisor': (_) => const _SupervisorShell(),
-        '/home/parent': (_) => const _ParentStudentShell(roleLabel: 'Parent'),
-        '/home/student': (_) => const _ParentStudentShell(roleLabel: 'Élève'),
+        '/home/accountant': (_) =>
+          const RequireEtablissementSelection(child: _AdminShell()),
+        '/home/teacher': (_) =>
+          const RequireEtablissementSelection(child: _AdminShell()),
+        '/home/supervisor': (_) =>
+          const RequireEtablissementSelection(child: _AdminShell()),
+        '/home/parent': (_) =>
+          const RequireEtablissementSelection(child: _AdminShell()),
+        '/home/student': (_) =>
+          const RequireEtablissementSelection(child: _AdminShell()),
         '/attendance': (_) =>
             const _GlobalFeatureRefreshHost(child: AttendancePage()),
         '/exams': (_) => const _GlobalFeatureRefreshHost(child: ExamsPage()),
@@ -190,176 +196,6 @@ class GestionSchoolApp extends ConsumerWidget {
             const _GlobalFeatureRefreshHost(child: ReportsPage()),
         '/users': (_) => const _GlobalFeatureRefreshHost(child: UsersPage()),
       },
-    );
-  }
-}
-
-class _RoleShell extends ConsumerWidget {
-  final List<Widget> tabs;
-  final List<Widget> views;
-  final String title;
-
-  const _RoleShell({
-    required this.tabs,
-    required this.views,
-    required this.title,
-  });
-
-  String _userEtablissementLabel(AuthUser user) {
-    final name = user.etablissementName.trim();
-    if (name.isNotEmpty) {
-      return name;
-    }
-    final id = user.etablissementId;
-    if (id != null) {
-      return 'Etablissement #$id';
-    }
-    return 'etablissement associe a votre compte';
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final screenWidth = MediaQuery.sizeOf(context).width;
-    final watermarkSize = (screenWidth * 0.095).clamp(34.0, 92.0).toDouble();
-
-    final etabProvider = ref.watch(etablissementProvider);
-    final authUser = ref.watch(authControllerProvider).value;
-
-    if (authUser != null && authUser.role != 'super_admin') {
-      final userEtabId = authUser.etablissementId;
-      if (userEtabId != null && etabProvider.selected?.id != userEtabId) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!context.mounted) {
-            return;
-          }
-          final messenger = ScaffoldMessenger.of(context);
-          final concerned = _userEtablissementLabel(authUser);
-          messenger
-            ..hideCurrentSnackBar()
-            ..showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Ce compte appartient a "$concerned". Veuillez vous connecter sur cet etablissement.',
-                ),
-              ),
-            );
-          Navigator.of(
-            context,
-          ).pushNamedAndRemoveUntil('/', (route) => false);
-        });
-        return const Scaffold(body: Center(child: CircularProgressIndicator()));
-      }
-    }
-
-    final etabName = etabProvider.selected?.name ?? authUser?.etablissementName;
-    return DefaultTabController(
-      length: tabs.length,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Row(
-            children: [
-              Text(title),
-              if (etabName != null) ...[
-                const SizedBox(width: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: scheme.primary.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.school, size: 18),
-                      const SizedBox(width: 4),
-                      Text(
-                        etabName,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ],
-          ),
-          actions: [
-            IconButton(
-              onPressed: () {
-                final current = ref.read(themeModeProvider);
-                ref
-                    .read(themeModeProvider.notifier)
-                    .state = current == ThemeMode.dark
-                    ? ThemeMode.light
-                    : ThemeMode.dark;
-              },
-              icon: const Icon(Icons.dark_mode),
-            ),
-            IconButton(
-              onPressed: () async {
-                await ref.read(authControllerProvider.notifier).logout();
-                if (!context.mounted) {
-                  return;
-                }
-                Navigator.of(
-                  context,
-                ).pushNamedAndRemoveUntil('/login', (route) => false);
-              },
-              icon: const Icon(Icons.logout),
-            ),
-          ],
-          bottom: TabBar(isScrollable: true, tabs: tabs),
-        ),
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      scheme.surface,
-                      scheme.surfaceContainerHighest.withValues(alpha: 0.35),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: IgnorePointer(
-                child: Align(
-                  alignment: Alignment.center,
-                  child: Transform.rotate(
-                    angle: -0.08,
-                    child: Text(
-                      etabName ?? SchoolBranding.schoolName,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.displayMedium
-                          ?.copyWith(
-                            fontSize: watermarkSize,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 12,
-                            color: scheme.primary.withValues(alpha: 0.045),
-                          ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: TabBarView(
-                children: views
-                    .map((view) => _GlobalFeatureRefreshHost(child: view))
-                    .toList(growable: false),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -590,6 +426,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   bool _isItemVisibleForRole(String key, String? role) {
     if (role == 'parent' || role == 'student') {
       const parentStudentKeys = {
+        'dashboard',
         'reports',
       };
       return parentStudentKeys.contains(key);
@@ -597,7 +434,8 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
     if (role == 'teacher') {
       const teacherKeys = {
-        'attendance',
+        'dashboard',
+        'teacher_timesheet',
         'grades',
         'timetable',
         'discipline',
@@ -608,8 +446,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (role == 'accountant') {
       const accountantKeys = {
         'dashboard',
-        'attendance',
-        'exams',
         'finance',
         'reports',
       };
@@ -624,11 +460,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         'teacher_attendance',
         'teacher_timesheet',
         'discipline',
-        'finance',
         'timetable',
-        'exams',
-        'reports',
-        'communication',
       };
       return supervisorKeys.contains(key);
     }
@@ -678,6 +510,27 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     final isVisible = _isItemVisibleForRole(_selectedKey, role);
     final targetKey = isVisible ? _selectedKey : _firstVisibleKeyForRole(role);
     return _items.firstWhere((item) => item.keyName == targetKey);
+  }
+
+  Widget _buildRoleSpecificView(_AdminMenuItem item, String? role) {
+    if (item.keyName != 'dashboard') {
+      return item.view;
+    }
+
+    switch (role) {
+      case 'teacher':
+        return const TeacherDashboardPage();
+      case 'supervisor':
+        return const SupervisorDashboardPage();
+      case 'accountant':
+        return const AccountantDashboardPage();
+      case 'parent':
+        return const ParentDashboardPage();
+      case 'student':
+        return const StudentDashboardPage();
+      default:
+        return item.view;
+    }
   }
 
   @override
@@ -1164,6 +1017,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     }
 
     final selectedItem = _selectedItemForRole(user.role);
+    final selectedView = _buildRoleSpecificView(selectedItem, user.role);
 
     if (isMobile) {
       return Scaffold(
@@ -1252,7 +1106,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         body: SafeArea(
           child: _GlobalFeatureRefreshHost(
             key: ValueKey('admin-mobile-${selectedItem.keyName}'),
-            child: selectedItem.view,
+            child: selectedView,
           ),
         ),
       );
@@ -1626,7 +1480,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                             key: ValueKey(
                               'admin-desktop-${selectedItem.keyName}',
                             ),
-                            child: selectedItem.view,
+                            child: selectedView,
                           ),
                         ),
                       ),
@@ -1900,218 +1754,3 @@ class _SidebarItem extends StatelessWidget {
   }
 }
 
-class _AccountantShell extends ConsumerWidget {
-  const _AccountantShell();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return RequireEtablissementSelection(
-      child: const _AdminShell(),
-    );
-  }
-}
-
-class _TeacherShell extends ConsumerWidget {
-  const _TeacherShell();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return const RequireEtablissementSelection(child: _AdminShell());
-  }
-}
-
-class _TeacherShellTabs extends ConsumerStatefulWidget {
-  const _TeacherShellTabs();
-
-  @override
-  ConsumerState<_TeacherShellTabs> createState() => _TeacherShellTabsState();
-}
-
-class _TeacherShellTabsState extends ConsumerState<_TeacherShellTabs> {
-  int _gradesBadge = 0;
-  int _timetableBadge = 0;
-  int _disciplineBadge = 0;
-  bool _badgesLoaded = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadTeacherBadges();
-  }
-
-  List<Map<String, dynamic>> _extractRows(dynamic data) {
-    final List<dynamic> rows;
-    if (data is Map<String, dynamic> && data['results'] is List) {
-      rows = data['results'] as List<dynamic>;
-    } else if (data is List<dynamic>) {
-      rows = data;
-    } else {
-      rows = [];
-    }
-    return rows
-        .whereType<Map>()
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList();
-  }
-
-  int _asInt(dynamic value) {
-    if (value is int) return value;
-    return int.tryParse(value?.toString() ?? '') ?? 0;
-  }
-
-  Future<void> _loadTeacherBadges() async {
-    try {
-      final authUser = ref.read(authControllerProvider).value;
-      if (authUser == null || authUser.role != 'teacher') {
-        return;
-      }
-
-      final dio = ref.read(dioProvider);
-      final responses = await Future.wait([
-        dio.get('/teachers/'),
-        dio.get('/teacher-assignments/'),
-        dio.get('/teacher-schedule-slots/'),
-        dio.get('/students/'),
-        dio.get('/discipline-incidents/'),
-      ]);
-
-      if (!mounted) return;
-
-      final teachers = _extractRows(responses[0].data);
-      final assignments = _extractRows(responses[1].data);
-      final slots = _extractRows(responses[2].data);
-      final students = _extractRows(responses[3].data);
-      final incidents = _extractRows(responses[4].data);
-
-      final teacherProfile = teachers.firstWhere(
-        (row) => _asInt(row['user']) == authUser.id,
-        orElse: () => <String, dynamic>{},
-      );
-      final teacherId = _asInt(teacherProfile['id']);
-      if (teacherId <= 0) {
-        setState(() => _badgesLoaded = true);
-        return;
-      }
-
-      final ownAssignments = assignments
-          .where((row) => _asInt(row['teacher']) == teacherId)
-          .toList();
-      final ownAssignmentIds = ownAssignments
-          .map((row) => _asInt(row['id']))
-          .where((id) => id > 0)
-          .toSet();
-      final ownClassroomIds = ownAssignments
-          .map((row) => _asInt(row['classroom']))
-          .where((id) => id > 0)
-          .toSet();
-
-      final ownStudentIds = students
-          .where((row) => ownClassroomIds.contains(_asInt(row['classroom'])))
-          .map((row) => _asInt(row['id']))
-          .where((id) => id > 0)
-          .toSet();
-
-      final ownOpenIncidents = incidents
-          .where(
-            (row) =>
-                ownStudentIds.contains(_asInt(row['student'])) &&
-                (row['status']?.toString() ?? 'open') == 'open',
-          )
-          .length;
-
-      final ownSlots = slots
-          .where((row) => ownAssignmentIds.contains(_asInt(row['assignment'])))
-          .length;
-
-      setState(() {
-        _gradesBadge = ownAssignments.length;
-        _timetableBadge = ownSlots;
-        _disciplineBadge = ownOpenIncidents;
-        _badgesLoaded = true;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _badgesLoaded = true);
-    }
-  }
-
-  Widget _tabLabel(String label, int? badge) {
-    final showBadge = badge != null && badge > 0;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(label),
-        if (showBadge) ...[
-          const SizedBox(width: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E40AF),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              '$badge',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return _RoleShell(
-      title: '${SchoolBranding.appName} - Enseignant',
-      tabs: [
-        Tab(
-          child: _tabLabel(
-            'Notes & Bulletin',
-            _badgesLoaded ? _gradesBadge : null,
-          ),
-        ),
-        Tab(
-          child: _tabLabel(
-            'Emploi du temps',
-            _badgesLoaded ? _timetableBadge : null,
-          ),
-        ),
-        Tab(
-          child: _tabLabel(
-            'Discipline',
-            _badgesLoaded ? _disciplineBadge : null,
-          ),
-        ),
-      ],
-      views: const [GradesPage(), TimetableModulePage(), DisciplinePage()],
-    );
-  }
-}
-
-class _SupervisorShell extends ConsumerWidget {
-  const _SupervisorShell();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return RequireEtablissementSelection(
-      child: const _AdminShell(),
-    );
-  }
-}
-
-class _ParentStudentShell extends ConsumerWidget {
-  final String roleLabel;
-
-  const _ParentStudentShell({required this.roleLabel});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return RequireEtablissementSelection(
-      child: const _AdminShell(),
-    );
-  }
-}
