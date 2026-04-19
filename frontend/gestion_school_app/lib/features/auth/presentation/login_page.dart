@@ -5,6 +5,7 @@ import '../../../core/constants/branding.dart';
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
 import '../../../models/etablissement.dart';
+import '../domain/auth_user.dart';
 import 'auth_controller.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -19,6 +20,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _testingApiConnection = false;
+  bool _wrongScopeDialogOpen = false;
   String _activeApiUrl = ApiConstants.baseUrl;
 
   @override
@@ -59,8 +61,32 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
     ref.listen(authControllerProvider, (previous, next) async {
       next.whenOrNull(
-        data: (user) {
+        data: (user) async {
           if (user != null && mounted) {
+            final selectedEtablissementId = selectedEtablissement?.id;
+            final userEtablissementId = user.etablissementId;
+            final wrongScopedLogin = user.role != 'super_admin' &&
+                selectedEtablissementId != null &&
+                userEtablissementId != null &&
+                selectedEtablissementId != userEtablissementId;
+
+            if (wrongScopedLogin) {
+              await ref.read(authControllerProvider.notifier).logout();
+              if (!mounted) {
+                return;
+              }
+              _passwordController.clear();
+              if (_wrongScopeDialogOpen) {
+                return;
+              }
+              _wrongScopeDialogOpen = true;
+              try {
+                await _showWrongScopedLoginDialog(user);
+              } finally {
+                _wrongScopeDialogOpen = false;
+              }
+              return;
+            }
             Navigator.of(context).pushReplacementNamed(user.homeRoute);
           }
         },
@@ -576,6 +602,161 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           ),
         ],
       ),
+    );
+  }
+
+  String _userEtablissementLabel(AuthUser user) {
+    final name = user.etablissementName.trim();
+    if (name.isNotEmpty) {
+      return name;
+    }
+    final id = user.etablissementId;
+    if (id != null) {
+      return 'Etablissement #$id';
+    }
+    return 'l\'etablissement associe a ce compte';
+  }
+
+  Future<void> _showWrongScopedLoginDialog(AuthUser user) async {
+    if (!mounted) {
+      return;
+    }
+
+    final targetLabel = _userEtablissementLabel(user);
+    final scheme = Theme.of(context).colorScheme;
+    final targetId = user.etablissementId;
+
+    Future<void> chooseTargetEtablissement(BuildContext dialogContext) async {
+      final provider = ref.read(etablissementProvider);
+      if (targetId == null) {
+        if (dialogContext.mounted) {
+          Navigator.of(dialogContext).pop();
+        }
+        _showMessage(
+          'Impossible d\'identifier automatiquement l\'etablissement du compte.',
+        );
+        return;
+      }
+
+      Etablissement? target;
+      for (final item in provider.etablissements) {
+        if (item.id == targetId) {
+          target = item;
+          break;
+        }
+      }
+      if (target == null) {
+        if (dialogContext.mounted) {
+          Navigator.of(dialogContext).pop();
+        }
+        if (mounted) {
+          Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+        }
+        return;
+      }
+
+      await provider.selectEtablissement(target);
+      if (dialogContext.mounted) {
+        Navigator.of(dialogContext).pop();
+      }
+      _showMessage(
+        'Etablissement "$targetLabel" selectionne. Reconnectez-vous pour continuer.',
+        isSuccess: true,
+      );
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+          contentPadding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+          actionsPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+          title: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF3E8),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.account_balance_rounded,
+                  color: Color(0xFFB54708),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Etablissement incorrect',
+                  style: Theme.of(dialogContext).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Ce compte est rattache a cet etablissement :',
+                style: Theme.of(dialogContext).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: scheme.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: scheme.primary.withValues(alpha: 0.25),
+                  ),
+                ),
+                child: Text(
+                  targetLabel,
+                  style: Theme.of(dialogContext).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: scheme.primary,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Selectionnez le bon etablissement avant de vous reconnecter.',
+                style: Theme.of(dialogContext).textTheme.bodySmall,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Fermer'),
+            ),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                if (mounted) {
+                  Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+                }
+              },
+              icon: const Icon(Icons.swap_horiz_rounded),
+              label: const Text('Changer d\'etablissement'),
+            ),
+            FilledButton.icon(
+              onPressed: () => chooseTargetEtablissement(dialogContext),
+              icon: const Icon(Icons.check_circle_outline),
+              label: const Text('Choisir cet etablissement'),
+            ),
+          ],
+        );
+      },
     );
   }
 

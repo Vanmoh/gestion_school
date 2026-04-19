@@ -1,5 +1,5 @@
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 from django.db import models
@@ -558,10 +558,40 @@ class TeacherPayroll(TimeStampedModel):
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     paid_on = models.DateField(null=True, blank=True)
     paid_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    level_one_validated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="teacher_payroll_level_one_validations",
+    )
+    level_one_validated_at = models.DateTimeField(null=True, blank=True)
+    level_two_validated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="teacher_payroll_level_two_validations",
+    )
+    level_two_validated_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)
+
+    @property
+    def validation_stage(self):
+        if self.level_two_validated_at:
+            return "level_two"
+        if self.level_one_validated_at:
+            return "level_one"
+        return "draft"
+
+    @property
+    def is_fully_validated(self):
+        return bool(self.level_two_validated_at)
 
 
 class TeacherTimeEntry(TimeStampedModel):
+    LATE_TOLERANCE_MINUTES = 15
+
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="time_entries")
     etablissement = models.ForeignKey(
         'Etablissement',
@@ -572,7 +602,11 @@ class TeacherTimeEntry(TimeStampedModel):
     )
     entry_date = models.DateField()
     check_in_time = models.TimeField()
-    check_out_time = models.TimeField()
+    check_out_time = models.TimeField(null=True, blank=True)
+    late_minutes = models.PositiveIntegerField(default=0)
+    tolerated_late_minutes = models.PositiveIntegerField(default=0)
+    is_auto_closed = models.BooleanField(default=False)
+    auto_closed_reason = models.CharField(max_length=255, blank=True)
     worked_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     notes = models.CharField(max_length=255, blank=True)
     recorded_by = models.ForeignKey(
@@ -589,17 +623,108 @@ class TeacherTimeEntry(TimeStampedModel):
             models.Index(fields=["etablissement", "entry_date"], name="ttentry_etab_date_idx"),
         ]
 
+    @property
+    def is_checkout_missing(self):
+        return self.check_out_time is None
+
+    def _weekday_code(self):
+        day_map = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+        return day_map[self.entry_date.weekday()]
+
+    def _schedule_slots_for_day(self):
+        day_code = self._weekday_code()
+        if day_code == "SUN":
+            return TeacherScheduleSlot.objects.none()
+
+        return TeacherScheduleSlot.objects.select_related("assignment", "assignment__teacher").filter(
+            assignment__teacher=self.teacher,
+            day_of_week=day_code,
+        )
+
+    @staticmethod
+    def _time_to_minutes(value):
+        return value.hour * 60 + value.minute
+
+    def _pick_schedule_slot(self):
+        slots = list(self._schedule_slots_for_day())
+        if not slots:
+            return None
+
+        check_in_minutes = self._time_to_minutes(self.check_in_time)
+        check_out_minutes = self._time_to_minutes(self.check_out_time) if self.check_out_time else None
+
+        def slot_score(slot):
+            start_minutes = self._time_to_minutes(slot.start_time)
+            end_minutes = self._time_to_minutes(slot.end_time)
+            overlap = 0
+            if check_out_minutes is not None:
+                overlap = max(0, min(end_minutes, check_out_minutes) - max(start_minutes, check_in_minutes))
+            distance = abs(start_minutes - check_in_minutes)
+            return (overlap, -distance)
+
+        return max(slots, key=slot_score)
+
+    def _resolve_auto_checkout(self, schedule_slot):
+        if schedule_slot and schedule_slot.end_time and schedule_slot.end_time > self.check_in_time:
+            return schedule_slot.end_time, "auto_close_schedule_end"
+
+        default_cutoff = time(18, 0)
+        if default_cutoff > self.check_in_time:
+            return default_cutoff, "auto_close_default_cutoff"
+
+        start_dt = datetime.combine(self.entry_date, self.check_in_time)
+        fallback_dt = start_dt + timedelta(hours=1)
+        max_dt = datetime.combine(self.entry_date, time(23, 59))
+        if fallback_dt > max_dt:
+            fallback_dt = max_dt
+        return fallback_dt.time(), "auto_close_plus_one_hour"
+
+    def _compute_payable_minutes(self, schedule_slot):
+        if self.check_out_time is None or self.check_out_time <= self.check_in_time:
+            return 0, 0, 0
+
+        start_minutes = self._time_to_minutes(self.check_in_time)
+        end_minutes = self._time_to_minutes(self.check_out_time)
+        actual_minutes = max(end_minutes - start_minutes, 0)
+
+        if not schedule_slot:
+            return actual_minutes, 0, 0
+
+        planned_start = self._time_to_minutes(schedule_slot.start_time)
+        planned_end = self._time_to_minutes(schedule_slot.end_time)
+        planned_duration = max(planned_end - planned_start, 0)
+
+        late_minutes = max(start_minutes - planned_start, 0)
+        tolerated_late = min(late_minutes, self.LATE_TOLERANCE_MINUTES)
+
+        payable_minutes = actual_minutes + tolerated_late
+        if planned_duration > 0:
+            payable_minutes = min(payable_minutes, planned_duration)
+
+        return max(payable_minutes, 0), late_minutes, tolerated_late
+
     def save(self, *args, **kwargs):
         if self.teacher and self.etablissement_id is None:
             self.etablissement = self.teacher.etablissement
 
-        start_dt = datetime.combine(self.entry_date, self.check_in_time)
-        end_dt = datetime.combine(self.entry_date, self.check_out_time)
-        duration = end_dt - start_dt
-        duration_hours = Decimal(str(max(duration.total_seconds(), 0) / 3600)).quantize(
+        schedule_slot = self._pick_schedule_slot() if self.teacher_id else None
+
+        if self.check_out_time is None:
+            auto_checkout, reason = self._resolve_auto_checkout(schedule_slot)
+            self.check_out_time = auto_checkout
+            self.is_auto_closed = True
+            self.auto_closed_reason = reason
+        else:
+            self.is_auto_closed = False
+            self.auto_closed_reason = ""
+
+        payable_minutes, late_minutes, tolerated_late = self._compute_payable_minutes(schedule_slot)
+        duration_hours = Decimal(str(max(payable_minutes, 0) / 60)).quantize(
             Decimal("0.01"),
             rounding=ROUND_HALF_UP,
         )
+        self.late_minutes = late_minutes
+        self.tolerated_late_minutes = tolerated_late
         self.worked_hours = duration_hours
         super().save(*args, **kwargs)
 

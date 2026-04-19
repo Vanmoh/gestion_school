@@ -98,6 +98,24 @@ class IsTeacherAttendanceModuleScopedAccess(BasePermission):
         return user.role in {"super_admin", "director", "supervisor", "teacher"}
 
 
+class IsTeacherTimesheetModuleScopedAccess(BasePermission):
+    message = (
+        "Acces emargement enseignants reserve. Ecriture: super admin/surveillant. "
+        "Lecture: super admin, surveillant, directeur, comptable. "
+        "Le directeur est en lecture seule sur ce module."
+    )
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            return user.role in {"super_admin", "supervisor", "director", "accountant"}
+
+        return user.role in {"super_admin", "supervisor"}
+
+
 class IsDisciplineModuleScopedAccess(BasePermission):
     message = (
         "Acces discipline reserve. Ecriture: super admin/directeur/surveillant/enseignant. "
@@ -134,7 +152,7 @@ class IsExamsModuleScopedAccess(BasePermission):
 
 class IsTimetableModuleScopedAccess(BasePermission):
     message = (
-        "Acces emploi du temps reserve. Ecriture: super admin/directeur. "
+        "Acces emploi du temps reserve. Ecriture: super admin/directeur/surveillant. "
         "Lecture: super admin, directeur, surveillant, enseignant, comptable, parent, eleve."
     )
 
@@ -146,7 +164,7 @@ class IsTimetableModuleScopedAccess(BasePermission):
         if request.method in SAFE_METHODS:
             return user.role in {"super_admin", "director", "supervisor", "teacher", "accountant", "parent", "student"}
 
-        return user.role in {"super_admin", "director"}
+        return user.role in {"super_admin", "director", "supervisor"}
 
 
 class IsTeacherAvailabilityModuleScopedAccess(BasePermission):

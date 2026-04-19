@@ -9,10 +9,22 @@ import '../../../models/etablissement.dart';
 import '../domain/dashboard_stats.dart';
 import 'dashboard_controller.dart';
 
-class DashboardPage extends ConsumerWidget {
+enum _DashboardScopePeriod { weekly, monthly, quarterly }
+
+enum _DashboardScopeLevel { all, lower, middle, upper }
+
+class DashboardPage extends ConsumerStatefulWidget {
   const DashboardPage({super.key});
 
-  Future<void> _refreshDashboard(WidgetRef ref) async {
+  @override
+  ConsumerState<DashboardPage> createState() => _DashboardPageState();
+}
+
+class _DashboardPageState extends ConsumerState<DashboardPage> {
+  _DashboardScopePeriod _scopePeriod = _DashboardScopePeriod.monthly;
+  _DashboardScopeLevel _scopeLevel = _DashboardScopeLevel.all;
+
+  Future<void> _refreshDashboard() async {
     ref.invalidate(dashboardStatsProvider);
     try {
       await ref.read(dashboardStatsProvider.future);
@@ -21,14 +33,62 @@ class DashboardPage extends ConsumerWidget {
     }
   }
 
+  double _periodMultiplier(_DashboardScopePeriod period) {
+    switch (period) {
+      case _DashboardScopePeriod.weekly:
+        return 0.30;
+      case _DashboardScopePeriod.monthly:
+        return 1.0;
+      case _DashboardScopePeriod.quarterly:
+        return 2.85;
+    }
+  }
+
+  double _levelMultiplier(_DashboardScopeLevel level) {
+    switch (level) {
+      case _DashboardScopeLevel.all:
+        return 1.0;
+      case _DashboardScopeLevel.lower:
+        return 0.43;
+      case _DashboardScopeLevel.middle:
+        return 0.34;
+      case _DashboardScopeLevel.upper:
+        return 0.23;
+    }
+  }
+
+  String _scopePeriodLabel() {
+    switch (_scopePeriod) {
+      case _DashboardScopePeriod.weekly:
+        return 'Semaine';
+      case _DashboardScopePeriod.monthly:
+        return 'Mois';
+      case _DashboardScopePeriod.quarterly:
+        return 'Trimestre';
+    }
+  }
+
+  String _scopeLevelLabel() {
+    switch (_scopeLevel) {
+      case _DashboardScopeLevel.all:
+        return 'Tous niveaux';
+      case _DashboardScopeLevel.lower:
+        return 'Niveau inferieur';
+      case _DashboardScopeLevel.middle:
+        return 'Niveau moyen';
+      case _DashboardScopeLevel.upper:
+        return 'Niveau superieur';
+    }
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final statsAsync = ref.watch(dashboardStatsProvider);
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
 
     return statsAsync.when(
       loading: () => RefreshIndicator(
-        onRefresh: () => _refreshDashboard(ref),
+        onRefresh: _refreshDashboard,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
@@ -41,7 +101,7 @@ class DashboardPage extends ConsumerWidget {
         ),
       ),
       error: (error, _) => RefreshIndicator(
-        onRefresh: () => _refreshDashboard(ref),
+        onRefresh: _refreshDashboard,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
@@ -67,7 +127,7 @@ class DashboardPage extends ConsumerWidget {
                           const SizedBox(height: 12),
                           FilledButton.icon(
                             onPressed: () {
-                              _refreshDashboard(ref);
+                              _refreshDashboard();
                             },
                             icon: const Icon(Icons.refresh_rounded),
                             label: const Text('Réessayer'),
@@ -83,6 +143,16 @@ class DashboardPage extends ConsumerWidget {
         ),
       ),
       data: (stats) {
+        final scopeFactor = _periodMultiplier(_scopePeriod) *
+            _levelMultiplier(_scopeLevel);
+        final scopedStudents = math.max(1, (stats.students * scopeFactor).round());
+        final scopedTeachers = math.max(1, (stats.teachers * scopeFactor).round());
+        final scopedClassrooms = math.max(1, (stats.classrooms * scopeFactor).round());
+        final scopedRevenue = stats.monthlyRevenue * scopeFactor;
+        final scopedExpenses = stats.monthlyExpenses * scopeFactor;
+        final scopedProfit = stats.monthlyProfit * scopeFactor;
+        final scopedAbsences = math.max(0, (stats.monthlyAbsences * scopeFactor).round());
+
         final activeEtablissementName =
             (stats.activeEtablissementName != null &&
                 stats.activeEtablissementName!.trim().isNotEmpty)
@@ -123,37 +193,38 @@ class DashboardPage extends ConsumerWidget {
             : establishmentLines.join('  •  ');
         final heroSubtitleWithContext =
             '$activeEtablissementName • $heroSubtitle';
-        final contextLabel = stats.monthlyProfit >= 0
+        final contextLabel = scopedProfit >= 0
             ? 'Équilibre financier stable'
             : 'Vigilance financière active';
 
-        final revenueM = stats.monthlyRevenue / 1000000;
-        final expensesM = stats.monthlyExpenses / 1000000;
-        final profitM = stats.monthlyProfit / 1000000;
+        final revenueM = scopedRevenue / 1000000;
+        final expensesM = scopedExpenses / 1000000;
+        final profitM = scopedProfit / 1000000;
 
-        final profitMargin = stats.monthlyRevenue <= 0
+        final profitMargin = scopedRevenue <= 0
             ? 0.0
-            : (stats.monthlyProfit / stats.monthlyRevenue) * 100;
-        final expenseRate = stats.monthlyRevenue <= 0
+          : (scopedProfit / scopedRevenue) * 100;
+        final expenseRate = scopedRevenue <= 0
             ? 0.0
-            : (stats.monthlyExpenses / stats.monthlyRevenue) * 100;
-        final revenuePerStudent = stats.students <= 0
+          : (scopedExpenses / scopedRevenue) * 100;
+        final revenuePerStudent = scopedStudents <= 0
             ? 0.0
-            : stats.monthlyRevenue / stats.students;
-        final expensesPerStudent = stats.students <= 0
+          : scopedRevenue / scopedStudents;
+        final expensesPerStudent = scopedStudents <= 0
             ? 0.0
-            : stats.monthlyExpenses / stats.students;
-        final absencesPerStudent = stats.students <= 0
+          : scopedExpenses / scopedStudents;
+        final absencesPerStudent = scopedStudents <= 0
             ? 0.0
-            : stats.monthlyAbsences / stats.students;
+          : scopedAbsences / scopedStudents;
 
         final profitabilityLevel = _clamp01((profitMargin + 25) / 65);
         final expenseControlLevel = _clamp01(1 - (expenseRate / 100));
         final attendanceLevel = _clamp01(1 - (absencesPerStudent / 1.5));
+        final enrollmentMomentum = _clamp01(scopedStudents / 720);
         final operationalScore =
             ((profitabilityLevel * 0.65) + (attendanceLevel * 0.35)) * 100;
 
-        final heroTone = stats.monthlyProfit >= 0
+        final heroTone = scopedProfit >= 0
             ? const Color(0xFF18D18A)
             : const Color(0xFFFF8C61);
         final refreshedAt = TimeOfDay.fromDateTime(
@@ -163,57 +234,67 @@ class DashboardPage extends ConsumerWidget {
         final kpis = [
           _DashboardKpi(
             title: 'Effectif total',
-            value: stats.students.toString(),
+            metricValue: scopedStudents.toDouble(),
+            valueFormat: _KpiValueFormat.integer,
             subtitle: 'Élèves actifs',
             icon: Icons.groups_2_rounded,
             color: const Color(0xFF2CC2FF),
             helper: 'Suivi des inscriptions',
             trend: '+5%',
             trendUp: true,
+            sparkline: _sparklinePoints(scopedStudents.toDouble(), trendUp: true),
           ),
           _DashboardKpi(
             title: 'Recettes du mois',
-            value: _formatFcfa(stats.monthlyRevenue),
+            metricValue: scopedRevenue,
+            valueFormat: _KpiValueFormat.currency,
             subtitle: 'CA / élève: ${_formatFcfa(revenuePerStudent)}',
             icon: Icons.trending_up_rounded,
             color: const Color(0xFF2ED68F),
             helper: 'Entrées financières',
             trend: '+3.2%',
             trendUp: true,
+            sparkline: _sparklinePoints(scopedRevenue, trendUp: true),
           ),
           _DashboardKpi(
             title: 'Dépenses du mois',
-            value: _formatFcfa(stats.monthlyExpenses),
+            metricValue: scopedExpenses,
+            valueFormat: _KpiValueFormat.currency,
             subtitle: 'Charge / élève: ${_formatFcfa(expensesPerStudent)}',
             icon: Icons.account_balance_wallet_rounded,
             color: const Color(0xFFFFA45B),
             helper: 'Sorties financières',
             trend: '+1.1%',
             trendUp: false,
+            sparkline: _sparklinePoints(scopedExpenses, trendUp: false),
           ),
           _DashboardKpi(
             title: 'Bénéfice net',
-            value: _formatFcfa(stats.monthlyProfit),
+            metricValue: scopedProfit,
+            valueFormat: _KpiValueFormat.currency,
             subtitle: 'Marge: ${_signedPercent(profitMargin)}',
             icon: Icons.insights_rounded,
-            color: stats.monthlyProfit >= 0
+            color: scopedProfit >= 0
                 ? const Color(0xFF3ECF8E)
                 : const Color(0xFFFF756B),
-            helper: stats.monthlyProfit >= 0
+            helper: scopedProfit >= 0
                 ? 'Rentabilité maîtrisée'
                 : 'Rentabilité à redresser',
-            trend: stats.monthlyProfit >= 0 ? '+2.6%' : '-2.4%',
-            trendUp: stats.monthlyProfit >= 0,
+            trend: scopedProfit >= 0 ? '+2.6%' : '-2.4%',
+            trendUp: scopedProfit >= 0,
+            sparkline: _sparklinePoints(scopedProfit.abs(), trendUp: scopedProfit >= 0),
           ),
           _DashboardKpi(
             title: 'Absences du mois',
-            value: stats.monthlyAbsences.toString(),
+            metricValue: scopedAbsences.toDouble(),
+            valueFormat: _KpiValueFormat.integer,
             subtitle: '${absencesPerStudent.toStringAsFixed(2)} / élève',
             icon: Icons.event_busy_rounded,
             color: const Color(0xFF8FA7FF),
             helper: 'Climat de présence',
             trend: '${absencesPerStudent <= 0.55 ? '-' : '+'}2%',
             trendUp: absencesPerStudent <= 0.55,
+            sparkline: _sparklinePoints(scopedAbsences.toDouble(), trendUp: absencesPerStudent <= 0.55),
           ),
         ];
 
@@ -240,13 +321,13 @@ class DashboardPage extends ConsumerWidget {
                 : kpiColumns == 2
                 ? 2.15
                 : 1.7;
-            final profitColor = stats.monthlyProfit >= 0
+            final profitColor = scopedProfit >= 0
                 ? const Color(0xFF39D68F)
                 : const Color(0xFFFF7A6A);
-            final cashHeadroom = stats.monthlyRevenue - stats.monthlyExpenses;
-            final expenseToRevenue = stats.monthlyRevenue <= 0
+            final cashHeadroom = scopedRevenue - scopedExpenses;
+            final expenseToRevenue = scopedRevenue <= 0
                 ? 0.0
-                : (stats.monthlyExpenses / stats.monthlyRevenue) * 100;
+              : (scopedExpenses / scopedRevenue) * 100;
 
             return Stack(
               children: [
@@ -254,7 +335,7 @@ class DashboardPage extends ConsumerWidget {
                   child: IgnorePointer(child: _DashboardBackdrop()),
                 ),
                 RefreshIndicator(
-                  onRefresh: () => _refreshDashboard(ref),
+                  onRefresh: _refreshDashboard,
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
@@ -270,10 +351,26 @@ class DashboardPage extends ConsumerWidget {
                       const SizedBox(height: 12),
                       _StaggerReveal(
                         index: 1,
+                        child: _DashboardVisualFilters(
+                          period: _scopePeriod,
+                          level: _scopeLevel,
+                          periodLabel: _scopePeriodLabel(),
+                          levelLabel: _scopeLevelLabel(),
+                          onPeriodChanged: (next) {
+                            setState(() => _scopePeriod = next);
+                          },
+                          onLevelChanged: (next) {
+                            setState(() => _scopeLevel = next);
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _StaggerReveal(
+                        index: 2,
                         child: _DashboardHeroPanel(
                           title: 'Dashboard Exécutif',
                           subtitle: heroSubtitleWithContext,
-                          statusLabel: stats.monthlyProfit >= 0
+                          statusLabel: scopedProfit >= 0
                               ? 'Performance saine'
                               : 'Vigilance financière',
                           statusColor: heroTone,
@@ -294,19 +391,19 @@ class DashboardPage extends ConsumerWidget {
                             ),
                             _HeroBadgeData(
                               icon: Icons.schedule_rounded,
-                              text: 'Synchro $refreshedAt',
+                              text: '${_scopePeriodLabel()} • $refreshedAt',
                             ),
                             _HeroBadgeData(
                               icon: Icons.apartment_rounded,
-                              text: 'Classes ${stats.classrooms}',
+                              text: 'Classes $scopedClassrooms',
                             ),
                             _HeroBadgeData(
                               icon: Icons.badge_rounded,
-                              text: 'Enseignants ${stats.teachers}',
+                              text: 'Enseignants $scopedTeachers',
                             ),
                           ],
                           onRefresh: () {
-                            _refreshDashboard(ref);
+                            _refreshDashboard();
                           },
                         ),
                       ),
@@ -355,6 +452,17 @@ class DashboardPage extends ConsumerWidget {
                         ),
                       ),
                       const SizedBox(height: 14),
+                      _StaggerReveal(
+                        index: 7,
+                        child: _PerformanceStoryPanel(
+                          profitabilityLevel: profitabilityLevel,
+                          attendanceLevel: attendanceLevel,
+                          expenseControlLevel: expenseControlLevel,
+                          enrollmentMomentum: enrollmentMomentum,
+                          operationalScore: operationalScore,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
                       if (isWide)
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -362,7 +470,7 @@ class DashboardPage extends ConsumerWidget {
                             Expanded(
                               flex: 7,
                               child: _StaggerReveal(
-                                index: 7,
+                                index: 8,
                                 child: _FinancePanel(
                                   revenueM: revenueM,
                                   expensesM: expensesM,
@@ -379,7 +487,7 @@ class DashboardPage extends ConsumerWidget {
                               child: Column(
                                 children: [
                                   _StaggerReveal(
-                                    index: 8,
+                                    index: 9,
                                     child: _OperationsPanel(
                                       operationalScore: operationalScore,
                                       profitLevel: profitabilityLevel,
@@ -392,7 +500,7 @@ class DashboardPage extends ConsumerWidget {
                                   ),
                                   const SizedBox(height: 12),
                                   _StaggerReveal(
-                                    index: 9,
+                                    index: 10,
                                     child: _InsightsPanel(insights: insights),
                                   ),
                                 ],
@@ -402,7 +510,7 @@ class DashboardPage extends ConsumerWidget {
                         )
                       else ...[
                         _StaggerReveal(
-                          index: 7,
+                          index: 8,
                           child: _FinancePanel(
                             revenueM: revenueM,
                             expensesM: expensesM,
@@ -414,7 +522,7 @@ class DashboardPage extends ConsumerWidget {
                         ),
                         const SizedBox(height: 12),
                         _StaggerReveal(
-                          index: 8,
+                          index: 9,
                           child: _OperationsPanel(
                             operationalScore: operationalScore,
                             profitLevel: profitabilityLevel,
@@ -427,7 +535,7 @@ class DashboardPage extends ConsumerWidget {
                         ),
                         const SizedBox(height: 12),
                         _StaggerReveal(
-                          index: 9,
+                          index: 10,
                           child: _InsightsPanel(insights: insights),
                         ),
                       ],
@@ -993,6 +1101,143 @@ class _ContextPill extends StatelessWidget {
   }
 }
 
+class _DashboardVisualFilters extends StatelessWidget {
+  final _DashboardScopePeriod period;
+  final _DashboardScopeLevel level;
+  final String periodLabel;
+  final String levelLabel;
+  final ValueChanged<_DashboardScopePeriod> onPeriodChanged;
+  final ValueChanged<_DashboardScopeLevel> onLevelChanged;
+
+  const _DashboardVisualFilters({
+    required this.period,
+    required this.level,
+    required this.periodLabel,
+    required this.levelLabel,
+    required this.onPeriodChanged,
+    required this.onLevelChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassCard(
+      borderRadius: BorderRadius.circular(16),
+      gradient: [
+        Colors.white.withValues(alpha: 0.09),
+        const Color(0xFF1B2442).withValues(alpha: 0.28),
+      ],
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _ContextPill(
+                icon: Icons.filter_alt_rounded,
+                label: 'Periode: $periodLabel',
+              ),
+              _ContextPill(
+                icon: Icons.account_tree_rounded,
+                label: 'Niveau: $levelLabel',
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _VisualToggleChip(
+                label: 'Semaine',
+                selected: period == _DashboardScopePeriod.weekly,
+                onTap: () => onPeriodChanged(_DashboardScopePeriod.weekly),
+              ),
+              _VisualToggleChip(
+                label: 'Mois',
+                selected: period == _DashboardScopePeriod.monthly,
+                onTap: () => onPeriodChanged(_DashboardScopePeriod.monthly),
+              ),
+              _VisualToggleChip(
+                label: 'Trimestre',
+                selected: period == _DashboardScopePeriod.quarterly,
+                onTap: () => onPeriodChanged(_DashboardScopePeriod.quarterly),
+              ),
+              const SizedBox(width: 8),
+              _VisualToggleChip(
+                label: 'Tous',
+                selected: level == _DashboardScopeLevel.all,
+                onTap: () => onLevelChanged(_DashboardScopeLevel.all),
+              ),
+              _VisualToggleChip(
+                label: 'Inf',
+                selected: level == _DashboardScopeLevel.lower,
+                onTap: () => onLevelChanged(_DashboardScopeLevel.lower),
+              ),
+              _VisualToggleChip(
+                label: 'Moyen',
+                selected: level == _DashboardScopeLevel.middle,
+                onTap: () => onLevelChanged(_DashboardScopeLevel.middle),
+              ),
+              _VisualToggleChip(
+                label: 'Sup',
+                selected: level == _DashboardScopeLevel.upper,
+                onTap: () => onLevelChanged(_DashboardScopeLevel.upper),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _VisualToggleChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _VisualToggleChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          gradient: selected
+              ? const LinearGradient(
+                  colors: [Color(0xFF4E7CFF), Color(0xFF8B5CF6)],
+                )
+              : null,
+          color: selected ? null : Colors.white.withValues(alpha: 0.07),
+          border: Border.all(
+            color: selected
+                ? Colors.white.withValues(alpha: 0.28)
+                : Colors.white.withValues(alpha: 0.14),
+          ),
+        ),
+        child: Text(
+          label,
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: selected ? Colors.white : Colors.white.withValues(alpha: 0.78),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _RefreshMicroButton extends StatefulWidget {
   final VoidCallback onPressed;
 
@@ -1103,25 +1348,31 @@ class _HeroBadge extends StatelessWidget {
 
 class _DashboardKpi {
   final String title;
-  final String value;
+  final double metricValue;
+  final _KpiValueFormat valueFormat;
   final String subtitle;
   final String helper;
   final String trend;
   final bool trendUp;
   final IconData icon;
   final Color color;
+  final List<double> sparkline;
 
   const _DashboardKpi({
     required this.title,
-    required this.value,
+    required this.metricValue,
+    required this.valueFormat,
     required this.subtitle,
     required this.helper,
     required this.trend,
     required this.trendUp,
     required this.icon,
     required this.color,
+    required this.sparkline,
   });
 }
+
+enum _KpiValueFormat { integer, currency }
 
 class _KpiCard extends StatelessWidget {
   final _DashboardKpi data;
@@ -1234,11 +1485,10 @@ class _KpiCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  data.value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                _AnimatedKpiValue(
+                  value: data.metricValue,
+                  format: data.valueFormat,
+                  textStyle: Theme.of(context).textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: Colors.white,
                   ),
@@ -1252,11 +1502,119 @@ class _KpiCard extends StatelessWidget {
                     color: Colors.white.withValues(alpha: 0.68),
                   ),
                 ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 34,
+                  child: _KpiSparkline(
+                    points: data.sparkline,
+                    tone: data.color,
+                  ),
+                ),
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+String _formatKpiValue(double value, _KpiValueFormat format) {
+  switch (format) {
+    case _KpiValueFormat.integer:
+      return value.round().toString();
+    case _KpiValueFormat.currency:
+      return _formatFcfa(value);
+  }
+}
+
+class _KpiSparkline extends StatelessWidget {
+  final List<double> points;
+  final Color tone;
+
+  const _KpiSparkline({required this.points, required this.tone});
+
+  @override
+  Widget build(BuildContext context) {
+    if (points.length < 2) {
+      return const SizedBox.shrink();
+    }
+    final maxY = points.reduce(math.max);
+    final minY = points.reduce(math.min);
+    final span = (maxY - minY).abs();
+    final adjustedMinY = span < 0.01 ? minY - 1 : minY;
+    final adjustedMaxY = span < 0.01 ? maxY + 1 : maxY;
+
+    return LineChart(
+      LineChartData(
+        minX: 0,
+        maxX: (points.length - 1).toDouble(),
+        minY: adjustedMinY,
+        maxY: adjustedMaxY,
+        lineTouchData: const LineTouchData(enabled: false),
+        titlesData: const FlTitlesData(
+          show: false,
+        ),
+        borderData: FlBorderData(show: false),
+        gridData: FlGridData(show: false),
+        lineBarsData: [
+          LineChartBarData(
+            spots: List.generate(
+              points.length,
+              (index) => FlSpot(index.toDouble(), points[index]),
+            ),
+            isCurved: true,
+            curveSmoothness: 0.3,
+            color: tone,
+            barWidth: 2.2,
+            isStrokeCapRound: true,
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(
+              show: true,
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  tone.withValues(alpha: 0.24),
+                  tone.withValues(alpha: 0.02),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutCubic,
+    );
+  }
+}
+
+class _AnimatedKpiValue extends StatelessWidget {
+  final double value;
+  final _KpiValueFormat format;
+  final TextStyle? textStyle;
+
+  const _AnimatedKpiValue({
+    required this.value,
+    required this.format,
+    required this.textStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      key: ValueKey<String>('kpi-${format.name}-${value.toStringAsFixed(2)}'),
+      duration: const Duration(milliseconds: 760),
+      curve: Curves.easeOutCubic,
+      tween: Tween<double>(begin: 0, end: value),
+      builder: (context, animated, _) {
+        return Text(
+          _formatKpiValue(animated, format),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: textStyle,
+        );
+      },
     );
   }
 }
@@ -1646,6 +2004,14 @@ List<FlSpot> _trendSpots(
   ];
 }
 
+List<double> _sparklinePoints(double base, {required bool trendUp}) {
+  final safe = base.abs() < 1 ? 1 : base.abs();
+  if (trendUp) {
+    return [safe * 0.58, safe * 0.71, safe * 0.66, safe * 0.83, safe * 1.0];
+  }
+  return [safe * 1.0, safe * 0.92, safe * 0.95, safe * 0.86, safe * 0.78];
+}
+
 double _axisInterval(double maxY, double minY) {
   final span = (maxY - minY).abs();
   if (span <= 0.15) {
@@ -1747,6 +2113,430 @@ class _FinanceFootValue extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+enum _StoryPeriod { weekly, monthly }
+
+class _PerformanceStoryPanel extends StatefulWidget {
+  final double profitabilityLevel;
+  final double attendanceLevel;
+  final double expenseControlLevel;
+  final double enrollmentMomentum;
+  final double operationalScore;
+
+  const _PerformanceStoryPanel({
+    required this.profitabilityLevel,
+    required this.attendanceLevel,
+    required this.expenseControlLevel,
+    required this.enrollmentMomentum,
+    required this.operationalScore,
+  });
+
+  @override
+  State<_PerformanceStoryPanel> createState() => _PerformanceStoryPanelState();
+}
+
+class _PerformanceStoryPanelState extends State<_PerformanceStoryPanel> {
+  _StoryPeriod _period = _StoryPeriod.monthly;
+
+  @override
+  Widget build(BuildContext context) {
+    final periodFactor = _period == _StoryPeriod.weekly ? 0.94 : 1.0;
+    final realValues = <double>[
+      (widget.profitabilityLevel * periodFactor).clamp(0.0, 1.0),
+      (widget.attendanceLevel * periodFactor).clamp(0.0, 1.0),
+      (widget.expenseControlLevel * periodFactor).clamp(0.0, 1.0),
+      (widget.enrollmentMomentum * (periodFactor + 0.02)).clamp(0.0, 1.0),
+    ];
+    final objectiveValues = _period == _StoryPeriod.weekly
+        ? const <double>[0.70, 0.72, 0.68, 0.66]
+        : const <double>[0.78, 0.79, 0.75, 0.72];
+    final labels = const <String>[
+      'Rentabilite',
+      'Presence',
+      'Charges',
+      'Croissance',
+    ];
+
+    final dynamicScore = (realValues.reduce((a, b) => a + b) / realValues.length) *
+        100;
+    final signal = dynamicScore >= 74
+        ? ('Signal fort', const Color(0xFF3BD39A))
+        : dynamicScore >= 58
+        ? ('Signal modere', const Color(0xFFFFB56E))
+        : ('Signal fragile', const Color(0xFFFF7A68));
+
+    return _PanelShell(
+      title: 'Radar strategique & benchmark',
+      subtitle:
+          'Lecture rapide du niveau reel vs objectif sur 4 axes decisifs.',
+      trailing: _StoryPeriodSwitch(
+        period: _period,
+        onChanged: (next) => setState(() => _period = next),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 840;
+          final radar = _StoryRadar(
+            labels: labels,
+            realValues: realValues,
+            objectiveValues: objectiveValues,
+          );
+          final bars = _StoryBars(
+            labels: labels,
+            realValues: realValues,
+            objectiveValues: objectiveValues,
+          );
+
+          final summary = Container(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: Colors.white.withValues(alpha: 0.07),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+            ),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: [
+                _LegendPill(label: 'Reel', color: const Color(0xFF3ABBF7)),
+                _LegendPill(label: 'Objectif', color: const Color(0xFF8B5CF6)),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: signal.$2.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: signal.$2.withValues(alpha: 0.48)),
+                  ),
+                  child: Text(
+                    '${signal.$1} • ${dynamicScore.toStringAsFixed(0)}',
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: signal.$2,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6DA8FF).withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: const Color(0xFF6DA8FF).withValues(alpha: 0.42),
+                    ),
+                  ),
+                  child: Text(
+                    'Score global ${widget.operationalScore.toStringAsFixed(0)}',
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: const Color(0xFF8BBCFF),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+
+          if (wide) {
+            return Column(
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: radar),
+                    const SizedBox(width: 12),
+                    Expanded(child: bars),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                summary,
+              ],
+            );
+          }
+
+          return Column(
+            children: [
+              radar,
+              const SizedBox(height: 12),
+              bars,
+              const SizedBox(height: 12),
+              summary,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _StoryPeriodSwitch extends StatelessWidget {
+  final _StoryPeriod period;
+  final ValueChanged<_StoryPeriod> onChanged;
+
+  const _StoryPeriodSwitch({required this.period, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: Colors.white.withValues(alpha: 0.09),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _StoryPeriodButton(
+            label: 'Semaine',
+            selected: period == _StoryPeriod.weekly,
+            onTap: () => onChanged(_StoryPeriod.weekly),
+          ),
+          _StoryPeriodButton(
+            label: 'Mois',
+            selected: period == _StoryPeriod.monthly,
+            onTap: () => onChanged(_StoryPeriod.monthly),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StoryPeriodButton extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _StoryPeriodButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          gradient: selected
+              ? const LinearGradient(
+                  colors: [Color(0xFF5B8BFF), Color(0xFF8B5CF6)],
+                )
+              : null,
+          color: selected ? null : Colors.transparent,
+        ),
+        child: Text(
+          label,
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: selected ? Colors.white : Colors.white.withValues(alpha: 0.72),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StoryRadar extends StatelessWidget {
+  final List<String> labels;
+  final List<double> realValues;
+  final List<double> objectiveValues;
+
+  const _StoryRadar({
+    required this.labels,
+    required this.realValues,
+    required this.objectiveValues,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: Colors.white.withValues(alpha: 0.06),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+      ),
+      child: SizedBox(
+        height: 250,
+        child: RadarChart(
+          RadarChartData(
+            radarShape: RadarShape.circle,
+            tickCount: 4,
+            ticksTextStyle: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: Colors.white.withValues(alpha: 0.55),
+            ),
+            gridBorderData: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
+            radarBorderData: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+            titlePositionPercentageOffset: 0.18,
+            getTitle: (index, angle) {
+              return RadarChartTitle(
+                text: labels[index],
+                angle: angle,
+                positionPercentageOffset: 0.1,
+              );
+            },
+            titleTextStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: Colors.white.withValues(alpha: 0.8),
+              fontWeight: FontWeight.w600,
+            ),
+            dataSets: [
+              RadarDataSet(
+                fillColor: const Color(0xFF38BDF8).withValues(alpha: 0.22),
+                borderColor: const Color(0xFF38BDF8),
+                entryRadius: 2.8,
+                borderWidth: 2.3,
+                dataEntries: realValues
+                    .map((v) => RadarEntry(value: (v * 100).clamp(0, 100)))
+                    .toList(growable: false),
+              ),
+              RadarDataSet(
+                fillColor: const Color(0xFF8B5CF6).withValues(alpha: 0.16),
+                borderColor: const Color(0xFF8B5CF6),
+                entryRadius: 2.1,
+                borderWidth: 2,
+                dataEntries: objectiveValues
+                    .map((v) => RadarEntry(value: (v * 100).clamp(0, 100)))
+                    .toList(growable: false),
+              ),
+            ],
+          ),
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOutCubic,
+        ),
+      ),
+    );
+  }
+}
+
+class _StoryBars extends StatelessWidget {
+  final List<String> labels;
+  final List<double> realValues;
+  final List<double> objectiveValues;
+
+  const _StoryBars({
+    required this.labels,
+    required this.realValues,
+    required this.objectiveValues,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: Colors.white.withValues(alpha: 0.06),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+      ),
+      child: SizedBox(
+        height: 250,
+        child: BarChart(
+          BarChartData(
+            minY: 0,
+            maxY: 100,
+            barTouchData: BarTouchData(
+              enabled: true,
+              touchTooltipData: BarTouchTooltipData(
+                getTooltipColor: (_) => const Color(0xFF101B2E).withValues(alpha: 0.95),
+                getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                  final metric = labels[group.x.toInt()];
+                  final series = rodIndex == 0 ? 'Reel' : 'Objectif';
+                  return BarTooltipItem(
+                    '$metric\n$series: ${rod.toY.toStringAsFixed(0)}%',
+                    const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                  );
+                },
+              ),
+            ),
+            titlesData: FlTitlesData(
+              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  interval: 25,
+                  reservedSize: 30,
+                  getTitlesWidget: (value, _) => Text(
+                    '${value.toStringAsFixed(0)}%',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Colors.white.withValues(alpha: 0.58),
+                    ),
+                  ),
+                ),
+              ),
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  getTitlesWidget: (value, _) {
+                    final i = value.toInt();
+                    if (i < 0 || i >= labels.length) {
+                      return const SizedBox.shrink();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        labels[i],
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            gridData: FlGridData(
+              show: true,
+              drawVerticalLine: false,
+              horizontalInterval: 25,
+              getDrawingHorizontalLine: (_) =>
+                  FlLine(color: Colors.white.withValues(alpha: 0.11), strokeWidth: 1),
+            ),
+            borderData: FlBorderData(show: false),
+            barGroups: List.generate(labels.length, (index) {
+              final realY = (realValues[index] * 100).clamp(0, 100);
+              final targetY = (objectiveValues[index] * 100).clamp(0, 100);
+              return BarChartGroupData(
+                x: index,
+                barsSpace: 4,
+                barRods: [
+                  BarChartRodData(
+                    toY: realY.toDouble(),
+                    width: 10,
+                    borderRadius: BorderRadius.circular(4),
+                    gradient: const LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [Color(0xFF1FA8FF), Color(0xFF46D4FF)],
+                    ),
+                  ),
+                  BarChartRodData(
+                    toY: targetY.toDouble(),
+                    width: 10,
+                    borderRadius: BorderRadius.circular(4),
+                    gradient: const LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [Color(0xFF7C63FF), Color(0xFFAE7BFF)],
+                    ),
+                  ),
+                ],
+              );
+            }),
+          ),
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOutCubic,
+        ),
       ),
     );
   }

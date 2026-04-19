@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
+import '../../../core/providers/navigation_intents.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/payment.dart';
 import '../domain/student_fee.dart';
@@ -39,6 +40,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   DateTime _timeEntryDate = DateTime.now();
   TimeOfDay _timeEntryCheckIn = const TimeOfDay(hour: 8, minute: 0);
   TimeOfDay _timeEntryCheckOut = const TimeOfDay(hour: 10, minute: 0);
+  bool _timeEntryForgotCheckOut = false;
   bool _financeBusy = false;
   List<Map<String, dynamic>> _financeTeachers = [];
   List<Map<String, dynamic>> _financeTimeEntries = [];
@@ -77,6 +79,21 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     return '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
   }
 
+  String _normalizePointageBusinessMessage(String raw) {
+    final normalized = raw.trim();
+    final lower = normalized.toLowerCase();
+
+    if (lower.contains('dimanche')) {
+      return 'Pointage refuse: le dimanche est interdit. Choisissez un jour autorise (lundi a samedi).';
+    }
+
+    if (lower.contains("aucun creneau") || lower.contains("emploi du temps")) {
+      return 'Pointage bloque: aucun creneau d\'emploi du temps pour cet enseignant a cette date. Configurez le planning du jour puis reessayez.';
+    }
+
+    return normalized;
+  }
+
   String _extractApiErrorMessage(Object error) {
     if (error is DioException) {
       final data = error.response?.data;
@@ -85,20 +102,24 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
         for (final entry in data.entries) {
           final value = entry.value;
           if (value is List && value.isNotEmpty) {
-            return value.map((item) => item.toString()).join(' | ');
+            return _normalizePointageBusinessMessage(
+              value.map((item) => item.toString()).join(' | '),
+            );
           }
           if (value is String && value.trim().isNotEmpty) {
-            return value.trim();
+            return _normalizePointageBusinessMessage(value);
           }
         }
       }
 
       if (data is List && data.isNotEmpty) {
-        return data.map((item) => item.toString()).join(' | ');
+        return _normalizePointageBusinessMessage(
+          data.map((item) => item.toString()).join(' | '),
+        );
       }
 
       if (data is String && data.trim().isNotEmpty) {
-        return data.trim();
+        return _normalizePointageBusinessMessage(data);
       }
 
       final status = error.response?.statusCode;
@@ -128,26 +149,19 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
 
     try {
       final repo = ref.read(paymentsRepositoryProvider);
-      final results = await Future.wait([
-        repo.fetchTeachers(),
-        repo.fetchTeacherTimeEntries(),
-        repo.fetchTeacherPayrolls(month: _payrollMonthController.text.trim()),
-      ]);
+      final payrolls = await repo.fetchTeacherPayrolls(
+        month: _payrollMonthController.text.trim(),
+      );
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _financeTeachers = results[0] as List<Map<String, dynamic>>;
-        _financeTimeEntries = results[1] as List<Map<String, dynamic>>;
-        _financePayrolls = results[2] as List<Map<String, dynamic>>;
-        _selectedTeacherId ??= _financeTeachers.isNotEmpty
-            ? (_financeTeachers.first['id'] as num?)?.toInt()
-            : null;
+        _financePayrolls = payrolls;
       });
     } catch (error) {
-      _showMessage('Erreur chargement pointage enseignants: $error');
+      _showMessage('Erreur chargement paie horaire: $error');
     }
   }
 
@@ -159,10 +173,12 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     }
 
     final checkInMinutes = _timeToMinutes(_timeEntryCheckIn);
-    final checkOutMinutes = _timeToMinutes(_timeEntryCheckOut);
-    if (checkOutMinutes <= checkInMinutes) {
-      _showMessage("L'heure de sortie doit etre apres l'heure d'entree.");
-      return;
+    if (!_timeEntryForgotCheckOut) {
+      final checkOutMinutes = _timeToMinutes(_timeEntryCheckOut);
+      if (checkOutMinutes <= checkInMinutes) {
+        _showMessage("L'heure de sortie doit etre apres l'heure d'entree.");
+        return;
+      }
     }
 
     setState(() => _financeBusy = true);
@@ -173,14 +189,27 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
             teacherId: teacherId,
             entryDate: _toApiDate(_timeEntryDate),
             checkInTime: _toApiTime(_timeEntryCheckIn),
-            checkOutTime: _toApiTime(_timeEntryCheckOut),
+            checkOutTime: _timeEntryForgotCheckOut
+                ? null
+                : _toApiTime(_timeEntryCheckOut),
             notes: _timeEntryNotesController.text.trim(),
           );
       _timeEntryNotesController.clear();
+      _timeEntryForgotCheckOut = false;
       _showMessage('Pointage enseignant enregistre avec succes.', isSuccess: true);
       await _loadTeacherFinanceSection();
     } catch (error) {
-      _showMessage('Erreur pointage enseignant: ${_extractApiErrorMessage(error)}');
+      final details = _extractApiErrorMessage(error);
+      final lower = details.toLowerCase();
+      final hasPlanningBlock =
+          lower.contains('aucun creneau') || lower.contains('emploi du temps');
+      _showMessage(
+        'Erreur pointage enseignant: $details',
+        actionLabel: hasPlanningBlock ? 'Ouvrir emploi du temps' : null,
+        onAction: hasPlanningBlock
+          ? () => ref.read(adminShellNavigationKeyProvider.notifier).state = 'timetable'
+            : null,
+      );
     } finally {
       if (mounted) {
         setState(() => _financeBusy = false);
@@ -209,6 +238,52 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
         setState(() => _financeBusy = false);
       }
     }
+  }
+
+  Future<void> _validatePayrollLevelOne(int payrollId) async {
+    setState(() => _financeBusy = true);
+    try {
+      await ref.read(paymentsRepositoryProvider).validateTeacherPayrollLevelOne(payrollId);
+      _showMessage('Validation niveau 1 enregistree.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur validation niveau 1: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _validatePayrollLevelTwo(int payrollId) async {
+    setState(() => _financeBusy = true);
+    try {
+      await ref.read(paymentsRepositoryProvider).validateTeacherPayrollLevelTwo(payrollId);
+      _showMessage('Validation niveau 2 enregistree.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur validation niveau 2: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _resetPayrollValidation(int payrollId) async {
+    setState(() => _financeBusy = true);
+    try {
+      await ref.read(paymentsRepositoryProvider).resetTeacherPayrollValidation(payrollId);
+      _showMessage('Validation reinitialisee.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur reinitialisation validation: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  String _payrollStageLabel(Map<String, dynamic> row) {
+    final stage = (row['validation_stage'] ?? '').toString();
+    if (stage == 'level_two') return 'N2 valide';
+    if (stage == 'level_one') return 'N1 valide';
+    return 'Brouillon';
   }
 
   @override
@@ -254,7 +329,12 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     });
   }
 
-  void _showMessage(String text, {bool isSuccess = false}) {
+  void _showMessage(
+    String text, {
+    bool isSuccess = false,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
     if (!mounted) return;
 
     final messenger = ScaffoldMessenger.of(context);
@@ -267,6 +347,12 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
             style: isSuccess ? const TextStyle(color: Colors.white) : null,
           ),
           backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
+          action: (actionLabel != null && onAction != null)
+              ? SnackBarAction(
+                  label: actionLabel,
+                  onPressed: onAction,
+                )
+              : null,
         ),
       );
   }
@@ -1515,118 +1601,15 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Pointage enseignants & paie horaire',
+                            'Paie horaire enseignants',
                             style: Theme.of(context).textTheme.titleSmall,
                           ),
                           const SizedBox(height: 6),
                           Text(
                             isTeacherFinanceReadOnly
-                                ? 'Mode lecture seule (Comptable): consultation uniquement.'
-                                : 'Saisie entree/sortie + generation paie horaire mensuelle.',
+                                ? 'Mode lecture seule (Comptable): consultation et validation niveau 2.'
+                                : 'Generation de la paie mensuelle et validation du workflow N1/N2.',
                             style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            children: [
-                              SizedBox(
-                                width: 420,
-                                child: DropdownButtonFormField<int>(
-                                  initialValue: _selectedTeacherId,
-                                  decoration: const InputDecoration(labelText: 'Enseignant'),
-                                  items: _financeTeachers
-                                      .map(
-                                        (row) => DropdownMenuItem<int>(
-                                          value: (row['id'] as num).toInt(),
-                                          child: Text(_teacherFinanceLabel(row)),
-                                        ),
-                                      )
-                                      .toList(growable: false),
-                                  onChanged: (value) {
-                                    setState(() => _selectedTeacherId = value);
-                                  },
-                                ),
-                              ),
-                              SizedBox(
-                                width: 170,
-                                child: TextFormField(
-                                  initialValue: _toApiDate(_timeEntryDate),
-                                  readOnly: true,
-                                  decoration: const InputDecoration(labelText: 'Date pointage'),
-                                  onTap: isTeacherFinanceReadOnly
-                                      ? null
-                                      : () async {
-                                          final picked = await showDatePicker(
-                                            context: context,
-                                            firstDate: DateTime(2020),
-                                            lastDate: DateTime(2100),
-                                            initialDate: _timeEntryDate,
-                                          );
-                                          if (picked != null && mounted) {
-                                            setState(() => _timeEntryDate = picked);
-                                          }
-                                        },
-                                ),
-                              ),
-                              SizedBox(
-                                width: 160,
-                                child: OutlinedButton.icon(
-                                  onPressed: isTeacherFinanceReadOnly
-                                      ? null
-                                      : () async {
-                                          final picked = await showTimePicker(
-                                            context: context,
-                                            initialTime: _timeEntryCheckIn,
-                                          );
-                                          if (picked != null && mounted) {
-                                            setState(() => _timeEntryCheckIn = picked);
-                                          }
-                                        },
-                                  icon: const Icon(Icons.login_rounded),
-                                  label: Text('Entree ${_time24(_timeEntryCheckIn)}'),
-                                ),
-                              ),
-                              SizedBox(
-                                width: 160,
-                                child: OutlinedButton.icon(
-                                  onPressed: isTeacherFinanceReadOnly
-                                      ? null
-                                      : () async {
-                                          final picked = await showTimePicker(
-                                            context: context,
-                                            initialTime: _timeEntryCheckOut,
-                                          );
-                                          if (picked != null && mounted) {
-                                            setState(() => _timeEntryCheckOut = picked);
-                                          }
-                                        },
-                                  icon: const Icon(Icons.logout_rounded),
-                                  label: Text('Sortie ${_time24(_timeEntryCheckOut)}'),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            children: [
-                              SizedBox(
-                                width: 360,
-                                child: TextField(
-                                  controller: _timeEntryNotesController,
-                                  decoration: const InputDecoration(labelText: 'Note pointage (optionnel)'),
-                                ),
-                              ),
-                              FilledButton.icon(
-                                onPressed: (isTeacherFinanceReadOnly || _financeBusy)
-                                    ? null
-                                    : _createTeacherTimeEntry,
-                                icon: const Icon(Icons.access_time_filled_outlined),
-                                label: const Text('Enregistrer pointage'),
-                              ),
-                            ],
                           ),
                           const SizedBox(height: 10),
                           Wrap(
@@ -1673,14 +1656,25 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                   DataColumn(label: Text('H. travaillees')),
                                   DataColumn(label: Text('Taux horaire')),
                                   DataColumn(label: Text('Montant')),
+                                  DataColumn(label: Text('Validation')),
+                                  DataColumn(label: Text('Actions')),
                                 ],
                                 rows: _financePayrolls.map((row) {
+                                  final payrollId = (row['id'] as num?)?.toInt();
                                   final teacherName = row['teacher_full_name']?.toString() ?? 'Enseignant';
                                   final month = row['month']?.toString() ?? '-';
                                   final attributed = row['hours_attributed']?.toString() ?? '0';
                                   final worked = row['hours_worked']?.toString() ?? '0';
                                   final rate = double.tryParse(row['hourly_rate']?.toString() ?? '0') ?? 0;
                                   final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
+                                  final stage = (row['validation_stage'] ?? '').toString();
+                                  final canL1 = (authUser?.role == 'supervisor' || authUser?.role == 'super_admin') &&
+                                      stage != 'level_two' &&
+                                      payrollId != null;
+                                  final canL2 = (authUser?.role == 'accountant' || authUser?.role == 'super_admin') &&
+                                      stage == 'level_one' &&
+                                      payrollId != null;
+                                  final canReset = authUser?.role == 'super_admin' && payrollId != null;
 
                                   return DataRow(
                                     cells: [
@@ -1690,38 +1684,36 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                       DataCell(Text(worked)),
                                       DataCell(Text('${_formatMoney(rate)}/h')),
                                       DataCell(Text(_formatMoney(amount))),
-                                    ],
-                                  );
-                                }).toList(growable: false),
-                              ),
-                            ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Derniers pointages (${_financeTimeEntries.length})',
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          const SizedBox(height: 8),
-                          if (_financeTimeEntries.isEmpty)
-                            const Text('Aucun pointage enseignant enregistre.')
-                          else
-                            SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: DataTable(
-                                columns: const [
-                                  DataColumn(label: Text('Enseignant')),
-                                  DataColumn(label: Text('Date')),
-                                  DataColumn(label: Text('Entree')),
-                                  DataColumn(label: Text('Sortie')),
-                                  DataColumn(label: Text('Heures')),
-                                ],
-                                rows: _financeTimeEntries.take(20).map((row) {
-                                  return DataRow(
-                                    cells: [
-                                      DataCell(Text(row['teacher_full_name']?.toString() ?? '-')),
-                                      DataCell(Text(row['entry_date']?.toString() ?? '-')),
-                                      DataCell(Text(row['check_in_time']?.toString() ?? '-')),
-                                      DataCell(Text(row['check_out_time']?.toString() ?? '-')),
-                                      DataCell(Text(row['worked_hours']?.toString() ?? '0')),
+                                      DataCell(Text(_payrollStageLabel(row))),
+                                      DataCell(
+                                        Wrap(
+                                          spacing: 6,
+                                          runSpacing: 6,
+                                          children: [
+                                            if (canL1)
+                                              OutlinedButton(
+                                                onPressed: _financeBusy
+                                                    ? null
+                                                    : () => _validatePayrollLevelOne(payrollId!),
+                                                child: const Text('Valider N1'),
+                                              ),
+                                            if (canL2)
+                                              FilledButton.tonal(
+                                                onPressed: _financeBusy
+                                                    ? null
+                                                    : () => _validatePayrollLevelTwo(payrollId!),
+                                                child: const Text('Valider N2'),
+                                              ),
+                                            if (canReset)
+                                              TextButton(
+                                                onPressed: _financeBusy
+                                                    ? null
+                                                    : () => _resetPayrollValidation(payrollId!),
+                                                child: const Text('Reset'),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
                                     ],
                                   );
                                 }).toList(growable: false),

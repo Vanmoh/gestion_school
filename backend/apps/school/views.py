@@ -36,6 +36,7 @@ from apps.accounts.permissions import (
     IsSuperAdmin,
     IsSuperAdminSupervisorOrAccountantReadOnly,
     IsTeacherAttendanceModuleScopedAccess,
+    IsTeacherTimesheetModuleScopedAccess,
     IsTeacherAvailabilityModuleScopedAccess,
     IsTimetableModuleScopedAccess,
 )
@@ -3470,7 +3471,7 @@ class TeacherTimeEntryViewSet(BaseModelViewSet):
     queryset = TeacherTimeEntry.objects.select_related("teacher", "teacher__user", "recorded_by").all().order_by("-entry_date", "-id")
     serializer_class = TeacherTimeEntrySerializer
     filterset_fields = ["teacher", "entry_date", "etablissement"]
-    permission_classes = [permissions.IsAuthenticated, IsSuperAdminSupervisorOrAccountantReadOnly]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherTimesheetModuleScopedAccess]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -3971,7 +3972,13 @@ class ExpenseViewSet(BaseModelViewSet):
 
 
 class TeacherPayrollViewSet(BaseModelViewSet):
-    queryset = TeacherPayroll.objects.select_related("teacher", "paid_by").all().order_by("-paid_on")
+    queryset = TeacherPayroll.objects.select_related(
+        "teacher",
+        "teacher__user",
+        "paid_by",
+        "level_one_validated_by",
+        "level_two_validated_by",
+    ).all().order_by("-paid_on", "-id")
     serializer_class = TeacherPayrollSerializer
     permission_classes = [permissions.IsAuthenticated, IsSuperAdminSupervisorOrAccountantReadOnly]
     filterset_fields = ["teacher", "month"]
@@ -4058,10 +4065,28 @@ class TeacherPayrollViewSet(BaseModelViewSet):
 
     def perform_create(self, serializer):
         self._validate_payroll_scope(serializer)
+        hourly_rate = serializer.validated_data.get("hourly_rate")
+        hours_worked = serializer.validated_data.get("hours_worked")
+        if hourly_rate is not None and hours_worked is not None:
+            serializer.validated_data["amount"] = (
+                Decimal(str(hourly_rate)) * Decimal(str(hours_worked))
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         serializer.save(paid_by=self.request.user)
 
     def perform_update(self, serializer):
-        self._validate_payroll_scope(serializer, instance=self.get_object())
+        instance = self.get_object()
+        self._validate_payroll_scope(serializer, instance=instance)
+
+        if instance.level_two_validated_at:
+            raise ValidationError(
+                {"detail": "La fiche est validée niveau 2. Modification impossible sans réinitialisation."}
+            )
+
+        hourly_rate = serializer.validated_data.get("hourly_rate", instance.hourly_rate)
+        hours_worked = serializer.validated_data.get("hours_worked", instance.hours_worked)
+        serializer.validated_data["amount"] = (
+            Decimal(str(hourly_rate)) * Decimal(str(hours_worked))
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         serializer.save(paid_by=self.request.user)
 
     def _month_range(self, month_value):
@@ -4122,10 +4147,36 @@ class TeacherPayrollViewSet(BaseModelViewSet):
         )
         return Decimal(str(total)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+    def _auto_close_missing_entries(self, teacher, month_start, month_end):
+        open_entries = TeacherTimeEntry.objects.filter(
+            teacher=teacher,
+            entry_date__gte=month_start,
+            entry_date__lte=month_end,
+            check_out_time__isnull=True,
+        ).order_by("entry_date", "id")
+
+        closed = 0
+        for entry in open_entries:
+            entry.save()
+            closed += 1
+        return closed
+
+    @staticmethod
+    def _can_validate_level_one(role):
+        return role in {UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}
+
+    @staticmethod
+    def _can_validate_level_two(role):
+        return role in {UserRole.ACCOUNTANT, UserRole.SUPER_ADMIN}
+
     @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsSuperAdminSupervisorOrAccountantReadOnly])
     def generate_monthly(self, request):
         month_start, month_end = self._month_range(request.data.get("month"))
         teacher_id = request.data.get("teacher")
+        force_regenerate = bool(request.data.get("force_regenerate", False))
+
+        if force_regenerate and getattr(request.user, "role", None) != UserRole.SUPER_ADMIN:
+            raise ValidationError({"detail": "Seul le super admin peut forcer la régénération."})
 
         qs = Teacher.objects.select_related("etablissement", "user").all()
         requested_etablissement = self._requested_etablissement()
@@ -4147,7 +4198,11 @@ class TeacherPayrollViewSet(BaseModelViewSet):
             qs = qs.filter(id=teacher_id)
 
         generated_ids = []
+        skipped_final = 0
+        auto_closed_entries = 0
         for teacher in qs:
+            auto_closed_entries += self._auto_close_missing_entries(teacher, month_start, month_end)
+
             hours_attributed = self._teacher_hours_attributed(teacher, month_start, month_end)
             hours_worked = self._teacher_hours_worked(teacher, month_start, month_end)
             hourly_rate = Decimal(str(teacher.hourly_rate or teacher.salary_base or 0)).quantize(
@@ -4155,6 +4210,26 @@ class TeacherPayrollViewSet(BaseModelViewSet):
                 rounding=ROUND_HALF_UP,
             )
             amount = (hours_worked * hourly_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+            existing = TeacherPayroll.objects.filter(teacher=teacher, month=month_start).first()
+            if existing and existing.level_two_validated_at and not force_regenerate:
+                skipped_final += 1
+                continue
+
+            if existing and existing.level_two_validated_at and force_regenerate:
+                existing.level_one_validated_by = None
+                existing.level_one_validated_at = None
+                existing.level_two_validated_by = None
+                existing.level_two_validated_at = None
+                existing.save(
+                    update_fields=[
+                        "level_one_validated_by",
+                        "level_one_validated_at",
+                        "level_two_validated_by",
+                        "level_two_validated_at",
+                        "updated_at",
+                    ]
+                )
 
             payroll, _ = TeacherPayroll.objects.update_or_create(
                 teacher=teacher,
@@ -4175,7 +4250,100 @@ class TeacherPayrollViewSet(BaseModelViewSet):
             {
                 "month": month_start.strftime("%Y-%m"),
                 "count": len(generated_ids),
+                "auto_closed_entries": auto_closed_entries,
+                "skipped_final_validated": skipped_final,
                 "results": serializer.data,
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[permissions.IsAuthenticated],
+    )
+    def validate_level_one(self, request, pk=None):
+        role = getattr(request.user, "role", "")
+        if not self._can_validate_level_one(role):
+            raise ValidationError({"detail": "Accès refusé: validation niveau 1 réservée au surveillant/super admin."})
+
+        payroll = self.get_object()
+        if payroll.level_two_validated_at:
+            raise ValidationError({"detail": "La fiche est déjà validée niveau 2."})
+
+        payroll.level_one_validated_by = request.user
+        payroll.level_one_validated_at = timezone.now()
+        payroll.save(update_fields=["level_one_validated_by", "level_one_validated_at", "updated_at"])
+
+        return Response(
+            {
+                "detail": "Validation niveau 1 enregistrée.",
+                "id": payroll.id,
+                "validation_stage": payroll.validation_stage,
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[permissions.IsAuthenticated],
+    )
+    def validate_level_two(self, request, pk=None):
+        role = getattr(request.user, "role", "")
+        if not self._can_validate_level_two(role):
+            raise ValidationError({"detail": "Accès refusé: validation niveau 2 réservée au comptable/super admin."})
+
+        payroll = self.get_object()
+        if not payroll.level_one_validated_at:
+            raise ValidationError({"detail": "Validation niveau 1 requise avant la validation finale."})
+
+        payroll.level_two_validated_by = request.user
+        payroll.level_two_validated_at = timezone.now()
+        payroll.paid_by = request.user
+        payroll.save(
+            update_fields=[
+                "level_two_validated_by",
+                "level_two_validated_at",
+                "paid_by",
+                "updated_at",
+            ]
+        )
+
+        return Response(
+            {
+                "detail": "Validation niveau 2 enregistrée. Fiche finale verrouillée.",
+                "id": payroll.id,
+                "validation_stage": payroll.validation_stage,
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[permissions.IsAuthenticated],
+    )
+    def reset_validation(self, request, pk=None):
+        if getattr(request.user, "role", "") != UserRole.SUPER_ADMIN:
+            raise ValidationError({"detail": "Seul le super admin peut réinitialiser la validation."})
+
+        payroll = self.get_object()
+        payroll.level_one_validated_by = None
+        payroll.level_one_validated_at = None
+        payroll.level_two_validated_by = None
+        payroll.level_two_validated_at = None
+        payroll.save(
+            update_fields=[
+                "level_one_validated_by",
+                "level_one_validated_at",
+                "level_two_validated_by",
+                "level_two_validated_at",
+                "updated_at",
+            ]
+        )
+        return Response(
+            {
+                "detail": "Validation réinitialisée.",
+                "id": payroll.id,
+                "validation_stage": payroll.validation_stage,
             }
         )
 

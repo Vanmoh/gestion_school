@@ -189,7 +189,7 @@ class PaymentsRepository {
     required int teacherId,
     required String entryDate,
     required String checkInTime,
-    required String checkOutTime,
+    String? checkOutTime,
     String notes = '',
   }) async {
     await dio.post(
@@ -198,7 +198,8 @@ class PaymentsRepository {
         'teacher': teacherId,
         'entry_date': entryDate,
         'check_in_time': checkInTime,
-        'check_out_time': checkOutTime,
+        if (checkOutTime != null && checkOutTime.trim().isNotEmpty)
+          'check_out_time': checkOutTime,
         'notes': notes,
       },
     );
@@ -234,5 +235,29 @@ class PaymentsRepository {
     }
 
     return const <Map<String, dynamic>>[];
+  }
+
+  Future<Map<String, dynamic>> validateTeacherPayrollLevelOne(int payrollId) async {
+    final response = await dio.post('/teacher-payrolls/$payrollId/validate_level_one/');
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> validateTeacherPayrollLevelTwo(int payrollId) async {
+    final response = await dio.post('/teacher-payrolls/$payrollId/validate_level_two/');
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> resetTeacherPayrollValidation(int payrollId) async {
+    final response = await dio.post('/teacher-payrolls/$payrollId/reset_validation/');
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
   }
 }
