@@ -31,11 +31,13 @@ from apps.accounts.permissions import (
     IsCommunicationModuleScopedAccess,
     IsDisciplineModuleScopedAccess,
     IsExamsModuleScopedAccess,
+    IsFinanceModuleScopedAccess,
     IsReadOnlyForParentStudent,
     IsStudentModuleScopedAccess,
     IsSuperAdmin,
     IsSuperAdminSupervisorOrAccountantReadOnly,
     IsTeacherAttendanceModuleScopedAccess,
+    IsTeacherModuleScopedAccess,
     IsTeacherTimesheetModuleScopedAccess,
     IsTeacherAvailabilityModuleScopedAccess,
     IsTimetableModuleScopedAccess,
@@ -542,6 +544,16 @@ class SubjectViewSet(BaseModelViewSet):
     queryset = Subject.objects.all().order_by("name")
     serializer_class = SubjectSerializer
 
+    def _requested_classroom_id(self):
+        raw_value = self.request.query_params.get("classroom")
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
     def _requested_etablissement_id(self):
         raw_value = (
             self.request.headers.get("X-Etablissement-Id")
@@ -598,9 +610,10 @@ class SubjectViewSet(BaseModelViewSet):
         user = self.request.user
         qs = Subject.objects.select_related("classroom", "classroom__etablissement").all().order_by("name")
         requested_etablissement = self._requested_etablissement()
+        requested_classroom_id = self._requested_classroom_id()
 
         if requested_etablissement is not None:
-            return (
+            scoped_qs = (
                 qs.filter(
                     Q(classroom__etablissement=requested_etablissement)
                     | Q(teacher_assignments__classroom__etablissement=requested_etablissement)
@@ -608,17 +621,22 @@ class SubjectViewSet(BaseModelViewSet):
                 )
                 .distinct()
             )
+            if requested_classroom_id:
+                scoped_qs = scoped_qs.filter(classroom_id=requested_classroom_id)
+            return scoped_qs
 
         if self._has_requested_scope():
             return qs.none()
 
         if getattr(user, "role", None) == UserRole.SUPER_ADMIN:
+            if requested_classroom_id:
+                return qs.filter(classroom_id=requested_classroom_id)
             return qs
 
         user_etablissement = getattr(user, "etablissement", None)
         if user_etablissement is None:
             return qs.none()
-        return (
+        scoped_qs = (
             qs.filter(
                 Q(classroom__etablissement=user_etablissement)
                 | Q(teacher_assignments__classroom__etablissement=user_etablissement)
@@ -626,6 +644,9 @@ class SubjectViewSet(BaseModelViewSet):
             )
             .distinct()
         )
+        if requested_classroom_id:
+            scoped_qs = scoped_qs.filter(classroom_id=requested_classroom_id)
+        return scoped_qs
 
     def _validate_scope(self, serializer):
         classroom = serializer.validated_data.get("classroom")
@@ -668,6 +689,7 @@ class SubjectViewSet(BaseModelViewSet):
 class TeacherViewSet(BaseModelViewSet):
     queryset = Teacher.objects.all()
     serializer_class = TeacherSerializer
+    permission_classes = [permissions.IsAuthenticated, IsTeacherModuleScopedAccess]
 
     def _backfill_missing_teacher_etablissements(self):
         missing_teachers = list(
@@ -3814,6 +3836,7 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
 class StudentFeeViewSet(BaseModelViewSet):
     queryset = StudentFee.objects.select_related("student", "student__user", "academic_year").all().order_by("-due_date", "-id")
     serializer_class = StudentFeeSerializer
+    permission_classes = [permissions.IsAuthenticated, IsFinanceModuleScopedAccess]
     pagination_class = StandardResultsSetPagination
     filterset_fields = ["student", "academic_year", "fee_type"]
 
@@ -3933,6 +3956,7 @@ class StudentFeeViewSet(BaseModelViewSet):
 class PaymentViewSet(BaseModelViewSet):
     queryset = Payment.objects.all()
     serializer_class = PaymentSerializer
+    permission_classes = [permissions.IsAuthenticated, IsFinanceModuleScopedAccess]
     pagination_class = StandardResultsSetPagination
     filterset_fields = ["fee", "fee__student", "method", "received_by"]
     search_fields = [
@@ -4036,14 +4060,11 @@ class PaymentViewSet(BaseModelViewSet):
         self._validate_payment_scope(serializer, instance=self.get_object())
         serializer.save(etablissement=self._resolve_target_etablissement())
 
-    def perform_create(self, serializer):
-        # The cashier shown on the receipt must be the user who records the payment.
-        serializer.save(received_by=self.request.user)
-
 
 class ExpenseViewSet(BaseModelViewSet):
     queryset = Expense.objects.all().order_by("-date")
     serializer_class = ExpenseSerializer
+    permission_classes = [permissions.IsAuthenticated, IsFinanceModuleScopedAccess]
 
     def _requested_etablissement_id(self):
         raw_value = (

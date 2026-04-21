@@ -429,6 +429,14 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
     def _is_super_admin(self):
         return getattr(self.request.user, "role", "") == "super_admin"
 
+    def _require_super_admin_restore(self):
+        if not self._is_super_admin():
+            return Response(
+                {"detail": "Seul un super admin peut lancer une restauration."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
+
     def _resolve_etablissement(self):
         from apps.school.models import Etablissement
 
@@ -1151,6 +1159,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="restore")
     def restore(self, request, pk=None):
+        denied = self._require_super_admin_restore()
+        if denied is not None:
+            return denied
+
         backup = self.get_object()
         if backup.scope == BackupArchive.Scope.GLOBAL and not self._is_super_admin():
             return Response(
@@ -1180,6 +1192,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"], url_path="upload-restore")
     def upload_restore(self, request):
+        denied = self._require_super_admin_restore()
+        if denied is not None:
+            return denied
+
         uploaded = request.FILES.get("file")
         if not isinstance(uploaded, UploadedFile):
             return Response({"detail": "Fichier requis."}, status=status.HTTP_400_BAD_REQUEST)

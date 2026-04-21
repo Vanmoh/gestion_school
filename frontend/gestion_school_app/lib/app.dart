@@ -481,17 +481,13 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     }
 
     if (role == 'accountant') {
-      return key == 'dashboard' ||
-          key == 'attendance' ||
-          key == 'exams' ||
-          key == 'reports';
+      return key == 'dashboard' || key == 'reports';
     }
 
     if (role == 'supervisor') {
       return key == 'dashboard' ||
           key == 'students' ||
-          key == 'exams' ||
-          key == 'reports';
+          key == 'timetable';
     }
 
     return false;
@@ -866,6 +862,127 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
           duration: const Duration(seconds: 4),
         ),
       );
+  }
+
+  void _navigateToShellItem(String key) {
+    if (!mounted) {
+      return;
+    }
+    if (_isItemVisibleForRole(key, ref.read(authControllerProvider).value?.role)) {
+      _selectItem(key);
+      ref.read(adminShellNavigationKeyProvider.notifier).state = key;
+    }
+  }
+
+  Future<void> _openNotificationsCenter(AuthUser user) async {
+    if (!mounted) {
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.notifications_active_outlined),
+                title: const Text('Centre de notifications'),
+                subtitle: Text(_welcomeConnectedUser(user)),
+              ),
+              if (_isItemVisibleForRole('activity_logs', user.role))
+                ListTile(
+                  leading: const Icon(Icons.history_rounded),
+                  title: const Text('Journal d\'activité'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _navigateToShellItem('activity_logs');
+                  },
+                ),
+              if (_isItemVisibleForRole('communication', user.role))
+                ListTile(
+                  leading: const Icon(Icons.campaign_outlined),
+                  title: const Text('Communication'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _navigateToShellItem('communication');
+                  },
+                ),
+              if (_isItemVisibleForRole('reports', user.role))
+                ListTile(
+                  leading: const Icon(Icons.summarize_outlined),
+                  title: const Text('Rapports'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _navigateToShellItem('reports');
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openInsightsCenter(AuthUser user) async {
+    if (!mounted) {
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const ListTile(
+                leading: Icon(Icons.insights_rounded),
+                title: Text('Insights & raccourcis'),
+                subtitle: Text('Accès rapide aux modules d\'analyse utiles.'),
+              ),
+              if (_isItemVisibleForRole('reports', user.role))
+                ListTile(
+                  leading: const Icon(Icons.analytics_outlined),
+                  title: const Text('Rapports analytiques'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _navigateToShellItem('reports');
+                  },
+                ),
+              if (_isItemVisibleForRole('finance', user.role))
+                ListTile(
+                  leading: const Icon(Icons.account_balance_wallet_outlined),
+                  title: const Text('Vue finances'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _navigateToShellItem('finance');
+                  },
+                ),
+              if (_isItemVisibleForRole('timetable', user.role))
+                ListTile(
+                  leading: const Icon(Icons.calendar_month_rounded),
+                  title: const Text('Emploi du temps'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _navigateToShellItem('timetable');
+                  },
+                ),
+              if (_isItemVisibleForRole('grades', user.role))
+                ListTile(
+                  leading: const Icon(Icons.auto_stories_outlined),
+                  title: const Text('Notes & bulletins'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _navigateToShellItem('grades');
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   List<Widget> _buildGroupedMenu(
@@ -1382,16 +1499,21 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                                   const SizedBox(width: 8),
                                   _TopBarIconBubble(
                                     icon: Icons.notifications_none_rounded,
+                                    tooltip: 'Notifications',
+                                    onTap: () => _openNotificationsCenter(user),
                                   ),
                                   const SizedBox(width: 8),
                                   _TopBarIconBubble(
                                     icon: Icons.mail_outline_rounded,
+                                    tooltip: 'Messages',
                                     badge: _chatUnread,
                                     onTap: _openChatPanel,
                                   ),
                                   const SizedBox(width: 8),
                                   _TopBarIconBubble(
                                     icon: Icons.insights_rounded,
+                                    tooltip: 'Insights',
+                                    onTap: () => _openInsightsCenter(user),
                                   ),
                                   const SizedBox(width: 10),
                                   Tooltip(
@@ -1501,10 +1623,10 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   String _welcomeConnectedUser(AuthUser? user) {
     final roleLabel = _connectedRoleLabel(user?.role);
-    final identifier = (user?.username.trim().isNotEmpty ?? false)
-        ? user!.username.trim()
-        : ((user?.fullName.trim().isNotEmpty ?? false)
-              ? user!.fullName.trim()
+    final identifier = (user?.fullName.trim().isNotEmpty ?? false)
+        ? user!.fullName.trim()
+        : ((user?.username.trim().isNotEmpty ?? false)
+              ? user!.username.trim()
               : 'Utilisateur');
 
     return 'Utilisateur connecté: $roleLabel ($identifier)';
@@ -1533,6 +1655,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   String _connectedRoleLabel(String? role) {
     switch (role) {
       case 'super_admin':
+        return 'Admin';
       case 'director':
         return 'Directeur';
       case 'accountant':
@@ -1555,59 +1678,68 @@ class _TopBarIconBubble extends StatelessWidget {
   final IconData icon;
   final VoidCallback? onTap;
   final int badge;
+  final String? tooltip;
 
-  const _TopBarIconBubble({required this.icon, this.onTap, this.badge = 0});
+  const _TopBarIconBubble({
+    required this.icon,
+    this.onTap,
+    this.badge = 0,
+    this.tooltip,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(10),
-      onTap: onTap,
-      child: SizedBox(
-        width: 34,
-        height: 34,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  color: Colors.white.withValues(alpha: 0.1),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-                ),
-                child: Icon(
-                  icon,
-                  size: 18,
-                  color: Colors.white.withValues(alpha: 0.9),
+    return Tooltip(
+      message: tooltip ?? '',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: SizedBox(
+          width: 34,
+          height: 34,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned.fill(
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    color: Colors.white.withValues(alpha: 0.1),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                  ),
+                  child: Icon(
+                    icon,
+                    size: 18,
+                    color: Colors.white.withValues(alpha: 0.9),
+                  ),
                 ),
               ),
-            ),
-            if (badge > 0)
-              Positioned(
-                right: -3,
-                top: -3,
-                child: Container(
-                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEF4444),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: Colors.white, width: 1),
-                  ),
-                  child: Center(
-                    child: Text(
-                      badge > 99 ? '99+' : '$badge',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
+              if (badge > 0)
+                Positioned(
+                  right: -3,
+                  top: -3,
+                  child: Container(
+                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.white, width: 1),
+                    ),
+                    child: Center(
+                      child: Text(
+                        badge > 99 ? '99+' : '$badge',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );

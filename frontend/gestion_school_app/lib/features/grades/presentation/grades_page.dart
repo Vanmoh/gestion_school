@@ -2515,6 +2515,14 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       return _subjects;
     }
 
+    final classSubjects = _subjects
+        .where((row) => _asInt(row['classroom']) == classroomId)
+        .toList();
+
+    if (!_isTeacherUser && classSubjects.isNotEmpty) {
+      return classSubjects;
+    }
+
     final assignedRows = _teacherAssignments.where((row) {
       if (_asInt(row['classroom']) != classroomId) {
         return false;
@@ -2531,7 +2539,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
         .toSet();
 
     if (assignedSubjectIds.isEmpty) {
-      return const [];
+      return _isTeacherUser ? const [] : classSubjects;
     }
 
     return _subjects

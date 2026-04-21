@@ -306,22 +306,28 @@ class _TeacherAttendancePageState extends ConsumerState<TeacherAttendancePage> {
     );
   }
 
+  String _cleanTeacherName(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    return trimmed
+        .replaceFirst(RegExp(r'^\s*[^•]+\s+•\s+'), '')
+        .replaceFirst(RegExp(r'\s*\(([A-Z0-9_-]+)\)\s*$'), '')
+        .trim();
+  }
+
   String _teacherLabel(Map<String, dynamic> row) {
-    final employee =
-        row['employee_code']?.toString() ??
-        row['teacher_employee_code']?.toString() ??
-        'N/A';
     final user = row['user'] is Map<String, dynamic>
         ? Map<String, dynamic>.from(row['user'] as Map)
         : const <String, dynamic>{};
     final first = user['first_name']?.toString() ?? '';
     final last = user['last_name']?.toString() ?? '';
-    final fullName = '$first $last'.trim();
-    final fallback = row['teacher_full_name']?.toString() ?? '';
-    final name = fullName.isNotEmpty
+    final fullName = _cleanTeacherName('$first $last');
+    final fallback = _cleanTeacherName(
+      row['teacher_full_name']?.toString() ?? '',
+    );
+    return fullName.isNotEmpty
         ? fullName
-        : (fallback.isNotEmpty ? fallback : 'Enseignant ${row['id'] ?? ''}');
-    return '$employee • $name';
+        : (fallback.isNotEmpty ? fallback : 'Enseignant');
   }
 
   List<Map<String, dynamic>> _extractRows(dynamic data) {

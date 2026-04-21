@@ -89,6 +89,14 @@ if [[ "$MODE" == "stable" ]] && ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! python3 - <<'PY' >/dev/null 2>&1
+import pymysql  # noqa: F401
+PY
+then
+  echo "Erreur: le package Python 'pymysql' est requis (pip install pymysql)."
+  exit 1
+fi
+
 if [[ -z "$HOST_IP" ]]; then
   HOST_IP="$(hostname -I | awk '{print $1}')"
 fi
@@ -111,6 +119,13 @@ if ! curl -fsS --max-time 8 "$API_DOCS_URL" >/dev/null 2>&1; then
   echo "Backend non joignable via IP LAN: $HOST_IP:$API_PORT"
   echo "Astuce: vérifie que ./bootstrap.sh est lancé et que le pare-feu autorise le port $API_PORT."
   exit 1
+fi
+
+echo "[1.1/3] Vérification cohérence données runtime (MySQL) ..."
+if ! python3 "$ROOT_DIR/tools/runtime_data_guard.py" --etab-id=11; then
+  echo "Guard KO: tentative de réparation idempotente..."
+  python3 "$ROOT_DIR/tools/repair_runtime_etab11.py"
+  python3 "$ROOT_DIR/tools/runtime_data_guard.py" --etab-id=11
 fi
 
 echo "[2/3] Préparation Flutter web..."

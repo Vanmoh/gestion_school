@@ -166,11 +166,25 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
     return '$h:$m';
   }
 
+  String _cleanTeacherName(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    return trimmed
+        .replaceFirst(RegExp(r'^\s*[^•]+\s+•\s+'), '')
+        .replaceFirst(RegExp(r'\s*\(([A-Z0-9_-]+)\)\s*$'), '')
+        .trim();
+  }
+
   String _teacherLabel(Map<String, dynamic> row) {
-    final fullName = (row['user_full_name']?.toString().trim() ?? '');
-    final code = (row['employee_code']?.toString().trim() ?? '');
-    final name = fullName.isNotEmpty ? fullName : 'Enseignant #${row['id']}';
-    return '$name${code.isNotEmpty ? ' ($code)' : ''}';
+    final fullName = _cleanTeacherName(
+      row['user_full_name']?.toString() ?? '',
+    );
+    final fallback = _cleanTeacherName(
+      row['teacher_full_name']?.toString() ?? '',
+    );
+    return fullName.isNotEmpty
+        ? fullName
+        : (fallback.isNotEmpty ? fallback : 'Enseignant');
   }
 
   String _summaryPeriodLabel(_SummaryPeriod period) {

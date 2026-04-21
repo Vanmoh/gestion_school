@@ -199,3 +199,37 @@ class IsCommunicationModuleScopedAccess(BasePermission):
             return user.role in {"super_admin", "director", "supervisor", "teacher", "accountant"}
 
         return user.role in {"super_admin", "director", "supervisor"}
+
+
+class IsTeacherModuleScopedAccess(BasePermission):
+    message = (
+        "Acces enseignants reserve. Ecriture: super admin/directeur. "
+        "Lecture: super admin, directeur, surveillant."
+    )
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            return user.role in {"super_admin", "director", "supervisor"}
+
+        return user.role in {"super_admin", "director"}
+
+
+class IsFinanceModuleScopedAccess(BasePermission):
+    message = (
+        "Acces finance reserve. Ecriture: super admin/directeur/comptable. "
+        "Lecture: super admin, directeur, comptable, parent, eleve."
+    )
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            return user.role in {"super_admin", "director", "accountant", "parent", "student"}
+
+        return user.role in {"super_admin", "director", "accountant"}

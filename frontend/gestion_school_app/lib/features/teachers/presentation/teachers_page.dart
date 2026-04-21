@@ -1167,7 +1167,6 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _detailLine('Nom', _fullNameFromUser(user)),
-                _detailLine('Username', (user['username'] ?? '-').toString()),
                 _detailLine('Email', (user['email'] ?? '-').toString()),
                 _detailLine('Téléphone', (user['phone'] ?? '-').toString()),
                 _detailLine(
@@ -1823,9 +1822,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                                     horizontal: 4,
                                   ),
                                   title: Text(_fullNameFromUser(user)),
-                                  subtitle: Text(
-                                    '${(user['username'] ?? '-').toString()}  •  ${(user['email'] ?? '-').toString()}  •  $status',
-                                  ),
+                                  subtitle: Text(status),
                                   trailing: PopupMenuButton<String>(
                                     enabled: !_saving,
                                     onSelected: (value) async {
@@ -2301,8 +2298,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     if (full.isNotEmpty) {
       return full;
     }
-    final username = (user['username'] ?? '').toString().trim();
-    return username.isEmpty ? 'Utilisateur' : username;
+    return 'Enseignant';
   }
 
   Future<void> _pickHireDate() async {
@@ -2407,10 +2403,6 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                   runSpacing: 8,
                   children: [
                     _metricChip('Nom', _fullNameFromUser(selectedUser)),
-                    _metricChip(
-                      'Username',
-                      (selectedUser['username'] ?? '-').toString(),
-                    ),
                     _metricChip(
                       'Email',
                       (selectedUser['email'] ?? '-').toString(),
@@ -2870,8 +2862,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     final first = (user['first_name'] ?? '').toString().trim();
     final last = (user['last_name'] ?? '').toString().trim();
     final full = '$first $last'.trim();
-    final username = (user['username'] ?? '').toString().trim();
-    return full.isNotEmpty ? '$full ($username)' : username;
+    return full.isNotEmpty ? full : 'Enseignant';
   }
 
   String _teacherUserActionLabel(Map<String, dynamic> user) {

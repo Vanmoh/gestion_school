@@ -135,6 +135,15 @@ Ce mode stable applique:
 - build web avec `--pwa-strategy=none` (pas de service worker)
 - serveur statique avec en-têtes `Cache-Control: no-store`
 - arrêt automatique du processus qui occupait déjà le port web
+- garde-fou runtime MySQL (vérifie classes/élèves/matières/profs + scope directeur)
+- auto-réparation idempotente si incohérence détectée
+
+Scripts anti-régression disponibles:
+
+```bash
+python3 tools/runtime_data_guard.py --etab-id=11
+python3 tools/repair_runtime_etab11.py
+```
 
 Si tu veux explicitement garder le comportement PWA:
 
