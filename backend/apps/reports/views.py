@@ -778,6 +778,24 @@ def _effective_etablissement_id(request):
     return getattr(user, "etablissement_id", None)
 
 
+def _ensure_reports_module_access(request) -> None:
+    role = getattr(request.user, "role", "")
+    if role not in {
+        UserRole.SUPER_ADMIN,
+        UserRole.DIRECTOR,
+        UserRole.ACCOUNTANT,
+        UserRole.PARENT,
+        UserRole.STUDENT,
+    }:
+        raise PermissionDenied("Accès refusé au module rapports.")
+
+
+def _ensure_sensitive_export_access(request) -> None:
+    role = getattr(request.user, "role", "")
+    if role not in {UserRole.SUPER_ADMIN, UserRole.DIRECTOR, UserRole.ACCOUNTANT}:
+        raise PermissionDenied("Accès refusé: export sensible réservé à l'administration/finance.")
+
+
 def _allowed_students_queryset(request):
     user = request.user
     queryset = Student.objects.select_related(
@@ -1202,6 +1220,8 @@ class ReportsContextView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        _ensure_reports_module_access(request)
+
         students = _allowed_students_queryset(request).order_by(
             "user__last_name",
             "user__first_name",
@@ -1553,6 +1573,8 @@ class ClassBulletinsPdfView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, classroom_id: int, academic_year_id: int, term: str):
+        _ensure_sensitive_export_access(request)
+
         normalized_term = normalize_term(term)
         if not normalized_term:
             return Response(
@@ -1910,6 +1932,8 @@ class PaymentExcelExportView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        _ensure_sensitive_export_access(request)
+
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Paiements"
@@ -2100,6 +2124,8 @@ class ClassStudentCardsPdfView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, classroom_id: int):
+        _ensure_sensitive_export_access(request)
+
         if getattr(request.user, "role", "") in {UserRole.PARENT, UserRole.STUDENT}:
             raise PermissionDenied("Accès refusé aux cartes de classe.")
 

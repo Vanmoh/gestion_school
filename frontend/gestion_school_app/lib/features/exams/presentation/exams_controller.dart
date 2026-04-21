@@ -36,9 +36,13 @@ final examClassroomsProvider = FutureProvider<List<OptionItem>>((ref) async {
   return ref.read(examsRepositoryProvider).fetchClassrooms();
 });
 
-final examSubjectsProvider = FutureProvider<List<OptionItem>>((ref) async {
-  return ref.read(examsRepositoryProvider).fetchSubjects();
-});
+final examSubjectsProvider = FutureProvider.family<List<OptionItem>, int?>(
+  (ref, classroomId) async {
+    return ref.read(examsRepositoryProvider).fetchSubjects(
+      classroomId: classroomId,
+    );
+  },
+);
 
 final examStudentsProvider = FutureProvider<List<OptionItem>>((ref) async {
   return ref.read(examsRepositoryProvider).fetchStudents();

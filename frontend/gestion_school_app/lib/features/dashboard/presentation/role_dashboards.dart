@@ -599,7 +599,7 @@ class _SupervisorDashboardPageState extends ConsumerState<SupervisorDashboardPag
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     return _RoleDashboardScaffold(
-      title: 'Dashboard Surveillant',
+      title: 'Tableau de bord Surveillant',
       subtitle: 'Suivi opérationnel quotidien de l\'établissement.',
       metrics: [
         _RoleMetric(
@@ -719,7 +719,7 @@ class _TeacherDashboardPageState extends ConsumerState<TeacherDashboardPage> {
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     return _RoleDashboardScaffold(
-      title: 'Dashboard Enseignant',
+      title: 'Tableau de bord Enseignant',
       subtitle: 'Vue personnelle des classes, matières et actions pédagogiques.',
       metrics: [
         _RoleMetric(
@@ -807,7 +807,7 @@ class _AccountantDashboardPageState extends ConsumerState<AccountantDashboardPag
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     return _RoleDashboardScaffold(
-      title: 'Dashboard Comptable',
+      title: 'Tableau de bord Comptable',
       subtitle: 'Pilotage financier opérationnel de l\'établissement.',
       metrics: [
         _RoleMetric(
@@ -886,7 +886,7 @@ class _ParentDashboardPageState extends ConsumerState<ParentDashboardPage> {
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     return _RoleDashboardScaffold(
-      title: 'Dashboard Parent',
+      title: 'Tableau de bord Parent',
       subtitle: 'Suivi des informations scolaires liées à vos enfants.',
       metrics: [
         _RoleMetric(
@@ -959,7 +959,7 @@ class _StudentDashboardPageState extends ConsumerState<StudentDashboardPage> {
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     return _RoleDashboardScaffold(
-      title: 'Dashboard Élève',
+      title: 'Tableau de bord Élève',
       subtitle: 'Vue personnelle de votre progression et de votre suivi.',
       metrics: [
         _RoleMetric(

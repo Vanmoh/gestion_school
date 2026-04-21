@@ -105,10 +105,19 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     final invigilationsAsync = ref.watch(examInvigilationsProvider);
     final yearsAsync = ref.watch(examAcademicYearsProvider);
     final classroomsAsync = ref.watch(examClassroomsProvider);
-    final subjectsAsync = ref.watch(examSubjectsProvider);
     final studentsAsync = ref.watch(examStudentsProvider);
     final supervisorsAsync = ref.watch(examSupervisorsProvider);
     final mutationState = ref.watch(examMutationProvider);
+    final students = studentsAsync.valueOrNull ?? const <OptionItem>[];
+    final selectedResultStudent = _selectedResultStudent == null
+        ? null
+        : students.where((item) => item.id == _selectedResultStudent).firstOrNull;
+    final planningSubjectsAsync = ref.watch(
+      examSubjectsProvider(_selectedPlanningClassroom),
+    );
+    final resultSubjectsAsync = ref.watch(
+      examSubjectsProvider(selectedResultStudent?.classroomId),
+    );
     final planningsSnapshot = planningsAsync.valueOrNull ?? const [];
     final sessionLabelById = {
       for (final s in sessionsAsync.valueOrNull ?? const <ExamSessionItem>[])
@@ -119,13 +128,13 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
         c.id: c.label,
     };
     final subjectLabelById = {
-      for (final s in subjectsAsync.valueOrNull ?? const <OptionItem>[])
+      for (final s in {
+        ...planningSubjectsAsync.valueOrNull ?? const <OptionItem>[],
+        ...resultSubjectsAsync.valueOrNull ?? const <OptionItem>[],
+      })
         s.id: s.label,
     };
-    final studentLabelById = {
-      for (final s in studentsAsync.valueOrNull ?? const <OptionItem>[])
-        s.id: s.label,
-    };
+    final studentLabelById = {for (final s in students) s.id: s.label};
     final sessionsCount = sessionsAsync.valueOrNull?.length ?? 0;
     final planningsCount = planningsAsync.valueOrNull?.length ?? 0;
     final resultsCount = resultsAsync.valueOrNull?.length ?? 0;
@@ -357,13 +366,15 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     },
                   ),
                   const SizedBox(height: 8),
-                  subjectsAsync.when(
+                  planningSubjectsAsync.when(
                     loading: () => const SizedBox.shrink(),
                     error: (e, _) => Text('Erreur matières: $e'),
                     data: (subjects) {
                       if (subjects.isEmpty) return const Text('Aucune matière');
-                      _selectedPlanningSubject ??= subjects.first.id;
-                      _selectedResultSubject ??= subjects.first.id;
+                      if (_selectedPlanningSubject == null ||
+                          !subjects.any((s) => s.id == _selectedPlanningSubject)) {
+                        _selectedPlanningSubject = subjects.first.id;
+                      }
                       return DropdownButtonFormField<int>(
                         initialValue: _selectedPlanningSubject,
                         items: subjects
@@ -481,12 +492,15 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     },
                   ),
                   const SizedBox(height: 8),
-                  subjectsAsync.when(
+                  resultSubjectsAsync.when(
                     loading: () => const SizedBox.shrink(),
                     error: (e, _) => Text('Erreur matières: $e'),
                     data: (subjects) {
                       if (subjects.isEmpty) return const Text('Aucune matière');
-                      _selectedResultSubject ??= subjects.first.id;
+                      if (_selectedResultSubject == null ||
+                          !subjects.any((s) => s.id == _selectedResultSubject)) {
+                        _selectedResultSubject = subjects.first.id;
+                      }
                       return DropdownButtonFormField<int>(
                         initialValue: _selectedResultSubject,
                         items: subjects

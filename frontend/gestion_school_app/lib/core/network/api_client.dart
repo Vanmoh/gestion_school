@@ -106,15 +106,9 @@ final dioProvider = Provider<Dio>((ref) {
           }
         }
 
-        // Non-superadmin users are always pinned to their own establishment.
-        // Backend also enforces this, this is only a client-side safety layer.
-        if (role != 'super_admin' && userEtablissementId != null) {
-          options.headers['X-Etablissement-Id'] = userEtablissementId.toString();
-          final cleanedName = userEtablissementName?.trim();
-          if (cleanedName != null && cleanedName.isNotEmpty) {
-            options.headers['X-Etablissement-Name'] = cleanedName;
-          }
-        }
+        // Do not pin non-superadmin scope from cached user metadata.
+        // Cached storage can be stale across account switches; backend enforces
+        // effective establishment from the authenticated user on every request.
         handler.next(options);
       },
       onError: (error, handler) async {

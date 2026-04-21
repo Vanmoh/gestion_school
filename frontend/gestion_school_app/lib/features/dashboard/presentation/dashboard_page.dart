@@ -4,6 +4,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/providers/navigation_intents.dart';
 import '../../../models/etablissement.dart';
 import '../domain/dashboard_stats.dart';
 import 'dashboard_controller.dart';
@@ -12,6 +13,8 @@ import 'dashboard_shared_ui.dart';
 enum _DashboardScopePeriod { weekly, monthly, quarterly }
 
 enum _DashboardScopeLevel { all, lower, middle, upper }
+
+enum _DashboardQuickAction { refresh, reports, finance, timetable, activityLogs }
 
 class DashboardPage extends ConsumerStatefulWidget {
   const DashboardPage({super.key});
@@ -30,6 +33,30 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
       await ref.read(dashboardStatsProvider.future);
     } catch (_) {
       // Keep refresh gesture responsive even when backend is temporarily down.
+    }
+  }
+
+  void _navigateToShellItem(String key) {
+    ref.read(adminShellNavigationKeyProvider.notifier).state = key;
+  }
+
+  void _handleQuickAction(_DashboardQuickAction action) {
+    switch (action) {
+      case _DashboardQuickAction.refresh:
+        _refreshDashboard();
+        return;
+      case _DashboardQuickAction.reports:
+        _navigateToShellItem('reports');
+        return;
+      case _DashboardQuickAction.finance:
+        _navigateToShellItem('finance');
+        return;
+      case _DashboardQuickAction.timetable:
+        _navigateToShellItem('timetable');
+        return;
+      case _DashboardQuickAction.activityLogs:
+        _navigateToShellItem('activity_logs');
+        return;
     }
   }
 
@@ -346,6 +373,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                           establishmentName: activeEtablissementName,
                           contextLabel: contextLabel,
                           refreshedAt: refreshedAt,
+                          onActionSelected: _handleQuickAction,
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -368,7 +396,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                       _StaggerReveal(
                         index: 2,
                         child: _DashboardHeroPanel(
-                          title: 'Dashboard Exécutif',
+                          title: 'Tableau de bord Admin',
                           subtitle: heroSubtitleWithContext,
                           statusLabel: scopedProfit >= 0
                               ? 'Performance saine'
@@ -405,6 +433,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                           onRefresh: () {
                             _refreshDashboard();
                           },
+                          onActionSelected: _handleQuickAction,
                         ),
                       ),
                       const SizedBox(height: 14),
@@ -725,6 +754,7 @@ class _DashboardHeroPanel extends StatelessWidget {
   final Color statusColor;
   final List<_HeroBadgeData> badges;
   final VoidCallback onRefresh;
+  final ValueChanged<_DashboardQuickAction> onActionSelected;
 
   const _DashboardHeroPanel({
     required this.title,
@@ -733,6 +763,7 @@ class _DashboardHeroPanel extends StatelessWidget {
     required this.statusColor,
     required this.badges,
     required this.onRefresh,
+    required this.onActionSelected,
   });
 
   @override
@@ -781,7 +812,7 @@ class _DashboardHeroPanel extends StatelessWidget {
                 children: [
                   _RefreshMicroButton(onPressed: onRefresh),
                   const SizedBox(width: 8),
-                  const _HeroActionBubble(icon: Icons.more_horiz_rounded),
+                  _HeroActionMenu(onSelected: onActionSelected),
                 ],
               ),
             ],
@@ -821,22 +852,72 @@ class _DashboardHeroPanel extends StatelessWidget {
   }
 }
 
-class _HeroActionBubble extends StatelessWidget {
-  final IconData icon;
+class _HeroActionMenu extends StatelessWidget {
+  final ValueChanged<_DashboardQuickAction> onSelected;
 
-  const _HeroActionBubble({required this.icon});
+  const _HeroActionMenu({required this.onSelected});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 38,
-      height: 38,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(11),
-        color: Colors.white.withValues(alpha: 0.1),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+    return PopupMenuButton<_DashboardQuickAction>(
+      tooltip: 'Actions rapides',
+      onSelected: onSelected,
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: _DashboardQuickAction.refresh,
+          child: ListTile(
+            leading: Icon(Icons.refresh_rounded),
+            title: Text('Actualiser'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          value: _DashboardQuickAction.reports,
+          child: ListTile(
+            leading: Icon(Icons.assessment_rounded),
+            title: Text('Rapports'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          value: _DashboardQuickAction.finance,
+          child: ListTile(
+            leading: Icon(Icons.account_balance_wallet_rounded),
+            title: Text('Finances'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          value: _DashboardQuickAction.timetable,
+          child: ListTile(
+            leading: Icon(Icons.schedule_rounded),
+            title: Text('Emploi du temps'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          value: _DashboardQuickAction.activityLogs,
+          child: ListTile(
+            leading: Icon(Icons.history_rounded),
+            title: Text('Journal d’activité'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+      ],
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(11),
+          color: Colors.white.withValues(alpha: 0.1),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+        ),
+        child: Icon(
+          Icons.more_horiz_rounded,
+          color: Colors.white.withValues(alpha: 0.88),
+          size: 18,
+        ),
       ),
-      child: Icon(icon, color: Colors.white.withValues(alpha: 0.88), size: 18),
     );
   }
 }
@@ -845,11 +926,13 @@ class _ContextRibbon extends StatelessWidget {
   final String establishmentName;
   final String contextLabel;
   final String refreshedAt;
+  final ValueChanged<_DashboardQuickAction> onActionSelected;
 
   const _ContextRibbon({
     required this.establishmentName,
     required this.contextLabel,
     required this.refreshedAt,
+    required this.onActionSelected,
   });
 
   @override
@@ -885,26 +968,52 @@ class _ContextRibbon extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              gradient: const LinearGradient(
-                colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+          PopupMenuButton<_DashboardQuickAction>(
+            tooltip: 'Raccourcis dashboard',
+            onSelected: onActionSelected,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _DashboardQuickAction.refresh,
+                child: Text('Actualiser les indicateurs'),
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF8B5CF6).withValues(alpha: 0.34),
-                  blurRadius: 16,
-                  spreadRadius: -4,
+              PopupMenuItem(
+                value: _DashboardQuickAction.reports,
+                child: Text('Ouvrir les rapports'),
+              ),
+              PopupMenuItem(
+                value: _DashboardQuickAction.finance,
+                child: Text('Ouvrir la finance'),
+              ),
+              PopupMenuItem(
+                value: _DashboardQuickAction.timetable,
+                child: Text('Ouvrir l’emploi du temps'),
+              ),
+              PopupMenuItem(
+                value: _DashboardQuickAction.activityLogs,
+                child: Text('Voir le journal d’activité'),
+              ),
+            ],
+            child: Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
                 ),
-              ],
-            ),
-            child: const Icon(
-              Icons.more_horiz_rounded,
-              color: Colors.white,
-              size: 18,
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF8B5CF6).withValues(alpha: 0.34),
+                    blurRadius: 16,
+                    spreadRadius: -4,
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.more_horiz_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
             ),
           ),
         ],
