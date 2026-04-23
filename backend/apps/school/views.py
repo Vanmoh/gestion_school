@@ -2697,6 +2697,43 @@ class GradeViewSet(BaseModelViewSet):
             is_validated=True,
         ).exists()
 
+    def _close_term_workflow(self, *, classroom, academic_year, term, notes, user):
+        grade_count = Grade.objects.filter(
+            classroom=classroom,
+            academic_year=academic_year,
+            term=term,
+        ).count()
+        if grade_count == 0:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Aucune note de classe pour cette période. "
+                        "Ajoutez les notes avant la clôture trimestrielle."
+                    )
+                }
+            )
+
+        with transaction.atomic():
+            # The ranking used by promotion/history is refreshed immediately before locking the term.
+            recalculate_term_ranking(classroom, academic_year, term)
+            validation, _ = GradeValidation.objects.update_or_create(
+                classroom=classroom,
+                academic_year=academic_year,
+                term=term,
+                defaults={
+                    "is_validated": True,
+                    "validated_by": user,
+                    "validated_at": timezone.now(),
+                    "notes": notes,
+                },
+            )
+
+        history_count = StudentAcademicHistory.objects.filter(
+            classroom=classroom,
+            academic_year=academic_year,
+        ).count()
+        return validation, history_count
+
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -2796,19 +2833,52 @@ class GradeViewSet(BaseModelViewSet):
 
         classroom = self._get_scoped_classroom_or_404(classroom_id)
         academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
-        validation, _ = GradeValidation.objects.update_or_create(
+        validation, history_count = self._close_term_workflow(
             classroom=classroom,
             academic_year=academic_year,
             term=term,
-            defaults={
-                "is_validated": True,
-                "validated_by": request.user,
-                "validated_at": timezone.now(),
-                "notes": notes,
-            },
+            notes=notes,
+            user=request.user,
         )
         serializer = GradeValidationSerializer(validation)
-        return Response(serializer.data)
+        payload = dict(serializer.data)
+        payload.update(
+            {
+                "detail": "Période clôturée: classement recalculé et modifications verrouillées.",
+                "history_rows": history_count,
+            }
+        )
+        return Response(payload)
+
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    def close_term(self, request):
+        classroom_id = self._parse_positive_int(request.data.get("classroom"))
+        academic_year_id = self._parse_positive_int(request.data.get("academic_year"))
+        term = self._normalize_term_or_none(request.data.get("term"))
+        notes = request.data.get("notes", "")
+
+        if not classroom_id or not academic_year_id or not term:
+            return Response({"detail": "classroom, academic_year et term (T1/T2/T3) sont requis."}, status=400)
+
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
+        academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
+        validation, history_count = self._close_term_workflow(
+            classroom=classroom,
+            academic_year=academic_year,
+            term=term,
+            notes=notes,
+            user=request.user,
+        )
+
+        serializer = GradeValidationSerializer(validation)
+        payload = dict(serializer.data)
+        payload.update(
+            {
+                "detail": "Clôture trimestrielle effectuée avec succès.",
+                "history_rows": history_count,
+            }
+        )
+        return Response(payload)
 
     @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
     def unvalidate_term(self, request):

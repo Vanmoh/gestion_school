@@ -26,6 +26,7 @@ from apps.school.models import (
     Grade,
     Payment,
     Student,
+    StudentAcademicHistory,
     Subject,
     TeacherAssignment,
 )
@@ -1016,7 +1017,7 @@ def _build_bulletin_rows(
         }
     ]
 
-    weighted_sum += conduite_note * conduite_coef
+    weighted_sum += round(conduite_note * conduite_coef, 2)
     coef_sum += conduite_coef
 
     for index, subject in enumerate(subjects, start=2):
@@ -1025,29 +1026,25 @@ def _build_bulletin_rows(
         note_examen = exam_note_by_subject.get(subject.id)
 
         if note_classe is not None and note_examen is not None:
-            note_finale = round((note_classe * coef) + (note_examen * coef), 2)
-            effective_coef = coef * 2
+            note_finale = round((note_classe + note_examen) / 2.0, 2)
+            effective_coef = coef
         elif note_classe is not None:
-            note_finale = round(note_classe * coef, 2)
+            note_finale = round(note_classe, 2)
             effective_coef = coef
         elif note_examen is not None:
-            note_finale = round(note_examen * coef, 2)
+            note_finale = round(note_examen, 2)
             effective_coef = coef
         else:
             note_finale = None
             effective_coef = 0.0
 
-        appreciation_score = (
-            (note_finale / effective_coef)
-            if (note_finale is not None and effective_coef > 0)
-            else None
-        )
+        appreciation_score = note_finale
 
         note_moyenne_classe = class_average_by_subject.get(subject.id)
-        points = note_finale
+        points = round(note_finale * coef, 2) if note_finale is not None else None
 
-        if note_finale is not None and effective_coef > 0:
-            weighted_sum += note_finale
+        if points is not None and effective_coef > 0:
+            weighted_sum += points
             coef_sum += effective_coef
 
         rows.append(
@@ -1385,6 +1382,20 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
         conduite_moyenne_classe=conduite_moyenne_classe,
     )
 
+    rank_value = None
+    if classroom_id:
+        history = (
+            StudentAcademicHistory.objects.filter(
+                student_id=student.id,
+                academic_year_id=academic_year_id,
+                classroom_id=classroom_id,
+            )
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        if history and history.rank:
+            rank_value = int(history.rank)
+
     if average >= 16:
         mention = "Tres bien"
     elif average >= 14:
@@ -1395,6 +1406,17 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
         mention = "Passable"
     else:
         mention = "Insuffisant"
+
+    etablissement = _student_etablissement(student)
+    signature_source = _etablissement_media_field_path(etablissement, "principal_signature_image") or _school_signature_asset_path()
+    stamp_source = _etablissement_media_field_path(etablissement, "stamp_image") or _school_stamp_asset_path()
+    signature_asset_path = _pdf_compatible_image_path(signature_source, cache_prefix="bulletin_signature")
+    stamp_asset_path = _pdf_compatible_image_path(stamp_source, cache_prefix="bulletin_stamp")
+    signature_label = str(getattr(etablissement, "principal_signature_label", "") or "").strip() or "Direction"
+    signature_position = str(getattr(etablissement, "principal_signature_position", "") or "right").strip().lower()
+    stamp_position = str(getattr(etablissement, "stamp_position", "") or "right").strip().lower()
+    signature_scale = _safe_scale_percent(getattr(etablissement, "principal_signature_scale", 100)) / 100.0
+    stamp_scale = _safe_scale_percent(getattr(etablissement, "stamp_scale", 100)) / 100.0
 
     return {
         "logo_path": logo_path,
@@ -1407,10 +1429,19 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
         "class_name": class_name,
         "academic_year_name": academic_year_name,
         "period_label": period_label,
+        "rank": rank_value,
+        "rank_display": str(rank_value) if rank_value else "-",
         "rows": rows,
         "average": average,
         "coef_sum": coef_sum,
         "mention": mention,
+        "signature_asset_path": signature_asset_path,
+        "stamp_asset_path": stamp_asset_path,
+        "signature_label": signature_label,
+        "signature_position": signature_position,
+        "stamp_position": stamp_position,
+        "signature_scale": signature_scale,
+        "stamp_scale": stamp_scale,
     }
 
 
@@ -1463,6 +1494,7 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
         ("Eleve", payload["student_name"]),
         ("Matricule", payload["student_matricule"]),
         ("Classe", payload["class_name"]),
+        ("Rang", payload["rank_display"]),
         ("Etablissement", payload["school_name"]),
         ("Annee", payload["academic_year_name"]),
         ("Periode", payload["period_label"]),
@@ -1478,27 +1510,34 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
         if index % 2 == 1:
             pdf.ln(info_h)
 
+    # If the info table has an odd number of cells, force a line break
+    # so the grades table always starts below it.
+    if len(info_rows) % 2 == 1:
+        pdf.ln(info_h)
+
     rows = payload["rows"]
     table_columns = [
         ("N", 10, "index"),
-        ("Matiere", 96, "subject"),
-        ("Coef", 16, "coef"),
-        ("Note classe", 27, "note_classe"),
-        ("Note examen", 27, "note_examen"),
-        ("Note finale", 27, "note_finale"),
-        ("Appreciation", 42, "appreciation"),
+        ("Matiere", 86, "subject"),
+        ("Coef", 14, "coef"),
+        ("Classe /20", 22, "note_classe"),
+        ("Examen /20", 22, "note_examen"),
+        ("Moyenne /20", 22, "note_finale"),
+        ("Points", 22, "points"),
+        ("Appreciation", 34, "appreciation"),
     ]
     table_width = sum(column[1] for column in table_columns)
     table_x = max(left_margin, (pdf.w - table_width) / 2)
 
     table_y = pdf.get_y() + 2.4
-    summary_start_y = 172
+    # Keep enough bottom space for director signature + stamp block.
+    summary_start_y = 154
     header_h = 5.6
     available_for_rows = max(26.0, summary_start_y - table_y - header_h)
     row_count = max(len(rows), 1)
     row_h = max(2.5, min(5.4, available_for_rows / row_count))
     body_font_size = max(6.1, min(8.2, row_h + 2.0))
-    subject_max_len = max(24, min(78, int(78 * (row_h / 5.4))))
+    subject_max_len = max(22, min(64, int(64 * (row_h / 5.4))))
 
     pdf.set_y(table_y)
     pdf.set_x(table_x)
@@ -1527,18 +1566,22 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
                 pdf.set_fill_color(248, 250, 253)
             pdf.set_x(table_x)
             pdf.cell(10, row_h, _pdf_text(str(row["index"])), border=1, align="C", fill=fill_row)
-            pdf.cell(96, row_h, _pdf_text(str(row["subject"])[:subject_max_len]), border=1, fill=fill_row)
-            pdf.cell(16, row_h, _pdf_text(_format_coef_value(row["coef"])), border=1, align="C", fill=fill_row)
-            pdf.cell(27, row_h, _pdf_text(_format_cell_value(row["note_classe"])), border=1, align="C", fill=fill_row)
-            pdf.cell(27, row_h, _pdf_text(_format_cell_value(row["note_examen"])), border=1, align="C", fill=fill_row)
-            pdf.cell(27, row_h, _pdf_text(_format_cell_value(row["note_finale"])), border=1, align="C", fill=fill_row)
-            pdf.cell(42, row_h, _pdf_text(str(row.get("appreciation") or "-")[:20]), border=1, align="C", fill=fill_row)
+            pdf.cell(86, row_h, _pdf_text(str(row["subject"])[:subject_max_len]), border=1, fill=fill_row)
+            pdf.cell(14, row_h, _pdf_text(_format_coef_value(row["coef"])), border=1, align="C", fill=fill_row)
+            pdf.cell(22, row_h, _pdf_text(_format_cell_value(row["note_classe"])), border=1, align="C", fill=fill_row)
+            pdf.cell(22, row_h, _pdf_text(_format_cell_value(row["note_examen"])), border=1, align="C", fill=fill_row)
+            pdf.cell(22, row_h, _pdf_text(_format_cell_value(row["note_finale"])), border=1, align="C", fill=fill_row)
+            pdf.cell(22, row_h, _pdf_text(_format_cell_value(row.get("points"))), border=1, align="C", fill=fill_row)
+            pdf.cell(34, row_h, _pdf_text(str(row.get("appreciation") or "-")[:20]), border=1, align="C", fill=fill_row)
             pdf.ln(row_h)
 
-    pdf.set_y(summary_start_y)
+    # Keep at least 1 cm (10 mm) between the end of the table and the summary block.
+    summary_y = max(summary_start_y, pdf.get_y() + 10.0)
+    pdf.set_y(summary_y)
     pdf.set_font("Helvetica", "B", 9.2)
     pdf.cell(0, 4.3, _pdf_text(f"Moyenne generale ponderee: {payload['average']:.2f}/20"), ln=True)
     pdf.cell(0, 4.3, _pdf_text(f"Total coefficients utilises: {_format_coef_value(payload['coef_sum'])}"), ln=True)
+    pdf.cell(0, 4.3, _pdf_text(f"Rang: {payload['rank_display']}"), ln=True)
     pdf.cell(0, 4.3, _pdf_text(f"Mention: {payload['mention']}"), ln=True)
 
     pdf.set_font("Helvetica", size=7.2)
@@ -1547,8 +1590,8 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
         0,
         3.8,
         _pdf_text(
-            "Formule: Note finale = (Note classe x Coef classe) + (Note examen x Coef examen). "
-            "Coef classe et coef examen sont egaux au coefficient de la matiere."
+            "Formule: Moyenne matiere = (Note classe + Note examen) / 2 si les deux existent, "
+            "sinon la note disponible. Points = Moyenne matiere x Coefficient."
         ),
     )
     pdf.set_text_color(0, 0, 0)
@@ -1559,14 +1602,88 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
     right_sig_x2 = right_margin - 12
     right_sig_x1 = right_sig_x2 - 62
 
+    signature_asset_path = payload.get("signature_asset_path")
+    stamp_asset_path = payload.get("stamp_asset_path")
+    signature_label = str(payload.get("signature_label") or "Direction")
+    signature_position = str(payload.get("signature_position") or "right").strip().lower()
+    stamp_position = str(payload.get("stamp_position") or "right").strip().lower()
+    signature_scale = float(payload.get("signature_scale") or 1.0)
+    stamp_scale = float(payload.get("stamp_scale") or 1.0)
+
+    right_line_w = right_sig_x2 - right_sig_x1
+    signature_w = max(16.0, min(46.0, right_line_w * 0.90 * signature_scale))
+    signature_h = max(4.2, min(12.0, 5.8 * signature_scale))
+    stamp_size = max(11.0, min(24.0, 16.0 * stamp_scale))
+
+    # Compute the lowest safe baseline so images stay fully visible.
+    signature_bottom_padding = 5.2 + signature_h + (stamp_size * 0.42) + 2.0
+    signature_max_y = pdf.h - signature_bottom_padding
+    signature_pref_y = max(pdf.get_y() + 2.0, 176.0)
+    signature_y = min(signature_pref_y, signature_max_y)
+    if signature_y < 166.0:
+        signature_y = 166.0
+
     pdf.line(left_sig_x1, signature_y, left_sig_x2, signature_y)
     pdf.line(right_sig_x1, signature_y, right_sig_x2, signature_y)
+    signature_default_x = right_sig_x1 + max(0.0, (right_line_w - signature_w) / 2.0)
+    signature_x = _positioned_x(
+        signature_position,
+        min_x=right_sig_x1,
+        max_x=right_sig_x2,
+        box_width=signature_w,
+        default_x=signature_default_x,
+    )
+    # Keep signature and stamp under the "Le Directeur" label.
+    signature_img_y = signature_y + 5.2
+
+    if signature_asset_path:
+        try:
+            pdf.image(signature_asset_path, x=signature_x, y=signature_img_y, w=signature_w, h=signature_h)
+        except Exception:
+            signature_asset_path = None
+
+    if not signature_asset_path:
+        fallback_line_y = signature_img_y + (signature_h * 0.62)
+        pdf.set_draw_color(85, 96, 112)
+        pdf.set_line_width(0.16)
+        pdf.line(signature_x + 0.3, fallback_line_y, signature_x + signature_w - 0.3, fallback_line_y)
+
+    stamp_default_x = min(right_sig_x2 - stamp_size, signature_x + signature_w - (stamp_size * 0.5))
+    stamp_x = _positioned_x(
+        stamp_position,
+        min_x=right_sig_x1,
+        max_x=right_sig_x2,
+        box_width=stamp_size,
+        default_x=stamp_default_x,
+    )
+    stamp_y = signature_img_y + max(0.2, signature_h - (stamp_size * 0.58))
+    if stamp_asset_path:
+        try:
+            pdf.image(stamp_asset_path, x=stamp_x, y=stamp_y, w=stamp_size, h=stamp_size)
+        except Exception:
+            stamp_asset_path = None
+
+    if not stamp_asset_path:
+        pdf.set_draw_color(31, 90, 161)
+        pdf.set_line_width(0.18)
+        try:
+            pdf.ellipse(stamp_x, stamp_y, stamp_size, stamp_size)
+            pdf.ellipse(stamp_x + 1.7, stamp_y + 1.7, stamp_size - 3.4, stamp_size - 3.4)
+        except Exception:
+            pdf.rect(stamp_x, stamp_y, stamp_size, stamp_size)
+            pdf.rect(stamp_x + 1.7, stamp_y + 1.7, stamp_size - 3.4, stamp_size - 3.4)
+
+        pdf.set_xy(stamp_x, stamp_y + (stamp_size * 0.45))
+        pdf.set_font("Helvetica", "B", 5.8)
+        pdf.set_text_color(31, 90, 161)
+        pdf.cell(stamp_size, 2.4, _pdf_text("Cachet"), align="C")
+
     pdf.set_y(signature_y + 1.2)
     pdf.set_font("Helvetica", size=7.8)
     pdf.set_x(left_sig_x1)
     pdf.cell(left_sig_x2 - left_sig_x1, 3.8, _pdf_text("Titulaire / Enseignant"), align="C")
     pdf.set_x(right_sig_x1)
-    pdf.cell(right_sig_x2 - right_sig_x1, 3.8, _pdf_text("Direction"), align="C")
+    pdf.cell(right_sig_x2 - right_sig_x1, 3.8, _pdf_text(signature_label), align="C")
 
 
 class ClassBulletinsPdfView(APIView):
@@ -1595,8 +1712,29 @@ class ClassBulletinsPdfView(APIView):
         students = list(
             _allowed_students_queryset(request)
             .filter(classroom_id=classroom.id, is_archived=False)
-            .order_by("user__last_name", "user__first_name", "matricule")
         )
+
+        if students:
+            rank_by_student_id = {
+                int(student_id): int(rank)
+                for student_id, rank in StudentAcademicHistory.objects.filter(
+                    classroom_id=classroom.id,
+                    academic_year_id=academic_year_id,
+                    student_id__in=[student.id for student in students],
+                ).values_list("student_id", "rank")
+                if rank is not None and int(rank) > 0
+            }
+
+            def _student_rank_key(student: Student):
+                rank = rank_by_student_id.get(student.id)
+                last_name = str(getattr(student.user, "last_name", "") or "").lower()
+                first_name = str(getattr(student.user, "first_name", "") or "").lower()
+                matricule = str(getattr(student, "matricule", "") or "").lower()
+                if rank is None:
+                    return (1, 10**9, last_name, first_name, matricule, student.id)
+                return (0, rank, last_name, first_name, matricule, student.id)
+
+            students.sort(key=_student_rank_key)
 
         if not students:
             return Response({"detail": "Aucun élève trouvé pour cette classe."}, status=404)
