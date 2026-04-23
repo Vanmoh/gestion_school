@@ -903,16 +903,46 @@ def recalculate_term_ranking(classroom: ClassRoom, academic_year: AcademicYear, 
             academic_year=academic_year,
             term=term,
         ).select_related("subject")
+        exam_results = ExamResult.objects.filter(
+            student=student,
+            session__academic_year=academic_year,
+            session__term=term,
+        ).select_related("subject", "session")
+
+        class_note_by_subject = {}
+        subject_by_id = {}
+        for grade in grades.order_by("subject_id", "-created_at", "-id"):
+            class_note_by_subject.setdefault(grade.subject_id, Decimal(str(grade.value)))
+            subject_by_id.setdefault(grade.subject_id, grade.subject)
+
+        exam_note_by_subject = {}
+        for exam_result in exam_results.order_by(
+            "subject_id",
+            "-session__end_date",
+            "-session__start_date",
+            "-created_at",
+            "-id",
+        ):
+            exam_note_by_subject.setdefault(exam_result.subject_id, Decimal(str(exam_result.score)))
+            subject_by_id.setdefault(exam_result.subject_id, exam_result.subject)
 
         weighted_sum = Decimal("0")
         coef_sum = Decimal("0")
 
-        for grade in grades:
-            coef = Decimal(str(grade.subject.coefficient or 0))
+        for subject_id, subject in subject_by_id.items():
+            coef = Decimal(str(subject.coefficient or 0))
             if coef <= 0:
                 continue
-            weighted_sum += Decimal(str(grade.value)) * coef
-            coef_sum += coef
+
+            class_note = class_note_by_subject.get(subject_id)
+            exam_note = exam_note_by_subject.get(subject_id)
+
+            if class_note is not None:
+                weighted_sum += class_note * coef
+                coef_sum += coef
+            if exam_note is not None:
+                weighted_sum += exam_note * coef
+                coef_sum += coef
 
         average = Decimal("0")
         if coef_sum > 0:

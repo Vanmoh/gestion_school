@@ -1618,12 +1618,77 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     var selectedTerm = _currentTermOrDefault();
     var search = '';
 
-    final initialStudents = _studentsForClassroom(selectedClassroom)
-      ..sort(
-        (a, b) => '${a['user_full_name'] ?? ''}'.toLowerCase().compareTo(
-          '${b['user_full_name'] ?? ''}'.toLowerCase(),
-        ),
-      );
+    Future<Map<int, int>> fetchRankMapForSelection({
+      required int? classroomId,
+      required int? academicYearId,
+    }) async {
+      if (classroomId == null || classroomId <= 0 || academicYearId == null || academicYearId <= 0) {
+        return <int, int>{};
+      }
+
+      try {
+        final dio = ref.read(dioProvider);
+        final response = await dio.get(
+          '/student-history/',
+          queryParameters: {
+            'classroom': classroomId,
+            'academic_year': academicYearId,
+            'page_size': 500,
+          },
+        );
+
+        final rows = _extractRows(response.data);
+        final rankMap = <int, int>{};
+        for (final row in rows) {
+          final studentId = _asInt(row['student']);
+          final rank = _asInt(row['rank']);
+          if (studentId > 0 && rank > 0) {
+            rankMap[studentId] = rank;
+          }
+        }
+        return rankMap;
+      } catch (_) {
+        return <int, int>{};
+      }
+    }
+
+    List<Map<String, dynamic>> sortStudentsByRank(
+      List<Map<String, dynamic>> rows,
+      Map<int, int> rankByStudent,
+    ) {
+      final sorted = List<Map<String, dynamic>>.from(rows);
+      sorted.sort((a, b) {
+        final aId = _asInt(a['id']);
+        final bId = _asInt(b['id']);
+        final rankA = rankByStudent[aId] ?? 1 << 30;
+        final rankB = rankByStudent[bId] ?? 1 << 30;
+        if (rankA != rankB) return rankA.compareTo(rankB);
+
+        final aName = '${a['user_full_name'] ?? ''}'.toLowerCase();
+        final bName = '${b['user_full_name'] ?? ''}'.toLowerCase();
+        final byName = aName.compareTo(bName);
+        if (byName != 0) return byName;
+
+        final aMat = '${a['matricule'] ?? ''}'.toLowerCase();
+        final bMat = '${b['matricule'] ?? ''}'.toLowerCase();
+        final byMat = aMat.compareTo(bMat);
+        if (byMat != 0) return byMat;
+
+        return aId.compareTo(bId);
+      });
+      return sorted;
+    }
+
+    var rankByStudent = await fetchRankMapForSelection(
+      classroomId: selectedClassroom,
+      academicYearId: selectedYear,
+    );
+    var rankLoading = false;
+
+    final initialStudents = sortStudentsByRank(
+      _studentsForClassroom(selectedClassroom),
+      rankByStudent,
+    );
 
     int? selectedStudent = initialStudents.isNotEmpty
         ? _asInt(initialStudents.first['id'])
@@ -1642,12 +1707,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            final classStudents = _studentsForClassroom(selectedClassroom)
-              ..sort(
-                (a, b) => '${a['user_full_name'] ?? ''}'
-                    .toLowerCase()
-                    .compareTo('${b['user_full_name'] ?? ''}'.toLowerCase()),
-              );
+            final classStudents = sortStudentsByRank(
+              _studentsForClassroom(selectedClassroom),
+              rankByStudent,
+            );
 
             final visibleStudents = classStudents.where((row) {
               if (search.isEmpty) return true;
@@ -1690,21 +1753,27 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                     ),
                                   )
                                   .toList(),
-                              onChanged: (value) {
+                              onChanged: (value) async {
                                 if (value == null) return;
                                 setDialogState(() {
                                   selectedClassroom = value;
-                                  final nextStudents =
-                                      _studentsForClassroom(
-                                        selectedClassroom,
-                                      )..sort(
-                                        (a, b) => '${a['user_full_name'] ?? ''}'
-                                            .toLowerCase()
-                                            .compareTo(
-                                              '${b['user_full_name'] ?? ''}'
-                                                  .toLowerCase(),
-                                            ),
-                                      );
+                                  rankLoading = true;
+                                });
+
+                                final nextRankMap =
+                                    await fetchRankMapForSelection(
+                                      classroomId: value,
+                                      academicYearId: selectedYear,
+                                    );
+                                if (!mounted) return;
+
+                                setDialogState(() {
+                                  rankByStudent = nextRankMap;
+                                  rankLoading = false;
+                                  final nextStudents = sortStudentsByRank(
+                                    _studentsForClassroom(selectedClassroom),
+                                    rankByStudent,
+                                  );
                                   selectedStudent = nextStudents.isNotEmpty
                                       ? _asInt(nextStudents.first['id'])
                                       : null;
@@ -1734,10 +1803,35 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                     ),
                                   )
                                   .toList(),
-                              onChanged: (value) {
+                              onChanged: (value) async {
                                 if (value == null) return;
                                 setDialogState(() {
                                   selectedYear = value;
+                                  rankLoading = true;
+                                });
+
+                                final nextRankMap =
+                                    await fetchRankMapForSelection(
+                                      classroomId: selectedClassroom,
+                                      academicYearId: value,
+                                    );
+                                if (!mounted) return;
+
+                                setDialogState(() {
+                                  rankByStudent = nextRankMap;
+                                  rankLoading = false;
+                                  final nextStudents = sortStudentsByRank(
+                                    _studentsForClassroom(selectedClassroom),
+                                    rankByStudent,
+                                  );
+                                  if (selectedStudent != null &&
+                                      !nextStudents.any(
+                                        (row) => _asInt(row['id']) == selectedStudent,
+                                      )) {
+                                    selectedStudent = nextStudents.isNotEmpty
+                                        ? _asInt(nextStudents.first['id'])
+                                        : null;
+                                  }
                                   previewFuture = selectedStudent == null
                                       ? null
                                       : _fetchBulletinPdfBytes(
@@ -1806,6 +1900,14 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                       });
                                     },
                                   ),
+                                  if (rankLoading)
+                                    const Padding(
+                                      padding: EdgeInsets.only(top: 6),
+                                      child: Text(
+                                        'Tri par rang en cours...',
+                                        style: TextStyle(fontSize: 12),
+                                      ),
+                                    ),
                                   const SizedBox(height: 8),
                                   Expanded(
                                     child: Container(
@@ -1834,6 +1936,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                                 final rowId = _asInt(row['id']);
                                                 final selected =
                                                     rowId == selectedStudent;
+                                                final rankLabel = rankByStudent[rowId];
                                                 final label =
                                                     '${row['matricule'] ?? ''} ${(row['user_full_name'] ?? '').toString().trim()}';
                                                 return ListTile(
@@ -1845,6 +1948,9 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                                     overflow:
                                                         TextOverflow.ellipsis,
                                                   ),
+                                                  subtitle: rankLabel == null
+                                                      ? null
+                                                      : Text('Rang: $rankLabel'),
                                                   onTap: () {
                                                     setDialogState(() {
                                                       selectedStudent = rowId;

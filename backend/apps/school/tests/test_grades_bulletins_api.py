@@ -1,23 +1,28 @@
 from datetime import date
+from unittest.mock import patch
 
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import User, UserRole
-from apps.reports.views import _build_bulletin_rows
+from apps.reports.views import _build_bulletin_payload, _build_bulletin_rows
 from apps.school.models import (
     AcademicYear,
     Attendance,
     ClassRoom,
     DisciplineIncident,
     Etablissement,
+    ExamResult,
+    ExamSession,
     Grade,
     GradeValidation,
     ParentProfile,
     Student,
+    StudentAcademicHistory,
     Subject,
     Teacher,
     TeacherAssignment,
+    recalculate_term_ranking,
 )
 
 
@@ -430,7 +435,7 @@ class GradesAndBulletinsApiTests(APITestCase):
         self.assertEqual(patch_response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_create_grade_normalizes_term_and_rejects_out_of_range_value(self):
-        self.client.force_authenticate(self.admin_user)
+        self.client.force_authenticate(self.supervisor_user)
 
         valid_response = self.client.post(
             "/api/grades/",
@@ -529,6 +534,65 @@ class GradesAndBulletinsApiTests(APITestCase):
         )
         self.assertEqual(recalc_response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_validate_term_closes_period_and_recalculates_ranking(self):
+        self.client.force_authenticate(self.admin_user)
+
+        self.grade_1.value = 10
+        self.grade_1.save(update_fields=["value", "updated_at"])
+        self.grade_2.value = 12
+        self.grade_2.save(update_fields=["value", "updated_at"])
+
+        session = ExamSession.objects.create(
+            title="Examen T1 closure",
+            term="T1",
+            academic_year=self.year,
+            start_date=date(2026, 1, 12),
+            end_date=date(2026, 1, 13),
+        )
+        ExamResult.objects.create(
+            session=session,
+            student=self.student_1,
+            subject=self.subject_math,
+            score=20,
+        )
+        ExamResult.objects.create(
+            session=session,
+            student=self.student_2,
+            subject=self.subject_math,
+            score=0,
+        )
+
+        response = self.client.post(
+            "/api/grades/validate_term/",
+            {
+                "classroom": self.class_a.id,
+                "academic_year": self.year.id,
+                "term": "T1",
+                "notes": "Fin du trimestre",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data.get("is_validated"))
+        self.assertIn("clôturée", str(response.data.get("detail", "")))
+        self.assertEqual(response.data.get("history_rows"), 2)
+
+        history_1 = StudentAcademicHistory.objects.get(
+            student=self.student_1,
+            academic_year=self.year,
+            classroom=self.class_a,
+        )
+        history_2 = StudentAcademicHistory.objects.get(
+            student=self.student_2,
+            academic_year=self.year,
+            classroom=self.class_a,
+        )
+        self.assertEqual(float(history_1.average), 15.0)
+        self.assertEqual(float(history_2.average), 6.0)
+        self.assertEqual(history_1.rank, 1)
+        self.assertEqual(history_2.rank, 2)
+
     def test_exam_session_requires_and_normalizes_term(self):
         self.client.force_authenticate(self.admin_user)
 
@@ -546,6 +610,50 @@ class GradesAndBulletinsApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["term"], "T1")
+
+    def test_recalculate_term_ranking_includes_exam_results(self):
+        session = ExamSession.objects.create(
+            title="Examen T1",
+            term="T1",
+            academic_year=self.year,
+            start_date=date(2026, 1, 10),
+            end_date=date(2026, 1, 11),
+        )
+        ExamResult.objects.create(
+            session=session,
+            student=self.student_1,
+            subject=self.subject_math,
+            score=20,
+        )
+        ExamResult.objects.create(
+            session=session,
+            student=self.student_2,
+            subject=self.subject_math,
+            score=0,
+        )
+
+        self.grade_1.value = 10
+        self.grade_1.save(update_fields=["value", "updated_at"])
+        self.grade_2.value = 12
+        self.grade_2.save(update_fields=["value", "updated_at"])
+
+        recalculate_term_ranking(self.class_a, self.year, "T1")
+
+        history_1 = StudentAcademicHistory.objects.get(
+            student=self.student_1,
+            academic_year=self.year,
+            classroom=self.class_a,
+        )
+        history_2 = StudentAcademicHistory.objects.get(
+            student=self.student_2,
+            academic_year=self.year,
+            classroom=self.class_a,
+        )
+
+        self.assertEqual(float(history_1.average), 15.0)
+        self.assertEqual(float(history_2.average), 6.0)
+        self.assertEqual(history_1.rank, 1)
+        self.assertEqual(history_2.rank, 2)
 
     def test_bulletin_rejects_invalid_term(self):
         self.client.force_authenticate(self.admin_user)
@@ -588,9 +696,38 @@ class GradesAndBulletinsApiTests(APITestCase):
             conduite_moyenne_classe=17.0,
         )
 
-        self.assertEqual(rows[1]["note_finale"], 52.0)
-        self.assertEqual(coef_sum, 6.0)
-        self.assertEqual(average, 14.67)
+        self.assertEqual(rows[1]["note_finale"], 13.0)
+        self.assertEqual(rows[1]["points"], 26.0)
+        self.assertEqual(coef_sum, 4.0)
+        self.assertEqual(average, 15.5)
+
+    def test_bulletin_payload_uses_establishment_signature_and_stamp_settings(self):
+        self.etablissement_main.principal_signature_label = "Proviseur"
+        self.etablissement_main.principal_signature_position = "center"
+        self.etablissement_main.principal_signature_scale = 140
+        self.etablissement_main.stamp_position = "left"
+        self.etablissement_main.stamp_scale = 130
+        self.etablissement_main.save(
+            update_fields=[
+                "principal_signature_label",
+                "principal_signature_position",
+                "principal_signature_scale",
+                "stamp_position",
+                "stamp_scale",
+            ]
+        )
+
+        payload = _build_bulletin_payload(
+            student=self.student_1,
+            academic_year_id=self.year.id,
+            normalized_term="T1",
+        )
+
+        self.assertEqual(payload["signature_label"], "Proviseur")
+        self.assertEqual(payload["signature_position"], "center")
+        self.assertEqual(payload["stamp_position"], "left")
+        self.assertEqual(payload["signature_scale"], 1.4)
+        self.assertEqual(payload["stamp_scale"], 1.3)
 
     def test_teacher_assignment_rejects_duplicate_subject_for_same_class(self):
         self.client.force_authenticate(self.admin_user)
@@ -616,3 +753,38 @@ class GradesAndBulletinsApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("apps.reports.views._render_bulletin_page")
+    @patch("apps.reports.views._build_bulletin_payload")
+    def test_class_bulletins_print_order_follows_rank(self, mock_build_payload, mock_render_page):
+        StudentAcademicHistory.objects.update_or_create(
+            student=self.student_1,
+            academic_year=self.year,
+            classroom=self.class_a,
+            defaults={"average": 12.0, "rank": 2},
+        )
+        StudentAcademicHistory.objects.update_or_create(
+            student=self.student_2,
+            academic_year=self.year,
+            classroom=self.class_a,
+            defaults={"average": 14.0, "rank": 1},
+        )
+
+        mock_build_payload.side_effect = lambda **kwargs: {
+            "period_label": "T1",
+            "student_matricule": kwargs["student"].matricule,
+        }
+
+        self.client.force_authenticate(self.admin_user)
+        response = self.client.get(
+                f"/api/reports/bulletins/class/{self.class_a.id}/{self.year.id}/T1/",
+                HTTP_X_ETABLISSEMENT_ID=str(self.etablissement_main.id),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        ordered_student_ids = [
+            call.kwargs["student"].id
+            for call in mock_build_payload.call_args_list
+        ]
+        self.assertEqual(ordered_student_ids, [self.student_2.id, self.student_1.id])

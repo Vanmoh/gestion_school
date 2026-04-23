@@ -145,6 +145,37 @@ python3 tools/runtime_data_guard.py --etab-id=11
 python3 tools/repair_runtime_etab11.py
 ```
 
+Pour injecter des notes trimestrielles sans jamais viser la mauvaise base, utilise le wrapper runtime:
+
+```bash
+./seed_runtime_term_scores.sh --etab-id=11 --term=T1 --seed=20260423
+```
+
+Injection multi-trimestres avec cloture automatique:
+
+```bash
+./seed_runtime_term_scores.sh --etab-id=11 --terms=T1,T2,T3 --seed=20260423 --close-term
+```
+
+Ce script impose la bonne cible en exécutant la commande Django dans le conteneur backend Docker,
+puis vérifie le résultat via:
+- SQL direct sur le service `db`
+- API `/grades/` réellement consommée par l'UI locale
+
+Commande Django sous-jacente disponible dans le backend:
+
+```bash
+cd backend
+python manage.py seed_term_scores --etab-id=11 --term=T1 --seed=20260423 --dry-run
+```
+
+Avec cloture de periode (validation + verrouillage):
+
+```bash
+cd backend
+python manage.py seed_term_scores --etab-id=11 --term=T2 --seed=20260423 --close-term --close-notes="Cloture T2"
+```
+
 Si tu veux explicitement garder le comportement PWA:
 
 ```bash
