@@ -1,5 +1,7 @@
 import re
+import unicodedata
 from decimal import Decimal
+from django.utils import timezone
 from rest_framework import serializers
 from .term_utils import normalize_term
 from apps.accounts.models import UserRole
@@ -936,6 +938,24 @@ class StudentFeeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Le montant dû doit être supérieur à 0.")
         return value
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        academic_year = attrs.get("academic_year") or getattr(self.instance, "academic_year", None)
+        due_date = attrs.get("due_date") or getattr(self.instance, "due_date", None)
+
+        if academic_year and due_date:
+            if due_date < academic_year.start_date or due_date > academic_year.end_date:
+                raise serializers.ValidationError(
+                    {
+                        "due_date": (
+                            "La date d'echeance doit etre comprise dans l'annee scolaire selectionnee."
+                        )
+                    }
+                )
+
+        return attrs
+
     class Meta:
         model = StudentFee
         fields = "__all__"
@@ -945,6 +965,38 @@ class PaymentSerializer(serializers.ModelSerializer):
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
     fee_type = serializers.SerializerMethodField(read_only=True)
+
+    PAYMENT_METHOD_ALIASES = {
+        "cash": "Especes",
+        "espece": "Especes",
+        "especes": "Especes",
+        "liquide": "Especes",
+        "mobilemoney": "Mobile Money",
+        "mobile_money": "Mobile Money",
+        "mobile money": "Mobile Money",
+        "momo": "Mobile Money",
+        "orange money": "Mobile Money",
+        "wave": "Mobile Money",
+        "virement": "Virement",
+        "transfer": "Virement",
+        "bank_transfer": "Virement",
+        "banque": "Virement",
+        "cheque": "Cheque",
+        "check": "Cheque",
+        "carte": "Carte",
+        "card": "Carte",
+        "autre": "Autre",
+        "other": "Autre",
+    }
+
+    NON_CASH_METHODS = {"Mobile Money", "Virement", "Cheque", "Carte"}
+
+    @staticmethod
+    def _normalize_token(value: str) -> str:
+        text = str(value or "").strip().lower()
+        text = unicodedata.normalize("NFD", text)
+        text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+        return re.sub(r"\s+", " ", text)
 
     def get_student_full_name(self, obj):
         student = obj.fee.student if obj.fee else None
@@ -964,9 +1016,38 @@ class PaymentSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         fee = attrs.get("fee") or getattr(self.instance, "fee", None)
         amount = attrs.get("amount")
+        method = attrs.get("method")
+        reference = attrs.get("reference")
 
         if amount is None and self.instance is not None:
             amount = self.instance.amount
+        if method is None and self.instance is not None:
+            method = self.instance.method
+        if reference is None and self.instance is not None:
+            reference = self.instance.reference
+
+        normalized_method_key = self._normalize_token(method)
+        normalized_method = self.PAYMENT_METHOD_ALIASES.get(normalized_method_key)
+        if not normalized_method:
+            allowed_methods = sorted(set(self.PAYMENT_METHOD_ALIASES.values()))
+            raise serializers.ValidationError(
+                {"method": f"Méthode invalide. Valeurs autorisées: {', '.join(allowed_methods)}."}
+            )
+
+        attrs["method"] = normalized_method
+
+        cleaned_reference = str(reference or "").strip()
+        attrs["reference"] = cleaned_reference
+
+        if normalized_method in self.NON_CASH_METHODS and not cleaned_reference:
+            raise serializers.ValidationError(
+                {"reference": "Référence obligatoire pour les paiements non espèces."}
+            )
+
+        if normalized_method in self.NON_CASH_METHODS and cleaned_reference and len(cleaned_reference) < 4:
+            raise serializers.ValidationError(
+                {"reference": "La référence doit contenir au moins 4 caractères pour un paiement non espèces."}
+            )
 
         if fee is None or amount is None:
             return attrs
@@ -981,19 +1062,137 @@ class PaymentSerializer(serializers.ModelSerializer):
         if amount > (fee.balance + existing_amount):
             raise serializers.ValidationError("Le montant dépasse le solde restant du frais.")
 
+        if normalized_method in self.NON_CASH_METHODS and cleaned_reference:
+            etablissement_id = getattr(getattr(fee, "student", None), "etablissement_id", None)
+            duplicate_qs = Payment.objects.filter(
+                reference__iexact=cleaned_reference,
+                method=normalized_method,
+            )
+            if etablissement_id:
+                duplicate_qs = duplicate_qs.filter(fee__student__etablissement_id=etablissement_id)
+            if self.instance is not None:
+                duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
+            if duplicate_qs.exists():
+                raise serializers.ValidationError(
+                    {
+                        "reference": (
+                            "Cette reference existe deja pour la meme methode dans l'etablissement."
+                        )
+                    }
+                )
+
         return attrs
 
     class Meta:
         model = Payment
         fields = "__all__"
+        read_only_fields = (
+            "received_by",
+            "etablissement",
+        )
 
 
 class ExpenseSerializer(serializers.ModelSerializer):
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    validation_stage = serializers.CharField(read_only=True)
+    is_fully_validated = serializers.BooleanField(read_only=True)
+    level_one_validated_by_name = serializers.SerializerMethodField(read_only=True)
+    level_two_validated_by_name = serializers.SerializerMethodField(read_only=True)
+
+    CATEGORY_ALIASES = {
+        "salaire enseignant": "Salaires enseignants",
+        "paie enseignant": "Salaires enseignants",
+        "teacher payroll": "Salaires enseignants",
+        "salaire personnel": "Salaires personnels",
+        "paie personnel": "Salaires personnels",
+        "staff salary": "Salaires personnels",
+        "electricite": "Utilites",
+        "eau": "Utilites",
+        "internet": "Utilites",
+        "utilite": "Utilites",
+        "maintenance": "Maintenance",
+        "reparation": "Maintenance",
+        "fourniture": "Fournitures",
+        "achat fourniture": "Fournitures",
+        "taxe": "Taxes",
+        "impot": "Taxes",
+        "transport": "Transport",
+        "carburant": "Transport",
+        "loyer": "Loyer",
+        "charge": "Charges operationnelles",
+        "depense": "Charges operationnelles",
+        "sortie": "Charges operationnelles",
+        "autre": "Autres",
+    }
+
+    @staticmethod
+    def _normalize_token(value: str) -> str:
+        text = str(value or "").strip().lower()
+        text = unicodedata.normalize("NFD", text)
+        text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+        return re.sub(r"\s+", " ", text)
+
+    def validate_amount(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError("Le montant de la dépense doit être supérieur à 0.")
+        return value
+
+    def validate_date(self, value):
+        if value is None:
+            return value
+        if value > timezone.localdate():
+            raise serializers.ValidationError("La date de dépense ne peut pas être dans le futur.")
+        return value
+
+    def validate_category(self, value):
+        normalized = self._normalize_token(value)
+        if not normalized:
+            raise serializers.ValidationError("La catégorie est obligatoire.")
+
+        if normalized in self.CATEGORY_ALIASES:
+            return self.CATEGORY_ALIASES[normalized]
+
+        for token, mapped in self.CATEGORY_ALIASES.items():
+            if token in normalized:
+                return mapped
+
+        # Keep backward compatibility for edits on pre-existing custom categories.
+        if self.instance is not None and normalized == self._normalize_token(self.instance.category):
+            return self.instance.category
+
+        allowed = sorted(set(self.CATEGORY_ALIASES.values()))
+        raise serializers.ValidationError(
+            f"Catégorie invalide. Utilisez l'une des catégories standards: {', '.join(allowed)}."
+        )
+
+    def get_level_one_validated_by_name(self, obj):
+        user = obj.level_one_validated_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    def get_level_two_validated_by_name(self, obj):
+        user = obj.level_two_validated_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
 
     class Meta:
         model = Expense
         fields = "__all__"
+        read_only_fields = (
+            "etablissement",
+            "paid_by",
+            "paid_on",
+            "level_one_validated_by",
+            "level_one_validated_at",
+            "level_two_validated_by",
+            "level_two_validated_at",
+            "validation_stage",
+            "is_fully_validated",
+        )
 
 
 class TeacherPayrollSerializer(serializers.ModelSerializer):
@@ -1030,9 +1229,44 @@ class TeacherPayrollSerializer(serializers.ModelSerializer):
         full_name = user.get_full_name().strip()
         return full_name or user.username
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        month = attrs.get("month") or getattr(self.instance, "month", None)
+        if month and month.day != 1:
+            raise serializers.ValidationError(
+                {"month": "Le mois de paie doit etre en debut de mois (jour 01)."}
+            )
+
+        hours_attributed = attrs.get("hours_attributed")
+        hours_worked = attrs.get("hours_worked")
+        hourly_rate = attrs.get("hourly_rate")
+
+        for field_name, value in (
+            ("hours_attributed", hours_attributed),
+            ("hours_worked", hours_worked),
+            ("hourly_rate", hourly_rate),
+        ):
+            if value is not None and Decimal(str(value)) < Decimal("0"):
+                raise serializers.ValidationError(
+                    {field_name: "La valeur ne peut pas etre negative."}
+                )
+
+        return attrs
+
     class Meta:
         model = TeacherPayroll
         fields = "__all__"
+        read_only_fields = (
+            "amount",
+            "paid_by",
+            "level_one_validated_by",
+            "level_one_validated_at",
+            "level_two_validated_by",
+            "level_two_validated_at",
+            "validation_stage",
+            "is_fully_validated",
+        )
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):

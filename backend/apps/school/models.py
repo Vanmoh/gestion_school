@@ -541,7 +541,43 @@ class Expense(TimeStampedModel):
     date = models.DateField()
     category = models.CharField(max_length=100)
     notes = models.TextField(blank=True)
+    paid_on = models.DateField(null=True, blank=True)
+    paid_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="paid_expenses",
+    )
+    level_one_validated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="expense_level_one_validations",
+    )
+    level_one_validated_at = models.DateTimeField(null=True, blank=True)
+    level_two_validated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="expense_level_two_validations",
+    )
+    level_two_validated_at = models.DateTimeField(null=True, blank=True)
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="expenses", null=True, blank=True)
+
+    @property
+    def validation_stage(self):
+        if self.level_two_validated_at:
+            return "level_two"
+        if self.level_one_validated_at:
+            return "level_one"
+        return "draft"
+
+    @property
+    def is_fully_validated(self):
+        return bool(self.level_two_validated_at)
 
     class Meta:
         indexes = [

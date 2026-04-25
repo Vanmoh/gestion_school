@@ -4132,9 +4132,26 @@ class PaymentViewSet(BaseModelViewSet):
 
 
 class ExpenseViewSet(BaseModelViewSet):
-    queryset = Expense.objects.all().order_by("-date")
+    queryset = Expense.objects.select_related(
+        "paid_by",
+        "level_one_validated_by",
+        "level_two_validated_by",
+    ).all().order_by("-date", "-id")
     serializer_class = ExpenseSerializer
     permission_classes = [permissions.IsAuthenticated, IsFinanceModuleScopedAccess]
+
+    def get_permissions(self):
+        if self.action in {"validate_level_one", "validate_level_two", "reset_validation"}:
+            return [permissions.IsAuthenticated()]
+        return super().get_permissions()
+
+    @staticmethod
+    def _can_validate_level_one(role):
+        return role in {UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}
+
+    @staticmethod
+    def _can_validate_level_two(role):
+        return role in {UserRole.ACCOUNTANT, UserRole.SUPER_ADMIN}
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -4208,10 +4225,121 @@ class ExpenseViewSet(BaseModelViewSet):
         serializer.save(etablissement=target_etablissement)
 
     def perform_update(self, serializer):
+        instance = self.get_object()
+        if instance.level_two_validated_at:
+            raise ValidationError(
+                {"detail": "La depense est validee niveau 2. Modification impossible sans reinitialisation."}
+            )
         target_etablissement = self._resolve_target_etablissement()
         if target_etablissement is None:
             raise ValidationError({"detail": "Etablissement actif requis pour modifier une depense."})
         serializer.save(etablissement=target_etablissement)
+
+    def destroy(self, request, *args, **kwargs):
+        expense = self.get_object()
+        if expense.level_two_validated_at:
+            raise ValidationError(
+                {"detail": "La depense est validee niveau 2. Suppression interdite sans reinitialisation."}
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[permissions.IsAuthenticated, IsFinanceModuleScopedAccess],
+    )
+    def validate_level_one(self, request, pk=None):
+        role = getattr(request.user, "role", "")
+        if not self._can_validate_level_one(role):
+            raise ValidationError({"detail": "Acces refuse: validation niveau 1 reservee au surveillant/super admin."})
+
+        expense = self.get_object()
+        if expense.level_two_validated_at:
+            raise ValidationError({"detail": "La depense est deja validee niveau 2."})
+
+        expense.level_one_validated_by = request.user
+        expense.level_one_validated_at = timezone.now()
+        expense.save(update_fields=["level_one_validated_by", "level_one_validated_at", "updated_at"])
+
+        return Response(
+            {
+                "detail": "Validation niveau 1 enregistree.",
+                "id": expense.id,
+                "validation_stage": expense.validation_stage,
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[permissions.IsAuthenticated, IsFinanceModuleScopedAccess],
+    )
+    def validate_level_two(self, request, pk=None):
+        role = getattr(request.user, "role", "")
+        if not self._can_validate_level_two(role):
+            raise ValidationError({"detail": "Acces refuse: validation niveau 2 reservee au comptable/super admin."})
+
+        expense = self.get_object()
+        if not expense.level_one_validated_at:
+            raise ValidationError({"detail": "Validation niveau 1 requise avant la validation finale."})
+
+        expense.level_two_validated_by = request.user
+        expense.level_two_validated_at = timezone.now()
+        expense.paid_by = request.user
+        expense.paid_on = timezone.localdate()
+        expense.save(
+            update_fields=[
+                "level_two_validated_by",
+                "level_two_validated_at",
+                "paid_by",
+                "paid_on",
+                "updated_at",
+            ]
+        )
+
+        return Response(
+            {
+                "detail": "Validation niveau 2 enregistree. Depense verrouillee.",
+                "id": expense.id,
+                "validation_stage": expense.validation_stage,
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[permissions.IsAuthenticated, IsFinanceModuleScopedAccess],
+    )
+    def reset_validation(self, request, pk=None):
+        if getattr(request.user, "role", "") != UserRole.SUPER_ADMIN:
+            raise ValidationError({"detail": "Seul le super admin peut reinitialiser la validation."})
+
+        expense = self.get_object()
+        expense.level_one_validated_by = None
+        expense.level_one_validated_at = None
+        expense.level_two_validated_by = None
+        expense.level_two_validated_at = None
+        expense.paid_by = None
+        expense.paid_on = None
+        expense.save(
+            update_fields=[
+                "level_one_validated_by",
+                "level_one_validated_at",
+                "level_two_validated_by",
+                "level_two_validated_at",
+                "paid_by",
+                "paid_on",
+                "updated_at",
+            ]
+        )
+
+        return Response(
+            {
+                "detail": "Validation de la depense reinitialisee.",
+                "id": expense.id,
+                "validation_stage": expense.validation_stage,
+            }
+        )
 
 
 class TeacherPayrollViewSet(BaseModelViewSet):

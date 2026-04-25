@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from rest_framework import status
@@ -788,3 +788,163 @@ class GradesAndBulletinsApiTests(APITestCase):
             for call in mock_build_payload.call_args_list
         ]
         self.assertEqual(ordered_student_ids, [self.student_2.id, self.student_1.id])
+
+    def test_student_fee_rejects_due_date_outside_academic_year(self):
+        self.client.force_authenticate(self.admin_user)
+
+        response = self.client.post(
+            "/api/fees/",
+            {
+                "student": self.student_1.id,
+                "academic_year": self.year.id,
+                "fee_type": "registration",
+                "amount_due": "150000",
+                "due_date": str(self.year.end_date + timedelta(days=7)),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("due_date", response.data)
+
+    def test_payment_rejects_duplicate_non_cash_reference(self):
+        self.client.force_authenticate(self.admin_user)
+        fee_response = self.client.post(
+            "/api/fees/",
+            {
+                "student": self.student_1.id,
+                "academic_year": self.year.id,
+                "fee_type": "registration",
+                "amount_due": "100000",
+                "due_date": str(self.year.start_date),
+            },
+            format="json",
+        )
+        self.assertEqual(fee_response.status_code, status.HTTP_201_CREATED)
+        fee_id = fee_response.data["id"]
+
+        create_first = self.client.post(
+            "/api/payments/",
+            {
+                "fee": fee_id,
+                "amount": "50000",
+                "method": "mobile money",
+                "reference": "TXN-ABC-001",
+            },
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement_main.id),
+        )
+        self.assertEqual(create_first.status_code, status.HTTP_201_CREATED)
+
+        create_second = self.client.post(
+            "/api/payments/",
+            {
+                "fee": fee_id,
+                "amount": "10000",
+                "method": "momo",
+                "reference": "TXN-ABC-001",
+            },
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement_main.id),
+        )
+        self.assertEqual(create_second.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reference", create_second.data)
+
+    def test_payment_rejects_short_reference_for_non_cash_method(self):
+        self.client.force_authenticate(self.admin_user)
+        fee_response = self.client.post(
+            "/api/fees/",
+            {
+                "student": self.student_1.id,
+                "academic_year": self.year.id,
+                "fee_type": "registration",
+                "amount_due": "100000",
+                "due_date": str(self.year.start_date),
+            },
+            format="json",
+        )
+        self.assertEqual(fee_response.status_code, status.HTTP_201_CREATED)
+        fee_id = fee_response.data["id"]
+
+        response = self.client.post(
+            "/api/payments/",
+            {
+                "fee": fee_id,
+                "amount": "50000",
+                "method": "virement",
+                "reference": "A1",
+            },
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement_main.id),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reference", response.data)
+
+    def test_payment_update_cannot_override_received_by(self):
+        self.client.force_authenticate(self.admin_user)
+        fee_response = self.client.post(
+            "/api/fees/",
+            {
+                "student": self.student_1.id,
+                "academic_year": self.year.id,
+                "fee_type": "registration",
+                "amount_due": "100000",
+                "due_date": str(self.year.start_date),
+            },
+            format="json",
+        )
+        self.assertEqual(fee_response.status_code, status.HTTP_201_CREATED)
+        fee_id = fee_response.data["id"]
+
+        create_response = self.client.post(
+            "/api/payments/",
+            {
+                "fee": fee_id,
+                "amount": "15000",
+                "method": "cash",
+                "reference": "",
+            },
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement_main.id),
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        payment_id = create_response.data["id"]
+
+        patch_response = self.client.patch(
+            f"/api/payments/{payment_id}/",
+            {
+                "received_by": self.supervisor_user.id,
+                "amount": "14000",
+            },
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement_main.id),
+        )
+        self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
+
+        details = self.client.get(
+            f"/api/payments/{payment_id}/",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement_main.id),
+        )
+        self.assertEqual(details.status_code, status.HTTP_200_OK)
+        self.assertEqual(details.data.get("received_by"), self.admin_user.id)
+        self.assertEqual(str(details.data.get("amount")), "14000.00")
+
+    def test_expense_rejects_future_date(self):
+        self.client.force_authenticate(self.admin_user)
+
+        response = self.client.post(
+            "/api/expenses/",
+            {
+                "label": "Achat fournitures",
+                "amount": "25000",
+                "date": str(date.today() + timedelta(days=1)),
+                "category": "fourniture",
+                "notes": "Commande en cours",
+            },
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement_main.id),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("date", response.data)
