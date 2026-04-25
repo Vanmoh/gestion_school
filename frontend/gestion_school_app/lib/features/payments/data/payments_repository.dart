@@ -84,6 +84,54 @@ class PaymentsRepository {
     return page.results;
   }
 
+  Future<List<PaymentItem>> fetchPaymentsForJournal({
+    String search = '',
+    String? method,
+  }) async {
+    final rows = <PaymentItem>[];
+    var page = 1;
+    while (true) {
+      final batch = await fetchPaymentsPage(
+        page: page,
+        pageSize: 200,
+        search: search,
+        method: method,
+      );
+      rows.addAll(batch.results);
+      if (!batch.hasNext || page >= 200) {
+        break;
+      }
+      page += 1;
+    }
+    return rows;
+  }
+
+  Future<Uint8List> exportPaymentsJournal({
+    required String format,
+    String search = '',
+    String? method,
+    String? dateFrom,
+    String? dateTo,
+  }) async {
+    final response = await dio.get<List<int>>(
+      '/reports/journal-payments/export/',
+      queryParameters: {
+        'export_format': format,
+        if (search.trim().isNotEmpty) 'search': search.trim(),
+        if (method != null && method.trim().isNotEmpty) 'method': method,
+        if (dateFrom != null && dateFrom.trim().isNotEmpty) 'date_from': dateFrom,
+        if (dateTo != null && dateTo.trim().isNotEmpty) 'date_to': dateTo,
+      },
+      options: Options(responseType: ResponseType.bytes),
+    );
+
+    final bytes = response.data;
+    if (bytes == null || bytes.isEmpty) {
+      throw Exception('Export vide');
+    }
+    return Uint8List.fromList(bytes);
+  }
+
   Future<List<StudentFeeItem>> fetchFees() async {
     final response = await dio.get(
       '/fees/',
@@ -198,7 +246,7 @@ class PaymentsRepository {
         'teacher': teacherId,
         'entry_date': entryDate,
         'check_in_time': checkInTime,
-        if (checkOutTime != null && checkOutTime.trim().isNotEmpty)
+        if (checkOutTime?.trim().isNotEmpty ?? false)
           'check_out_time': checkOutTime,
         'notes': notes,
       },
@@ -219,12 +267,14 @@ class PaymentsRepository {
     required String month,
     int? teacherId,
   }) async {
+    final payload = <String, dynamic>{'month': month};
+    if (teacherId != null) {
+      payload['teacher'] = teacherId;
+    }
+
     final response = await dio.post(
       '/teacher-payrolls/generate_monthly/',
-      data: {
-        'month': month,
-        if (teacherId != null) 'teacher': teacherId,
-      },
+      data: payload,
     );
 
     final data = response.data;
@@ -259,5 +309,153 @@ class PaymentsRepository {
       return Map<String, dynamic>.from(response.data as Map);
     }
     return const <String, dynamic>{};
+  }
+
+  Future<List<Map<String, dynamic>>> fetchExpenses() async {
+    final response = await dio.get(
+      '/expenses/',
+      queryParameters: {
+        'page_size': 500,
+        'ordering': '-date,-id',
+      },
+    );
+    final rows = _extractRows(response.data);
+    return rows.whereType<Map<String, dynamic>>().toList(growable: false);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchExpensesForJournal({
+    String search = '',
+    String? category,
+    String? stage,
+    String? dateFrom,
+    String? dateTo,
+  }) async {
+    final rows = <Map<String, dynamic>>[];
+    var page = 1;
+    while (true) {
+      final response = await dio.get(
+        '/reports/journal/expenses/',
+        queryParameters: {
+          'page': page,
+          'page_size': 200,
+          if (search.trim().isNotEmpty) 'search': search.trim(),
+          if (category != null && category.trim().isNotEmpty) 'category': category,
+          if (stage != null && stage.trim().isNotEmpty) 'stage': stage,
+          if (dateFrom != null && dateFrom.trim().isNotEmpty) 'date_from': dateFrom,
+          if (dateTo != null && dateTo.trim().isNotEmpty) 'date_to': dateTo,
+        },
+      );
+      final payload = response.data;
+      rows.addAll(_extractRows(payload).whereType<Map<String, dynamic>>());
+      final hasNext = payload is Map<String, dynamic> && payload['next'] != null;
+      if (!hasNext || page >= 200) {
+        break;
+      }
+      page += 1;
+    }
+    return rows;
+  }
+
+  Future<Uint8List> exportExpensesJournal({
+    required String format,
+    String search = '',
+    String? category,
+    String? stage,
+    String? dateFrom,
+    String? dateTo,
+  }) async {
+    final response = await dio.get<List<int>>(
+      '/reports/journal-expenses/export/',
+      queryParameters: {
+        'export_format': format,
+        if (search.trim().isNotEmpty) 'search': search.trim(),
+        if (category != null && category.trim().isNotEmpty) 'category': category,
+        if (stage != null && stage.trim().isNotEmpty) 'stage': stage,
+        if (dateFrom != null && dateFrom.trim().isNotEmpty) 'date_from': dateFrom,
+        if (dateTo != null && dateTo.trim().isNotEmpty) 'date_to': dateTo,
+      },
+      options: Options(responseType: ResponseType.bytes),
+    );
+
+    final bytes = response.data;
+    if (bytes == null || bytes.isEmpty) {
+      throw Exception('Export vide');
+    }
+    return Uint8List.fromList(bytes);
+  }
+
+  Future<Map<String, dynamic>> validateExpenseLevelOne(int expenseId) async {
+    final response = await dio.post('/expenses/$expenseId/validate_level_one/');
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> validateExpenseLevelTwo(int expenseId) async {
+    final response = await dio.post('/expenses/$expenseId/validate_level_two/');
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> resetExpenseValidation(int expenseId) async {
+    final response = await dio.post('/expenses/$expenseId/reset_validation/');
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> createExpense({
+    required String label,
+    required double amount,
+    required String date,
+    required String category,
+    String notes = '',
+  }) async {
+    final response = await dio.post(
+      '/expenses/',
+      data: {
+        'label': label,
+        'amount': amount,
+        'date': date,
+        'category': category,
+        'notes': notes,
+      },
+    );
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> updateExpense({
+    required int expenseId,
+    required String label,
+    required double amount,
+    required String date,
+    required String category,
+    String notes = '',
+  }) async {
+    final response = await dio.patch(
+      '/expenses/$expenseId/',
+      data: {
+        'label': label,
+        'amount': amount,
+        'date': date,
+        'category': category,
+        'notes': notes,
+      },
+    );
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<void> deleteExpense(int expenseId) async {
+    await dio.delete('/expenses/$expenseId/');
   }
 }

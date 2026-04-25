@@ -10,6 +10,7 @@ import 'package:printing/printing.dart';
 
 import '../../../core/models/paginated_result.dart';
 import '../../../features/auth/presentation/auth_controller.dart';
+import '../../payments/presentation/payment_entry_dialog.dart';
 import '../../../models/etablissement.dart';
 import '../domain/student.dart';
 import 'students_controller.dart';
@@ -76,6 +77,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   bool _tableRefreshing = false;
   bool _saving = false;
   bool _detailLoading = false;
+  Student? _lastRegisteredStudent;
   DateTime? _lastStudentsRefreshAt;
 
   List<Student> _students = [];
@@ -510,6 +512,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       if (_selectedStudent?.id != student.id) {
         await _focusStudentInTable(student.id);
       }
+      _lastRegisteredStudent = student;
       return true;
     } catch (error) {
       await _showRegistrationFailure(_extractErrorMessage(error));
@@ -1446,6 +1449,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required BuildContext panelContext,
     required Future<bool> Function() action,
     required String successMessage,
+    Future<void> Function()? afterSuccess,
   }) async {
     final success = await action();
     if (!success || !mounted) return;
@@ -1457,6 +1461,62 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       }
     }
     _showMessage(successMessage, isSuccess: true);
+    if (afterSuccess != null) {
+      await afterSuccess();
+    }
+  }
+
+  Future<void> _offerRegistrationPaymentFlow() async {
+    final student = _lastRegisteredStudent;
+    if (student == null || !mounted) {
+      return;
+    }
+
+    final shouldCollectNow = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Encaisser les frais maintenant ?'),
+          content: Text(
+            'L\'eleve ${student.fullName} a ete inscrit. Voulez-vous ouvrir la fenetre d\'encaissement pour les frais d\'inscription ?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Plus tard'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Encaisser maintenant'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldCollectNow != true || !mounted) {
+      _lastRegisteredStudent = null;
+      return;
+    }
+
+    final saved = await showGuidedPaymentEntryDialog(
+      context: context,
+      ref: ref,
+      title: 'Encaissement apres inscription',
+      initialStudent: student,
+      initialClassroomId: student.classroomId,
+      preferredFeeType: 'registration',
+      lockStudentSelection: true,
+      onPaymentSaved: () async {
+        await _loadBaseData(keepSelectedId: student.id);
+        await _loadStudentLinkedData(student.id);
+      },
+    );
+
+    if (saved == true && mounted) {
+      _showMessage('Paiement d\'inscription enregistre.', isSuccess: true);
+    }
+    _lastRegisteredStudent = null;
   }
 
   Future<void> _openHistoryForm() {
@@ -1753,6 +1813,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       panelContext: panelContext,
                       action: _registerStudent,
                       successMessage: 'Élève inscrit avec succès.',
+                      afterSuccess: _offerRegistrationPaymentFlow,
                     ),
               icon: const Icon(Icons.person_add_alt_1),
               label: const Text('Inscrire élève'),

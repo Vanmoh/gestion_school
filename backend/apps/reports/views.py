@@ -1,8 +1,11 @@
 import hashlib
+import io
 import tempfile
+from datetime import date
 from pathlib import Path
 
 from django.conf import settings
+from django.core.paginator import Paginator
 from django.db.models import Avg, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -23,6 +26,7 @@ from apps.school.models import (
     Etablissement,
     ExamPlanning,
     ExamResult,
+    Expense,
     Grade,
     Payment,
     Student,
@@ -849,6 +853,136 @@ def _allowed_payments_queryset(request):
             )
         )
     return queryset.none()
+
+
+def _allowed_expenses_queryset(request):
+    user = request.user
+    queryset = Expense.objects.select_related(
+        "paid_by",
+        "level_one_validated_by",
+        "level_two_validated_by",
+        "etablissement",
+    ).all()
+    role = getattr(user, "role", "")
+
+    target_etablissement_id = _effective_etablissement_id(request)
+    if target_etablissement_id:
+        return queryset.filter(etablissement_id=target_etablissement_id)
+
+    if role == UserRole.SUPER_ADMIN:
+        return queryset.none()
+
+    return queryset.filter(etablissement_id=getattr(user, "etablissement_id", None))
+
+
+def _query_param_date(request, key: str) -> date | None:
+    raw_value = str(request.query_params.get(key, "") or "").strip()
+    if not raw_value:
+        return None
+    try:
+        return date.fromisoformat(raw_value)
+    except ValueError:
+        return None
+
+
+def _journal_period_bounds(request) -> tuple[date | None, date | None]:
+    date_from = _query_param_date(request, "date_from")
+    date_to = _query_param_date(request, "date_to")
+    if date_from and date_to and date_to < date_from:
+        date_from, date_to = date_to, date_from
+    return date_from, date_to
+
+
+def _apply_payment_journal_filters(queryset, request):
+    search = str(request.query_params.get("search", "") or "").strip()
+    method = str(request.query_params.get("method", "") or "").strip()
+    date_from, date_to = _journal_period_bounds(request)
+
+    if search:
+        queryset = queryset.filter(
+            Q(reference__icontains=search)
+            | Q(fee__student__matricule__icontains=search)
+            | Q(fee__student__user__first_name__icontains=search)
+            | Q(fee__student__user__last_name__icontains=search)
+            | Q(fee__fee_type__icontains=search)
+        )
+    if method:
+        queryset = queryset.filter(method__iexact=method)
+    if date_from:
+        queryset = queryset.filter(created_at__date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(created_at__date__lte=date_to)
+
+    return queryset
+
+
+def _apply_expense_journal_filters(queryset, request):
+    search = str(request.query_params.get("search", "") or "").strip()
+    category = str(request.query_params.get("category", "") or "").strip()
+    stage = str(request.query_params.get("stage", "") or "").strip().lower()
+    date_from, date_to = _journal_period_bounds(request)
+
+    if search:
+        queryset = queryset.filter(Q(label__icontains=search) | Q(notes__icontains=search))
+    if category:
+        queryset = queryset.filter(category__iexact=category)
+    if stage == "draft":
+        queryset = queryset.filter(level_one_validated_at__isnull=True, level_two_validated_at__isnull=True)
+    elif stage == "level_one":
+        queryset = queryset.filter(level_one_validated_at__isnull=False, level_two_validated_at__isnull=True)
+    elif stage == "level_two":
+        queryset = queryset.filter(level_two_validated_at__isnull=False)
+    if date_from:
+        queryset = queryset.filter(date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(date__lte=date_to)
+
+    return queryset
+
+
+def _payment_journal_row(payment: Payment) -> dict:
+    student = payment.fee.student if payment.fee else None
+    student_user = student.user if student else None
+    receiver = payment.received_by
+    receiver_name = ""
+    if receiver:
+        receiver_name = receiver.get_full_name().strip() or receiver.username
+    return {
+        "id": payment.id,
+        "created_at": timezone.localtime(payment.created_at).isoformat(),
+        "student_full_name": (
+            (student_user.get_full_name().strip() or student_user.username)
+            if student_user
+            else ""
+        ),
+        "student_matricule": student.matricule if student else "",
+        "fee_type": payment.fee.get_fee_type_display() if payment.fee else "",
+        "amount": float(payment.amount),
+        "method": payment.method,
+        "reference": payment.reference or "",
+        "received_by": receiver_name,
+    }
+
+
+def _expense_journal_row(expense: Expense) -> dict:
+    return {
+        "id": expense.id,
+        "date": expense.date.isoformat() if expense.date else "",
+        "label": expense.label,
+        "category": expense.category,
+        "amount": float(expense.amount),
+        "validation_stage": expense.validation_stage,
+        "paid_on": expense.paid_on.isoformat() if expense.paid_on else "",
+        "notes": expense.notes or "",
+    }
+
+
+def _parse_page_size(request, default: int = 100, max_size: int = 1000) -> int:
+    try:
+        parsed = int(request.query_params.get("page_size", default))
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, min(max_size, parsed))
 
 
 def _ensure_student_access(request, student: Student) -> None:
@@ -2237,6 +2371,239 @@ class PaymentExcelExportView(APIView):
         response["Content-Disposition"] = 'attachment; filename="payments_export.xlsx"'
         workbook.save(response)
         return response
+
+
+class PaymentJournalPageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _ensure_sensitive_export_access(request)
+        queryset = _apply_payment_journal_filters(
+            _allowed_payments_queryset(request).order_by("-created_at", "-id"),
+            request,
+        )
+
+        page_size = _parse_page_size(request, default=100, max_size=1000)
+        paginator = Paginator(queryset, page_size)
+        try:
+            page_number = int(request.query_params.get("page", 1))
+        except (TypeError, ValueError):
+            page_number = 1
+        page_number = max(1, page_number)
+        page_obj = paginator.get_page(page_number)
+
+        base_url = request.build_absolute_uri(request.path)
+        query_dict = request.query_params.copy()
+
+        def _page_link(page_no: int | None) -> str | None:
+            if page_no is None:
+                return None
+            query_copy = query_dict.copy()
+            query_copy["page"] = str(page_no)
+            return f"{base_url}?{query_copy.urlencode()}"
+
+        return Response(
+            {
+                "count": paginator.count,
+                "next": _page_link(page_obj.next_page_number() if page_obj.has_next() else None),
+                "previous": _page_link(page_obj.previous_page_number() if page_obj.has_previous() else None),
+                "results": [_payment_journal_row(payment) for payment in page_obj.object_list],
+            }
+        )
+
+
+class ExpenseJournalPageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _ensure_sensitive_export_access(request)
+        queryset = _apply_expense_journal_filters(
+            _allowed_expenses_queryset(request).order_by("-date", "-id"),
+            request,
+        )
+
+        page_size = _parse_page_size(request, default=100, max_size=1000)
+        paginator = Paginator(queryset, page_size)
+        try:
+            page_number = int(request.query_params.get("page", 1))
+        except (TypeError, ValueError):
+            page_number = 1
+        page_number = max(1, page_number)
+        page_obj = paginator.get_page(page_number)
+
+        base_url = request.build_absolute_uri(request.path)
+        query_dict = request.query_params.copy()
+
+        def _page_link(page_no: int | None) -> str | None:
+            if page_no is None:
+                return None
+            query_copy = query_dict.copy()
+            query_copy["page"] = str(page_no)
+            return f"{base_url}?{query_copy.urlencode()}"
+
+        return Response(
+            {
+                "count": paginator.count,
+                "next": _page_link(page_obj.next_page_number() if page_obj.has_next() else None),
+                "previous": _page_link(page_obj.previous_page_number() if page_obj.has_previous() else None),
+                "results": [_expense_journal_row(expense) for expense in page_obj.object_list],
+            }
+        )
+
+
+def _csv_response(*, filename: str, header: list[str], rows: list[list]) -> HttpResponse:
+    def _csv_cell(value) -> str:
+        text = str(value or "")
+        return f'"{text.replace("\"", "\"\"")}"'
+
+    output = io.StringIO()
+    output.write("\ufeff")
+    for line in [header, *rows]:
+        output.write(",".join([_csv_cell(value) for value in line]))
+        output.write("\n")
+
+    response = HttpResponse(output.getvalue(), content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+def _build_journal_pdf(*, title: str, subtitle: str, headers: list[str], rows: list[list[str]]) -> FPDF:
+    pdf = FPDF(orientation="L", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.cell(0, 8, _pdf_text(title), ln=True)
+    pdf.set_font("Helvetica", size=9)
+    pdf.cell(0, 5, _pdf_text(subtitle), ln=True)
+    pdf.cell(0, 5, _pdf_text(f"Genere le: {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"), ln=True)
+    pdf.ln(3)
+
+    page_width = pdf.w - 20
+    col_width = page_width / max(1, len(headers))
+    row_h = 6.2
+
+    pdf.set_fill_color(57, 99, 151)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 8)
+    for title_cell in headers:
+        pdf.cell(col_width, row_h, _pdf_text(title_cell)[:30], border=1, align="C", fill=True)
+    pdf.ln(row_h)
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", size=7.4)
+    for row in rows:
+        for value in row:
+            pdf.cell(col_width, row_h, _pdf_text(str(value or ""))[:36], border=1)
+        pdf.ln(row_h)
+
+    return pdf
+
+
+class PaymentJournalExportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _ensure_sensitive_export_access(request)
+        export_format = str(request.query_params.get("export_format", "csv") or "csv").strip().lower()
+        queryset = _apply_payment_journal_filters(
+            _allowed_payments_queryset(request).order_by("-created_at", "-id"),
+            request,
+        )
+        rows = [_payment_journal_row(payment) for payment in queryset.iterator(chunk_size=1000)]
+
+        stamp = timezone.localtime().strftime("%Y%m%d_%H%M")
+        if export_format == "pdf":
+            pdf = _build_journal_pdf(
+                title="Journal des encaissements",
+                subtitle=f"{len(rows)} ligne(s)",
+                headers=["Date", "Eleve", "Matricule", "Type frais", "Montant", "Methode", "Reference", "Encaisse par"],
+                rows=[
+                    [
+                        row.get("created_at", ""),
+                        row.get("student_full_name", ""),
+                        row.get("student_matricule", ""),
+                        row.get("fee_type", ""),
+                        f"{row.get('amount', 0):.0f}",
+                        row.get("method", ""),
+                        row.get("reference", ""),
+                        row.get("received_by", ""),
+                    ]
+                    for row in rows
+                ],
+            )
+            return pdf_output_response(pdf, f"journal_encaissements_{stamp}.pdf")
+
+        return _csv_response(
+            filename=f"journal_encaissements_{stamp}.csv",
+            header=["id", "date", "eleve", "matricule", "type_frais", "montant", "methode", "reference", "encaisse_par"],
+            rows=[
+                [
+                    row.get("id", ""),
+                    row.get("created_at", ""),
+                    row.get("student_full_name", ""),
+                    row.get("student_matricule", ""),
+                    row.get("fee_type", ""),
+                    f"{row.get('amount', 0):.0f}",
+                    row.get("method", ""),
+                    row.get("reference", ""),
+                    row.get("received_by", ""),
+                ]
+                for row in rows
+            ],
+        )
+
+
+class ExpenseJournalExportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _ensure_sensitive_export_access(request)
+        export_format = str(request.query_params.get("export_format", "csv") or "csv").strip().lower()
+        queryset = _apply_expense_journal_filters(
+            _allowed_expenses_queryset(request).order_by("-date", "-id"),
+            request,
+        )
+        rows = [_expense_journal_row(expense) for expense in queryset.iterator(chunk_size=1000)]
+
+        stamp = timezone.localtime().strftime("%Y%m%d_%H%M")
+        if export_format == "pdf":
+            pdf = _build_journal_pdf(
+                title="Journal des depenses",
+                subtitle=f"{len(rows)} ligne(s)",
+                headers=["Date", "Libelle", "Categorie", "Montant", "Validation", "Paye le", "Notes"],
+                rows=[
+                    [
+                        row.get("date", ""),
+                        row.get("label", ""),
+                        row.get("category", ""),
+                        f"{row.get('amount', 0):.0f}",
+                        row.get("validation_stage", ""),
+                        row.get("paid_on", ""),
+                        row.get("notes", ""),
+                    ]
+                    for row in rows
+                ],
+            )
+            return pdf_output_response(pdf, f"journal_depenses_{stamp}.pdf")
+
+        return _csv_response(
+            filename=f"journal_depenses_{stamp}.csv",
+            header=["id", "date", "libelle", "categorie", "montant", "validation", "paye_le", "notes"],
+            rows=[
+                [
+                    row.get("id", ""),
+                    row.get("date", ""),
+                    row.get("label", ""),
+                    row.get("category", ""),
+                    f"{row.get('amount', 0):.0f}",
+                    row.get("validation_stage", ""),
+                    row.get("paid_on", ""),
+                    row.get("notes", ""),
+                ]
+                for row in rows
+            ],
+        )
 
 
 class StudentCardPdfView(APIView):
