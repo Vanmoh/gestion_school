@@ -482,6 +482,23 @@ class _GuidedPaymentEntryDialogState
     return 'Frais solde';
   }
 
+  Color _methodAccentColor(String method, ColorScheme colorScheme) {
+    switch (method) {
+      case 'Especes':
+        return const Color(0xFF0F8A5F);
+      case 'Mobile Money':
+        return const Color(0xFF9A5B00);
+      case 'Virement':
+        return const Color(0xFF0B63C7);
+      case 'Cheque':
+        return const Color(0xFF6E3CBC);
+      case 'Carte':
+        return const Color(0xFFAD1457);
+      default:
+        return colorScheme.primary;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -699,6 +716,10 @@ class _GuidedPaymentEntryDialogState
                 label: 'Eleves visibles',
                 value: '${filteredStudents.length}',
               ),
+              _MetricPill(
+                label: 'Selection rapide',
+                value: 'Tactile',
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -814,16 +835,21 @@ class _GuidedPaymentEntryDialogState
                                 ? colorScheme.primaryContainer.withValues(alpha: 0.82)
                                 : colorScheme.surface,
                             borderRadius: BorderRadius.circular(16),
+                            elevation: selected ? 1.5 : 0,
                             child: InkWell(
                               borderRadius: BorderRadius.circular(16),
                               onTap: () async {
                                 await _loadFeesForStudent(student);
                               },
                               child: Padding(
-                                padding: const EdgeInsets.all(13),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 14,
+                                ),
                                 child: Row(
                                   children: [
                                     CircleAvatar(
+                                      radius: 22,
                                       backgroundColor: selected
                                           ? colorScheme.surface.withValues(alpha: 0.92)
                                           : colorScheme.surfaceContainerHighest,
@@ -845,13 +871,42 @@ class _GuidedPaymentEntryDialogState
                                             '${student.matricule}${student.classroomName.trim().isEmpty ? '' : ' • ${student.classroomName}'}',
                                             style: Theme.of(context).textTheme.bodySmall,
                                           ),
+                                          const SizedBox(height: 6),
+                                          Row(
+                                            children: [
+                                              Icon(
+                                                Icons.touch_app_outlined,
+                                                size: 15,
+                                                color: selected
+                                                    ? colorScheme.primary
+                                                    : colorScheme.outline,
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                selected
+                                                    ? 'Eleve actif pour encaissement'
+                                                    : 'Toucher pour charger les frais',
+                                                style: Theme.of(context).textTheme.labelSmall,
+                                              ),
+                                            ],
+                                          ),
                                         ],
                                       ),
                                     ),
                                     if (selected)
-                                      Icon(
-                                        Icons.check_circle,
-                                        color: colorScheme.primary,
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: colorScheme.primary.withValues(alpha: 0.12),
+                                          borderRadius: BorderRadius.circular(999),
+                                        ),
+                                        child: Icon(
+                                          Icons.check_circle,
+                                          color: colorScheme.primary,
+                                        ),
                                       )
                                     else
                                       const Icon(Icons.chevron_right),
@@ -947,6 +1002,14 @@ class _GuidedPaymentEntryDialogState
                     (type) => ChoiceChip(
                       label: Text(_feeTypeLabel(type)),
                       selected: _selectedFeeType == type,
+                      showCheckmark: false,
+                      labelStyle: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 10,
+                      ),
                       onSelected: _selectedStudent == null
                           ? null
                           : (_) {
@@ -1057,6 +1120,7 @@ class _GuidedPaymentEntryDialogState
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               decoration: InputDecoration(
                 labelText: feeNeedsCreation ? 'Montant a encaisser' : 'Montant a encaisser (reste)',
+                prefixIcon: const Icon(Icons.payments_outlined),
               ),
             ),
             const SizedBox(height: 10),
@@ -1078,11 +1142,42 @@ class _GuidedPaymentEntryDialogState
                 setState(() => _selectedMethod = value);
               },
             ),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: _methodAccentColor(_selectedMethod, colorScheme).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: _methodAccentColor(_selectedMethod, colorScheme).withValues(alpha: 0.3),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.verified_user_outlined,
+                    color: _methodAccentColor(_selectedMethod, colorScheme),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Methode active: $_selectedMethod',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            color: _methodAccentColor(_selectedMethod, colorScheme),
+                            fontWeight: FontWeight.w800,
+                          ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 10),
             TextField(
               controller: _referenceController,
               decoration: const InputDecoration(
                 labelText: 'Reference',
+                prefixIcon: Icon(Icons.qr_code_2_outlined),
                 helperText: 'Obligatoire pour Mobile Money, Virement, Cheque et Carte.',
               ),
             ),
@@ -1136,6 +1231,12 @@ class _GuidedPaymentEntryDialogState
                       const SizedBox(width: 8),
                       FilledButton.icon(
                         onPressed: _saving ? null : _submit,
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 18,
+                            vertical: 16,
+                          ),
+                        ),
                         icon: _saving
                             ? const SizedBox(
                                 width: 18,
@@ -1239,7 +1340,7 @@ class _MetricPill extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
         color: colorScheme.surface.withValues(alpha: 0.76),
         borderRadius: BorderRadius.circular(999),
@@ -1293,6 +1394,13 @@ class _FeeSummaryCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         color: colorScheme.surface,
         border: Border.all(color: colorScheme.outlineVariant),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
