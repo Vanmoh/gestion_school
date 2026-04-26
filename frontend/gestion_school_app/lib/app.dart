@@ -960,6 +960,17 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                     _navigateToShellItem('finance');
                   },
                 ),
+              if (_isItemVisibleForRole('finance', user.role))
+                ListTile(
+                  leading: const Icon(Icons.point_of_sale_rounded),
+                  title: const Text('Encaisser maintenant'),
+                  subtitle: const Text('Ouvre directement la fenetre d\'encaissement guidee.'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    ref.read(financeOpenGuidedPaymentIntentProvider.notifier).state = true;
+                    _navigateToShellItem('finance');
+                  },
+                ),
               if (_isItemVisibleForRole('timetable', user.role))
                 ListTile(
                   leading: const Icon(Icons.calendar_month_rounded),

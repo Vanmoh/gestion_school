@@ -11,6 +11,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../../core/providers/navigation_intents.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/payment.dart';
 import '../domain/student_fee.dart';
@@ -26,8 +27,11 @@ class PaymentsPage extends ConsumerStatefulWidget {
 
 enum _FinancePeriod { day, week, month, all }
 
+enum _PaymentRowAction { view, edit, print, delete }
+
 class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   static const List<int> _pageSizeOptions = [15, 25, 50, 100];
+  static const List<int> _outstandingPageSizeOptions = [10, 20, 40];
   static const List<String> _paymentMethodOptions = [
     'Especes',
     'Mobile Money',
@@ -45,12 +49,17 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   String _methodFilter = 'all';
   int _currentPage = 1;
   int _pageSize = 25;
+  int _outstandingPage = 1;
+  int _outstandingPageSize = 10;
+  bool _outstandingExpanded = false;
+  final Set<String> _expandedOutstandingClasses = <String>{};
   String _searchTerm = '';
   Timer? _searchDebounce;
   bool _financeBusy = false;
   List<Map<String, dynamic>> _financePayrolls = [];
   List<Map<String, dynamic>> _financeExpenses = [];
-  _FinancePeriod _financePeriod = _FinancePeriod.month;
+  _FinancePeriod _financePeriod = _FinancePeriod.all;
+  bool _openingGuidedDialogFromIntent = false;
 
   static const List<String> _expenseCategoryOptions = [
     'Salaires enseignants',
@@ -71,7 +80,32 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     final now = DateTime.now();
     _payrollMonthController.text =
         '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}';
-    Future<void>.microtask(_loadTeacherFinanceSection);
+    Future<void>.microtask(() async {
+      await _loadTeacherFinanceSection();
+      await _consumeGuidedPaymentIntentIfNeeded();
+    });
+  }
+
+  Future<void> _consumeGuidedPaymentIntentIfNeeded() async {
+    if (!mounted || _openingGuidedDialogFromIntent) {
+      return;
+    }
+    final shouldOpen = ref.read(financeOpenGuidedPaymentIntentProvider);
+    if (!shouldOpen) {
+      return;
+    }
+
+    ref.read(financeOpenGuidedPaymentIntentProvider.notifier).state = false;
+    _openingGuidedDialogFromIntent = true;
+    try {
+      await showGuidedPaymentEntryDialog(
+        context: context,
+        ref: ref,
+        title: 'Fenetre flottante d\'encaissement',
+      );
+    } finally {
+      _openingGuidedDialogFromIntent = false;
+    }
   }
 
   bool _isTeacherFinanceVisible(String? role) {
@@ -1140,6 +1174,143 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     return rows.isEmpty ? null : rows.first;
   }
 
+  String _classLabel(String raw) {
+    final cleaned = raw.trim();
+    return cleaned.isEmpty ? 'Sans classe' : cleaned;
+  }
+
+  Map<String, List<StudentFeeItem>> _groupOutstandingByClass(List<StudentFeeItem> fees) {
+    final grouped = <String, List<StudentFeeItem>>{};
+    for (final fee in fees) {
+      final key = _classLabel(fee.classroomName);
+      grouped.putIfAbsent(key, () => <StudentFeeItem>[]).add(fee);
+    }
+    final sortedKeys = grouped.keys.toList()..sort();
+    final sorted = <String, List<StudentFeeItem>>{};
+    for (final key in sortedKeys) {
+      final rows = grouped[key]!;
+      rows.sort((a, b) => a.studentFullName.compareTo(b.studentFullName));
+      sorted[key] = rows;
+    }
+    return sorted;
+  }
+
+  Future<void> _handlePaymentRowAction({
+    required _PaymentRowAction action,
+    required PaymentItem payment,
+    required List<StudentFeeItem> fees,
+    required bool isMutating,
+  }) async {
+    switch (action) {
+      case _PaymentRowAction.view:
+        await _openPaymentDetails(payment);
+        break;
+      case _PaymentRowAction.edit:
+        if (isMutating) return;
+        await _openEditDialog(payment, fees);
+        break;
+      case _PaymentRowAction.print:
+        try {
+          await _printReceipt(payment.id);
+        } catch (error) {
+          _showMessage('Erreur generation PDF: $error');
+        }
+        break;
+      case _PaymentRowAction.delete:
+        if (isMutating) return;
+        await _deletePayment(payment);
+        break;
+    }
+  }
+
+  Future<void> _openSelectedPaymentDrawer({
+    required PaymentItem payment,
+    required List<StudentFeeItem> fees,
+    required bool isMutating,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Recu selectionne',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 10),
+                _detailRow('Eleve', payment.studentFullName),
+                _detailRow('Matricule', payment.studentMatricule),
+                _detailRow('Classe', _classLabel(payment.classroomName)),
+                _detailRow('Type frais', payment.feeType),
+                _detailRow('Montant', _formatMoney(payment.amount)),
+                _detailRow('Methode', payment.method),
+                _detailRow('Date', _formatDate(payment.createdAt)),
+                _detailRow('Reference', payment.reference.isEmpty ? '-' : payment.reference),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.tonalIcon(
+                      onPressed: () async {
+                        Navigator.of(context).pop();
+                        await _openPaymentDetails(payment);
+                      },
+                      icon: const Icon(Icons.visibility_outlined),
+                      label: const Text('Afficher'),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: isMutating
+                          ? null
+                          : () async {
+                              Navigator.of(context).pop();
+                              await _openEditDialog(payment, fees);
+                            },
+                      icon: const Icon(Icons.edit_outlined),
+                      label: const Text('Modifier'),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: () async {
+                        Navigator.of(context).pop();
+                        try {
+                          await _printReceipt(payment.id);
+                        } catch (error) {
+                          _showMessage('Erreur generation PDF: $error');
+                        }
+                      },
+                      icon: const Icon(Icons.picture_as_pdf_outlined),
+                      label: const Text('Imprimer'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: isMutating
+                          ? null
+                          : () async {
+                              Navigator.of(context).pop();
+                              await _deletePayment(payment);
+                            },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFFB42318),
+                      ),
+                      icon: const Icon(Icons.delete_outline),
+                      label: const Text('Supprimer'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _openPaymentDetails(PaymentItem payment) async {
     await showDialog<void>(
       context: context,
@@ -1363,7 +1534,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     return _openPaymentDialog(payment: payment, fees: fees);
   }
 
-  Future<void> _openCreatePaymentDialog(List<StudentFeeItem> fees) {
+  Future<void> _openCreatePaymentDialog() {
     return showGuidedPaymentEntryDialog(
       context: context,
       ref: ref,
@@ -1494,6 +1665,12 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<bool>(financeOpenGuidedPaymentIntentProvider, (previous, next) {
+      if (next) {
+        Future<void>.microtask(_consumeGuidedPaymentIntentIfNeeded);
+      }
+    });
+
     final authUser = ref.watch(authControllerProvider).value;
     final isTeacherFinanceVisible = _isTeacherFinanceVisible(authUser?.role);
     final isTeacherFinanceReadOnly = _isTeacherFinanceReadOnly(authUser?.role);
@@ -1669,6 +1846,29 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
               0,
               (sum, fee) => sum + fee.balance,
             );
+            final outstandingPages = outstandingFees.isEmpty
+                ? 1
+                : (outstandingFees.length / _outstandingPageSize).ceil();
+            var safeOutstandingPage = _outstandingPage;
+            if (safeOutstandingPage > outstandingPages) {
+              safeOutstandingPage = outstandingPages;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                if (_outstandingPage != safeOutstandingPage) {
+                  setState(() => _outstandingPage = safeOutstandingPage);
+                }
+              });
+            }
+            if (safeOutstandingPage < 1) {
+              safeOutstandingPage = 1;
+            }
+            final outstandingStart = (safeOutstandingPage - 1) * _outstandingPageSize;
+            final outstandingEnd = outstandingFees.isEmpty
+                ? 0
+                : (outstandingStart + _outstandingPageSize).clamp(0, outstandingFees.length);
+            final visibleOutstandingFees = outstandingFees.isEmpty
+                ? const <StudentFeeItem>[]
+                : outstandingFees.sublist(outstandingStart, outstandingEnd);
 
             final methodOptions = <String>{'all'};
             for (final payment in payments) {
@@ -1677,12 +1877,168 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
               }
             }
 
-            return RefreshIndicator(
-              onRefresh: _refreshPayments,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(18),
-                children: [
+            return Column(
+              children: [
+                Container(
+                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surface,
+                    border: Border(
+                      bottom: BorderSide(
+                        color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+                      ),
+                    ),
+                  ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 940;
+                      final searchField = SizedBox(
+                        width: compact ? double.infinity : 270,
+                        child: TextField(
+                          controller: _searchController,
+                          onChanged: _onSearchChanged,
+                          decoration: InputDecoration(
+                            labelText: 'Recherche paiement',
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: _searchController.text.trim().isEmpty
+                                ? null
+                                : IconButton(
+                                    onPressed: () {
+                                      _searchDebounce?.cancel();
+                                      _searchController.clear();
+                                      setState(() {
+                                        _searchTerm = '';
+                                        _currentPage = 1;
+                                      });
+                                    },
+                                    icon: const Icon(Icons.clear),
+                                  ),
+                          ),
+                        ),
+                      );
+                      final methodField = SizedBox(
+                        width: compact ? double.infinity : 220,
+                        child: DropdownButtonFormField<String>(
+                          initialValue: _methodFilter,
+                          decoration: const InputDecoration(
+                            labelText: 'Filtrer par methode',
+                          ),
+                          items: methodOptions
+                              .map(
+                                (method) => DropdownMenuItem<String>(
+                                  value: method,
+                                  child: Text(
+                                    method == 'all' ? 'Toutes les methodes' : method,
+                                  ),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (value) {
+                            setState(() {
+                              _methodFilter = value ?? 'all';
+                              _currentPage = 1;
+                            });
+                          },
+                        ),
+                      );
+                      final periodField = SizedBox(
+                        width: compact ? double.infinity : 170,
+                        child: DropdownButtonFormField<_FinancePeriod>(
+                          initialValue: _financePeriod,
+                          decoration: const InputDecoration(labelText: 'Periode'),
+                          items: _FinancePeriod.values
+                              .map(
+                                (item) => DropdownMenuItem<_FinancePeriod>(
+                                  value: item,
+                                  child: Text(_financePeriodLabel(item)),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() => _financePeriod = value);
+                          },
+                        ),
+                      );
+                      final actions = Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          FilledButton.tonalIcon(
+                            onPressed: isMutating ? null : _openCreatePaymentDialog,
+                            icon: const Icon(Icons.add_card_outlined),
+                            label: const Text('Nouveau paiement'),
+                          ),
+                          FilledButton.icon(
+                            onPressed: isMutating
+                                ? null
+                                : () => _exportPaymentsCsv(
+                                      search: _searchTerm,
+                                      method: _methodFilter == 'all' ? null : _methodFilter,
+                                    ),
+                            icon: const Icon(Icons.download_outlined),
+                            label: const Text('Exporter CSV'),
+                          ),
+                          FilledButton.tonalIcon(
+                            onPressed: isMutating
+                                ? null
+                                : () => _exportPaymentsPdf(
+                                      search: _searchTerm,
+                                      method: _methodFilter == 'all' ? null : _methodFilter,
+                                    ),
+                            icon: const Icon(Icons.picture_as_pdf_outlined),
+                            label: const Text('Exporter PDF'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: isMutating
+                                ? null
+                                : () {
+                                    _searchDebounce?.cancel();
+                                    _searchController.clear();
+                                    setState(() {
+                                      _methodFilter = 'all';
+                                      _searchTerm = '';
+                                      _currentPage = 1;
+                                      _financePeriod = _FinancePeriod.all;
+                                    });
+                                  },
+                            icon: const Icon(Icons.filter_alt_off_outlined),
+                            label: const Text('Reinitialiser'),
+                          ),
+                        ],
+                      );
+
+                      if (compact) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            searchField,
+                            const SizedBox(height: 8),
+                            methodField,
+                            const SizedBox(height: 8),
+                            periodField,
+                            const SizedBox(height: 8),
+                            actions,
+                          ],
+                        );
+                      }
+
+                      return Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [searchField, methodField, periodField, actions],
+                      );
+                    },
+                  ),
+                ),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: _refreshPayments,
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.all(18),
+                      children: [
                   Text(
                     'Paiements & Facturation',
                     style: Theme.of(context).textTheme.headlineSmall,
@@ -1714,152 +2070,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                           'Journal des encaissements avec filtres, creation par dialogue et exports CSV/PDF.',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
-                        const SizedBox(height: 10),
-                        LayoutBuilder(
-                          builder: (context, constraints) {
-                            final compact = constraints.maxWidth < 940;
-                            final searchField = SizedBox(
-                              width: compact ? double.infinity : 270,
-                              child: TextField(
-                                controller: _searchController,
-                                onChanged: _onSearchChanged,
-                                decoration: InputDecoration(
-                                  labelText: 'Recherche paiement',
-                                  prefixIcon: const Icon(Icons.search),
-                                  suffixIcon: _searchController.text.trim().isEmpty
-                                      ? null
-                                      : IconButton(
-                                          onPressed: () {
-                                            _searchDebounce?.cancel();
-                                            _searchController.clear();
-                                            setState(() {
-                                              _searchTerm = '';
-                                              _currentPage = 1;
-                                            });
-                                          },
-                                          icon: const Icon(Icons.clear),
-                                        ),
-                                ),
-                              ),
-                            );
-                            final methodField = SizedBox(
-                              width: compact ? double.infinity : 220,
-                              child: DropdownButtonFormField<String>(
-                                initialValue: _methodFilter,
-                                decoration: const InputDecoration(
-                                  labelText: 'Filtrer par methode',
-                                ),
-                                items: methodOptions
-                                    .map(
-                                      (method) => DropdownMenuItem<String>(
-                                        value: method,
-                                        child: Text(
-                                          method == 'all'
-                                              ? 'Toutes les methodes'
-                                              : method,
-                                        ),
-                                      ),
-                                    )
-                                    .toList(growable: false),
-                                onChanged: (value) {
-                                  setState(() {
-                                    _methodFilter = value ?? 'all';
-                                    _currentPage = 1;
-                                  });
-                                },
-                              ),
-                            );
-                            final periodField = SizedBox(
-                              width: compact ? double.infinity : 170,
-                              child: DropdownButtonFormField<_FinancePeriod>(
-                                initialValue: _financePeriod,
-                                decoration: const InputDecoration(labelText: 'Periode'),
-                                items: _FinancePeriod.values
-                                    .map(
-                                      (item) => DropdownMenuItem<_FinancePeriod>(
-                                        value: item,
-                                        child: Text(_financePeriodLabel(item)),
-                                      ),
-                                    )
-                                    .toList(growable: false),
-                                onChanged: (value) {
-                                  if (value == null) return;
-                                  setState(() => _financePeriod = value);
-                                },
-                              ),
-                            );
-                            final actions = Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                FilledButton.tonalIcon(
-                                  onPressed: isMutating ? null : () => _openCreatePaymentDialog(fees),
-                                  icon: const Icon(Icons.add_card_outlined),
-                                  label: const Text('Nouveau paiement'),
-                                ),
-                                FilledButton.icon(
-                                  onPressed: isMutating
-                                      ? null
-                                      : () => _exportPaymentsCsv(
-                                            search: _searchTerm,
-                                            method: _methodFilter == 'all' ? null : _methodFilter,
-                                          ),
-                                  icon: const Icon(Icons.download_outlined),
-                                  label: const Text('Exporter CSV'),
-                                ),
-                                FilledButton.tonalIcon(
-                                  onPressed: isMutating
-                                      ? null
-                                      : () => _exportPaymentsPdf(
-                                            search: _searchTerm,
-                                            method: _methodFilter == 'all' ? null : _methodFilter,
-                                          ),
-                                  icon: const Icon(Icons.picture_as_pdf_outlined),
-                                  label: const Text('Exporter PDF'),
-                                ),
-                                OutlinedButton.icon(
-                                  onPressed: isMutating
-                                      ? null
-                                      : () {
-                                          _searchDebounce?.cancel();
-                                          _searchController.clear();
-                                          setState(() {
-                                            _methodFilter = 'all';
-                                            _searchTerm = '';
-                                            _currentPage = 1;
-                                            _financePeriod = _FinancePeriod.month;
-                                          });
-                                        },
-                                  icon: const Icon(Icons.filter_alt_off_outlined),
-                                  label: const Text('Reinitialiser'),
-                                ),
-                              ],
-                            );
-
-                            if (compact) {
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  searchField,
-                                  const SizedBox(height: 8),
-                                  methodField,
-                                  const SizedBox(height: 8),
-                                  periodField,
-                                  const SizedBox(height: 8),
-                                  actions,
-                                ],
-                              );
-                            }
-
-                            return Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [searchField, methodField, periodField, actions],
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 8),
                         Wrap(
                           spacing: 10,
                           runSpacing: 10,
@@ -1889,68 +2100,192 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                             ),
                           )
                         else
-                          SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: DataTable(
-                              columns: const [
-                                DataColumn(label: Text('Date')),
-                                DataColumn(label: Text('Eleve')),
-                                DataColumn(label: Text('Matricule')),
-                                DataColumn(label: Text('Type frais')),
-                                DataColumn(label: Text('Montant')),
-                                DataColumn(label: Text('Methode')),
-                                DataColumn(label: Text('Reference')),
-                                DataColumn(label: Text('Actions')),
-                              ],
-                              rows: visiblePayments.map((payment) {
-                                final selected = payment.id == _selectedPaymentId;
-                                return DataRow(
-                                  selected: selected,
-                                  onSelectChanged: (_) {
-                                    setState(() => _selectedPaymentId = payment.id);
-                                  },
-                                  cells: [
-                                    DataCell(Text(_formatDate(payment.createdAt))),
-                                    DataCell(Text(payment.studentFullName)),
-                                    DataCell(Text(payment.studentMatricule)),
-                                    DataCell(Text(payment.feeType)),
-                                    DataCell(Text(_formatMoney(payment.amount))),
-                                    DataCell(_methodTag(context, payment.method)),
-                                    DataCell(Text(payment.reference.isEmpty ? '-' : payment.reference)),
-                                    DataCell(
-                                      Wrap(
-                                        spacing: 6,
-                                        runSpacing: 6,
-                                        children: [
-                                          OutlinedButton(
-                                            onPressed: () => _openPaymentDetails(payment),
-                                            child: const Text('Afficher'),
-                                          ),
-                                          OutlinedButton(
-                                            onPressed: isMutating ? null : () => _openEditDialog(payment, fees),
-                                            child: const Text('Modifier'),
-                                          ),
-                                          FilledButton.tonal(
-                                            onPressed: () async {
-                                              try {
-                                                await _printReceipt(payment.id);
-                                              } catch (error) {
-                                                _showMessage('Erreur generation PDF: $error');
-                                              }
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final compact = constraints.maxWidth < 1080;
+
+                              final paymentsTable = SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: DataTable(
+                                  columns: const [
+                                    DataColumn(label: Text('Date')),
+                                    DataColumn(label: Text('Eleve')),
+                                    DataColumn(label: Text('Classe')),
+                                    DataColumn(label: Text('Matricule')),
+                                    DataColumn(label: Text('Type frais')),
+                                    DataColumn(label: Text('Montant')),
+                                    DataColumn(label: Text('Methode')),
+                                    DataColumn(label: Text('Actions')),
+                                  ],
+                                  rows: visiblePayments.map((payment) {
+                                    final selected = payment.id == _selectedPaymentId;
+                                    return DataRow(
+                                      selected: selected,
+                                      onSelectChanged: (_) {
+                                        setState(() => _selectedPaymentId = payment.id);
+                                      },
+                                      cells: [
+                                        DataCell(Text(_formatDate(payment.createdAt))),
+                                        DataCell(Text(payment.studentFullName)),
+                                        DataCell(Text(_classLabel(payment.classroomName))),
+                                        DataCell(Text(payment.studentMatricule)),
+                                        DataCell(Text(payment.feeType)),
+                                        DataCell(Text(_formatMoney(payment.amount))),
+                                        DataCell(_methodTag(context, payment.method)),
+                                        DataCell(
+                                          PopupMenuButton<_PaymentRowAction>(
+                                            tooltip: 'Actions',
+                                            onSelected: (action) {
+                                              _handlePaymentRowAction(
+                                                action: action,
+                                                payment: payment,
+                                                fees: fees,
+                                                isMutating: isMutating,
+                                              );
                                             },
-                                            child: const Text('Recu PDF'),
+                                            itemBuilder: (context) => const [
+                                              PopupMenuItem<_PaymentRowAction>(
+                                                value: _PaymentRowAction.view,
+                                                child: Text('Afficher'),
+                                              ),
+                                              PopupMenuItem<_PaymentRowAction>(
+                                                value: _PaymentRowAction.edit,
+                                                child: Text('Modifier'),
+                                              ),
+                                              PopupMenuItem<_PaymentRowAction>(
+                                                value: _PaymentRowAction.print,
+                                                child: Text('Imprimer recu'),
+                                              ),
+                                              PopupMenuItem<_PaymentRowAction>(
+                                                value: _PaymentRowAction.delete,
+                                                child: Text('Supprimer'),
+                                              ),
+                                            ],
+                                            child: const Icon(Icons.more_vert),
                                           ),
-                                          TextButton(
-                                            onPressed: isMutating ? null : () => _deletePayment(payment),
-                                            child: const Text('Supprimer'),
+                                        ),
+                                      ],
+                                    );
+                                  }).toList(growable: false),
+                                ),
+                              );
+
+                              if (compact) {
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    if (selectedPayment != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(bottom: 8),
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: FilledButton.tonalIcon(
+                                            onPressed: () => _openSelectedPaymentDrawer(
+                                              payment: selectedPayment,
+                                              fees: fees,
+                                              isMutating: isMutating,
+                                            ),
+                                            icon: const Icon(Icons.receipt_long_outlined),
+                                            label: Text(
+                                              'Recu selectionne • ${selectedPayment.studentMatricule}',
+                                            ),
                                           ),
-                                        ],
+                                        ),
                                       ),
-                                    ),
+                                    paymentsTable,
                                   ],
                                 );
-                              }).toList(growable: false),
-                            ),
+                              }
+
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(child: paymentsTable),
+                                  const SizedBox(width: 12),
+                                  SizedBox(
+                                    width: 320,
+                                    child: selectedPayment == null
+                                        ? Card(
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(12),
+                                              child: Text(
+                                                'Selectionne un encaissement pour afficher le detail.',
+                                                style: Theme.of(context).textTheme.bodyMedium,
+                                              ),
+                                            ),
+                                          )
+                                        : Card(
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(12),
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    'Recu selectionne',
+                                                    style: Theme.of(context).textTheme.titleSmall,
+                                                  ),
+                                                  const SizedBox(height: 8),
+                                                  _detailRow('Eleve', selectedPayment.studentFullName),
+                                                  _detailRow('Matricule', selectedPayment.studentMatricule),
+                                                  _detailRow('Classe', _classLabel(selectedPayment.classroomName)),
+                                                  _detailRow('Type frais', selectedPayment.feeType),
+                                                  _detailRow('Montant', _formatMoney(selectedPayment.amount)),
+                                                  _detailRow('Methode', selectedPayment.method),
+                                                  _detailRow('Date', _formatDate(selectedPayment.createdAt)),
+                                                  _detailRow(
+                                                    'Reference',
+                                                    selectedPayment.reference.isEmpty
+                                                        ? '-'
+                                                        : selectedPayment.reference,
+                                                  ),
+                                                  const SizedBox(height: 8),
+                                                  Wrap(
+                                                    spacing: 6,
+                                                    runSpacing: 6,
+                                                    children: [
+                                                      FilledButton.tonalIcon(
+                                                        onPressed: () => _openPaymentDetails(selectedPayment),
+                                                        icon: const Icon(Icons.visibility_outlined),
+                                                        label: const Text('Afficher'),
+                                                      ),
+                                                      FilledButton.tonalIcon(
+                                                        onPressed: isMutating
+                                                            ? null
+                                                            : () => _openEditDialog(selectedPayment, fees),
+                                                        icon: const Icon(Icons.edit_outlined),
+                                                        label: const Text('Modifier'),
+                                                      ),
+                                                      FilledButton.tonalIcon(
+                                                        onPressed: () async {
+                                                          try {
+                                                            await _printReceipt(selectedPayment.id);
+                                                          } catch (error) {
+                                                            _showMessage('Erreur generation PDF: $error');
+                                                          }
+                                                        },
+                                                        icon: const Icon(Icons.picture_as_pdf_outlined),
+                                                        label: const Text('Imprimer'),
+                                                      ),
+                                                      FilledButton.icon(
+                                                        onPressed: isMutating
+                                                            ? null
+                                                            : () => _deletePayment(selectedPayment),
+                                                        style: FilledButton.styleFrom(
+                                                          backgroundColor: const Color(0xFFB42318),
+                                                        ),
+                                                        icon: const Icon(Icons.delete_outline),
+                                                        label: const Text('Supprimer'),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                  ),
+                                ],
+                              );
+                            },
                           ),
                         const SizedBox(height: 8),
                         Wrap(
@@ -2007,63 +2342,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                             ),
                           ],
                         ),
-                        if (selectedPayment != null) ...[
-                          const SizedBox(height: 12),
-                          Divider(color: colorScheme.outlineVariant),
-                          const SizedBox(height: 10),
-                          Text(
-                            'Recu selectionne',
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 8,
-                            children: [
-                              _metricChip('Eleve', selectedPayment.studentFullName),
-                              _metricChip('Matricule', selectedPayment.studentMatricule),
-                              _metricChip('Type frais', selectedPayment.feeType),
-                              _metricChip('Montant', _formatMoney(selectedPayment.amount)),
-                              _metricChip('Methode', selectedPayment.method),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            children: [
-                              FilledButton.tonalIcon(
-                                onPressed: () => _openPaymentDetails(selectedPayment),
-                                icon: const Icon(Icons.visibility_outlined),
-                                label: const Text('Afficher'),
-                              ),
-                              FilledButton.tonalIcon(
-                                onPressed: isMutating ? null : () => _openEditDialog(selectedPayment, fees),
-                                icon: const Icon(Icons.edit_outlined),
-                                label: const Text('Modifier'),
-                              ),
-                              FilledButton.tonalIcon(
-                                onPressed: () async {
-                                  try {
-                                    await _printReceipt(selectedPayment.id);
-                                  } catch (error) {
-                                    _showMessage('Erreur generation PDF: $error');
-                                  }
-                                },
-                                icon: const Icon(Icons.picture_as_pdf),
-                                label: const Text('Imprimer recu'),
-                              ),
-                              FilledButton.icon(
-                                onPressed: isMutating ? null : () => _deletePayment(selectedPayment),
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: const Color(0xFFB42318),
-                                ),
-                                icon: const Icon(Icons.delete_outline),
-                                label: const Text('Supprimer'),
-                              ),
-                            ],
-                          ),
-                        ],
+                        const SizedBox(height: 2),
                       ],
                     ),
                   ),
@@ -2082,46 +2361,140 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Frais en attente',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 8),
-                        if (outstandingFees.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Text('Aucun solde restant.'),
-                          )
-                        else
-                          SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: DataTable(
-                              columns: const [
-                                DataColumn(label: Text('Eleve')),
-                                DataColumn(label: Text('Matricule')),
-                                DataColumn(label: Text('Type frais')),
-                                DataColumn(label: Text('Montant du')),
-                                DataColumn(label: Text('Solde')),
-                              ],
-                              rows: outstandingFees
-                                  .map(
-                                    (fee) => DataRow(
-                                      cells: [
-                                        DataCell(Text(fee.studentFullName)),
-                                        DataCell(Text(fee.studentMatricule)),
-                                        DataCell(Text(fee.feeType)),
-                                        DataCell(
-                                          Text(_formatMoney(fee.amountDue)),
-                                        ),
-                                        DataCell(
-                                          Text(_formatMoney(fee.balance)),
-                                        ),
-                                      ],
-                                    ),
-                                  )
-                                  .toList(),
-                            ),
+                        ExpansionTile(
+                          initiallyExpanded: _outstandingExpanded,
+                          onExpansionChanged: (expanded) {
+                            setState(() => _outstandingExpanded = expanded);
+                          },
+                          tilePadding: EdgeInsets.zero,
+                          title: Text(
+                            'Frais en attente • ${outstandingFees.length}',
+                            style: Theme.of(context).textTheme.titleSmall,
                           ),
+                          childrenPadding: const EdgeInsets.only(bottom: 4),
+                          children: [
+                            if (outstandingFees.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 8),
+                                child: Text('Aucun solde restant.'),
+                              )
+                            else ...[
+                              Text(
+                                'Affichage ${outstandingStart + 1}-${outstandingEnd} sur ${outstandingFees.length} frais en attente',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                              const SizedBox(height: 8),
+                              ..._groupOutstandingByClass(visibleOutstandingFees).entries.map((entry) {
+                                final className = entry.key;
+                                final classRows = entry.value;
+                                final expanded = _expandedOutstandingClasses.contains(className);
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+                                    ),
+                                  ),
+                                  child: ExpansionTile(
+                                    initiallyExpanded: expanded,
+                                    onExpansionChanged: (value) {
+                                      setState(() {
+                                        if (value) {
+                                          _expandedOutstandingClasses.add(className);
+                                        } else {
+                                          _expandedOutstandingClasses.remove(className);
+                                        }
+                                      });
+                                    },
+                                    title: Text('Classe $className • ${classRows.length}'),
+                                    children: [
+                                      SingleChildScrollView(
+                                        scrollDirection: Axis.horizontal,
+                                        child: DataTable(
+                                          columns: const [
+                                            DataColumn(label: Text('Eleve')),
+                                            DataColumn(label: Text('Matricule')),
+                                            DataColumn(label: Text('Type frais')),
+                                            DataColumn(label: Text('Montant du')),
+                                            DataColumn(label: Text('Solde')),
+                                          ],
+                                          rows: classRows
+                                              .map(
+                                                (fee) => DataRow(
+                                                  cells: [
+                                                    DataCell(Text(fee.studentFullName)),
+                                                    DataCell(Text(fee.studentMatricule)),
+                                                    DataCell(Text(fee.feeType)),
+                                                    DataCell(Text(_formatMoney(fee.amountDue))),
+                                                    DataCell(Text(_formatMoney(fee.balance))),
+                                                  ],
+                                                ),
+                                              )
+                                              .toList(growable: false),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                              Wrap(
+                                alignment: WrapAlignment.spaceBetween,
+                                runSpacing: 8,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  Wrap(
+                                    spacing: 6,
+                                    runSpacing: 6,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
+                                    children: [
+                                      const Text('Lignes/page:'),
+                                      DropdownButton<int>(
+                                        value: _outstandingPageSize,
+                                        items: _outstandingPageSizeOptions
+                                            .map(
+                                              (rows) => DropdownMenuItem<int>(
+                                                value: rows,
+                                                child: Text('$rows'),
+                                              ),
+                                            )
+                                            .toList(growable: false),
+                                        onChanged: (value) {
+                                          if (value == null || value == _outstandingPageSize) {
+                                            return;
+                                          }
+                                          setState(() {
+                                            _outstandingPageSize = value;
+                                            _outstandingPage = 1;
+                                          });
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                  Wrap(
+                                    spacing: 6,
+                                    children: [
+                                      IconButton(
+                                        tooltip: 'Page précédente',
+                                        onPressed: safeOutstandingPage > 1
+                                            ? () => setState(() => _outstandingPage -= 1)
+                                            : null,
+                                        icon: const Icon(Icons.chevron_left),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Page suivante',
+                                        onPressed: safeOutstandingPage < outstandingPages
+                                            ? () => setState(() => _outstandingPage += 1)
+                                            : null,
+                                        icon: const Icon(Icons.chevron_right),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -2505,8 +2878,11 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                       ),
                     ),
                   ],
-                ],
-              ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             );
           },
         );

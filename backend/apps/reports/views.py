@@ -843,6 +843,9 @@ def _allowed_payments_queryset(request):
     if role == UserRole.PARENT:
         return queryset.filter(fee__student__parent__user_id=user.id)
 
+    if role == UserRole.SUPER_ADMIN:
+        return queryset
+
     target_etablissement_id = _effective_etablissement_id(request)
     if target_etablissement_id:
         return queryset.filter(

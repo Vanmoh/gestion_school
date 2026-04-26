@@ -911,6 +911,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
     balance = serializers.SerializerMethodField(read_only=True)
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
+    classroom_name = serializers.SerializerMethodField(read_only=True)
 
     def get_amount_paid(self, obj):
         annotated = getattr(obj, "amount_paid_annotated", None)
@@ -932,6 +933,10 @@ class StudentFeeSerializer(serializers.ModelSerializer):
 
     def get_student_matricule(self, obj):
         return obj.student.matricule if obj.student else ""
+
+    def get_classroom_name(self, obj):
+        classroom = obj.student.classroom if obj.student else None
+        return classroom.name if classroom else ""
 
     def validate_amount_due(self, value):
         if value <= 0:
@@ -965,6 +970,7 @@ class PaymentSerializer(serializers.ModelSerializer):
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
     fee_type = serializers.SerializerMethodField(read_only=True)
+    classroom_name = serializers.SerializerMethodField(read_only=True)
 
     PAYMENT_METHOD_ALIASES = {
         "cash": "Especes",
@@ -1012,6 +1018,11 @@ class PaymentSerializer(serializers.ModelSerializer):
 
     def get_fee_type(self, obj):
         return obj.fee.get_fee_type_display() if obj.fee else ""
+
+    def get_classroom_name(self, obj):
+        student = obj.fee.student if obj.fee else None
+        classroom = student.classroom if student else None
+        return classroom.name if classroom else ""
 
     def validate(self, attrs):
         fee = attrs.get("fee") or getattr(self.instance, "fee", None)

@@ -6,6 +6,7 @@ class PaymentItem {
   final String reference;
   final String studentFullName;
   final String studentMatricule;
+  final String classroomName;
   final String feeType;
   final String createdAt;
 
@@ -17,6 +18,7 @@ class PaymentItem {
     required this.reference,
     required this.studentFullName,
     required this.studentMatricule,
+    required this.classroomName,
     required this.feeType,
     required this.createdAt,
   });

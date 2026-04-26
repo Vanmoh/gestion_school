@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers/navigation_intents.dart';
 import '../../../models/etablissement.dart';
+import '../../payments/presentation/payments_controller.dart';
 import '../domain/dashboard_stats.dart';
 import 'dashboard_controller.dart';
 import 'dashboard_shared_ui.dart';
@@ -14,7 +15,14 @@ enum _DashboardScopePeriod { weekly, monthly, quarterly }
 
 enum _DashboardScopeLevel { all, lower, middle, upper }
 
-enum _DashboardQuickAction { refresh, reports, finance, timetable, activityLogs }
+enum _DashboardQuickAction {
+  refresh,
+  reports,
+  finance,
+  newPayment,
+  timetable,
+  activityLogs,
+}
 
 class DashboardPage extends ConsumerStatefulWidget {
   const DashboardPage({super.key});
@@ -49,6 +57,10 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
         _navigateToShellItem('reports');
         return;
       case _DashboardQuickAction.finance:
+        _navigateToShellItem('finance');
+        return;
+      case _DashboardQuickAction.newPayment:
+        ref.read(financeOpenGuidedPaymentIntentProvider.notifier).state = true;
         _navigateToShellItem('finance');
         return;
       case _DashboardQuickAction.timetable:
@@ -111,6 +123,8 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   @override
   Widget build(BuildContext context) {
     final statsAsync = ref.watch(dashboardStatsProvider);
+    final recentPayments = ref.watch(paymentsProvider).valueOrNull ?? const [];
+    final fees = ref.watch(feesProvider).valueOrNull ?? const [];
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
 
     return statsAsync.when(
@@ -331,6 +345,45 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
           expenseRate: expenseRate,
           absencesPerStudent: absencesPerStudent,
         );
+        final pendingFees = fees
+            .where((fee) => fee.balance > 0)
+            .toList(growable: false)
+          ..sort((a, b) => b.balance.compareTo(a.balance));
+        final paymentRows = <_StatusRow>[
+          ...recentPayments.take(3).map(
+            (payment) => _StatusRow(
+              title: '${payment.studentFullName} - ${_feeTypeLabel(payment.feeType)}',
+              subtitle:
+                  '${_formatFcfa(payment.amount)} • ${payment.method} • ${_compactDateTime(payment.createdAt)}',
+              status: _StatusKind.paid,
+              onTap: () => _handleQuickAction(_DashboardQuickAction.finance),
+            ),
+          ),
+          ...pendingFees
+              .take(2)
+              .map(
+                (fee) => _StatusRow(
+                  title: '${fee.studentFullName} - ${_feeTypeLabel(fee.feeType)}',
+                  subtitle:
+                      'Reste ${_formatFcfa(fee.balance)} • Du ${_formatFcfa(fee.amountDue)}',
+                  status: _StatusKind.pending,
+                  onTap: () {
+                    ref.read(financeOpenGuidedPaymentIntentProvider.notifier).state = true;
+                    _navigateToShellItem('finance');
+                  },
+                ),
+              ),
+        ];
+
+        if (paymentRows.isEmpty) {
+          paymentRows.add(
+            const _StatusRow(
+              title: 'Aucun mouvement recent',
+              subtitle: 'Les encaissements et soldes a traiter apparaitront ici.',
+              status: _StatusKind.failed,
+            ),
+          );
+        }
 
         return LayoutBuilder(
           builder: (context, constraints) {
@@ -530,7 +583,10 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                                   const SizedBox(height: 12),
                                   _StaggerReveal(
                                     index: 10,
-                                    child: _InsightsPanel(insights: insights),
+                                    child: _InsightsPanel(
+                                      insights: insights,
+                                      paymentRows: paymentRows,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -565,7 +621,10 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                         const SizedBox(height: 12),
                         _StaggerReveal(
                           index: 10,
-                          child: _InsightsPanel(insights: insights),
+                          child: _InsightsPanel(
+                            insights: insights,
+                            paymentRows: paymentRows,
+                          ),
                         ),
                       ],
                     ],
@@ -888,6 +947,14 @@ class _HeroActionMenu extends StatelessWidget {
           ),
         ),
         PopupMenuItem(
+          value: _DashboardQuickAction.newPayment,
+          child: ListTile(
+            leading: Icon(Icons.point_of_sale_rounded),
+            title: Text('Encaisser maintenant'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
           value: _DashboardQuickAction.timetable,
           child: ListTile(
             leading: Icon(Icons.schedule_rounded),
@@ -983,6 +1050,10 @@ class _ContextRibbon extends StatelessWidget {
               PopupMenuItem(
                 value: _DashboardQuickAction.finance,
                 child: Text('Ouvrir la finance'),
+              ),
+              PopupMenuItem(
+                value: _DashboardQuickAction.newPayment,
+                child: Text('Nouveau paiement guide'),
               ),
               PopupMenuItem(
                 value: _DashboardQuickAction.timetable,
@@ -2669,29 +2740,12 @@ class _ProgressMetricRow extends StatelessWidget {
 
 class _InsightsPanel extends StatelessWidget {
   final List<_DashboardInsight> insights;
+  final List<_StatusRow> paymentRows;
 
-  const _InsightsPanel({required this.insights});
+  const _InsightsPanel({required this.insights, required this.paymentRows});
 
   @override
   Widget build(BuildContext context) {
-    const paymentRows = [
-      _StatusRow(
-        title: '3A - Scolarité Mars',
-        subtitle: 'Famille Kone',
-        status: _StatusKind.paid,
-      ),
-      _StatusRow(
-        title: '2B - Trimestre 2',
-        subtitle: 'Famille Diallo',
-        status: _StatusKind.pending,
-      ),
-      _StatusRow(
-        title: '6eA - Cantine',
-        subtitle: 'Famille Niamke',
-        status: _StatusKind.failed,
-      ),
-    ];
-
     return _PanelShell(
       title: 'Insights & priorités',
       subtitle: 'Suggestions automatiques pour le pilotage quotidien.',
@@ -2729,11 +2783,13 @@ class _StatusRow {
   final String title;
   final String subtitle;
   final _StatusKind status;
+  final VoidCallback? onTap;
 
   const _StatusRow({
     required this.title,
     required this.subtitle,
     required this.status,
+    this.onTap,
   });
 }
 
@@ -2752,76 +2808,81 @@ class _StatusListTileState extends State<_StatusListTile> {
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (widget.row.status) {
-      _StatusKind.paid => ('Paid', const Color(0xFF22C55E)),
-      _StatusKind.pending => ('Pending', const Color(0xFFF59E0B)),
-      _StatusKind.failed => ('Failed', const Color(0xFFEF4444)),
+      _StatusKind.paid => ('Paye', const Color(0xFF22C55E)),
+      _StatusKind.pending => ('En attente', const Color(0xFFF59E0B)),
+      _StatusKind.failed => ('Info', const Color(0xFF60A5FA)),
     };
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 170),
-        curve: Curves.easeOut,
-        padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          gradient: LinearGradient(
-            colors: [
-              Colors.white.withValues(alpha: _hovered ? 0.14 : 0.09),
-              const Color(0xFF242B4A).withValues(alpha: _hovered ? 0.24 : 0.18),
-            ],
-          ),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-          boxShadow: _hovered
-              ? [
-                  BoxShadow(
-                    color: const Color(0xFF8B5CF6).withValues(alpha: 0.2),
-                    blurRadius: 14,
-                    spreadRadius: -2,
-                  ),
-                ]
-              : null,
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.row.title,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    widget.row.subtitle,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: Colors.white.withValues(alpha: 0.66),
-                    ),
-                  ),
-                ],
-              ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: widget.row.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 170),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            gradient: LinearGradient(
+              colors: [
+                Colors.white.withValues(alpha: _hovered ? 0.14 : 0.09),
+                const Color(0xFF242B4A).withValues(alpha: _hovered ? 0.24 : 0.18),
+              ],
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(999),
-                color: color.withValues(alpha: 0.2),
-                border: Border.all(color: color.withValues(alpha: 0.55)),
-              ),
-              child: Text(
-                label,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: color,
-                  fontWeight: FontWeight.w700,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+            boxShadow: _hovered
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFF8B5CF6).withValues(alpha: 0.2),
+                      blurRadius: 14,
+                      spreadRadius: -2,
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.row.title,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.row.subtitle,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.66),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  color: color.withValues(alpha: 0.2),
+                  border: Border.all(color: color.withValues(alpha: 0.55)),
+                ),
+                child: Text(
+                  label,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3012,4 +3073,31 @@ String _formatFcfa(double value) {
 
   final formatted = negative ? '-${buffer.toString()}' : buffer.toString();
   return '$formatted FCFA';
+}
+
+String _feeTypeLabel(String raw) {
+  final value = raw.trim().toLowerCase();
+  switch (value) {
+    case 'registration':
+      return 'Frais inscription';
+    case 'monthly':
+      return 'Frais mensuels';
+    case 'exam':
+      return 'Frais examen';
+    default:
+      return raw.trim().isEmpty ? 'Frais' : raw;
+  }
+}
+
+String _compactDateTime(String raw) {
+  final parsed = DateTime.tryParse(raw);
+  if (parsed == null) {
+    return '-';
+  }
+  final local = parsed.toLocal();
+  final day = local.day.toString().padLeft(2, '0');
+  final month = local.month.toString().padLeft(2, '0');
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '$day/$month $hour:$minute';
 }
