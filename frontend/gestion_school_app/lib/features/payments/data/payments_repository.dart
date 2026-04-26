@@ -56,6 +56,7 @@ class PaymentsRepository {
         reference: map['reference']?.toString() ?? '',
         studentFullName: map['student_full_name']?.toString() ?? '',
         studentMatricule: map['student_matricule']?.toString() ?? '',
+        classroomName: map['classroom_name']?.toString() ?? '',
         feeType: map['fee_type']?.toString() ?? '',
         createdAt: map['created_at']?.toString() ?? '',
       );
@@ -145,6 +146,7 @@ class PaymentsRepository {
         id: map['id'] as int,
         studentFullName: map['student_full_name']?.toString() ?? '',
         studentMatricule: map['student_matricule']?.toString() ?? '',
+        classroomName: map['classroom_name']?.toString() ?? '',
         feeType: map['fee_type']?.toString() ?? '',
         amountDue: _toDouble(map['amount_due']),
         balance: _toDouble(map['balance']),

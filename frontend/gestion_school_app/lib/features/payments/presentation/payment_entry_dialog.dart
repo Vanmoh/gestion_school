@@ -104,9 +104,9 @@ class _GuidedPaymentEntryDialogState
 
   int? _selectedClassroomId;
   Student? _selectedStudent;
-  int? _selectedFeeId;
+  final Map<String, int?> _selectedFeeIdsByType = {};
   int? _selectedAcademicYearId;
-  String _selectedFeeType = 'registration';
+  Set<String> _selectedFeeTypes = {'registration'};
   String _selectedMethod = _paymentMethods.first;
   DateTime _selectedDueDate = DateTime.now();
 
@@ -121,7 +121,7 @@ class _GuidedPaymentEntryDialogState
     super.initState();
     _selectedClassroomId = widget.initialClassroomId ?? widget.initialStudent?.classroomId;
     _selectedStudent = widget.initialStudent;
-    _selectedFeeType = _normalizeFeeType(widget.preferredFeeType);
+    _selectedFeeTypes = {_normalizeFeeType(widget.preferredFeeType)};
     _loadBootstrap();
   }
 
@@ -213,7 +213,7 @@ class _GuidedPaymentEntryDialogState
         if (!selectedStillExists && !widget.lockStudentSelection) {
           _selectedStudent = null;
           _fees = const [];
-          _selectedFeeId = null;
+          _selectedFeeIdsByType.clear();
         }
       });
     } finally {
@@ -241,7 +241,7 @@ class _GuidedPaymentEntryDialogState
 
       setState(() {
         _fees = fees;
-        _syncSelectedFeeWithType(resetAmount: true);
+        _syncSelectedFeesWithTypes(resetAmount: true);
       });
     } finally {
       if (mounted) {
@@ -250,8 +250,8 @@ class _GuidedPaymentEntryDialogState
     }
   }
 
-  void _syncSelectedFeeWithType({bool resetAmount = false}) {
-    final preferred = _fees.where((fee) => fee.feeType == _selectedFeeType).toList();
+  _FeeOption? _bestFeeForType(String type) {
+    final preferred = _fees.where((fee) => fee.feeType == type).toList();
     preferred.sort((left, right) {
       if (left.balance > 0 && right.balance <= 0) {
         return -1;
@@ -261,19 +261,44 @@ class _GuidedPaymentEntryDialogState
       }
       return right.id.compareTo(left.id);
     });
+    return preferred.isEmpty ? null : preferred.first;
+  }
 
-    final matched = preferred.isEmpty ? null : preferred.first;
-    _selectedFeeId = matched?.id;
-    _selectedAcademicYearId ??= matched?.academicYearId;
-    if (matched?.dueDate != null) {
-      _selectedDueDate = matched!.dueDate!;
+  List<String> _orderedSelectedFeeTypes() {
+    final selected = _feeTypes.where(_selectedFeeTypes.contains).toList(growable: false);
+    if (selected.isNotEmpty) {
+      return selected;
     }
+    return const ['registration'];
+  }
+
+  void _syncSelectedFeesWithTypes({bool resetAmount = false}) {
+    final next = <String, int?>{};
+    for (final type in _orderedSelectedFeeTypes()) {
+      final matched = _bestFeeForType(type);
+      next[type] = matched?.id;
+      _selectedAcademicYearId ??= matched?.academicYearId;
+      if (matched?.dueDate != null) {
+        _selectedDueDate = matched!.dueDate!;
+      }
+    }
+    _selectedFeeIdsByType
+      ..clear()
+      ..addAll(next);
     if (resetAmount) {
-      final amount = matched == null
-          ? ''
-          : (matched.balance > 0 ? matched.balance : matched.amountDue).toStringAsFixed(0);
-      _paymentAmountController.text = amount;
+      final suggested = _suggestedTotalAmount();
+      _paymentAmountController.text = suggested > 0 ? suggested.toStringAsFixed(0) : '';
     }
+  }
+
+  void _refreshSuggestedPaymentAmountIfEmpty() {
+    final currentRaw = _paymentAmountController.text.trim();
+    final current = double.tryParse(currentRaw.replaceAll(',', '.'));
+    if (currentRaw.isNotEmpty && (current != null && current > 0)) {
+      return;
+    }
+    final suggested = _suggestedTotalAmount();
+    _paymentAmountController.text = suggested > 0 ? suggested.toStringAsFixed(0) : '';
   }
 
   Future<void> _pickDueDate() async {
@@ -289,9 +314,10 @@ class _GuidedPaymentEntryDialogState
     setState(() => _selectedDueDate = picked);
   }
 
-  Future<int> _ensureFeeId() async {
-    if (_selectedFeeId != null) {
-      return _selectedFeeId!;
+  Future<int> _ensureFeeIdForType(String feeType) async {
+    final existingFeeId = _selectedFeeIdsByType[feeType];
+    if (existingFeeId != null) {
+      return existingFeeId;
     }
 
     final student = _selectedStudent;
@@ -312,7 +338,7 @@ class _GuidedPaymentEntryDialogState
     final created = await ref.read(studentsRepositoryProvider).createStudentFee(
           studentId: student.id,
           academicYearId: academicYearId,
-          feeType: _selectedFeeType,
+          feeType: feeType,
           amountDue: amountDue,
           dueDate: _selectedDueDate,
         );
@@ -324,16 +350,50 @@ class _GuidedPaymentEntryDialogState
 
     setState(() {
       _fees = [..._fees, fee];
-      _selectedFeeId = fee.id;
-      _paymentAmountController.text = fee.balance.toStringAsFixed(0);
+      _selectedFeeIdsByType[feeType] = fee.id;
     });
     return fee.id;
+  }
+
+  double _maxCollectibleForType(String type) {
+    final feeId = _selectedFeeIdsByType[type];
+    final existing = feeId == null ? null : _fees.where((fee) => fee.id == feeId).firstOrNull;
+    if (existing != null) {
+      return existing.balance > 0 ? existing.balance : 0;
+    }
+    final amountDue = double.tryParse(
+      _amountDueController.text.trim().replaceAll(',', '.'),
+    );
+    return amountDue == null || amountDue <= 0 ? 0 : amountDue;
+  }
+
+  double _suggestedTotalAmount() {
+    var sum = 0.0;
+    for (final type in _orderedSelectedFeeTypes()) {
+      sum += _maxCollectibleForType(type);
+    }
+    return sum;
   }
 
   Future<void> _submit() async {
     final student = _selectedStudent;
     if (student == null) {
       _showError('Selectionnez un eleve.');
+      return;
+    }
+
+    final selectedTypes = _orderedSelectedFeeTypes();
+    if (selectedTypes.isEmpty) {
+      _showError('Selectionnez au moins un type de frais.');
+      return;
+    }
+
+    final totalCollectible = selectedTypes.fold<double>(
+      0,
+      (sum, type) => sum + _maxCollectibleForType(type),
+    );
+    if (totalCollectible <= 0) {
+      _showError('Aucun montant encaissable pour les frais selectionnes.');
       return;
     }
 
@@ -344,16 +404,36 @@ class _GuidedPaymentEntryDialogState
       _showError('Montant du paiement invalide.');
       return;
     }
+    if (amount > totalCollectible) {
+      _showError(
+        'Le montant depasse le total encaissable (${_formatMoney(totalCollectible)}).',
+      );
+      return;
+    }
 
     setState(() => _saving = true);
     try {
-      final feeId = await _ensureFeeId();
-      await ref.read(studentsRepositoryProvider).createPayment(
-            feeId: feeId,
-            amount: amount,
-            method: _selectedMethod,
-            reference: _referenceController.text.trim(),
-          );
+      var remaining = amount;
+      final reference = _referenceController.text.trim();
+      for (final type in selectedTypes) {
+        if (remaining <= 0) {
+          break;
+        }
+        final maxForType = _maxCollectibleForType(type);
+        if (maxForType <= 0) {
+          continue;
+        }
+
+        final amountForType = remaining < maxForType ? remaining : maxForType;
+        final feeId = await _ensureFeeIdForType(type);
+        await ref.read(studentsRepositoryProvider).createPayment(
+              feeId: feeId,
+              amount: amountForType,
+              method: _selectedMethod,
+              reference: reference,
+            );
+        remaining -= amountForType;
+      }
 
       ref.invalidate(paymentsProvider);
       ref.invalidate(paymentsPaginatedProvider);
@@ -511,8 +591,19 @@ class _GuidedPaymentEntryDialogState
       final haystack = '${student.fullName} ${student.matricule}'.toLowerCase();
       return haystack.contains(search);
     }).toList(growable: false);
-    final selectedFee = _fees.where((fee) => fee.id == _selectedFeeId).firstOrNull;
-    final feeNeedsCreation = selectedFee == null;
+    final selectedFees = _orderedSelectedFeeTypes()
+        .map((type) {
+          final feeId = _selectedFeeIdsByType[type];
+          if (feeId == null) {
+            return null;
+          }
+          return _fees.where((fee) => fee.id == feeId).firstOrNull;
+        })
+        .whereType<_FeeOption>()
+        .toList(growable: false);
+    final feeNeedsCreation = _orderedSelectedFeeTypes().any(
+      (type) => _selectedFeeIdsByType[type] == null,
+    );
 
     return Container(
       decoration: BoxDecoration(
@@ -553,9 +644,9 @@ class _GuidedPaymentEntryDialogState
                                 children: [
                                   _buildHeader(authUser),
                                   const SizedBox(height: 14),
-                                  _buildLeftPane(filteredStudents),
+                                  _buildLeftPane(filteredStudents, compact: compact),
                                   const SizedBox(height: 14),
-                                  _buildRightPane(selectedFee, feeNeedsCreation, authUser),
+                                  _buildRightPane(selectedFees, feeNeedsCreation, authUser),
                                 ],
                               )
                             : Column(
@@ -566,11 +657,14 @@ class _GuidedPaymentEntryDialogState
                                     child: Row(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Expanded(flex: 11, child: _buildLeftPane(filteredStudents)),
+                                        Expanded(
+                                          flex: 11,
+                                          child: _buildLeftPane(filteredStudents, compact: compact),
+                                        ),
                                         const SizedBox(width: 14),
                                         Expanded(
                                           flex: 10,
-                                          child: _buildRightPane(selectedFee, feeNeedsCreation, authUser),
+                                          child: _buildRightPane(selectedFees, feeNeedsCreation, authUser),
                                         ),
                                       ],
                                     ),
@@ -680,7 +774,7 @@ class _GuidedPaymentEntryDialogState
     );
   }
 
-  Widget _buildLeftPane(List<Student> filteredStudents) {
+  Widget _buildLeftPane(List<Student> filteredStudents, {required bool compact}) {
     final colorScheme = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(16),
@@ -741,7 +835,7 @@ class _GuidedPaymentEntryDialogState
                       _selectedClassroomId = value;
                       _selectedStudent = null;
                       _fees = const [];
-                      _selectedFeeId = null;
+                      _selectedFeeIdsByType.clear();
                       _studentSearchController.clear();
                     });
                     await _loadStudentsForClassroom();
@@ -819,112 +913,214 @@ class _GuidedPaymentEntryDialogState
                 ],
               ),
             ),
-          Expanded(
-            child: _studentsLoading
-                ? const Center(child: CircularProgressIndicator())
-                : filteredStudents.isEmpty
-                    ? const Center(child: Text('Aucun eleve dans cette classe.'))
-                    : ListView.separated(
-                        itemCount: filteredStudents.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final student = filteredStudents[index];
-                          final selected = _selectedStudent?.id == student.id;
-                          return Material(
-                            color: selected
-                                ? colorScheme.primaryContainer.withValues(alpha: 0.82)
-                                : colorScheme.surface,
-                            borderRadius: BorderRadius.circular(16),
-                            elevation: selected ? 1.5 : 0,
-                            child: InkWell(
+          if (compact)
+            SizedBox(
+              height: 300,
+              child: _studentsLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : filteredStudents.isEmpty
+                      ? const Center(child: Text('Aucun eleve dans cette classe.'))
+                      : ListView.separated(
+                          itemCount: filteredStudents.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final student = filteredStudents[index];
+                            final selected = _selectedStudent?.id == student.id;
+                            return Material(
+                              color: selected
+                                  ? colorScheme.primaryContainer.withValues(alpha: 0.82)
+                                  : colorScheme.surface,
                               borderRadius: BorderRadius.circular(16),
-                              onTap: () async {
-                                await _loadFeesForStudent(student);
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 14,
-                                ),
-                                child: Row(
-                                  children: [
-                                    CircleAvatar(
-                                      radius: 22,
-                                      backgroundColor: selected
-                                          ? colorScheme.surface.withValues(alpha: 0.92)
-                                          : colorScheme.surfaceContainerHighest,
-                                      child: Text(_studentInitial(student)),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            student.fullName,
-                                            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            '${student.matricule}${student.classroomName.trim().isEmpty ? '' : ' • ${student.classroomName}'}',
-                                            style: Theme.of(context).textTheme.bodySmall,
-                                          ),
-                                          const SizedBox(height: 6),
-                                          Row(
-                                            children: [
-                                              Icon(
-                                                Icons.touch_app_outlined,
-                                                size: 15,
-                                                color: selected
-                                                    ? colorScheme.primary
-                                                    : colorScheme.outline,
-                                              ),
-                                              const SizedBox(width: 4),
-                                              Text(
-                                                selected
-                                                    ? 'Eleve actif pour encaissement'
-                                                    : 'Toucher pour charger les frais',
-                                                style: Theme.of(context).textTheme.labelSmall,
-                                              ),
-                                            ],
-                                          ),
-                                        ],
+                              elevation: selected ? 1.5 : 0,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(16),
+                                onTap: () async {
+                                  await _loadFeesForStudent(student);
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 14,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 22,
+                                        backgroundColor: selected
+                                            ? colorScheme.surface.withValues(alpha: 0.92)
+                                            : colorScheme.surfaceContainerHighest,
+                                        child: Text(_studentInitial(student)),
                                       ),
-                                    ),
-                                    if (selected)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 8,
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              student.fullName,
+                                              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              '${student.matricule}${student.classroomName.trim().isEmpty ? '' : ' • ${student.classroomName}'}',
+                                              style: Theme.of(context).textTheme.bodySmall,
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.touch_app_outlined,
+                                                  size: 15,
+                                                  color: selected
+                                                      ? colorScheme.primary
+                                                      : colorScheme.outline,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  selected
+                                                      ? 'Eleve actif pour encaissement'
+                                                      : 'Toucher pour charger les frais',
+                                                  style: Theme.of(context).textTheme.labelSmall,
+                                                ),
+                                              ],
+                                            ),
+                                          ],
                                         ),
-                                        decoration: BoxDecoration(
-                                          color: colorScheme.primary.withValues(alpha: 0.12),
-                                          borderRadius: BorderRadius.circular(999),
-                                        ),
-                                        child: Icon(
-                                          Icons.check_circle,
-                                          color: colorScheme.primary,
-                                        ),
-                                      )
-                                    else
-                                      const Icon(Icons.chevron_right),
-                                  ],
+                                      ),
+                                      if (selected)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 8,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: colorScheme.primary.withValues(alpha: 0.12),
+                                            borderRadius: BorderRadius.circular(999),
+                                          ),
+                                          child: Icon(
+                                            Icons.check_circle,
+                                            color: colorScheme.primary,
+                                          ),
+                                        )
+                                      else
+                                        const Icon(Icons.chevron_right),
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                          );
-                        },
-                      ),
-          ),
+                            );
+                          },
+                        ),
+            )
+          else
+            Expanded(
+              child: _studentsLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : filteredStudents.isEmpty
+                      ? const Center(child: Text('Aucun eleve dans cette classe.'))
+                      : ListView.separated(
+                          itemCount: filteredStudents.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final student = filteredStudents[index];
+                            final selected = _selectedStudent?.id == student.id;
+                            return Material(
+                              color: selected
+                                  ? colorScheme.primaryContainer.withValues(alpha: 0.82)
+                                  : colorScheme.surface,
+                              borderRadius: BorderRadius.circular(16),
+                              elevation: selected ? 1.5 : 0,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(16),
+                                onTap: () async {
+                                  await _loadFeesForStudent(student);
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 14,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 22,
+                                        backgroundColor: selected
+                                            ? colorScheme.surface.withValues(alpha: 0.92)
+                                            : colorScheme.surfaceContainerHighest,
+                                        child: Text(_studentInitial(student)),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              student.fullName,
+                                              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              '${student.matricule}${student.classroomName.trim().isEmpty ? '' : ' • ${student.classroomName}'}',
+                                              style: Theme.of(context).textTheme.bodySmall,
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.touch_app_outlined,
+                                                  size: 15,
+                                                  color: selected
+                                                      ? colorScheme.primary
+                                                      : colorScheme.outline,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  selected
+                                                      ? 'Eleve actif pour encaissement'
+                                                      : 'Toucher pour charger les frais',
+                                                  style: Theme.of(context).textTheme.labelSmall,
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (selected)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 8,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: colorScheme.primary.withValues(alpha: 0.12),
+                                            borderRadius: BorderRadius.circular(999),
+                                          ),
+                                          child: Icon(
+                                            Icons.check_circle,
+                                            color: colorScheme.primary,
+                                          ),
+                                        )
+                                      else
+                                        const Icon(Icons.chevron_right),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+            ),
         ],
       ),
     );
   }
 
   Widget _buildRightPane(
-    _FeeOption? selectedFee,
+    List<_FeeOption> selectedFees,
     bool feeNeedsCreation,
     AuthUser? authUser,
   ) {
@@ -982,12 +1178,12 @@ class _GuidedPaymentEntryDialogState
                       runSpacing: 8,
                       children: [
                         _MetricPill(
-                          label: 'Etat',
-                          value: _selectedFeeStateLabel(selectedFee),
+                          label: 'Types choisis',
+                          value: '${_orderedSelectedFeeTypes().length}',
                         ),
                         _MetricPill(
-                          label: 'Type actif',
-                          value: _feeTypeLabel(_selectedFeeType),
+                          label: 'A creer',
+                          value: '${_orderedSelectedFeeTypes().where((t) => _selectedFeeIdsByType[t] == null).length}',
                         ),
                       ],
                     ),
@@ -999,9 +1195,9 @@ class _GuidedPaymentEntryDialogState
               runSpacing: 8,
               children: _feeTypes
                   .map(
-                    (type) => ChoiceChip(
+                    (type) => FilterChip(
                       label: Text(_feeTypeLabel(type)),
-                      selected: _selectedFeeType == type,
+                      selected: _selectedFeeTypes.contains(type),
                       showCheckmark: false,
                       labelStyle: Theme.of(context).textTheme.labelLarge?.copyWith(
                             fontWeight: FontWeight.w700,
@@ -1012,10 +1208,16 @@ class _GuidedPaymentEntryDialogState
                       ),
                       onSelected: _selectedStudent == null
                           ? null
-                          : (_) {
+                          : (selected) {
                               setState(() {
-                                _selectedFeeType = type;
-                                _syncSelectedFeeWithType(resetAmount: true);
+                                if (selected) {
+                                  _selectedFeeTypes = {..._selectedFeeTypes, type};
+                                } else if (_selectedFeeTypes.length > 1) {
+                                  _selectedFeeTypes = {
+                                    ..._selectedFeeTypes.where((entry) => entry != type),
+                                  };
+                                }
+                                _syncSelectedFeesWithTypes(resetAmount: true);
                               });
                             },
                     ),
@@ -1039,15 +1241,6 @@ class _GuidedPaymentEntryDialogState
                 padding: EdgeInsets.symmetric(vertical: 16),
                 child: Center(child: CircularProgressIndicator()),
               )
-            else if (selectedFee != null)
-              _FeeSummaryCard(
-                title: _feeTypeLabel(selectedFee.feeType),
-                feeId: selectedFee.id,
-                amountDue: _formatMoney(selectedFee.amountDue),
-                amountPaid: _formatMoney(selectedFee.amountPaid),
-                balance: _formatMoney(selectedFee.balance),
-                dueDate: selectedFee.dueDate == null ? '-' : _formatDate(selectedFee.dueDate!),
-              )
             else
               Container(
                 padding: const EdgeInsets.all(14),
@@ -1062,51 +1255,78 @@ class _GuidedPaymentEntryDialogState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Aucun ${_feeTypeLabel(_selectedFeeType).toLowerCase()} existant pour cet eleve.',
+                      selectedFees.isEmpty
+                          ? 'Aucun frais selectionne existant pour cet eleve.'
+                          : 'Aucun nouveau frais a creer pour les types deja existants.',
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
                             fontWeight: FontWeight.w700,
                           ),
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Le frais sera cree automatiquement pendant l encaissement.',
+                      'Les types sans frais existant seront crees automatiquement pendant l encaissement.',
                       style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<int>(
-                      initialValue: _selectedAcademicYearId,
-                      decoration: const InputDecoration(labelText: 'Annee scolaire'),
-                      items: _academicYears
-                          .map(
-                            (row) => DropdownMenuItem<int>(
-                              value: _extractId(row['id']),
-                              child: Text(_academicYearLabel(row)),
-                            ),
-                          )
-                          .toList(growable: false),
-                      onChanged: (value) => setState(() => _selectedAcademicYearId = value),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _amountDueController,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'Montant du frais'),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        OutlinedButton.icon(
-                          onPressed: _pickDueDate,
-                          icon: const Icon(Icons.event_outlined),
-                          label: Text(_formatDate(_selectedDueDate)),
-                        ),
-                      ],
                     ),
                   ],
                 ),
               ),
+            if (selectedFees.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              ...selectedFees.map(
+                (fee) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _FeeSummaryCard(
+                    title: _feeTypeLabel(fee.feeType),
+                    feeId: fee.id,
+                    amountDue: _formatMoney(fee.amountDue),
+                    amountPaid: _formatMoney(fee.amountPaid),
+                    balance: _formatMoney(fee.balance),
+                    dueDate: fee.dueDate == null ? '-' : _formatDate(fee.dueDate!),
+                  ),
+                ),
+              ),
+            ],
+            if (feeNeedsCreation) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                initialValue: _selectedAcademicYearId,
+                decoration: const InputDecoration(labelText: 'Annee scolaire (creation auto)'),
+                items: _academicYears
+                    .map(
+                      (row) => DropdownMenuItem<int>(
+                        value: _extractId(row['id']),
+                        child: Text(_academicYearLabel(row)),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (value) => setState(() => _selectedAcademicYearId = value),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _amountDueController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      onChanged: (_) {
+                        setState(() {
+                          _refreshSuggestedPaymentAmountIfEmpty();
+                        });
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Montant du frais a creer (par type manquant)',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  OutlinedButton.icon(
+                    onPressed: _pickDueDate,
+                    icon: const Icon(Icons.event_outlined),
+                    label: Text(_formatDate(_selectedDueDate)),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 14),
             Text(
               'Encaissement',
@@ -1119,7 +1339,7 @@ class _GuidedPaymentEntryDialogState
               controller: _paymentAmountController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               decoration: InputDecoration(
-                labelText: feeNeedsCreation ? 'Montant a encaisser' : 'Montant a encaisser (reste)',
+                labelText: 'Montant total a encaisser',
                 prefixIcon: const Icon(Icons.payments_outlined),
               ),
             ),
@@ -1208,9 +1428,9 @@ class _GuidedPaymentEntryDialogState
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    selectedFee == null
-                        ? 'Le systeme va creer le frais puis enregistrer l encaissement.'
-                        : 'Le paiement sera rattache au frais existant selectionne.',
+                    feeNeedsCreation
+                        ? 'Le systeme cree les frais manquants puis repartit le paiement sur les types selectionnes.'
+                        : 'Le paiement est reparti automatiquement sur les frais selectionnes.',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
@@ -1245,7 +1465,7 @@ class _GuidedPaymentEntryDialogState
                               )
                             : const Icon(Icons.payments_outlined),
                         label: Text(
-                          selectedFee == null ? 'Creer et encaisser' : 'Encaisser maintenant',
+                          feeNeedsCreation ? 'Creer et encaisser' : 'Encaisser maintenant',
                         ),
                       ),
                     ],
