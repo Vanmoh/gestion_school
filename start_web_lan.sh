@@ -25,6 +25,81 @@ EOF
 MODE="stable"
 PWA_STRATEGY="none"
 
+run_flutter_pub_get() {
+  local max_attempts=4
+  local attempt=1
+  local primary_hosted="${PUB_HOSTED_URL:-https://pub.dev}"
+  local primary_storage="${FLUTTER_STORAGE_BASE_URL:-https://storage.googleapis.com}"
+  local mirror_hosted="https://pub.flutter-io.cn"
+  local mirror_storage="https://storage.flutter-io.cn"
+  local pub_log
+
+  while [[ "$attempt" -le "$max_attempts" ]]; do
+    pub_log="$(mktemp)"
+    set +e
+    PUB_HOSTED_URL="$primary_hosted" FLUTTER_STORAGE_BASE_URL="$primary_storage" flutter pub get 2>&1 | tee "$pub_log"
+    local rc=${PIPESTATUS[0]}
+    set -e
+
+    if [[ "$rc" -eq 0 ]]; then
+      rm -f "$pub_log"
+      return 0
+    fi
+
+    if grep -qiE "connection reset by peer|failed to update packages|socketexception|timed out|temporary failure" "$pub_log"; then
+      rm -f "$pub_log"
+      if [[ "$attempt" -lt "$max_attempts" ]]; then
+        echo "[2/3] Echec reseau pub.dev detecte (tentative ${attempt}/${max_attempts}). Nouvelle tentative dans 6s..."
+        sleep 6
+        ((attempt++))
+        continue
+      fi
+      break
+    fi
+
+    cat "$pub_log"
+    rm -f "$pub_log"
+    return 1
+  done
+
+  if [[ "$primary_hosted" != "$mirror_hosted" ]]; then
+    echo "[2/3] Bascule vers mirror Flutter CN pour les dépendances..."
+    local mirror_attempt
+    for mirror_attempt in 1 2 3; do
+      pub_log="$(mktemp)"
+      set +e
+      PUB_HOSTED_URL="$mirror_hosted" FLUTTER_STORAGE_BASE_URL="$mirror_storage" flutter pub get 2>&1 | tee "$pub_log"
+      local mirror_rc=${PIPESTATUS[0]}
+      set -e
+
+      if [[ "$mirror_rc" -eq 0 ]]; then
+        rm -f "$pub_log"
+        return 0
+      fi
+
+      rm -f "$pub_log"
+      if [[ "$mirror_attempt" -lt 3 ]]; then
+        echo "[2/3] Mirror indisponible (tentative ${mirror_attempt}/3). Nouvelle tentative dans 6s..."
+        sleep 6
+      fi
+    done
+  fi
+
+  echo "[2/3] Tentative finale en mode offline (cache pub local)..."
+  set +e
+  flutter pub get --offline
+  local offline_rc=$?
+  set -e
+  if [[ "$offline_rc" -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "Erreur: impossible de récupérer les dépendances Flutter (pub.dev et mirror indisponibles)."
+  echo "Action conseillée: relancer ./start_web_lan.sh quand le réseau se stabilise."
+  echo "Astuce: si ton cache est chaud, réessaie avec: flutter pub get --offline"
+  return 1
+}
+
 free_web_port() {
   local pids_on_port
   pids_on_port="$(lsof -tiTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null || true)"
@@ -130,7 +205,7 @@ fi
 
 echo "[2/3] Préparation Flutter web..."
 cd "$APP_DIR"
-flutter pub get
+run_flutter_pub_get
 
 echo "[3/3] Lancement web (accessible sur le réseau local)..."
 echo "URL locale : http://127.0.0.1:${WEB_PORT}"

@@ -134,14 +134,26 @@ class PaymentsRepository {
   }
 
   Future<List<StudentFeeItem>> fetchFees() async {
-    final response = await dio.get(
-      '/fees/',
-      queryParameters: {'page_size': 120},
-    );
-    final rows = _extractRows(response.data);
+    final rows = <Map<String, dynamic>>[];
+    var page = 1;
+    while (true) {
+      final response = await dio.get(
+        '/fees/',
+        queryParameters: {
+          'page': page,
+          'page_size': 200,
+        },
+      );
+      final payload = response.data;
+      rows.addAll(_extractRows(payload).whereType<Map<String, dynamic>>());
+      final hasNext = payload is Map<String, dynamic> && payload['next'] != null;
+      if (!hasNext || page >= 200) {
+        break;
+      }
+      page += 1;
+    }
 
-    return rows.map((row) {
-      final map = row as Map<String, dynamic>;
+    return rows.map((map) {
       return StudentFeeItem(
         id: map['id'] as int,
         studentFullName: map['student_full_name']?.toString() ?? '',
@@ -150,8 +162,9 @@ class PaymentsRepository {
         feeType: map['fee_type']?.toString() ?? '',
         amountDue: _toDouble(map['amount_due']),
         balance: _toDouble(map['balance']),
+        dueDate: map['due_date']?.toString() ?? '',
       );
-    }).toList();
+    }).toList(growable: false);
   }
 
   Future<void> createPayment({
@@ -202,6 +215,22 @@ class PaymentsRepository {
     final bytes = response.data;
     if (bytes == null || bytes.isEmpty) {
       throw Exception('PDF vide');
+    }
+    return Uint8List.fromList(bytes);
+  }
+
+  Future<Uint8List> fetchBatchReceiptsPdf(List<int> paymentIds) async {
+    final response = await dio.post<List<int>>(
+      '/reports/receipts/batch/',
+      data: {
+        'payment_ids': paymentIds,
+      },
+      options: Options(responseType: ResponseType.bytes),
+    );
+
+    final bytes = response.data;
+    if (bytes == null || bytes.isEmpty) {
+      throw Exception('PDF groupé vide');
     }
     return Uint8List.fromList(bytes);
   }

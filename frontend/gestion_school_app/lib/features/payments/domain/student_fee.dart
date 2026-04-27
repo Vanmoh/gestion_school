@@ -6,6 +6,7 @@ class StudentFeeItem {
   final String feeType;
   final double amountDue;
   final double balance;
+  final String dueDate;
 
   const StudentFeeItem({
     required this.id,
@@ -15,5 +16,6 @@ class StudentFeeItem {
     required this.feeType,
     required this.amountDue,
     required this.balance,
+    required this.dueDate,
   });
 }

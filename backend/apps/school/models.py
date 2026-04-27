@@ -4,6 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.utils import timezone
 from apps.common.models import TimeStampedModel
 
 
@@ -505,7 +506,7 @@ class StudentFee(TimeStampedModel):
 
     @property
     def amount_paid(self):
-        total = self.payments.aggregate(total=models.Sum("amount"))["total"]
+        total = self.payments.filter(is_cancelled=False).aggregate(total=models.Sum("amount"))["total"]
         return total or Decimal("0.00")
 
     @property
@@ -526,6 +527,25 @@ class Payment(TimeStampedModel):
     reference = models.CharField(max_length=100, blank=True)
     received_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="received_payments")
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="payments", null=True, blank=True)
+    is_cancelled = models.BooleanField(default=False, db_index=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cancelled_payments",
+    )
+    cancel_reason = models.CharField(max_length=255, blank=True)
+
+    def cancel(self, *, user=None, reason=""):
+        if self.is_cancelled:
+            return
+        self.is_cancelled = True
+        self.cancelled_at = timezone.now()
+        self.cancelled_by = user
+        self.cancel_reason = (reason or "").strip()
+        self.save(update_fields=["is_cancelled", "cancelled_at", "cancelled_by", "cancel_reason", "updated_at"])
 
     class Meta:
         indexes = [

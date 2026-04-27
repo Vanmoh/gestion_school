@@ -43,6 +43,7 @@ from apps.accounts.permissions import (
     IsTimetableModuleScopedAccess,
 )
 from apps.common.pagination import StandardResultsSetPagination
+from apps.common.models import ActivityLog
 from .term_utils import normalize_term
 from .models import (
     AcademicYear,
@@ -3981,7 +3982,7 @@ class StudentFeeViewSet(BaseModelViewSet):
     @staticmethod
     def _with_financial_annotations(queryset):
         paid_amount = Coalesce(
-            Sum("payments__amount"),
+            Sum("payments__amount", filter=Q(payments__is_cancelled=False)),
             Value(0),
             output_field=DecimalField(max_digits=12, decimal_places=2),
         )
@@ -4024,7 +4025,7 @@ class StudentFeeViewSet(BaseModelViewSet):
 
 
 class PaymentViewSet(BaseModelViewSet):
-    queryset = Payment.objects.all()
+    queryset = Payment.objects.filter(is_cancelled=False)
     serializer_class = PaymentSerializer
     permission_classes = [permissions.IsAuthenticated, IsFinanceModuleScopedAccess]
     pagination_class = StandardResultsSetPagination
@@ -4102,9 +4103,27 @@ class PaymentViewSet(BaseModelViewSet):
         if target_etablissement and student.etablissement_id != target_etablissement.id:
             raise ValidationError({"fee": "Le frais selectionne n'appartient pas a l'etablissement actif."})
 
+    def _log_payment_action(self, *, action, payment, details=""):
+        user = self.request.user
+        ActivityLog.objects.create(
+            user=user if user and user.is_authenticated else None,
+            etablissement=getattr(payment, "etablissement", None),
+            role=getattr(user, "role", "") or "",
+            action=action,
+            method=self.request.method,
+            path=self.request.path,
+            module="finance",
+            target=f"payment:{payment.id}",
+            status_code=200,
+            success=True,
+            details=details,
+        )
+
     def get_queryset(self):
         user = self.request.user
-        qs = Payment.objects.select_related("fee", "fee__student", "fee__student__user", "received_by").order_by("-created_at")
+        qs = Payment.objects.select_related("fee", "fee__student", "fee__student__user", "received_by").filter(
+            is_cancelled=False
+        ).order_by("-created_at")
         role = getattr(user, "role", "")
         if role == UserRole.STUDENT:
             return qs.filter(fee__student__user_id=user.id)
@@ -4121,14 +4140,38 @@ class PaymentViewSet(BaseModelViewSet):
 
     def perform_create(self, serializer):
         self._validate_payment_scope(serializer)
-        serializer.save(
+        payment = serializer.save(
             etablissement=self._resolve_target_etablissement(),
             received_by=self.request.user,
+        )
+        self._log_payment_action(
+            action="payment_created",
+            payment=payment,
+            details=f"fee={payment.fee_id};amount={payment.amount};method={payment.method}",
         )
 
     def perform_update(self, serializer):
         self._validate_payment_scope(serializer, instance=self.get_object())
-        serializer.save(etablissement=self._resolve_target_etablissement())
+        payment = serializer.save(etablissement=self._resolve_target_etablissement())
+        self._log_payment_action(
+            action="payment_updated",
+            payment=payment,
+            details=f"fee={payment.fee_id};amount={payment.amount};method={payment.method}",
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        payment = self.get_object()
+        if payment.is_cancelled:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        reason = str(request.data.get("reason", "") if isinstance(request.data, dict) else "").strip()
+        payment.cancel(user=request.user, reason=reason or "Annulation depuis ecran finance")
+        self._log_payment_action(
+            action="payment_cancelled",
+            payment=payment,
+            details=f"reason={payment.cancel_reason};amount={payment.amount};fee={payment.fee_id}",
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ExpenseViewSet(BaseModelViewSet):
@@ -6013,7 +6056,7 @@ class DashboardViewSet(viewsets.ViewSet):
         if getattr(request.user, "role", None) == UserRole.SUPER_ADMIN and active_etablissement is None:
             raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
 
-        payment_qs = Payment.objects.filter(created_at__date__gte=month_start)
+        payment_qs = Payment.objects.filter(created_at__date__gte=month_start, is_cancelled=False)
         students_qs = Student.objects.filter(is_archived=False)
         attendance_qs = Attendance.objects.filter(is_absent=True, date__gte=month_start)
         classrooms_qs = ClassRoom.objects.all()

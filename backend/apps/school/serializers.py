@@ -1,6 +1,7 @@
 import re
 import unicodedata
 from decimal import Decimal
+from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 from .term_utils import normalize_term
@@ -1073,6 +1074,23 @@ class PaymentSerializer(serializers.ModelSerializer):
         if amount > (fee.balance + existing_amount):
             raise serializers.ValidationError("Le montant dépasse le solde restant du frais.")
 
+        duplicate_window_start = timezone.now() - timedelta(minutes=3)
+        duplicate_qs = Payment.objects.filter(
+            fee=fee,
+            amount=amount,
+            method=normalized_method,
+            is_cancelled=False,
+            created_at__gte=duplicate_window_start,
+        )
+        if cleaned_reference:
+            duplicate_qs = duplicate_qs.filter(reference__iexact=cleaned_reference)
+        if self.instance is not None:
+            duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
+        if duplicate_qs.exists():
+            raise serializers.ValidationError(
+                "Paiement potentiellement duplique: meme frais, montant et methode deja enregistre recemment."
+            )
+
         if normalized_method in self.NON_CASH_METHODS and cleaned_reference:
             etablissement_id = getattr(getattr(fee, "student", None), "etablissement_id", None)
             duplicate_qs = Payment.objects.filter(
@@ -1100,6 +1118,10 @@ class PaymentSerializer(serializers.ModelSerializer):
         read_only_fields = (
             "received_by",
             "etablissement",
+            "is_cancelled",
+            "cancelled_at",
+            "cancelled_by",
+            "cancel_reason",
         )
 
 

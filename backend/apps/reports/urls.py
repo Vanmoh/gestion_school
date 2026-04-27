@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import (
+    BatchPaymentReceiptsPdfView,
     BulletinPdfView,
     ClassBulletinsPdfView,
     ClassStudentCardsPdfView,
@@ -22,6 +23,7 @@ urlpatterns = [
         name="class-bulletins-pdf",
     ),
     path("receipt/<int:payment_id>/", PaymentReceiptPdfView.as_view(), name="payment-receipt-pdf"),
+    path("receipts/batch/", BatchPaymentReceiptsPdfView.as_view(), name="payment-receipts-batch-pdf"),
     path("payments/export-excel/", PaymentExcelExportView.as_view(), name="payments-export-excel"),
     path("journal-payments/export/", PaymentJournalExportView.as_view(), name="journal-payments-export-flat"),
     path("journal-expenses/export/", ExpenseJournalExportView.as_view(), name="journal-expenses-export-flat"),

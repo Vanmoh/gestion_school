@@ -15,7 +15,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from PIL import Image
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -835,7 +835,7 @@ def _allowed_payments_queryset(request):
         "fee__student__parent__user",
         "fee__academic_year",
         "received_by",
-    ).all()
+    ).filter(is_cancelled=False)
     role = getattr(user, "role", "")
 
     if role == UserRole.STUDENT:
@@ -1893,23 +1893,7 @@ class ClassBulletinsPdfView(APIView):
         return pdf_output_response(pdf, f"bulletins_{class_slug}_{safe_term}.pdf")
 
 
-class PaymentReceiptPdfView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, payment_id: int):
-        payment = Payment.objects.select_related(
-            "fee__student__user",
-            "fee__student__parent",
-            "fee__student__parent__user",
-            "fee__student__classroom",
-            "fee__student__etablissement",
-            "fee__student__classroom__etablissement",
-            "fee__academic_year",
-            "received_by",
-            "etablissement",
-        ).get(id=payment_id)
-        _ensure_payment_access(request, payment)
-
+def _render_payment_receipt_page(pdf: FPDF, payment: Payment):
         student = payment.fee.student
         school = _school_identity_for_student(student) if student else _school_identity()
         logo_path = (_etablissement_logo_path(student) if student else None) or _school_logo_path()
@@ -1949,10 +1933,6 @@ class PaymentReceiptPdfView(APIView):
         fee_type = payment.fee.get_fee_type_display() if payment.fee else "N/A"
         method = payment.method or "N/A"
         reference = payment.reference or "-"
-
-        pdf = FPDF(format="A5")
-        pdf.add_page()
-        pdf.set_auto_page_break(auto=False)
 
         page_x = 7
         page_y = 7
@@ -2200,7 +2180,85 @@ class PaymentReceiptPdfView(APIView):
             pdf.set_font("Helvetica", "B", 6.5)
             pdf.cell(stamp_size, 2.8, _pdf_text(school["city"])[:12], align="C")
 
+def _build_receipts_pdf(payments: list[Payment]) -> FPDF:
+    pdf = FPDF(format="A5")
+    pdf.set_auto_page_break(auto=False)
+    for payment in payments:
+        pdf.add_page()
+        _render_payment_receipt_page(pdf, payment)
+    return pdf
+
+
+class PaymentReceiptPdfView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, payment_id: int):
+        payment = Payment.objects.select_related(
+            "fee__student__user",
+            "fee__student__parent",
+            "fee__student__parent__user",
+            "fee__student__classroom",
+            "fee__student__etablissement",
+            "fee__student__classroom__etablissement",
+            "fee__academic_year",
+            "received_by",
+            "etablissement",
+        ).get(id=payment_id, is_cancelled=False)
+        _ensure_payment_access(request, payment)
+        pdf = _build_receipts_pdf([payment])
         return pdf_output_response(pdf, f"receipt_{payment.id}.pdf")
+
+
+class BatchPaymentReceiptsPdfView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        raw_ids = request.data.get("payment_ids") if isinstance(request.data, dict) else None
+        if not isinstance(raw_ids, list):
+            raise ValidationError({"payment_ids": "Fournissez une liste d'identifiants de paiements."})
+
+        payment_ids: list[int] = []
+        for raw in raw_ids:
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                payment_ids.append(parsed)
+
+        payment_ids = list(dict.fromkeys(payment_ids))
+        if not payment_ids:
+            raise ValidationError({"payment_ids": "Aucun identifiant de paiement valide."})
+        if len(payment_ids) > 80:
+            raise ValidationError({"payment_ids": "Limite maximale: 80 reçus par impression groupée."})
+
+        queryset = Payment.objects.select_related(
+            "fee__student__user",
+            "fee__student__parent",
+            "fee__student__parent__user",
+            "fee__student__classroom",
+            "fee__student__etablissement",
+            "fee__student__classroom__etablissement",
+            "fee__academic_year",
+            "received_by",
+            "etablissement",
+        ).filter(id__in=payment_ids, is_cancelled=False)
+
+        payment_by_id = {payment.id: payment for payment in queryset}
+        payments: list[Payment] = []
+        for payment_id in payment_ids:
+            payment = payment_by_id.get(payment_id)
+            if payment is None:
+                continue
+            _ensure_payment_access(request, payment)
+            payments.append(payment)
+
+        if not payments:
+            raise ValidationError({"payment_ids": "Aucun paiement accessible pour cette sélection."})
+
+        pdf = _build_receipts_pdf(payments)
+        timestamp = timezone.localtime(timezone.now()).strftime("%Y%m%d_%H%M")
+        return pdf_output_response(pdf, f"receipts_batch_{timestamp}.pdf")
 
 
 class PaymentExcelExportView(APIView):

@@ -43,11 +43,14 @@ compose_up_with_retries() {
   local max_attempts=3
   local attempt=1
   local up_log
+  local python_base_image="${PYTHON_BASE_IMAGE:-python:3.12-slim}"
+  local default_python_base_image="python:3.12-slim"
+  local mirror_python_base_image="mirror.gcr.io/library/python:3.12-slim"
 
   while [[ "$attempt" -le "$max_attempts" ]]; do
     up_log="$(mktemp)"
     set +e
-    docker_compose up -d --build 2>&1 | tee "$up_log"
+    PYTHON_BASE_IMAGE="$python_base_image" docker_compose up -d --build 2>&1 | tee "$up_log"
     local up_rc=${PIPESTATUS[0]}
     set -e
 
@@ -59,6 +62,10 @@ compose_up_with_retries() {
     if grep -qiE "failed to resolve source metadata|lookup registry-1\.docker\.io|i/o timeout|temporary failure in name resolution" "$up_log"; then
       rm -f "$up_log"
       if [[ "$attempt" -lt "$max_attempts" ]]; then
+        if [[ "$python_base_image" == "$default_python_base_image" ]]; then
+          python_base_image="$mirror_python_base_image"
+          log "Bascule automatique de l'image Python vers le mirror: $python_base_image"
+        fi
         log "Echec reseau Docker Hub detecte (tentative ${attempt}/${max_attempts}). Nouvelle tentative dans 8s..."
         sleep 8
         ((attempt++))
@@ -68,6 +75,7 @@ compose_up_with_retries() {
       echo "Erreur: impossible de joindre Docker Hub apres ${max_attempts} tentatives."
       echo "Cause probable: DNS/reseau intermittent (ex: registry-1.docker.io)."
       echo "Action conseillee: relancez ./bootstrap.sh, ou configurez des DNS stables pour Docker (1.1.1.1 / 8.8.8.8)."
+      echo "Contournement image Python: PYTHON_BASE_IMAGE=${mirror_python_base_image} ./bootstrap.sh"
       return 1
     fi
 
