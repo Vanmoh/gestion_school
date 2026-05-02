@@ -1,6 +1,8 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
+import csv
+import io
 import os
 from django.contrib.auth import get_user_model
 
@@ -17,8 +19,9 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from fpdf import FPDF
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 try:
     from openpyxl.drawing.image import Image as XLImage
 except Exception:  # pragma: no cover - optional dependency in some environments
@@ -203,6 +206,257 @@ class BaseModelViewSet(viewsets.ModelViewSet):
         if getattr(user, "role", None) == UserRole.SUPER_ADMIN:
             return requested
         return getattr(user, "etablissement", None)
+
+
+def _normalize_import_key(raw):
+    cleaned = str(raw or "").strip().lower()
+    cleaned = cleaned.replace(" ", "_").replace("-", "_")
+    return cleaned
+
+
+def _xlsx_rows_from_bytes(raw_bytes):
+    workbook = load_workbook(filename=BytesIO(raw_bytes), read_only=True, data_only=True)
+    sheet = workbook.active
+    rows = list(sheet.iter_rows(values_only=True))
+    if not rows:
+        return []
+    headers = [_normalize_import_key(value) for value in rows[0]]
+    payload = []
+    for row in rows[1:]:
+        if not row:
+            continue
+        row_map = {}
+        has_value = False
+        for idx, header in enumerate(headers):
+            if not header:
+                continue
+            value = row[idx] if idx < len(row) else None
+            if value not in (None, ""):
+                has_value = True
+            row_map[header] = value
+        if has_value:
+            payload.append(row_map)
+    return payload
+
+
+def _csv_rows_from_bytes(raw_bytes):
+    decoded = None
+    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            decoded = raw_bytes.decode(encoding)
+            break
+        except Exception:
+            continue
+    if decoded is None:
+        raise ValidationError({"file": "Impossible de lire le fichier CSV (encodage non supporté)."})
+
+    stream = io.StringIO(decoded)
+    reader = csv.DictReader(stream)
+    payload = []
+    for row in reader:
+        normalized = {}
+        has_value = False
+        for key, value in (row or {}).items():
+            header = _normalize_import_key(key)
+            if not header:
+                continue
+            cleaned = str(value).strip() if value is not None else ""
+            if cleaned:
+                has_value = True
+            normalized[header] = cleaned
+        if has_value:
+            payload.append(normalized)
+    return payload
+
+
+def _load_import_rows(uploaded_file):
+    if not uploaded_file:
+        raise ValidationError({"file": "Fichier requis."})
+
+    file_name = str(getattr(uploaded_file, "name", "") or "").lower()
+    raw = uploaded_file.read()
+    if not raw:
+        raise ValidationError({"file": "Fichier vide."})
+
+    if file_name.endswith(".xlsx"):
+        return _xlsx_rows_from_bytes(raw)
+    if file_name.endswith(".csv"):
+        return _csv_rows_from_bytes(raw)
+
+    raise ValidationError({"file": "Format non supporté. Utilisez CSV ou XLSX."})
+
+
+def _as_text(value):
+    return str(value or "").strip()
+
+
+def _as_decimal(value):
+    cleaned = _as_text(value).replace(",", ".")
+    if not cleaned:
+        return None
+    try:
+        return Decimal(cleaned)
+    except Exception:
+        return None
+
+
+def _as_date(value):
+    if isinstance(value, date):
+        return value
+    cleaned = _as_text(value)
+    if not cleaned:
+        return None
+    for pattern in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(cleaned, pattern).date()
+        except Exception:
+            continue
+    return None
+
+
+def _as_time(value):
+    if isinstance(value, time):
+        return value
+    cleaned = _as_text(value)
+    if not cleaned:
+        return None
+    for pattern in ("%H:%M", "%H:%M:%S"):
+        try:
+            return datetime.strptime(cleaned, pattern).time()
+        except Exception:
+            continue
+    return None
+
+
+IMPORT_TEMPLATE_DEFINITIONS = {
+    "students": {
+        "filename": "import_students_template",
+        "headers": [
+            "matricule",
+            "first_name",
+            "last_name",
+            "username",
+            "email",
+            "phone",
+            "birth_date",
+        ],
+        "rows": [
+            ["MAT001", "Aminata", "Diallo", "mat001", "aminata@example.com", "770000001", "2012-05-11"],
+            ["MAT002", "Ibrahima", "Sow", "mat002", "ibrahima@example.com", "770000002", "2011-10-03"],
+        ],
+    },
+    "controls": {
+        "filename": "import_controls_template",
+        "headers": [
+            "student_matricule",
+            "subject_code",
+            "subject_name",
+            "value",
+        ],
+        "rows": [
+            ["MAT001", "MAT", "Mathematiques", "14.5"],
+            ["MAT002", "PHY", "Physique", "12"],
+        ],
+    },
+    "exams": {
+        "filename": "import_exams_template",
+        "headers": [
+            "student_matricule",
+            "subject_code",
+            "subject_name",
+            "score",
+        ],
+        "rows": [
+            ["MAT001", "MAT", "Mathematiques", "13"],
+            ["MAT002", "PHY", "Physique", "11.75"],
+        ],
+    },
+    "timetable": {
+        "filename": "import_timetable_template",
+        "headers": [
+            "day_of_week",
+            "start_time",
+            "end_time",
+            "subject_code",
+            "subject_name",
+            "room",
+        ],
+        "rows": [
+            ["MON", "08:00", "09:00", "MAT", "Mathematiques", "Salle A"],
+            ["TUE", "10:00", "11:00", "PHY", "Physique", "Salle B"],
+        ],
+    },
+}
+
+
+def _build_import_template_csv_bytes(template_data):
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(template_data["headers"])
+    for row in template_data["rows"]:
+        writer.writerow(row)
+    return buffer.getvalue().encode("utf-8-sig")
+
+
+def _build_import_template_xlsx_bytes(template_data):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "template"
+    sheet.append(template_data["headers"])
+    for row in template_data["rows"]:
+        sheet.append(row)
+
+    for index, _ in enumerate(template_data["headers"], start=1):
+        sheet.column_dimensions[chr(64 + index)].width = 22
+
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream.read()
+
+
+def _build_import_template_download_response(import_type_raw, format_raw):
+    import_type = _normalize_import_key(import_type_raw)
+    file_format = _normalize_import_key(format_raw or "xlsx")
+
+    if import_type not in IMPORT_TEMPLATE_DEFINITIONS:
+        raise ValidationError(
+            {
+                "type": "Type invalide. Utilisez students, controls, exams ou timetable.",
+            }
+        )
+
+    if file_format == "xls":
+        file_format = "xlsx"
+
+    if file_format not in {"csv", "xlsx"}:
+        raise ValidationError({"format": "Format invalide. Utilisez csv ou xlsx."})
+
+    template_data = IMPORT_TEMPLATE_DEFINITIONS[import_type]
+    filename_base = template_data["filename"]
+
+    if file_format == "csv":
+        payload = _build_import_template_csv_bytes(template_data)
+        content_type = "text/csv; charset=utf-8"
+    else:
+        payload = _build_import_template_xlsx_bytes(template_data)
+        content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    response = HttpResponse(payload, content_type=content_type)
+    response["Content-Disposition"] = (
+        f'attachment; filename="{filename_base}.{file_format}"'
+    )
+    return response
+
+
+class ClassRoomImportTemplateDownloadView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        return _build_import_template_download_response(
+            request.query_params.get("type") or request.query_params.get("import_type"),
+            request.query_params.get("format"),
+        )
 
     def _infer_etablissement_from_payload(self, validated_data):
         direct = validated_data.get("etablissement")
@@ -538,6 +792,18 @@ class ClassRoomViewSet(BaseModelViewSet):
                 "dependencies": deps,
                 "can_delete": sum(deps.values()) == 0,
             }
+        )
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="import-template",
+        permission_classes=[permissions.IsAuthenticated],
+    )
+    def import_template(self, request):
+        return _build_import_template_download_response(
+            request.query_params.get("type") or request.query_params.get("import_type"),
+            request.query_params.get("format"),
         )
 
 
@@ -1485,6 +1751,215 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         self._validate_assignment_scope(serializer)
         serializer.save()
 
+    @action(detail=False, methods=["post"], url_path="import-by-class")
+    def import_by_class(self, request):
+        try:
+            classroom_id = int(request.data.get("classroom_id"))
+        except (TypeError, ValueError):
+            classroom_id = None
+        confirm = self._to_bool(request.data.get("confirm"), default=False)
+        confirm_conflicts = self._to_bool(request.data.get("confirm_conflicts"), default=False)
+
+        if not classroom_id:
+            raise ValidationError({"classroom_id": "Classe requise."})
+
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
+        rows = _load_import_rows(request.FILES.get("file") or request.data.get("file"))
+        if not rows:
+            raise ValidationError({"file": "Aucune ligne exploitable dans le fichier."})
+
+        assignments = TeacherAssignment.objects.select_related("teacher", "subject", "classroom").filter(classroom=classroom)
+        assignments_by_subject_code = {(a.subject.code or "").strip().lower(): a for a in assignments}
+        assignments_by_subject_name = {(a.subject.name or "").strip().lower(): a for a in assignments}
+
+        errors = []
+        prepared = []
+        conflicts = []
+        class_conflict_slot_ids = set()
+        blocking_conflicts = []
+
+        for index, row in enumerate(rows, start=2):
+            day_raw = _as_text(row.get("day_of_week") or row.get("jour")).upper()
+            day_map = {
+                "LUNDI": "MON",
+                "MARDI": "TUE",
+                "MERCREDI": "WED",
+                "JEUDI": "THU",
+                "VENDREDI": "FRI",
+                "SAMEDI": "SAT",
+            }
+            day_code = day_map.get(day_raw, day_raw)
+            start_time = _as_time(row.get("start_time") or row.get("debut"))
+            end_time = _as_time(row.get("end_time") or row.get("fin"))
+            subject_code = _as_text(row.get("subject_code") or row.get("matiere_code")).lower()
+            subject_name = _as_text(row.get("subject_name") or row.get("matiere")).lower()
+            room = _as_text(row.get("room") or row.get("salle"))
+
+            if day_code not in self.DAY_ORDER:
+                errors.append({"row": index, "error": "day_of_week invalide (MON..SAT)."})
+                continue
+            if not start_time or not end_time or end_time <= start_time:
+                errors.append({"row": index, "error": "Heures invalides (start_time/end_time)."})
+                continue
+
+            assignment = None
+            if subject_code:
+                assignment = assignments_by_subject_code.get(subject_code)
+            if assignment is None and subject_name:
+                assignment = assignments_by_subject_name.get(subject_name)
+            if assignment is None:
+                errors.append({"row": index, "error": "Matière non affectée à la classe (subject_code/subject_name)."})
+                continue
+
+            target_existing = TeacherScheduleSlot.objects.filter(
+                assignment=assignment,
+                day_of_week=day_code,
+                start_time=start_time,
+                end_time=end_time,
+            ).first()
+
+            overlaps = TeacherScheduleSlot.objects.select_related("assignment", "assignment__teacher", "assignment__subject", "assignment__classroom").filter(
+                day_of_week=day_code,
+                start_time__lt=end_time,
+                end_time__gt=start_time,
+            )
+            if target_existing is not None:
+                overlaps = overlaps.exclude(pk=target_existing.pk)
+
+            class_conflicts = overlaps.filter(assignment__classroom=classroom)
+            teacher_conflicts = overlaps.filter(assignment__teacher=assignment.teacher).exclude(assignment__classroom=classroom)
+            room_conflicts = TeacherScheduleSlot.objects.none()
+            if room:
+                room_conflicts = overlaps.exclude(room__exact="").filter(room__iexact=room).exclude(assignment__classroom=classroom)
+
+            if class_conflicts.exists() or teacher_conflicts.exists() or room_conflicts.exists():
+                issue = {
+                    "row": index,
+                    "day_of_week": day_code,
+                    "start_time": start_time.strftime("%H:%M"),
+                    "end_time": end_time.strftime("%H:%M"),
+                    "subject": assignment.subject.code,
+                    "class_conflicts": [slot.id for slot in class_conflicts[:20]],
+                    "teacher_conflicts": [slot.id for slot in teacher_conflicts[:20]],
+                    "room_conflicts": [slot.id for slot in room_conflicts[:20]],
+                }
+                conflicts.append(issue)
+                for slot in class_conflicts:
+                    class_conflict_slot_ids.add(slot.id)
+                if teacher_conflicts.exists() or room_conflicts.exists():
+                    blocking_conflicts.append(issue)
+
+            prepared.append(
+                {
+                    "row": index,
+                    "assignment": assignment,
+                    "day_of_week": day_code,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "room": room,
+                    "existing": target_existing,
+                }
+            )
+
+        to_create = sum(1 for item in prepared if item["existing"] is None)
+        to_update = len(prepared) - to_create
+        payload = {
+            "classroom": {"id": classroom.id, "name": classroom.name},
+            "summary": {
+                "total_rows": len(rows),
+                "valid_rows": len(prepared),
+                "errors": len(errors),
+                "to_create": to_create,
+                "to_update": to_update,
+                "conflicts": len(conflicts),
+                "blocking_conflicts": len(blocking_conflicts),
+            },
+            "errors": errors,
+            "conflicts": conflicts[:150],
+            "preview": [
+                {
+                    "row": item["row"],
+                    "action": "create" if item["existing"] is None else "update",
+                    "day_of_week": item["day_of_week"],
+                    "start_time": item["start_time"].strftime("%H:%M"),
+                    "end_time": item["end_time"].strftime("%H:%M"),
+                    "subject": item["assignment"].subject.code,
+                    "teacher": item["assignment"].teacher.employee_code,
+                    "room": item["room"],
+                }
+                for item in prepared[:180]
+            ],
+            "confirm_required": True,
+            "confirm_conflicts_required": len(conflicts) > 0,
+        }
+
+        if not confirm:
+            return Response(payload)
+        if errors:
+            return Response({**payload, "detail": "Import bloqué: corrigez les erreurs."}, status=400)
+        if blocking_conflicts:
+            return Response(
+                {
+                    **payload,
+                    "detail": "Conflits enseignant/salle détectés. Corrigez le fichier avant confirmation.",
+                },
+                status=400,
+            )
+        if conflicts and not confirm_conflicts:
+            return Response(
+                {
+                    **payload,
+                    "detail": "Conflits de créneaux détectés. Relancez avec confirm_conflicts=true après prévisualisation.",
+                },
+                status=409,
+            )
+
+        created = 0
+        updated = 0
+        deleted_conflicts = 0
+        with transaction.atomic():
+            if class_conflict_slot_ids:
+                deleted_conflicts, _ = TeacherScheduleSlot.objects.filter(id__in=class_conflict_slot_ids).delete()
+
+            for item in prepared:
+                data = {
+                    "assignment": item["assignment"].id,
+                    "day_of_week": item["day_of_week"],
+                    "start_time": item["start_time"].strftime("%H:%M:%S"),
+                    "end_time": item["end_time"].strftime("%H:%M:%S"),
+                    "room": item["room"],
+                }
+
+                existing = TeacherScheduleSlot.objects.filter(
+                    assignment=item["assignment"],
+                    day_of_week=item["day_of_week"],
+                    start_time=item["start_time"],
+                    end_time=item["end_time"],
+                ).first()
+
+                if existing is None:
+                    serializer = self.get_serializer(data=data)
+                    serializer.is_valid(raise_exception=True)
+                    self.perform_create(serializer)
+                    created += 1
+                else:
+                    serializer = self.get_serializer(existing, data=data, partial=False)
+                    serializer.is_valid(raise_exception=True)
+                    self.perform_update(serializer)
+                    updated += 1
+
+        return Response(
+            {
+                **payload,
+                "result": {
+                    "created": created,
+                    "updated": updated,
+                    "deleted_conflicts": deleted_conflicts,
+                },
+                "detail": "Import emploi du temps terminé.",
+            }
+        )
+
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
@@ -2404,6 +2879,226 @@ class StudentViewSet(BaseModelViewSet):
         target_etablissement = self._validate_student_scope(serializer, instance=serializer.instance)
         serializer.save(etablissement=target_etablissement)
 
+    def _scoped_classroom_queryset(self):
+        user = self.request.user
+        requested = self._requested_etablissement()
+        qs = ClassRoom.objects.select_related("etablissement", "academic_year")
+
+        if requested is not None:
+            return qs.filter(etablissement=requested)
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN:
+            active_etablissement = getattr(user, "etablissement", None)
+            if active_etablissement is not None:
+                return qs.filter(etablissement=active_etablissement)
+            return qs.none()
+        return qs.filter(etablissement=getattr(user, "etablissement", None))
+
+    @staticmethod
+    def _default_student_username(matricule, first_name, last_name):
+        base = _as_text(matricule).lower().replace(" ", "")
+        if base:
+            return base
+        combined = f"{_as_text(first_name)}.{_as_text(last_name)}".strip(".")
+        combined = combined.lower().replace(" ", "")
+        return combined or f"student_{int(timezone.now().timestamp())}"
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="import-templates/download",
+        permission_classes=[permissions.IsAuthenticated],
+    )
+    def import_template_download(self, request):
+        return _build_import_template_download_response(
+            request.query_params.get("type") or request.query_params.get("import_type"),
+            request.query_params.get("format"),
+        )
+
+    @action(detail=False, methods=["post"], url_path="import-by-class")
+    def import_by_class(self, request):
+        classroom_id = request.data.get("classroom_id")
+        confirm = str(request.data.get("confirm", "false")).strip().lower() in {"1", "true", "yes", "on"}
+        if classroom_id in (None, ""):
+            raise ValidationError({"classroom_id": "Classe requise."})
+
+        try:
+            classroom_id = int(classroom_id)
+        except (TypeError, ValueError):
+            raise ValidationError({"classroom_id": "Classe invalide."})
+
+        classroom = get_object_or_404(self._scoped_classroom_queryset(), id=classroom_id)
+        rows = _load_import_rows(request.FILES.get("file") or request.data.get("file"))
+        if not rows:
+            raise ValidationError({"file": "Aucune ligne exploitable dans le fichier."})
+
+        User = get_user_model()
+        row_errors = []
+        prepared = []
+        seen_matricules = set()
+
+        for index, row in enumerate(rows, start=2):
+            matricule = _as_text(row.get("matricule"))
+            first_name = _as_text(row.get("first_name") or row.get("prenom"))
+            last_name = _as_text(row.get("last_name") or row.get("nom"))
+            username = _as_text(row.get("username"))
+            email = _as_text(row.get("email"))
+            phone = _as_text(row.get("phone") or row.get("telephone"))
+            birth_date = _as_date(row.get("birth_date") or row.get("date_naissance"))
+
+            if not matricule:
+                row_errors.append({"row": index, "error": "Matricule obligatoire."})
+                continue
+            if not first_name or not last_name:
+                row_errors.append({"row": index, "error": "Prenom et nom obligatoires."})
+                continue
+            if matricule in seen_matricules:
+                row_errors.append({"row": index, "error": "Matricule dupliqué dans le fichier."})
+                continue
+            seen_matricules.add(matricule)
+
+            if not username:
+                username = self._default_student_username(matricule, first_name, last_name)
+
+            student = Student.objects.select_related("user").filter(matricule=matricule).first()
+            prepared.append(
+                {
+                    "row": index,
+                    "matricule": matricule,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "username": username,
+                    "email": email,
+                    "phone": phone,
+                    "birth_date": birth_date,
+                    "existing_student": student,
+                }
+            )
+
+        create_count = 0
+        update_count = 0
+        preview_rows = []
+        for item in prepared:
+            student = item["existing_student"]
+            action_label = "create" if student is None else "update"
+            if action_label == "create":
+                create_count += 1
+            else:
+                update_count += 1
+            preview_rows.append(
+                {
+                    "row": item["row"],
+                    "action": action_label,
+                    "matricule": item["matricule"],
+                    "full_name": f"{item['first_name']} {item['last_name']}",
+                }
+            )
+
+        preview_payload = {
+            "classroom": {"id": classroom.id, "name": classroom.name},
+            "summary": {
+                "total_rows": len(rows),
+                "valid_rows": len(prepared),
+                "errors": len(row_errors),
+                "to_create": create_count,
+                "to_update": update_count,
+            },
+            "errors": row_errors,
+            "preview": preview_rows[:120],
+            "confirm_required": True,
+        }
+
+        if not confirm:
+            return Response(preview_payload)
+
+        if row_errors:
+            return Response(
+                {
+                    **preview_payload,
+                    "detail": "Import bloqué: corrigez les erreurs avant confirmation.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        created = 0
+        updated = 0
+        with transaction.atomic():
+            for item in prepared:
+                student = item["existing_student"]
+                username = item["username"]
+                user = None
+
+                if student is None:
+                    user = User.objects.filter(username=username).first()
+                    if user and user.role != UserRole.STUDENT:
+                        raise ValidationError(
+                            {
+                                "detail": (
+                                    f"Conflit username '{username}' (rôle {user.role}). "
+                                    "Utilisez un username différent dans le fichier."
+                                )
+                            }
+                        )
+                    if user is None:
+                        user = User.objects.create_user(
+                            username=username,
+                            first_name=item["first_name"],
+                            last_name=item["last_name"],
+                            email=item["email"],
+                            role=UserRole.STUDENT,
+                            phone=item["phone"],
+                            etablissement=classroom.etablissement,
+                            password="Password@123",
+                        )
+                    else:
+                        user.first_name = item["first_name"]
+                        user.last_name = item["last_name"]
+                        user.email = item["email"]
+                        user.phone = item["phone"]
+                        user.etablissement = classroom.etablissement
+                        user.save(update_fields=["first_name", "last_name", "email", "phone", "etablissement"])
+
+                    Student.objects.create(
+                        user=user,
+                        matricule=item["matricule"],
+                        classroom=classroom,
+                        birth_date=item["birth_date"],
+                        etablissement=classroom.etablissement,
+                    )
+                    created += 1
+                else:
+                    user = student.user
+                    if user:
+                        user.first_name = item["first_name"]
+                        user.last_name = item["last_name"]
+                        if item["email"]:
+                            user.email = item["email"]
+                        if item["phone"]:
+                            user.phone = item["phone"]
+                        if not user.etablissement_id:
+                            user.etablissement = classroom.etablissement
+                        user.save()
+
+                    student.classroom = classroom
+                    if item["birth_date"] is not None:
+                        student.birth_date = item["birth_date"]
+                    student.etablissement = classroom.etablissement
+                    student.is_archived = False
+                    student.save(update_fields=["classroom", "birth_date", "etablissement", "is_archived", "updated_at"])
+                    updated += 1
+
+        return Response(
+            {
+                **preview_payload,
+                "result": {
+                    "created": created,
+                    "updated": updated,
+                },
+                "detail": "Import élèves terminé.",
+            }
+        )
+
     @action(
         detail=True,
         methods=["post", "patch"],
@@ -2937,6 +3632,152 @@ class GradeViewSet(BaseModelViewSet):
 
         serializer = GradeValidationSerializer(validation)
         return Response(serializer.data)
+
+    @action(detail=False, methods=["post"], url_path="import-controls")
+    def import_controls(self, request):
+        classroom_id = self._parse_positive_int(request.data.get("classroom_id"))
+        academic_year_id = self._parse_positive_int(request.data.get("academic_year_id"))
+        term = self._normalize_term_or_none(request.data.get("term"))
+        confirm = str(request.data.get("confirm", "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+        if not classroom_id or not academic_year_id or not term:
+            raise ValidationError(
+                {"detail": "classroom_id, academic_year_id et term (T1/T2/T3) sont requis."}
+            )
+
+        classroom = self._get_scoped_classroom_or_404(classroom_id)
+        academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
+
+        if self._is_term_validated(classroom.id, academic_year.id, term):
+            raise ValidationError({"detail": self._locked_term_message(prefix="Import")})
+
+        rows = _load_import_rows(request.FILES.get("file") or request.data.get("file"))
+        if not rows:
+            raise ValidationError({"file": "Aucune ligne exploitable dans le fichier."})
+
+        students_by_matricule = {
+            (student.matricule or "").strip().lower(): student
+            for student in Student.objects.filter(classroom=classroom, is_archived=False).select_related("user")
+        }
+        subjects = Subject.objects.filter(classroom=classroom)
+        subjects_by_code = {(subject.code or "").strip().lower(): subject for subject in subjects}
+        subjects_by_name = {(subject.name or "").strip().lower(): subject for subject in subjects}
+
+        errors = []
+        prepared = []
+        for index, row in enumerate(rows, start=2):
+            matricule = _as_text(row.get("student_matricule") or row.get("matricule")).lower()
+            subject_code = _as_text(row.get("subject_code") or row.get("matiere_code")).lower()
+            subject_name = _as_text(row.get("subject_name") or row.get("matiere")).lower()
+            value = _as_decimal(row.get("value") or row.get("note") or row.get("score"))
+
+            if not matricule:
+                errors.append({"row": index, "error": "student_matricule requis."})
+                continue
+            if value is None:
+                errors.append({"row": index, "error": "note/value invalide."})
+                continue
+            if value < Decimal("0") or value > Decimal("20"):
+                errors.append({"row": index, "error": "La note doit être comprise entre 0 et 20."})
+                continue
+
+            student = students_by_matricule.get(matricule)
+            if student is None:
+                errors.append({"row": index, "error": f"Élève introuvable dans la classe pour matricule '{matricule}'."})
+                continue
+
+            subject = None
+            if subject_code:
+                subject = subjects_by_code.get(subject_code)
+            if subject is None and subject_name:
+                subject = subjects_by_name.get(subject_name)
+            if subject is None:
+                errors.append({"row": index, "error": "Matière introuvable (subject_code/subject_name)."})
+                continue
+
+            existing = Grade.objects.filter(
+                student=student,
+                subject=subject,
+                classroom=classroom,
+                academic_year=academic_year,
+                term=term,
+            ).first()
+
+            prepared.append(
+                {
+                    "row": index,
+                    "student": student,
+                    "subject": subject,
+                    "value": value,
+                    "existing": existing,
+                }
+            )
+
+        to_create = sum(1 for item in prepared if item["existing"] is None)
+        to_update = len(prepared) - to_create
+        preview = [
+            {
+                "row": item["row"],
+                "action": "create" if item["existing"] is None else "update",
+                "student": item["student"].matricule,
+                "subject": item["subject"].code,
+                "value": str(item["value"]),
+            }
+            for item in prepared[:150]
+        ]
+
+        payload = {
+            "classroom": {"id": classroom.id, "name": classroom.name},
+            "academic_year": {"id": academic_year.id, "label": academic_year.name},
+            "term": term,
+            "summary": {
+                "total_rows": len(rows),
+                "valid_rows": len(prepared),
+                "errors": len(errors),
+                "to_create": to_create,
+                "to_update": to_update,
+            },
+            "errors": errors,
+            "preview": preview,
+            "confirm_required": True,
+        }
+
+        if not confirm:
+            return Response(payload)
+
+        if errors:
+            return Response({**payload, "detail": "Import bloqué: corrigez les erreurs."}, status=400)
+
+        created = 0
+        updated = 0
+        with transaction.atomic():
+            for item in prepared:
+                serializer_data = {
+                    "student": item["student"].id,
+                    "subject": item["subject"].id,
+                    "classroom": classroom.id,
+                    "academic_year": academic_year.id,
+                    "term": term,
+                    "value": str(item["value"]),
+                }
+                if item["existing"] is None:
+                    serializer = self.get_serializer(data=serializer_data)
+                    serializer.is_valid(raise_exception=True)
+                    self.perform_create(serializer)
+                    created += 1
+                else:
+                    serializer = self.get_serializer(item["existing"], data=serializer_data, partial=False)
+                    serializer.is_valid(raise_exception=True)
+                    self.perform_update(serializer)
+                    updated += 1
+
+        return Response(
+            {
+                **payload,
+                "result": {"created": created, "updated": updated},
+                "detail": "Import notes de contrôle terminé.",
+            }
+        )
 
 
 class AttendanceViewSet(BaseModelViewSet):
@@ -5473,6 +6314,142 @@ class ExamResultViewSet(BaseModelViewSet):
     def perform_update(self, serializer):
         self._validate_scope(serializer)
         serializer.save()
+
+    @action(detail=False, methods=["post"], url_path="import-exams")
+    def import_exams(self, request):
+        classroom_id = request.data.get("classroom_id")
+        session_id = request.data.get("session_id")
+        confirm = str(request.data.get("confirm", "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+        try:
+            classroom_id = int(classroom_id)
+            session_id = int(session_id)
+        except (TypeError, ValueError):
+            raise ValidationError({"detail": "classroom_id et session_id sont requis."})
+
+        user = request.user
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN:
+            requested_id = request.headers.get("X-Etablissement-Id") or request.query_params.get("etablissement")
+            target_id = int(requested_id) if requested_id not in (None, "") and str(requested_id).isdigit() else getattr(user, "etablissement_id", None)
+        else:
+            target_id = getattr(user, "etablissement_id", None)
+
+        classroom = get_object_or_404(ClassRoom.objects.select_related("etablissement"), id=classroom_id)
+        if target_id and classroom.etablissement_id != target_id:
+            raise ValidationError({"classroom_id": "La classe n'appartient pas à l'établissement actif."})
+
+        session = get_object_or_404(ExamSession, id=session_id)
+        rows = _load_import_rows(request.FILES.get("file") or request.data.get("file"))
+        if not rows:
+            raise ValidationError({"file": "Aucune ligne exploitable dans le fichier."})
+
+        students_by_matricule = {
+            (student.matricule or "").strip().lower(): student
+            for student in Student.objects.filter(classroom=classroom, is_archived=False)
+        }
+        subjects = Subject.objects.filter(classroom=classroom)
+        subjects_by_code = {(subject.code or "").strip().lower(): subject for subject in subjects}
+        subjects_by_name = {(subject.name or "").strip().lower(): subject for subject in subjects}
+
+        errors = []
+        prepared = []
+        for index, row in enumerate(rows, start=2):
+            matricule = _as_text(row.get("student_matricule") or row.get("matricule")).lower()
+            subject_code = _as_text(row.get("subject_code") or row.get("matiere_code")).lower()
+            subject_name = _as_text(row.get("subject_name") or row.get("matiere")).lower()
+            score = _as_decimal(row.get("score") or row.get("note"))
+
+            if not matricule:
+                errors.append({"row": index, "error": "student_matricule requis."})
+                continue
+            if score is None or score < Decimal("0") or score > Decimal("20"):
+                errors.append({"row": index, "error": "score/note invalide (0..20)."})
+                continue
+
+            student = students_by_matricule.get(matricule)
+            if student is None:
+                errors.append({"row": index, "error": f"Élève introuvable dans la classe pour matricule '{matricule}'."})
+                continue
+
+            subject = None
+            if subject_code:
+                subject = subjects_by_code.get(subject_code)
+            if subject is None and subject_name:
+                subject = subjects_by_name.get(subject_name)
+            if subject is None:
+                errors.append({"row": index, "error": "Matière introuvable (subject_code/subject_name)."})
+                continue
+
+            existing = ExamResult.objects.filter(session=session, student=student, subject=subject).first()
+            prepared.append(
+                {
+                    "row": index,
+                    "student": student,
+                    "subject": subject,
+                    "score": score,
+                    "existing": existing,
+                }
+            )
+
+        to_create = sum(1 for item in prepared if item["existing"] is None)
+        to_update = len(prepared) - to_create
+        payload = {
+            "classroom": {"id": classroom.id, "name": classroom.name},
+            "session": {"id": session.id, "name": session.title, "term": session.term},
+            "summary": {
+                "total_rows": len(rows),
+                "valid_rows": len(prepared),
+                "errors": len(errors),
+                "to_create": to_create,
+                "to_update": to_update,
+            },
+            "errors": errors,
+            "preview": [
+                {
+                    "row": item["row"],
+                    "action": "create" if item["existing"] is None else "update",
+                    "student": item["student"].matricule,
+                    "subject": item["subject"].code,
+                    "score": str(item["score"]),
+                }
+                for item in prepared[:150]
+            ],
+            "confirm_required": True,
+        }
+
+        if not confirm:
+            return Response(payload)
+        if errors:
+            return Response({**payload, "detail": "Import bloqué: corrigez les erreurs."}, status=400)
+
+        created = 0
+        updated = 0
+        with transaction.atomic():
+            for item in prepared:
+                data = {
+                    "session": session.id,
+                    "student": item["student"].id,
+                    "subject": item["subject"].id,
+                    "score": str(item["score"]),
+                }
+                if item["existing"] is None:
+                    serializer = self.get_serializer(data=data)
+                    serializer.is_valid(raise_exception=True)
+                    self.perform_create(serializer)
+                    created += 1
+                else:
+                    serializer = self.get_serializer(item["existing"], data=data, partial=False)
+                    serializer.is_valid(raise_exception=True)
+                    self.perform_update(serializer)
+                    updated += 1
+
+        return Response(
+            {
+                **payload,
+                "result": {"created": created, "updated": updated},
+                "detail": "Import notes d'examen terminé.",
+            }
+        )
 
 
 class SupplierViewSet(EtablissementScopedModelViewSet):

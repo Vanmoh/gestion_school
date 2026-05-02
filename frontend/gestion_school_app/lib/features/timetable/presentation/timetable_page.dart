@@ -8,8 +8,11 @@ import 'package:printing/printing.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/theme/academic_imports_ui_reference.dart';
+import '../../../core/widgets/foreground_notice.dart';
 import '../../../models/etablissement.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../imports/presentation/academic_imports_window.dart';
 import 'timetable_workload.dart';
 
 class TimetablePage extends ConsumerStatefulWidget {
@@ -43,6 +46,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   int? _loggedTeacherId;
   Set<int> _teacherAssignmentIds = <int>{};
   Set<int> _teacherClassroomIds = <int>{};
+
+  void _openAcademicImports() {
+    showAcademicImportsFloatingWindow(context);
+  }
 
   bool _isTimetableReadOnlyRole() {
     final role = ref.read(authControllerProvider).value?.role;
@@ -2023,20 +2030,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-    const successColor = Color(0xFF197A43);
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          backgroundColor: isSuccess ? successColor : null,
-          content: Text(
-            message,
-            style: isSuccess ? const TextStyle(color: Colors.white) : null,
-          ),
-        ),
-      );
+    ForegroundNotice.show(
+      context,
+      message,
+      isSuccess: isSuccess,
+      isError: !isSuccess,
+    );
   }
 
   Future<void> _resetCustomApiUrlAndReload() async {
@@ -2709,10 +2708,26 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       ],
                     ),
                   ),
-                  OutlinedButton.icon(
-                    onPressed: _saving ? null : _loadData,
-                    icon: const Icon(Icons.sync),
-                    label: const Text('Actualiser'),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _saving ? null : _loadData,
+                        icon: const Icon(Icons.sync),
+                        label: const Text('Actualiser'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: (_saving || isReadOnlyMode)
+                            ? null
+                            : _openAcademicImports,
+                        icon: const Icon(Icons.upload_file_outlined),
+                        label: const Text('Imports académiques'),
+                        style: AcademicImportsUiReference.importActionStyle(
+                          Theme.of(context).colorScheme,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

@@ -33,6 +33,8 @@ import 'features/communication/presentation/communication_page.dart';
 import 'features/discipline/presentation/discipline_page.dart';
 import 'features/etablissements/presentation/etablissements_page.dart';
 import 'features/grades/presentation/grades_page.dart';
+import 'features/imports/presentation/academic_imports_page.dart';
+import 'features/imports/presentation/academic_imports_window.dart';
 import 'features/library/presentation/library_page.dart';
 import 'features/payments/presentation/payments_controller.dart';
 import 'features/payments/presentation/payments_page.dart';
@@ -188,6 +190,7 @@ class GestionSchoolApp extends ConsumerWidget {
         '/exams': (_) => const _GlobalFeatureRefreshHost(child: ExamsPage()),
         '/students': (_) =>
             const _GlobalFeatureRefreshHost(child: StudentsPage()),
+        '/imports': (_) => const AcademicImportsFloatingRoutePage(),
         '/payments': (_) =>
             const _GlobalFeatureRefreshHost(child: PaymentsPage()),
         '/timetable': (_) =>
@@ -260,6 +263,12 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       label: 'Académique',
       icon: Icons.account_tree_outlined,
       view: AcademicsPage(),
+    ),
+    _AdminMenuItem(
+      keyName: 'academic_imports',
+      label: 'Imports académiques',
+      icon: Icons.upload_file_outlined,
+      view: AcademicImportsPage(),
     ),
     _AdminMenuItem(
       keyName: 'grades',
@@ -801,6 +810,10 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   }
 
   void _selectItem(String key) {
+    if (key == 'academic_imports') {
+      showAcademicImportsFloatingWindow(context);
+      return;
+    }
     for (final group in _groups) {
       if (group.itemKeys.contains(key) && group.collapsible) {
         _expandedGroups[group.keyName] = true;

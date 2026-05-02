@@ -10,6 +10,9 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/theme/academic_imports_ui_reference.dart';
+import '../../../core/widgets/foreground_notice.dart';
+import '../../imports/presentation/academic_imports_window.dart';
 import '../../auth/presentation/auth_controller.dart';
 
 class GradesPage extends ConsumerStatefulWidget {
@@ -44,6 +47,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   bool _isTeacherUser = false;
   int? _loggedTeacherId;
   Set<int> _allowedClassroomIds = <int>{};
+
+  void _openAcademicImports() {
+    showAcademicImportsFloatingWindow(context);
+  }
 
   @override
   void initState() {
@@ -143,9 +150,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       await _reloadGradesForCurrentFilters(showError: false);
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur chargement notes: $error')),
-      );
+      _showMessage('Erreur chargement notes: $error');
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -1010,7 +1015,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       }
     }
 
-    final shouldSave = await showDialog<bool>(
+    final dialogAction = await showDialog<String>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
@@ -1141,6 +1146,16 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                 },
                           icon: const Icon(Icons.remove),
                           label: const Text('Retirer devoir'),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          onPressed: savingRows
+                              ? null
+                              : () {
+                                  Navigator.of(dialogContext).pop('imports');
+                                },
+                          icon: const Icon(Icons.upload_file_outlined),
+                          label: const Text('Imports académiques'),
                         ),
                       ],
                     ),
@@ -1281,7 +1296,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                 TextButton(
                   onPressed: savingRows
                       ? null
-                      : () => Navigator.of(dialogContext).pop(false),
+                      : () => Navigator.of(dialogContext).pop(null),
                   child: const Text('Annuler'),
                 ),
                 FilledButton(
@@ -1358,7 +1373,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                             }
 
                             if (dialogContext.mounted) {
-                              Navigator.of(dialogContext).pop(true);
+                              Navigator.of(dialogContext).pop('save');
                             }
                           } catch (error) {
                             setDialogState(() {
@@ -1379,7 +1394,13 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
     disposeDialogControllers();
 
-    if (shouldSave != true) {
+    if (dialogAction == 'imports') {
+      if (!mounted) return;
+      _openAcademicImports();
+      return;
+    }
+
+    if (dialogAction != 'save') {
       return;
     }
 
@@ -1408,22 +1429,14 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
   Future<void> _recalculateRanking() async {
     if (_isValidated) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Période validée par la direction: recalcul verrouillé.',
-          ),
-        ),
-      );
+      _showMessage('Période validée par la direction: recalcul verrouillé.');
       return;
     }
 
     if (_selectedClassroom == null ||
         _selectedAcademicYear == null ||
         _termController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sélectionnez classe, année et période.')),
-      );
+      _showMessage('Sélectionnez classe, année et période.');
       return;
     }
 
@@ -1445,9 +1458,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       await _refreshValidationStatus();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur recalcul classement: $error')),
-      );
+      _showMessage('Erreur recalcul classement: $error');
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -1700,6 +1711,8 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             yearId: selectedYear,
             term: selectedTerm,
           );
+
+    if (!mounted) return;
 
     await showDialog<void>(
       context: context,
@@ -2533,9 +2546,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     if (_selectedClassroom == null ||
         _selectedAcademicYear == null ||
         _termController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sélectionnez classe, année et période.')),
-      );
+      _showMessage('Sélectionnez classe, année et période.');
       return;
     }
 
@@ -2563,9 +2574,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       await _refreshValidationStatus();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Erreur validation: $error')));
+      _showMessage('Erreur validation: $error');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -2579,21 +2588,12 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-    const successColor = Color(0xFF197A43);
-
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          backgroundColor: isSuccess ? successColor : null,
-          content: Text(
-            message,
-            style: isSuccess ? const TextStyle(color: Colors.white) : null,
-          ),
-        ),
-      );
+    ForegroundNotice.show(
+      context,
+      message,
+      isSuccess: isSuccess,
+      isError: !isSuccess,
+    );
   }
 
   List<Map<String, dynamic>> _studentsForClassroom(int? classroomId) {
@@ -3326,10 +3326,24 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                       ],
                     ),
                   ),
-                  OutlinedButton.icon(
-                    onPressed: _saving ? null : _loadData,
-                    icon: const Icon(Icons.sync),
-                    label: const Text('Actualiser'),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _saving ? null : _loadData,
+                        icon: const Icon(Icons.sync),
+                        label: const Text('Actualiser'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _saving ? null : _openAcademicImports,
+                        icon: const Icon(Icons.upload_file_outlined),
+                        label: const Text('Imports académiques'),
+                        style: AcademicImportsUiReference.importActionStyle(
+                          Theme.of(context).colorScheme,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

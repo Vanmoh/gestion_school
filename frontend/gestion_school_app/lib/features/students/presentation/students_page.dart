@@ -9,8 +9,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/models/paginated_result.dart';
+import '../../../core/theme/academic_imports_ui_reference.dart';
+import '../../../core/widgets/foreground_notice.dart';
 import '../../../features/auth/presentation/auth_controller.dart';
 import '../../payments/presentation/payment_entry_dialog.dart';
+import '../../imports/presentation/academic_imports_window.dart';
 import '../../../models/etablissement.dart';
 import '../domain/student.dart';
 import 'students_controller.dart';
@@ -39,6 +42,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   bool _serverHasNext = false;
   bool _serverHasPrevious = false;
   int? _lastScopeEtablissementId;
+
+  void _openAcademicImports() {
+    showAcademicImportsFloatingWindow(context);
+  }
 
   final _usernameController = TextEditingController();
   final _firstNameController = TextEditingController();
@@ -4002,6 +4009,14 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required int appliedFilters,
     required String selectedClassLabel,
   }) {
+    final role = ref.read(authControllerProvider).value?.role;
+    final canOpenAcademicImports =
+        role != 'teacher' &&
+        role != 'supervisor' &&
+        role != 'accountant' &&
+        role != 'parent' &&
+        role != 'student';
+
     return Card(
       child: Padding(
         padding: EdgeInsets.all(isCompactLayout ? 12 : 16),
@@ -4194,6 +4209,16 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       : _copyFilteredStudentsCsv,
                   icon: const Icon(Icons.content_copy_outlined),
                   label: const Text('Copier CSV'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: (_saving || !canOpenAcademicImports)
+                      ? null
+                      : _openAcademicImports,
+                  icon: const Icon(Icons.upload_file_outlined),
+                  label: const Text('Imports académiques'),
+                  style: AcademicImportsUiReference.importActionStyle(
+                    Theme.of(context).colorScheme,
+                  ),
                 ),
               ],
             ),
@@ -5481,17 +5506,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style: isSuccess ? const TextStyle(color: Colors.white) : null,
-        ),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
-      ),
+    ForegroundNotice.show(
+      context,
+      message,
+      isSuccess: isSuccess,
+      isError: !isSuccess,
     );
   }
 }

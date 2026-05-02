@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/theme/academic_imports_ui_reference.dart';
+import '../../../core/widgets/foreground_notice.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../imports/presentation/academic_imports_window.dart';
 import '../domain/exam_models.dart';
 import 'exams_controller.dart';
 
@@ -33,6 +36,10 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
   int? _selectedResultStudent;
   int? _selectedResultSubject;
 
+  void _openAcademicImports() {
+    showAcademicImportsFloatingWindow(context);
+  }
+
   @override
   void dispose() {
     _sessionTitleController.dispose();
@@ -55,20 +62,12 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
 
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-    const successColor = Color(0xFF197A43);
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          backgroundColor: isSuccess ? successColor : null,
-          content: Text(
-            message,
-            style: isSuccess ? const TextStyle(color: Colors.white) : null,
-          ),
-        ),
-      );
+    ForegroundNotice.show(
+      context,
+      message,
+      isSuccess: isSuccess,
+      isError: !isSuccess,
+    );
   }
 
   Widget _metricChip(String label, String value) {
@@ -182,10 +181,26 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   ],
                 ),
               ),
-              OutlinedButton.icon(
-                onPressed: mutationState.isLoading ? null : _refreshExams,
-                icon: const Icon(Icons.sync),
-                label: const Text('Actualiser'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: mutationState.isLoading ? null : _refreshExams,
+                    icon: const Icon(Icons.sync),
+                    label: const Text('Actualiser'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: (mutationState.isLoading || isReadOnlyMode)
+                        ? null
+                        : _openAcademicImports,
+                    icon: const Icon(Icons.upload_file_outlined),
+                    label: const Text('Imports académiques'),
+                    style: AcademicImportsUiReference.importActionStyle(
+                      Theme.of(context).colorScheme,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

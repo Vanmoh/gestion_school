@@ -10,6 +10,7 @@ from .views import (
     CanteenServiceViewSet,
     CanteenSubscriptionViewSet,
     ClassRoomViewSet,
+    ClassRoomImportTemplateDownloadView,
     DashboardViewSet,
     DisciplineIncidentViewSet,
     EtablissementViewSet,
@@ -82,5 +83,10 @@ router.register(r"stock-items", StockItemViewSet)
 router.register(r"stock-movements", StockMovementViewSet)
 
 urlpatterns = [
+    path(
+        "import-templates/download/",
+        ClassRoomImportTemplateDownloadView.as_view(),
+        name="import-template-download",
+    ),
     path("", include(router.urls)),
 ]
