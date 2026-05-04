@@ -179,7 +179,11 @@ class GestionSchoolApp extends ConsumerWidget {
           const RequireEtablissementSelection(child: _AdminShell()),
         '/home/teacher': (_) =>
           const RequireEtablissementSelection(child: _AdminShell()),
+        '/home/censor': (_) =>
+          const RequireEtablissementSelection(child: _AdminShell()),
         '/home/supervisor': (_) =>
+          const RequireEtablissementSelection(child: _AdminShell()),
+        '/home/promoter': (_) =>
           const RequireEtablissementSelection(child: _AdminShell()),
         '/home/parent': (_) =>
           const RequireEtablissementSelection(child: _AdminShell()),
@@ -218,6 +222,8 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   bool _sidebarCollapsed = false;
   String? _hoveredKey;
   int _chatUnread = 0;
+  StreamSubscription<void>? _sessionExpiredSub;
+  bool _handlingSessionExpiry = false;
   bool _chatPanelOpen = false;
   final Map<int, int> _chatUnreadByConversation = <int, int>{};
   final Set<String> _seenShellMessageKeys = <String>{};
@@ -464,6 +470,15 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (role == 'supervisor') {
       const supervisorKeys = {
         'dashboard',
+        'attendance',
+        'discipline',
+      };
+      return supervisorKeys.contains(key);
+    }
+
+    if (role == 'censor') {
+      const censorKeys = {
+        'dashboard',
         'students',
         'attendance',
         'teacher_attendance',
@@ -471,7 +486,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         'discipline',
         'timetable',
       };
-      return supervisorKeys.contains(key);
+      return censorKeys.contains(key);
     }
 
     if (key == 'etablissements') {
@@ -494,9 +509,11 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     }
 
     if (role == 'supervisor') {
-      return key == 'dashboard' ||
-          key == 'students' ||
-          key == 'timetable';
+      return key == 'dashboard';
+    }
+
+    if (role == 'censor') {
+      return key == 'dashboard' || key == 'students' || key == 'timetable';
     }
 
     return false;
@@ -527,6 +544,8 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         return const TeacherDashboardPage();
       case 'supervisor':
         return const SupervisorDashboardPage();
+      case 'censor':
+        return const CensorDashboardPage();
       case 'accountant':
         return const AccountantDashboardPage();
       case 'parent':
@@ -553,16 +572,39 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       const Duration(seconds: 25),
       (_) => _refreshChatUnread(),
     );
+    _sessionExpiredSub = sessionExpiredStream.listen((_) {
+      _handleSessionExpired();
+    });
   }
 
   @override
   void dispose() {
+    _sessionExpiredSub?.cancel();
     _chatUnreadTimer?.cancel();
     _chatWsReconnectTimer?.cancel();
     _chatWsHeartbeatTimer?.cancel();
     _chatChannelSub?.cancel();
     _chatChannel?.sink.close();
     super.dispose();
+  }
+
+  Future<void> _handleSessionExpired() async {
+    if (!mounted || _handlingSessionExpiry) {
+      return;
+    }
+    _handlingSessionExpiry = true;
+    try {
+      await ref.read(authControllerProvider.notifier).logout();
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        '/login',
+        (route) => false,
+      );
+    } finally {
+      _handlingSessionExpiry = false;
+    }
   }
 
   String _chatWsUrlFromApiBase(String apiBase, String token) {
@@ -1681,11 +1723,15 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       case 'super_admin':
         return 'Admin';
       case 'director':
-        return 'Directeur';
+        return 'Directeur/Proviseur';
+      case 'promoter':
+        return 'Promoteur';
       case 'accountant':
         return 'Comptable';
       case 'teacher':
         return 'Enseignant';
+      case 'censor':
+        return 'Censeur';
       case 'supervisor':
         return 'Surveillant';
       case 'parent':

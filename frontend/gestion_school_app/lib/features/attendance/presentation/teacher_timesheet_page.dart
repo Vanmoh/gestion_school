@@ -72,13 +72,14 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
 
   bool _canAccess(String? role) {
     return role == 'super_admin' ||
-        role == 'supervisor' ||
+        role == 'censor' ||
         role == 'director' ||
+        role == 'promoter' ||
         role == 'teacher';
   }
 
   bool _isReadOnlyRole(String? role) {
-    return role == 'director';
+    return role == 'director' || role == 'promoter';
   }
 
   bool _isTeacherRole(String? role) {

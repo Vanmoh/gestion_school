@@ -44,10 +44,10 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
             classroom=self.classroom,
         )
 
-        self.supervisor = User.objects.create_user(
-            username="supervisor_payroll",
+        self.censor = User.objects.create_user(
+            username="censor_payroll",
             password="Pass1234!",
-            role=UserRole.SUPERVISOR,
+            role=UserRole.CENSOR,
             etablissement=self.etablissement,
         )
         self.director = User.objects.create_user(
@@ -117,7 +117,7 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
         )
 
     def _create_time_entry(self, payload):
-        self.client.force_authenticate(self.supervisor)
+        self.client.force_authenticate(self.censor)
         return self.client.post("/api/teacher-time-entries/", payload, format="json")
 
     def test_late_tolerance_keeps_full_paid_hours(self):
@@ -226,7 +226,8 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
         self.client.force_authenticate(self.teacher_user)
         list_response = self.client.get("/api/teacher-time-entries/")
         self.assertEqual(list_response.status_code, status.HTTP_200_OK)
-        results = list_response.data.get("results", list_response.data)
+        payload = list_response.data
+        results = payload.get("results", payload) if isinstance(payload, dict) else payload
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["teacher"], self.teacher.id)
 
@@ -272,7 +273,7 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
             }
         )
 
-        self.client.force_authenticate(self.supervisor)
+        self.client.force_authenticate(self.censor)
         generate_response = self.client.post(
             "/api/teacher-payrolls/generate_monthly/",
             {"month": "2026-04", "teacher": self.teacher.id},
@@ -305,7 +306,7 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
         self.assertEqual(level_two_response.status_code, status.HTTP_200_OK)
         self.assertEqual(level_two_response.data["validation_stage"], "level_two")
 
-        self.client.force_authenticate(self.supervisor)
+        self.client.force_authenticate(self.censor)
         locked_update_response = self.client.patch(
             f"/api/teacher-payrolls/{payroll_id}/",
             {"hours_worked": "5.00"},

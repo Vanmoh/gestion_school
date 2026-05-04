@@ -309,11 +309,15 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   }
 
   bool _isTeacherFinanceVisible(String? role) {
-    return role == 'super_admin' || role == 'supervisor' || role == 'accountant';
+    return role == 'super_admin' ||
+        role == 'director' ||
+        role == 'promoter' ||
+        role == 'censor' ||
+        role == 'accountant';
   }
 
   bool _isTeacherFinanceReadOnly(String? role) {
-    return role == 'accountant';
+    return role == 'accountant' || role == 'director' || role == 'promoter';
   }
 
   String _toApiDate(DateTime value) {
@@ -4152,7 +4156,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                   final rate = double.tryParse(row['hourly_rate']?.toString() ?? '0') ?? 0;
                                   final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
                                   final stage = (row['validation_stage'] ?? '').toString();
-                                  final canL1 = (authUser?.role == 'supervisor' || authUser?.role == 'super_admin') &&
+                                    final canL1 = (authUser?.role == 'censor' || authUser?.role == 'super_admin') &&
                                       stage != 'level_two' &&
                                       payrollId != null;
                                   final canL2 = (authUser?.role == 'accountant' || authUser?.role == 'super_admin') &&
@@ -4334,7 +4338,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                 rows: periodExpenses.map((row) {
                                   final expenseId = (row['id'] as num?)?.toInt();
                                   final stage = (row['validation_stage'] ?? '').toString();
-                                  final canL1 = (authUser?.role == 'supervisor' || authUser?.role == 'super_admin') &&
+                                    final canL1 = (authUser?.role == 'censor' || authUser?.role == 'super_admin') &&
                                       stage != 'level_two' &&
                                       expenseId != null;
                                   final canL2 = (authUser?.role == 'accountant' || authUser?.role == 'super_admin') &&

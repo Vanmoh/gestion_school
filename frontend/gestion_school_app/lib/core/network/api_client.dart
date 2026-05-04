@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -6,6 +7,18 @@ import '../constants/api_constants.dart';
 import 'token_storage.dart';
 
 final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
+
+final StreamController<void> _sessionExpiredController =
+    StreamController<void>.broadcast();
+
+Stream<void> get sessionExpiredStream => _sessionExpiredController.stream;
+
+void _notifySessionExpired() {
+  if (_sessionExpiredController.isClosed) {
+    return;
+  }
+  _sessionExpiredController.add(null);
+}
 
 bool _isTransientNetworkError(DioException error) {
   return error.type == DioExceptionType.connectionTimeout ||
@@ -166,7 +179,11 @@ final dioProvider = Provider<Dio>((ref) {
               return;
             } catch (_) {
               await tokenStorage.clear();
+              _notifySessionExpired();
             }
+          } else {
+            await tokenStorage.clear();
+            _notifySessionExpired();
           }
         }
 

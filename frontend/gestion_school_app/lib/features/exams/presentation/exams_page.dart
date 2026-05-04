@@ -97,7 +97,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
   Widget build(BuildContext context) {
     final authUser = ref.watch(authControllerProvider).value;
     final isReadOnlyMode =
-        authUser?.role == 'supervisor' || authUser?.role == 'accountant';
+      authUser?.role == 'censor' || authUser?.role == 'accountant';
     final sessionsAsync = ref.watch(examSessionsProvider);
     final planningsAsync = ref.watch(examPlanningsProvider);
     final resultsAsync = ref.watch(examResultsProvider);
@@ -616,7 +616,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     data: (supervisors) {
                       if (supervisors.isEmpty) {
                         return const Text(
-                          'Aucun surveillant trouvé. Créez un utilisateur avec rôle "supervisor".',
+                          'Aucun censeur trouvé. Créez un utilisateur avec rôle "censor".',
                         );
                       }
                       _selectedInvigilationSupervisor ??= supervisors.first.id;

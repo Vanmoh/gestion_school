@@ -25,6 +25,13 @@ class TeacherScheduleSlotApiTests(APITestCase):
             first_name="Admin",
             last_name="Timetable",
         )
+        self.censor_user = User.objects.create_user(
+            username="censor_timetable",
+            password="censor12345",
+            role=UserRole.CENSOR,
+            first_name="Censor",
+            last_name="Timetable",
+        )
         self.supervisor_user = User.objects.create_user(
             username="supervisor_timetable",
             password="supervisor12345",
@@ -129,8 +136,8 @@ class TeacherScheduleSlotApiTests(APITestCase):
         errors = " ".join(response.data.get("non_field_errors", []))
         self.assertIn("Conflit enseignant", errors)
 
-    def test_supervisor_can_create_slot(self):
-        self.client.force_authenticate(self.supervisor_user)
+    def test_censor_can_create_slot(self):
+        self.client.force_authenticate(self.censor_user)
 
         response = self.client.post(
             "/api/teacher-schedule-slots/",
@@ -145,6 +152,23 @@ class TeacherScheduleSlotApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_supervisor_cannot_create_slot(self):
+        self.client.force_authenticate(self.supervisor_user)
+
+        response = self.client.post(
+            "/api/teacher-schedule-slots/",
+            {
+                "assignment": self.assignment_a_math.id,
+                "day_of_week": "MON",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "room": "A1",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_locked_classroom_blocks_create_and_delete(self):
         TimetablePublication.objects.create(

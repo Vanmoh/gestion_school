@@ -43,6 +43,8 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   static const _sheetReadRoles = {
     'super_admin',
     'director',
+    'promoter',
+    'censor',
     'supervisor',
     'teacher',
     'accountant',
@@ -50,12 +52,16 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   static const _sheetWriteRoles = {
     'super_admin',
     'director',
+    'promoter',
+    'censor',
     'supervisor',
     'teacher',
   };
   static const _sheetValidateRoles = {
     'super_admin',
     'director',
+    'promoter',
+    'censor',
     'supervisor',
   };
 
@@ -367,7 +373,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     final authState = ref.watch(authControllerProvider);
     final userRole = authState.valueOrNull?.role;
     final canEditConduite =
-        userRole == 'supervisor' || userRole == 'super_admin';
+      userRole == 'censor' || userRole == 'supervisor' || userRole == 'super_admin';
     final isReadOnlyMode = userRole == 'accountant';
     final canUseSheet = userRole != null && _sheetReadRoles.contains(userRole);
     final canWriteSheet = userRole != null && _sheetWriteRoles.contains(userRole);

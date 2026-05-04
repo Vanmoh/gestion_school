@@ -3789,6 +3789,8 @@ class AttendanceViewSet(BaseModelViewSet):
     ATTENDANCE_SHEET_READ_ROLES = {
         UserRole.SUPER_ADMIN,
         UserRole.DIRECTOR,
+        UserRole.PROMOTER,
+        UserRole.CENSOR,
         UserRole.SUPERVISOR,
         UserRole.TEACHER,
         UserRole.ACCOUNTANT,
@@ -3796,12 +3798,16 @@ class AttendanceViewSet(BaseModelViewSet):
     ATTENDANCE_SHEET_WRITE_ROLES = {
         UserRole.SUPER_ADMIN,
         UserRole.DIRECTOR,
+        UserRole.PROMOTER,
+        UserRole.CENSOR,
         UserRole.SUPERVISOR,
         UserRole.TEACHER,
     }
     ATTENDANCE_SHEET_VALIDATOR_ROLES = {
         UserRole.SUPER_ADMIN,
         UserRole.DIRECTOR,
+        UserRole.PROMOTER,
+        UserRole.CENSOR,
         UserRole.SUPERVISOR,
     }
 
@@ -5031,7 +5037,7 @@ class ExpenseViewSet(BaseModelViewSet):
 
     @staticmethod
     def _can_validate_level_one(role):
-        return role in {UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}
+        return role in {UserRole.CENSOR, UserRole.SUPER_ADMIN}
 
     @staticmethod
     def _can_validate_level_two(role):
@@ -5418,7 +5424,7 @@ class TeacherPayrollViewSet(BaseModelViewSet):
 
     @staticmethod
     def _can_validate_level_one(role):
-        return role in {UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}
+        return role in {UserRole.CENSOR, UserRole.SUPER_ADMIN}
 
     @staticmethod
     def _can_validate_level_two(role):

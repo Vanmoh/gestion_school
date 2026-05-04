@@ -46,9 +46,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
 
   static const List<(String, String)> _roles = [
     ('super_admin', 'Super Admin'),
-    ('director', 'Directeur'),
+    ('director', 'Directeur/Proviseur'),
+    ('promoter', 'Promoteur'),
     ('accountant', 'Comptable'),
     ('teacher', 'Enseignant'),
+    ('censor', 'Censeur'),
     ('supervisor', 'Surveillant'),
     ('parent', 'Parent'),
     ('student', 'Eleve'),
@@ -144,10 +146,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     switch (role) {
       case 'super_admin':
       case 'director':
+      case 'promoter':
         return const Color(0xFF2D6FD6);
       case 'accountant':
         return const Color(0xFF2A8E58);
       case 'teacher':
+      case 'censor':
       case 'supervisor':
         return const Color(0xFF8B5CF6);
       case 'parent':
@@ -934,12 +938,18 @@ class _UsersPageState extends ConsumerState<UsersPage> {
         final totalUsers = pageData.count;
         final adminCount = users
             .where(
-              (user) => user.role == 'super_admin' || user.role == 'director',
+              (user) =>
+                  user.role == 'super_admin' ||
+                  user.role == 'director' ||
+                  user.role == 'promoter',
             )
             .length;
         final teachingCount = users
             .where(
-              (user) => user.role == 'teacher' || user.role == 'supervisor',
+              (user) =>
+                  user.role == 'teacher' ||
+                  user.role == 'censor' ||
+                  user.role == 'supervisor',
             )
             .length;
         final familyCount = users

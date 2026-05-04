@@ -19,11 +19,13 @@ class AuthUser {
     switch (role) {
       case 'super_admin':
       case 'director':
+      case 'promoter':
         return '/home/admin';
       case 'accountant':
         return '/home/accountant';
       case 'teacher':
         return '/home/teacher';
+      case 'censor':
       case 'supervisor':
         return '/home/supervisor';
       case 'parent':

@@ -39,7 +39,10 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
 
   bool _isCommunicationReadOnlyRole() {
     final role = ref.read(authControllerProvider).value?.role;
-    return role != 'super_admin' && role != 'director' && role != 'supervisor';
+    return role != 'super_admin' &&
+        role != 'director' &&
+        role != 'promoter' &&
+        role != 'censor';
   }
 
   @override
@@ -416,7 +419,8 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
     final isReadOnlyMode =
       authUser?.role != 'super_admin' &&
       authUser?.role != 'director' &&
-      authUser?.role != 'supervisor';
+      authUser?.role != 'promoter' &&
+      authUser?.role != 'censor';
 
     final colorScheme = Theme.of(context).colorScheme;
 

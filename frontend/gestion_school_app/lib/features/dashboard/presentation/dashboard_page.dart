@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers/navigation_intents.dart';
 import '../../../models/etablissement.dart';
+import '../../auth/presentation/auth_controller.dart';
 import '../../payments/presentation/payments_controller.dart';
 import '../domain/dashboard_stats.dart';
 import 'dashboard_controller.dart';
@@ -120,9 +121,73 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     }
   }
 
+  String _dashboardTitleForRole(String? role) {
+    switch (role) {
+      case 'super_admin':
+        return 'Tableau de bord Super Admin';
+      case 'director':
+        return 'Tableau de bord Directeur/Proviseur';
+      case 'promoter':
+        return 'Tableau de bord Promoteur';
+      default:
+        return 'Tableau de bord Administration';
+    }
+  }
+
+  List<String> _responsibilitiesForRole(String? role) {
+    switch (role) {
+      case 'super_admin':
+        return const [
+          'Piloter toutes les opérations',
+          'Superviser sécurité et audit',
+          'Arbitrer performance globale',
+        ];
+      case 'director':
+        return const [
+          'Diriger la performance établissement',
+          'Superviser pédagogie et finances',
+          'Valider les décisions critiques',
+        ];
+      case 'promoter':
+        return const [
+          'Suivre les indicateurs stratégiques',
+          'Coordonner les priorités de direction',
+          'Arbitrer objectifs financiers',
+        ];
+      default:
+        return const ['Consulter les indicateurs de pilotage'];
+    }
+  }
+
+  List<_DashboardQuickAction> _quickActionsForRole(String? role) {
+    switch (role) {
+      case 'super_admin':
+        return const [
+          _DashboardQuickAction.refresh,
+          _DashboardQuickAction.reports,
+          _DashboardQuickAction.finance,
+          _DashboardQuickAction.newPayment,
+          _DashboardQuickAction.timetable,
+          _DashboardQuickAction.activityLogs,
+        ];
+      case 'director':
+      case 'promoter':
+        return const [
+          _DashboardQuickAction.refresh,
+          _DashboardQuickAction.reports,
+          _DashboardQuickAction.finance,
+          _DashboardQuickAction.newPayment,
+          _DashboardQuickAction.timetable,
+        ];
+      default:
+        return const [_DashboardQuickAction.refresh];
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final statsAsync = ref.watch(dashboardStatsProvider);
+    final authUser = ref.watch(authControllerProvider).value;
     final recentPayments = ref.watch(paymentsProvider).valueOrNull ?? const [];
     final fees = ref.watch(feesProvider).valueOrNull ?? const [];
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
@@ -237,6 +302,8 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
         final contextLabel = scopedProfit >= 0
             ? 'Équilibre financier stable'
             : 'Vigilance financière active';
+        final roleQuickActions = _quickActionsForRole(authUser?.role);
+        final roleResponsibilities = _responsibilitiesForRole(authUser?.role);
 
         final revenueM = scopedRevenue / 1000000;
         final expensesM = scopedExpenses / 1000000;
@@ -426,6 +493,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                           establishmentName: activeEtablissementName,
                           contextLabel: contextLabel,
                           refreshedAt: refreshedAt,
+                          quickActions: roleQuickActions,
                           onActionSelected: _handleQuickAction,
                         ),
                       ),
@@ -449,7 +517,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                       _StaggerReveal(
                         index: 2,
                         child: _DashboardHeroPanel(
-                          title: 'Tableau de bord Admin',
+                          title: _dashboardTitleForRole(authUser?.role),
                           subtitle: heroSubtitleWithContext,
                           statusLabel: scopedProfit >= 0
                               ? 'Performance saine'
@@ -483,6 +551,8 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                               text: 'Enseignants $scopedTeachers',
                             ),
                           ],
+                          quickActions: roleQuickActions,
+                          responsibilities: roleResponsibilities,
                           onRefresh: () {
                             _refreshDashboard();
                           },
@@ -812,6 +882,8 @@ class _DashboardHeroPanel extends StatelessWidget {
   final String statusLabel;
   final Color statusColor;
   final List<_HeroBadgeData> badges;
+  final List<_DashboardQuickAction> quickActions;
+  final List<String> responsibilities;
   final VoidCallback onRefresh;
   final ValueChanged<_DashboardQuickAction> onActionSelected;
 
@@ -821,6 +893,8 @@ class _DashboardHeroPanel extends StatelessWidget {
     required this.statusLabel,
     required this.statusColor,
     required this.badges,
+    required this.quickActions,
+    required this.responsibilities,
     required this.onRefresh,
     required this.onActionSelected,
   });
@@ -871,11 +945,44 @@ class _DashboardHeroPanel extends StatelessWidget {
                 children: [
                   _RefreshMicroButton(onPressed: onRefresh),
                   const SizedBox(width: 8),
-                  _HeroActionMenu(onSelected: onActionSelected),
+                  _HeroActionMenu(
+                    actions: quickActions,
+                    onSelected: onActionSelected,
+                  ),
                 ],
               ),
             ],
           ),
+          if (responsibilities.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final item in responsibilities)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(999),
+                      color: Colors.white.withValues(alpha: 0.08),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.15),
+                      ),
+                    ),
+                    child: Text(
+                      item,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.9),
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -912,65 +1019,51 @@ class _DashboardHeroPanel extends StatelessWidget {
 }
 
 class _HeroActionMenu extends StatelessWidget {
+  final List<_DashboardQuickAction> actions;
   final ValueChanged<_DashboardQuickAction> onSelected;
 
-  const _HeroActionMenu({required this.onSelected});
+  const _HeroActionMenu({
+    required this.actions,
+    required this.onSelected,
+  });
+
+  static ({String label, IconData icon}) _meta(_DashboardQuickAction action) {
+    switch (action) {
+      case _DashboardQuickAction.refresh:
+        return (label: 'Actualiser', icon: Icons.refresh_rounded);
+      case _DashboardQuickAction.reports:
+        return (label: 'Rapports', icon: Icons.assessment_rounded);
+      case _DashboardQuickAction.finance:
+        return (
+          label: 'Finances',
+          icon: Icons.account_balance_wallet_rounded,
+        );
+      case _DashboardQuickAction.newPayment:
+        return (label: 'Encaisser maintenant', icon: Icons.point_of_sale_rounded);
+      case _DashboardQuickAction.timetable:
+        return (label: 'Emploi du temps', icon: Icons.schedule_rounded);
+      case _DashboardQuickAction.activityLogs:
+        return (label: 'Journal d\'activité', icon: Icons.history_rounded);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<_DashboardQuickAction>(
       tooltip: 'Actions rapides',
       onSelected: onSelected,
-      itemBuilder: (context) => const [
-        PopupMenuItem(
-          value: _DashboardQuickAction.refresh,
-          child: ListTile(
-            leading: Icon(Icons.refresh_rounded),
-            title: Text('Actualiser'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        PopupMenuItem(
-          value: _DashboardQuickAction.reports,
-          child: ListTile(
-            leading: Icon(Icons.assessment_rounded),
-            title: Text('Rapports'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        PopupMenuItem(
-          value: _DashboardQuickAction.finance,
-          child: ListTile(
-            leading: Icon(Icons.account_balance_wallet_rounded),
-            title: Text('Finances'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        PopupMenuItem(
-          value: _DashboardQuickAction.newPayment,
-          child: ListTile(
-            leading: Icon(Icons.point_of_sale_rounded),
-            title: Text('Encaisser maintenant'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        PopupMenuItem(
-          value: _DashboardQuickAction.timetable,
-          child: ListTile(
-            leading: Icon(Icons.schedule_rounded),
-            title: Text('Emploi du temps'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        PopupMenuItem(
-          value: _DashboardQuickAction.activityLogs,
-          child: ListTile(
-            leading: Icon(Icons.history_rounded),
-            title: Text('Journal d’activité'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-      ],
+      itemBuilder: (context) => actions
+          .map(
+            (action) => PopupMenuItem(
+              value: action,
+              child: ListTile(
+                leading: Icon(_meta(action).icon),
+                title: Text(_meta(action).label),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          )
+          .toList(growable: false),
       child: Container(
         width: 38,
         height: 38,
@@ -993,12 +1086,14 @@ class _ContextRibbon extends StatelessWidget {
   final String establishmentName;
   final String contextLabel;
   final String refreshedAt;
+  final List<_DashboardQuickAction> quickActions;
   final ValueChanged<_DashboardQuickAction> onActionSelected;
 
   const _ContextRibbon({
     required this.establishmentName,
     required this.contextLabel,
     required this.refreshedAt,
+    required this.quickActions,
     required this.onActionSelected,
   });
 
@@ -1038,32 +1133,14 @@ class _ContextRibbon extends StatelessWidget {
           PopupMenuButton<_DashboardQuickAction>(
             tooltip: 'Raccourcis dashboard',
             onSelected: onActionSelected,
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: _DashboardQuickAction.refresh,
-                child: Text('Actualiser les indicateurs'),
-              ),
-              PopupMenuItem(
-                value: _DashboardQuickAction.reports,
-                child: Text('Ouvrir les rapports'),
-              ),
-              PopupMenuItem(
-                value: _DashboardQuickAction.finance,
-                child: Text('Ouvrir la finance'),
-              ),
-              PopupMenuItem(
-                value: _DashboardQuickAction.newPayment,
-                child: Text('Nouveau paiement guide'),
-              ),
-              PopupMenuItem(
-                value: _DashboardQuickAction.timetable,
-                child: Text('Ouvrir l’emploi du temps'),
-              ),
-              PopupMenuItem(
-                value: _DashboardQuickAction.activityLogs,
-                child: Text('Voir le journal d’activité'),
-              ),
-            ],
+            itemBuilder: (context) => quickActions
+                .map(
+                  (action) => PopupMenuItem(
+                    value: action,
+                    child: Text(_HeroActionMenu._meta(action).label),
+                  ),
+                )
+                .toList(growable: false),
             child: Container(
               width: 34,
               height: 34,

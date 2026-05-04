@@ -278,11 +278,15 @@ class _ChatPanelState extends State<ChatPanel> {
       case 'super_admin':
         return 'Super Admin';
       case 'director':
-        return 'Directeurs';
+        return 'Directeur/Proviseur';
+      case 'promoter':
+        return 'Promoteurs';
       case 'accountant':
         return 'Comptables';
       case 'teacher':
         return 'Enseignants';
+      case 'censor':
+        return 'Censeurs';
       case 'supervisor':
         return 'Surveillants';
       case 'parent':
@@ -306,8 +310,10 @@ class _ChatPanelState extends State<ChatPanel> {
     const roleOrder = <String>[
       'super_admin',
       'director',
+      'promoter',
       'accountant',
       'teacher',
+      'censor',
       'supervisor',
       'parent',
       'student',

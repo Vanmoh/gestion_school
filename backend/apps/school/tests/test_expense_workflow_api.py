@@ -21,10 +21,10 @@ class ExpenseWorkflowApiTests(APITestCase):
             password="Pass1234!",
             role=UserRole.SUPER_ADMIN,
         )
-        self.supervisor = User.objects.create_user(
-            username="sup_expense",
+        self.censor = User.objects.create_user(
+            username="censor_expense",
             password="Pass1234!",
-            role=UserRole.SUPERVISOR,
+            role=UserRole.CENSOR,
             etablissement=self.etablissement,
         )
         self.accountant = User.objects.create_user(
@@ -54,7 +54,7 @@ class ExpenseWorkflowApiTests(APITestCase):
     def test_expense_two_level_validation_workflow_and_lock(self):
         expense_id = self._create_expense()
 
-        self.client.force_authenticate(self.supervisor)
+        self.client.force_authenticate(self.censor)
         level_one = self.client.post(
             f"/api/expenses/{expense_id}/validate_level_one/",
             {},
@@ -105,7 +105,7 @@ class ExpenseWorkflowApiTests(APITestCase):
         )
         self.assertEqual(invalid_level_one.status_code, status.HTTP_400_BAD_REQUEST)
 
-        self.client.force_authenticate(self.supervisor)
+        self.client.force_authenticate(self.censor)
         invalid_level_two = self.client.post(
             f"/api/expenses/{expense_id}/validate_level_two/",
             {},

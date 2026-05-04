@@ -151,7 +151,7 @@ class ExamsRepository {
   Future<List<OptionItem>> fetchSupervisors() async {
     final response = await dio.get(
       '/auth/users/',
-      queryParameters: {'role': 'supervisor'},
+      queryParameters: {'role': 'censor'},
     );
     final rows = _extractRows(response.data);
     return rows.map((row) {
@@ -160,7 +160,7 @@ class ExamsRepository {
       final last = map['last_name']?.toString() ?? '';
       final fullName = '$first $last'.trim();
       final label = fullName.isEmpty
-          ? map['username']?.toString() ?? 'Surveillant'
+          ? map['username']?.toString() ?? 'Censeur'
           : fullName;
       return OptionItem(id: map['id'] as int, label: label);
     }).toList();

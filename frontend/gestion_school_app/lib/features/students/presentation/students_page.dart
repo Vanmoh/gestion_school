@@ -132,7 +132,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   bool _isStudentsReadOnlyRole() {
     final role = ref.read(authControllerProvider).value?.role;
-    return role == 'supervisor';
+    return role == 'censor';
   }
 
   @override
@@ -2715,7 +2715,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   @override
   Widget build(BuildContext context) {
     final authUser = ref.watch(authControllerProvider).value;
-    final isStudentsReadOnly = authUser?.role == 'supervisor';
+    final isStudentsReadOnly = authUser?.role == 'censor';
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
     final scopedEtablissementId = authUser?.role == 'super_admin'
         ? selectedEtablissement?.id

@@ -440,7 +440,7 @@ class _AcademicImportsPageState extends ConsumerState<AcademicImportsPage> {
       }
 
       if (showSuccessMessage) {
-        _showMessage('Modèle téléchargé: $fileName', isSuccess: true);
+        _showMessage('Modèle téléchargé avec succès.', isSuccess: true);
       }
       return true;
     } catch (error) {

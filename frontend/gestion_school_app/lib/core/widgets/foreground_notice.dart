@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -33,8 +34,8 @@ class ForegroundNotice {
     final route = ModalRoute.of(context);
     final isDialogRoute = route is PopupRoute;
     final isMobile = media.width < 700;
-    final maxWidth = isMobile ? media.width - 24 : 380.0;
-    final topOffset = isDialogRoute ? (isMobile ? 16.0 : 24.0) : 12.0;
+    final maxWidth = isMobile ? media.width - 28 : 320.0;
+    final topOffset = isDialogRoute ? (isMobile ? 14.0 : 18.0) : 10.0;
 
     late final OverlayEntry entry;
     entry = OverlayEntry(
@@ -44,9 +45,9 @@ class ForegroundNotice {
           child: SafeArea(
             child: Padding(
               padding: EdgeInsets.fromLTRB(
-                isMobile ? 12 : 16,
+                isMobile ? 14 : 16,
                 topOffset,
-                isMobile ? 12 : 16,
+                isMobile ? 14 : 16,
                 0,
               ),
               child: Align(
@@ -54,84 +55,84 @@ class ForegroundNotice {
                 child: ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: maxWidth),
                   child: TweenAnimationBuilder<double>(
-                    duration: const Duration(milliseconds: 220),
+                    duration: const Duration(milliseconds: 180),
                     curve: Curves.easeOutCubic,
                     tween: Tween<double>(begin: 0, end: 1),
                     builder: (context, value, child) {
                       return Opacity(
                         opacity: value,
                         child: Transform.translate(
-                          offset: Offset(0, -10 * (1 - value)),
+                          offset: Offset(0, -6 * (1 - value)),
                           child: child,
                         ),
                       );
                     },
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: backgroundColor,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isSuccess
-                              ? const Color(0xFF4CB979)
-                              : colorScheme.outlineVariant,
-                        ),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x30000000),
-                            blurRadius: 10,
-                            offset: Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: IntrinsicHeight(
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Container(
-                              width: 5,
-                              decoration: BoxDecoration(
-                                color: accentColor,
-                                borderRadius: const BorderRadius.only(
-                                  topLeft: Radius.circular(12),
-                                  bottomLeft: Radius.circular(12),
-                                ),
-                              ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: isSuccess
+                                ? const Color(0xFF16653A).withValues(alpha: 0.94)
+                                : backgroundColor.withValues(alpha: 0.9),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: isSuccess
+                                  ? const Color(0xFF5AC98A).withValues(alpha: 0.9)
+                                  : colorScheme.outlineVariant.withValues(alpha: 0.9),
                             ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 10,
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x22000000),
+                                blurRadius: 8,
+                                offset: Offset(0, 3),
                               ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
+                            ],
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 18,
+                                  height: 18,
+                                  decoration: BoxDecoration(
+                                    color: accentColor.withValues(alpha: 0.18),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
                                     isError
                                         ? Icons.error_outline
                                         : (isSuccess
-                                              ? Icons.check_circle_outline
+                                              ? Icons.check_rounded
                                               : Icons.info_outline),
-                                    size: 17,
+                                    size: 12,
                                     color: accentColor,
                                   ),
-                                  const SizedBox(width: 8),
-                                  Flexible(
-                                    child: Text(
-                                      message,
-                                      style: TextStyle(
-                                        color: foregroundColor,
-                                        fontWeight: FontWeight.w600,
-                                        height: 1.25,
-                                      ),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(width: 7),
+                                Flexible(
+                                  child: Text(
+                                    message,
+                                    style: TextStyle(
+                                      color: foregroundColor,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12.5,
+                                      letterSpacing: 0.1,
+                                      height: 1.2,
                                     ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     ),

@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/providers/navigation_intents.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../payments/presentation/payments_controller.dart';
 import 'dashboard_shared_ui.dart';
 
 List<Map<String, dynamic>> _rows(dynamic data) {
@@ -85,6 +87,121 @@ class _RoleInsight {
   });
 }
 
+enum _RoleQuickAction {
+  attendance,
+  discipline,
+  students,
+  teacherAttendance,
+  teacherTimesheet,
+  timetable,
+  reports,
+  finance,
+  newPayment,
+  grades,
+}
+
+class _RoleQuickActionMeta {
+  final String label;
+  final IconData icon;
+
+  const _RoleQuickActionMeta({required this.label, required this.icon});
+}
+
+_RoleQuickActionMeta _roleQuickActionMeta(_RoleQuickAction action) {
+  switch (action) {
+    case _RoleQuickAction.attendance:
+      return const _RoleQuickActionMeta(
+        label: 'Absences',
+        icon: Icons.event_busy_outlined,
+      );
+    case _RoleQuickAction.discipline:
+      return const _RoleQuickActionMeta(
+        label: 'Discipline',
+        icon: Icons.gavel_rounded,
+      );
+    case _RoleQuickAction.students:
+      return const _RoleQuickActionMeta(
+        label: 'Élèves',
+        icon: Icons.groups_rounded,
+      );
+    case _RoleQuickAction.teacherAttendance:
+      return const _RoleQuickActionMeta(
+        label: 'Absences enseignants',
+        icon: Icons.assignment_ind_outlined,
+      );
+    case _RoleQuickAction.teacherTimesheet:
+      return const _RoleQuickActionMeta(
+        label: 'Émargement',
+        icon: Icons.punch_clock_rounded,
+      );
+    case _RoleQuickAction.timetable:
+      return const _RoleQuickActionMeta(
+        label: 'Emploi du temps',
+        icon: Icons.schedule_rounded,
+      );
+    case _RoleQuickAction.reports:
+      return const _RoleQuickActionMeta(
+        label: 'Rapports',
+        icon: Icons.assessment_outlined,
+      );
+    case _RoleQuickAction.finance:
+      return const _RoleQuickActionMeta(
+        label: 'Finances',
+        icon: Icons.account_balance_wallet_outlined,
+      );
+    case _RoleQuickAction.newPayment:
+      return const _RoleQuickActionMeta(
+        label: 'Encaisser',
+        icon: Icons.point_of_sale_rounded,
+      );
+    case _RoleQuickAction.grades:
+      return const _RoleQuickActionMeta(
+        label: 'Notes',
+        icon: Icons.fact_check_outlined,
+      );
+  }
+}
+
+void _navigateToRoleShellItem(WidgetRef ref, String key) {
+  ref.read(adminShellNavigationKeyProvider.notifier).state = key;
+}
+
+void _handleRoleQuickAction(WidgetRef ref, _RoleQuickAction action) {
+  switch (action) {
+    case _RoleQuickAction.attendance:
+      _navigateToRoleShellItem(ref, 'attendance');
+      return;
+    case _RoleQuickAction.discipline:
+      _navigateToRoleShellItem(ref, 'discipline');
+      return;
+    case _RoleQuickAction.students:
+      _navigateToRoleShellItem(ref, 'students');
+      return;
+    case _RoleQuickAction.teacherAttendance:
+      _navigateToRoleShellItem(ref, 'teacher_attendance');
+      return;
+    case _RoleQuickAction.teacherTimesheet:
+      _navigateToRoleShellItem(ref, 'teacher_timesheet');
+      return;
+    case _RoleQuickAction.timetable:
+      _navigateToRoleShellItem(ref, 'timetable');
+      return;
+    case _RoleQuickAction.reports:
+      _navigateToRoleShellItem(ref, 'reports');
+      return;
+    case _RoleQuickAction.finance:
+      _navigateToRoleShellItem(ref, 'finance');
+      return;
+    case _RoleQuickAction.newPayment:
+      ref.read(financeOpenGuidedPaymentIntentProvider.notifier).state = true;
+      _navigateToRoleShellItem(ref, 'finance');
+      return;
+    case _RoleQuickAction.grades:
+      _navigateToRoleShellItem(ref, 'grades');
+      return;
+  }
+}
+
 double _metricNumber(String raw) {
   final normalized = raw
       .replaceAll(',', '.')
@@ -148,6 +265,9 @@ class _RoleDashboardScaffold extends StatelessWidget {
   final String subtitle;
   final List<_RoleMetric> metrics;
   final Future<void> Function() onRefresh;
+  final List<String> responsibilities;
+  final List<_RoleQuickAction> quickActions;
+  final ValueChanged<_RoleQuickAction>? onQuickActionSelected;
   final String? fallbackNote;
 
   const _RoleDashboardScaffold({
@@ -155,6 +275,9 @@ class _RoleDashboardScaffold extends StatelessWidget {
     required this.subtitle,
     required this.metrics,
     required this.onRefresh,
+    this.responsibilities = const <String>[],
+    this.quickActions = const <_RoleQuickAction>[],
+    this.onQuickActionSelected,
     this.fallbackNote,
   });
 
@@ -178,6 +301,17 @@ class _RoleDashboardScaffold extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
           children: [
             _RoleHeroCard(title: title, subtitle: subtitle, onRefresh: onRefresh),
+            if (responsibilities.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              _RoleResponsibilitiesPanel(items: responsibilities),
+            ],
+            if (quickActions.isNotEmpty && onQuickActionSelected != null) ...[
+              const SizedBox(height: 10),
+              _RoleQuickActionsPanel(
+                actions: quickActions,
+                onSelected: onQuickActionSelected!,
+              ),
+            ],
             const SizedBox(height: 14),
             GridView.builder(
               shrinkWrap: true,
@@ -210,6 +344,94 @@ class _RoleDashboardScaffold extends StatelessWidget {
             ],
           ],
         ),
+      ],
+    );
+  }
+}
+
+class _RoleResponsibilitiesPanel extends StatelessWidget {
+  final List<String> items;
+
+  const _RoleResponsibilitiesPanel({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        color: Colors.white.withValues(alpha: 0.06),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Ce que vous pouvez faire',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final item in items)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    color: Colors.white.withValues(alpha: 0.08),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+                  ),
+                  child: Text(
+                    item,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RoleQuickActionsPanel extends StatelessWidget {
+  final List<_RoleQuickAction> actions;
+  final ValueChanged<_RoleQuickAction> onSelected;
+
+  const _RoleQuickActionsPanel({
+    required this.actions,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final action in actions)
+          OutlinedButton.icon(
+            onPressed: () => onSelected(action),
+            icon: Icon(_roleQuickActionMeta(action).icon, size: 16),
+            label: Text(_roleQuickActionMeta(action).label),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.22)),
+              backgroundColor: Colors.white.withValues(alpha: 0.06),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              textStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
       ],
     );
   }
@@ -563,7 +785,109 @@ class _SupervisorDashboardPageState extends ConsumerState<SupervisorDashboardPag
   int _students = 0;
   int _attendances = 0;
   int _incidentsOpen = 0;
+  int _attendanceToday = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    Future<void>.microtask(_load);
+  }
+
+  Future<void> _load() async {
+    if (mounted) setState(() => _loading = true);
+    final dio = ref.read(dioProvider);
+    final results = await Future.wait([
+      _safeGetRows(dio, '/students/'),
+      _safeGetRows(dio, '/attendances/'),
+      _safeGetRows(dio, '/discipline-incidents/'),
+    ]);
+
+    if (!mounted) return;
+    setState(() {
+      _students = results[0].rows.length;
+      _attendances = results[1].rows.length;
+      _incidentsOpen = results[2]
+          .rows
+          .where((row) => (row['status']?.toString() ?? 'open') == 'open')
+          .length;
+        final today = DateTime.now();
+        final todayStr =
+          '${today.year.toString().padLeft(4, '0')}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+        _attendanceToday = results[1]
+          .rows
+          .where((row) => (row['date']?.toString() ?? '') == todayStr)
+          .length;
+      _hasRestrictedData = results.any((result) => result.restricted);
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    return _RoleDashboardScaffold(
+      title: 'Tableau de bord Surveillant',
+      subtitle: 'Suivi ciblé assiduité, retards, absences et discipline.',
+      responsibilities: const [
+        'Suivre les absences et retards',
+        'Gérer les incidents disciplinaires',
+        'Contrôler l\'assiduité quotidienne',
+      ],
+      quickActions: const [
+        _RoleQuickAction.attendance,
+        _RoleQuickAction.discipline,
+        _RoleQuickAction.reports,
+      ],
+      onQuickActionSelected: (action) => _handleRoleQuickAction(ref, action),
+      metrics: [
+        _RoleMetric(
+          label: 'Élèves suivis',
+          value: '$_students',
+          icon: Icons.groups_rounded,
+          color: const Color(0xFF2CC2FF),
+        ),
+        _RoleMetric(
+          label: 'Absences et retards',
+          value: '$_attendances',
+          icon: Icons.fact_check_outlined,
+          color: const Color(0xFF8FA7FF),
+        ),
+        _RoleMetric(
+          label: 'Pointages élèves (jour)',
+          value: '$_attendanceToday',
+          icon: Icons.today_rounded,
+          color: const Color(0xFF5B8CFF),
+        ),
+        _RoleMetric(
+          label: 'Incidents ouverts',
+          value: '$_incidentsOpen',
+          icon: Icons.gpp_maybe_outlined,
+          color: const Color(0xFFFF8C61),
+        ),
+      ],
+      fallbackNote: _hasRestrictedData
+          ? 'Certaines statistiques sont masquées selon vos droits d\'accès.'
+          : null,
+      onRefresh: _load,
+    );
+  }
+}
+
+class CensorDashboardPage extends ConsumerStatefulWidget {
+  const CensorDashboardPage({super.key});
+
+  @override
+  ConsumerState<CensorDashboardPage> createState() => _CensorDashboardPageState();
+}
+
+class _CensorDashboardPageState extends ConsumerState<CensorDashboardPage> {
+  bool _loading = true;
+  bool _hasRestrictedData = false;
+  int _students = 0;
+  int _attendances = 0;
+  int _incidentsOpen = 0;
   int _teacherEntries = 0;
+  int _timetableSlots = 0;
 
   @override
   void initState() {
@@ -579,6 +903,7 @@ class _SupervisorDashboardPageState extends ConsumerState<SupervisorDashboardPag
       _safeGetRows(dio, '/attendances/'),
       _safeGetRows(dio, '/discipline-incidents/'),
       _safeGetRows(dio, '/teacher-time-entries/'),
+      _safeGetRows(dio, '/teacher-schedule-slots/'),
     ]);
 
     if (!mounted) return;
@@ -590,6 +915,7 @@ class _SupervisorDashboardPageState extends ConsumerState<SupervisorDashboardPag
           .where((row) => (row['status']?.toString() ?? 'open') == 'open')
           .length;
       _teacherEntries = results[3].rows.length;
+      _timetableSlots = results[4].rows.length;
       _hasRestrictedData = results.any((result) => result.restricted);
       _loading = false;
     });
@@ -599,8 +925,21 @@ class _SupervisorDashboardPageState extends ConsumerState<SupervisorDashboardPag
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     return _RoleDashboardScaffold(
-      title: 'Tableau de bord Surveillant',
-      subtitle: 'Suivi opérationnel quotidien de l\'établissement.',
+      title: 'Tableau de bord Censeur',
+      subtitle: 'Pilotage pédagogique: élèves, discipline, pointages et planning.',
+      responsibilities: const [
+        'Piloter le suivi pédagogique',
+        'Superviser pointages enseignants',
+        'Coordonner discipline et emploi du temps',
+      ],
+      quickActions: const [
+        _RoleQuickAction.students,
+        _RoleQuickAction.teacherAttendance,
+        _RoleQuickAction.teacherTimesheet,
+        _RoleQuickAction.timetable,
+        _RoleQuickAction.discipline,
+      ],
+      onQuickActionSelected: (action) => _handleRoleQuickAction(ref, action),
       metrics: [
         _RoleMetric(
           label: 'Élèves suivis',
@@ -609,7 +948,7 @@ class _SupervisorDashboardPageState extends ConsumerState<SupervisorDashboardPag
           color: const Color(0xFF2CC2FF),
         ),
         _RoleMetric(
-          label: 'Lignes absences/retards',
+          label: 'Absences et retards',
           value: '$_attendances',
           icon: Icons.fact_check_outlined,
           color: const Color(0xFF8FA7FF),
@@ -625,6 +964,12 @@ class _SupervisorDashboardPageState extends ConsumerState<SupervisorDashboardPag
           value: '$_teacherEntries',
           icon: Icons.punch_clock_rounded,
           color: const Color(0xFF39D68F),
+        ),
+        _RoleMetric(
+          label: 'Créneaux planning',
+          value: '$_timetableSlots',
+          icon: Icons.calendar_month_rounded,
+          color: const Color(0xFF5B8CFF),
         ),
       ],
       fallbackNote: _hasRestrictedData
@@ -721,6 +1066,17 @@ class _TeacherDashboardPageState extends ConsumerState<TeacherDashboardPage> {
     return _RoleDashboardScaffold(
       title: 'Tableau de bord Enseignant',
       subtitle: 'Vue personnelle des classes, matières et actions pédagogiques.',
+      responsibilities: const [
+        'Suivre vos classes et matières',
+        'Consulter planning et notes',
+        'Suivre vos pointages',
+      ],
+      quickActions: const [
+        _RoleQuickAction.grades,
+        _RoleQuickAction.timetable,
+        _RoleQuickAction.teacherTimesheet,
+      ],
+      onQuickActionSelected: (action) => _handleRoleQuickAction(ref, action),
       metrics: [
         _RoleMetric(
           label: 'Classes affectées',
@@ -809,6 +1165,17 @@ class _AccountantDashboardPageState extends ConsumerState<AccountantDashboardPag
     return _RoleDashboardScaffold(
       title: 'Tableau de bord Comptable',
       subtitle: 'Pilotage financier opérationnel de l\'établissement.',
+      responsibilities: const [
+        'Suivre encaissements et soldes',
+        'Valider les dépenses niveau 2',
+        'Gérer les paiements',
+      ],
+      quickActions: const [
+        _RoleQuickAction.finance,
+        _RoleQuickAction.newPayment,
+        _RoleQuickAction.reports,
+      ],
+      onQuickActionSelected: (action) => _handleRoleQuickAction(ref, action),
       metrics: [
         _RoleMetric(
           label: 'Paiements enregistrés',
@@ -888,6 +1255,15 @@ class _ParentDashboardPageState extends ConsumerState<ParentDashboardPage> {
     return _RoleDashboardScaffold(
       title: 'Tableau de bord Parent',
       subtitle: 'Suivi des informations scolaires liées à vos enfants.',
+      responsibilities: const [
+        'Consulter notes et absences',
+        'Suivre la discipline',
+        'Lire les rapports disponibles',
+      ],
+      quickActions: const [
+        _RoleQuickAction.reports,
+      ],
+      onQuickActionSelected: (action) => _handleRoleQuickAction(ref, action),
       metrics: [
         _RoleMetric(
           label: 'Notes visibles',
@@ -961,6 +1337,15 @@ class _StudentDashboardPageState extends ConsumerState<StudentDashboardPage> {
     return _RoleDashboardScaffold(
       title: 'Tableau de bord Élève',
       subtitle: 'Vue personnelle de votre progression et de votre suivi.',
+      responsibilities: const [
+        'Consulter vos notes',
+        'Suivre vos absences',
+        'Voir vos incidents disciplinaires',
+      ],
+      quickActions: const [
+        _RoleQuickAction.reports,
+      ],
+      onQuickActionSelected: (action) => _handleRoleQuickAction(ref, action),
       metrics: [
         _RoleMetric(
           label: 'Notes visibles',

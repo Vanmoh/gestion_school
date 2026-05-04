@@ -589,9 +589,9 @@ class StudentSerializer(serializers.ModelSerializer):
         if "conduite" in attrs:
             request = self.context.get("request")
             role = getattr(getattr(request, "user", None), "role", "")
-            if role not in {UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
+            if role not in {UserRole.CENSOR, UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
                 raise serializers.ValidationError(
-                    {"conduite": "Seuls le surveillant et le super admin peuvent modifier la conduite."}
+                    {"conduite": "Seuls le censeur, le surveillant et le super admin peuvent modifier la conduite."}
                 )
         return attrs
 
@@ -764,9 +764,9 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
         if "conduite" in attrs:
             role = getattr(getattr(request, "user", None), "role", "")
-            if role not in {UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
+            if role not in {UserRole.CENSOR, UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
                 raise serializers.ValidationError(
-                    {"conduite": "Seuls le surveillant et le super admin peuvent modifier la conduite."}
+                    {"conduite": "Seuls le censeur, le surveillant et le super admin peuvent modifier la conduite."}
                 )
 
         if student and attendance_date:

@@ -30,7 +30,12 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
 
   bool _isDisciplineReadOnlyRole() {
     final role = ref.read(authControllerProvider).value?.role;
-    return role != 'super_admin' && role != 'director' && role != 'supervisor' && role != 'teacher';
+    return role != 'super_admin' &&
+        role != 'director' &&
+        role != 'promoter' &&
+        role != 'censor' &&
+        role != 'supervisor' &&
+        role != 'teacher';
   }
 
   @override
@@ -199,6 +204,8 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
     final isReadOnlyMode =
       authUser?.role != 'super_admin' &&
       authUser?.role != 'director' &&
+      authUser?.role != 'promoter' &&
+      authUser?.role != 'censor' &&
       authUser?.role != 'supervisor' &&
       authUser?.role != 'teacher';
 
