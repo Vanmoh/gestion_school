@@ -1,6 +1,8 @@
 
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+import re
+
 from django.conf import settings
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -216,8 +218,13 @@ class ParentProfile(TimeStampedModel):
 
 
 class Student(TimeStampedModel):
+    class Gender(models.TextChoices):
+        MALE = "M", "Masculin"
+        FEMALE = "F", "Féminin"
+
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="student_profile")
     matricule = models.CharField(max_length=30, unique=True, blank=True)
+    gender = models.CharField(max_length=1, choices=Gender.choices, null=True, blank=True)
     birth_date = models.DateField(null=True, blank=True)
     classroom = models.ForeignKey(ClassRoom, on_delete=models.SET_NULL, null=True, related_name="students")
     parent = models.ForeignKey(ParentProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name="children")
@@ -229,17 +236,66 @@ class Student(TimeStampedModel):
 
     def save(self, *args, **kwargs):
         if not self.matricule:
-            year = self.enrollment_date.year if self.enrollment_date else date.today().year
-            prefix = f"GS-{year}"
-            last_student = Student.objects.filter(matricule__startswith=prefix).order_by("-id").first()
-            next_number = 1
-            if last_student and last_student.matricule:
-                try:
-                    next_number = int(last_student.matricule.split("-")[-1]) + 1
-                except (ValueError, IndexError):
-                    next_number = last_student.id + 1
-            self.matricule = f"{prefix}-{next_number:05d}"
+            self.matricule = self._build_matricule()
         super().save(*args, **kwargs)
+
+    def _build_matricule(self):
+        target_etablissement = self.etablissement or (self.classroom.etablissement if self.classroom else None)
+        etablissement_name = getattr(target_etablissement, "name", "") or ""
+        etablissement_code = self._normalize_etablissement_code(etablissement_name)
+
+        class_name = self.classroom.name if self.classroom else ""
+        class_code = self._normalize_class_code(class_name)
+
+        if self.classroom and getattr(self.classroom, "academic_year", None):
+            entry_year = self.classroom.academic_year.start_date.year
+        else:
+            entry_year = self.enrollment_date.year if self.enrollment_date else date.today().year
+
+        entry_year_code = str(entry_year)[-2:]
+
+        if self.gender in {self.Gender.MALE, self.Gender.FEMALE}:
+            gender_code = self.gender
+            prefix = f"{etablissement_code}{class_code}{entry_year_code}E"
+        else:
+            gender_code = None
+            prefix = f"GS-{entry_year}"
+
+        last_student = Student.objects.filter(matricule__startswith=prefix).order_by("-id").first()
+        next_number = 1
+        if last_student and last_student.matricule:
+            digits = re.findall(r"(\d+)", last_student.matricule)
+            if digits:
+                try:
+                    next_number = int(digits[-1]) + 1
+                except ValueError:
+                    next_number = last_student.id + 1
+            else:
+                next_number = last_student.id + 1
+
+        if gender_code:
+            return f"{prefix}{next_number:04d}{gender_code}"
+        return f"{prefix}-{next_number:05d}"
+
+    @staticmethod
+    def _normalize_etablissement_code(name: str) -> str:
+        if not name:
+            return "GS"
+        normalized = re.findall(r"[A-Z0-9]+", name.upper())
+        if len(normalized) >= 2:
+            return "".join(part[0] for part in normalized[:2])
+        code = normalized[0] if normalized else "GS"
+        return code[:2]
+
+    @staticmethod
+    def _normalize_class_code(name: str) -> str:
+        if not name:
+            return "CL"
+        normalized = name.upper()
+        normalized = normalized.replace("ÈME", "").replace("EME", "")
+        normalized = normalized.replace("É", "E").replace("È", "E").replace("Ô", "O").replace("À", "A")
+        normalized = re.sub(r"[^A-Z0-9]", "", normalized)
+        return normalized[:4] if len(normalized) >= 2 else normalized.ljust(2, "X")
 
     def __str__(self):
         return f"{self.matricule} - {self.user.get_full_name()}"

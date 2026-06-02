@@ -7,6 +7,7 @@ class Student {
   final String email;
   final String phone;
   final String matricule;
+  final String gender;
   final String fullName;
   final bool isArchived;
   final int? classroomId;
@@ -27,6 +28,7 @@ class Student {
     this.email = '',
     this.phone = '',
     required this.matricule,
+    this.gender = '',
     required this.fullName,
     required this.isArchived,
     this.classroomId,

@@ -586,6 +586,9 @@ class StudentSerializer(serializers.ModelSerializer):
         return user.phone if user else ""
 
     def validate(self, attrs):
+        if self.instance is None and not attrs.get("gender"):
+            raise serializers.ValidationError({"gender": "Le genre est requis pour l'inscription de l'élève."})
+
         if "conduite" in attrs:
             request = self.context.get("request")
             role = getattr(getattr(request, "user", None), "role", "")

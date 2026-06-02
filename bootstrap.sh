@@ -43,9 +43,13 @@ compose_up_with_retries() {
   local max_attempts=3
   local attempt=1
   local up_log
-  local python_base_image="${PYTHON_BASE_IMAGE:-python:3.12-slim}"
-  local default_python_base_image="python:3.12-slim"
-  local mirror_python_base_image="mirror.gcr.io/library/python:3.12-slim"
+  local python_image_candidates=(
+    "${PYTHON_BASE_IMAGE:-python:3.12-slim}"
+    "mirror.gcr.io/library/python:3.12-slim"
+    "ghcr.io/docker-library/python:3.12-slim"
+  )
+  local current_image_index=0
+  local python_base_image="${python_image_candidates[$current_image_index]}"
 
   while [[ "$attempt" -le "$max_attempts" ]]; do
     up_log="$(mktemp)"
@@ -59,13 +63,12 @@ compose_up_with_retries() {
       return 0
     fi
 
-    if grep -qiE "failed to resolve source metadata|lookup registry-1\.docker\.io|i/o timeout|temporary failure in name resolution" "$up_log"; then
+    if grep -qiE "failed to resolve source metadata|lookup registry-1\.docker\.io|i/o timeout|temporary failure in name resolution|dial tcp|Name or service not known|network is unreachable" "$up_log"; then
       rm -f "$up_log"
-      if [[ "$attempt" -lt "$max_attempts" ]]; then
-        if [[ "$python_base_image" == "$default_python_base_image" ]]; then
-          python_base_image="$mirror_python_base_image"
-          log "Bascule automatique de l'image Python vers le mirror: $python_base_image"
-        fi
+      if [[ "$current_image_index" -lt $((${#python_image_candidates[@]} - 1)) ]]; then
+        ((current_image_index++))
+        python_base_image="${python_image_candidates[$current_image_index]}"
+        log "Bascule automatique de l'image Python vers le mirror: $python_base_image"
         log "Echec reseau Docker Hub detecte (tentative ${attempt}/${max_attempts}). Nouvelle tentative dans 8s..."
         sleep 8
         ((attempt++))
@@ -75,7 +78,8 @@ compose_up_with_retries() {
       echo "Erreur: impossible de joindre Docker Hub apres ${max_attempts} tentatives."
       echo "Cause probable: DNS/reseau intermittent (ex: registry-1.docker.io)."
       echo "Action conseillee: relancez ./bootstrap.sh, ou configurez des DNS stables pour Docker (1.1.1.1 / 8.8.8.8)."
-      echo "Contournement image Python: PYTHON_BASE_IMAGE=${mirror_python_base_image} ./bootstrap.sh"
+      echo "Contournement image Python: PYTHON_BASE_IMAGE=${python_image_candidates[1]} ./bootstrap.sh"
+      echo "Si le mirror principal echoue egalement: PYTHON_BASE_IMAGE=${python_image_candidates[2]} ./bootstrap.sh"
       return 1
     fi
 

@@ -1,3 +1,4 @@
+import re
 import random
 from datetime import date
 from decimal import Decimal
@@ -114,11 +115,19 @@ class Command(BaseCommand):
         last_name = random.choice(self.LAST_NAMES)
         return f"{first_name} {last_name}", gender
 
-    def generate_custom_matricule(self, class_code, sequence, gender):
+    def generate_etablissement_code(self, name):
+        normalized = re.findall(r"[A-Z0-9]+", name.upper())
+        if len(normalized) >= 2:
+            return "".join(part[0] for part in normalized[:2])
+        if normalized:
+            return normalized[0][:2]
+        return "GS"
+
+    def generate_custom_matricule(self, etablissement_code, class_code, entry_year, sequence, gender):
         """
         Generate custom matricule in format: RC15CG23E1485F
         RC = establishment code
-        15 = year code
+        15 = etablissement code suffix or derived code
         CG = class code (from class)
         23 = entry year
         E = entry type (E for entry)
@@ -126,8 +135,8 @@ class Command(BaseCommand):
         F/M = gender indicator
         """
         gender_indicator = 'F' if gender == 'F' else 'M'
-        matricule = f"RC15{class_code}23E{sequence:04d}{gender_indicator}"
-        return matricule
+        entry_year_code = str(entry_year)[-2:]
+        return f"{etablissement_code}{class_code}{entry_year_code}E{sequence:04d}{gender_indicator}"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -169,6 +178,7 @@ class Command(BaseCommand):
                 raise CommandError(f'Academic year "{academic_year_str}" not found. Please create it first.')
 
             self.stdout.write(f'Using academic year: {academic_year.name}')
+            etablissement_code = self.generate_etablissement_code(etablissement.name)
 
             # Create classes
             classrooms_created = []
@@ -236,12 +246,10 @@ class Command(BaseCommand):
                     )
 
                     # Create student profile
-                    matricule = self.generate_custom_matricule(class_code, sequence_counter, gender)
-                    
                     student, student_created = Student.objects.get_or_create(
                         user=user,
                         defaults={
-                            'matricule': matricule,
+                            'gender': gender,
                             'classroom': classroom,
                             'etablissement': etablissement,
                             'birth_date': date(
