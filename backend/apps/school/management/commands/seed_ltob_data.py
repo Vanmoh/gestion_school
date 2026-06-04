@@ -1,11 +1,14 @@
 import re
 import random
+import logging
 from datetime import date
 from decimal import Decimal
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 from apps.school.models import Etablissement, AcademicYear, ClassRoom, Subject, Student
 from apps.accounts.models import User
+
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
@@ -106,16 +109,33 @@ class Command(BaseCommand):
         """Generate a random Malian name"""
         if gender is None:
             gender = random.choice(['M', 'F'])
-        
+
         if gender == 'F':
             first_name = random.choice(self.FEMALE_FIRST_NAMES)
         else:
             first_name = random.choice(self.MALE_FIRST_NAMES)
-        
+
         last_name = random.choice(self.LAST_NAMES)
         return f"{first_name} {last_name}", gender
 
+    def generate_valid_birthdate(self, year_min=2005, year_max=2007):
+        """Generate a valid birthdate avoiding edge cases like Feb 30th"""
+        year = random.randint(year_min, year_max)
+        month = random.randint(1, 12)
+
+        # Days per month (handling leap years for Feb)
+        days_in_month = {
+            1: 31, 2: 29 if year % 4 == 0 else 28, 3: 31, 4: 30, 5: 31, 6: 30,
+            7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31
+        }
+
+        max_day = days_in_month.get(month, 28)
+        day = random.randint(1, max_day)
+
+        return date(year, month, day)
+
     def generate_etablissement_code(self, name):
+        """Generate 2-letter establishment code from name (e.g. 'LTOB' -> 'LT')"""
         normalized = re.findall(r"[A-Z0-9]+", name.upper())
         if len(normalized) >= 2:
             return "".join(part[0] for part in normalized[:2])
@@ -157,6 +177,8 @@ class Command(BaseCommand):
         academic_year_str = options['academic_year']
 
         try:
+            logger.info(f"Starting LTOB seed for {etab_name} ({academic_year_str})")
+
             # Get or create etablissement
             etablissement, created = Etablissement.objects.get_or_create(
                 name=etab_name,
@@ -168,8 +190,10 @@ class Command(BaseCommand):
             )
             if created:
                 self.stdout.write(self.style.SUCCESS(f'Created etablissement: {etablissement.name}'))
+                logger.info(f"Created etablissement: {etablissement.id}")
             else:
                 self.stdout.write(f'Using existing etablissement: {etablissement.name}')
+                logger.info(f"Using existing etablissement: {etablissement.id}")
 
             # Get or create academic year
             try:
@@ -178,6 +202,7 @@ class Command(BaseCommand):
                 raise CommandError(f'Academic year "{academic_year_str}" not found. Please create it first.')
 
             self.stdout.write(f'Using academic year: {academic_year.name}')
+            logger.info(f"Using academic year: {academic_year.id}")
             etablissement_code = self.generate_etablissement_code(etablissement.name)
 
             # Create classes
@@ -232,15 +257,18 @@ class Command(BaseCommand):
 
                 for i in range(students_per_class):
                     name, gender = self.generate_malian_name()
-                    
+                    name_parts = name.split()
+                    first_name = name_parts[0]
+                    last_name = name_parts[1] if len(name_parts) > 1 else ''
+
                     # Create or update user
                     username = f"student_{classroom.id}_{i}_{sequence_counter}"
                     user, user_created = User.objects.get_or_create(
                         username=username,
                         defaults={
                             'email': f'{username}@ltob.school',
-                            'first_name': name.split()[0],
-                            'last_name': name.split()[1] if len(name.split()) > 1 else '',
+                            'first_name': first_name,
+                            'last_name': last_name,
                             'is_active': True,
                         }
                     )
@@ -252,11 +280,7 @@ class Command(BaseCommand):
                             'gender': gender,
                             'classroom': classroom,
                             'etablissement': etablissement,
-                            'birth_date': date(
-                                random.randint(2005, 2007),
-                                random.randint(1, 12),
-                                random.randint(1, 28)
-                            ),
+                            'birth_date': self.generate_valid_birthdate(),
                             'conduite': Decimal(random.randint(15, 20)),
                         }
                     )

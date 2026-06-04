@@ -237,7 +237,15 @@ class Student(TimeStampedModel):
     def save(self, *args, **kwargs):
         if not self.matricule:
             self.matricule = self._build_matricule()
+        self.full_clean()
         super().save(*args, **kwargs)
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.birth_date and self.birth_date > date.today():
+            raise ValidationError({'birth_date': 'Date de naissance ne peut pas être dans le futur'})
+        if self.conduite and not (0 <= self.conduite <= 20):
+            raise ValidationError({'conduite': 'Conduite doit être entre 0 et 20'})
 
     def _build_matricule(self):
         target_etablissement = self.etablissement or (self.classroom.etablissement if self.classroom else None)
@@ -268,10 +276,10 @@ class Student(TimeStampedModel):
             if digits:
                 try:
                     next_number = int(digits[-1]) + 1
-                except ValueError:
-                    next_number = last_student.id + 1
+                except (ValueError, IndexError):
+                    next_number = last_student.id + 1 if last_student.id else 1
             else:
-                next_number = last_student.id + 1
+                next_number = last_student.id + 1 if last_student.id else 1
 
         if gender_code:
             return f"{prefix}{next_number:04d}{gender_code}"
