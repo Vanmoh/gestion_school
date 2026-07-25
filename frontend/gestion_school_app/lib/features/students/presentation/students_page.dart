@@ -102,6 +102,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   int? _registrationClassroomId;
   int? _registrationParentId;
+  String? _registrationGender;
   DateTime? _birthDate;
   int? _historyYearId;
   int? _historyClassroomId;
@@ -123,6 +124,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   int? _selectedClassroomUpdateId;
   int? _selectedParentUpdateId;
   DateTime? _updateBirthDate;
+  String? _updateGender;
 
   List<Map<String, dynamic>> _history = [];
   List<Map<String, dynamic>> _incidents = [];
@@ -418,6 +420,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     _selectedClassroomUpdateId = student.classroomId;
     _selectedParentUpdateId = student.parentId;
     _updateBirthDate = student.birthDate;
+    _updateGender = student.gender.isEmpty ? null : student.gender;
     _clearUpdateProfilePhotoSelection();
     _updateFirstNameController.text = student.firstName;
     _updateLastNameController.text = student.lastName;
@@ -469,14 +472,16 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final lastName = _lastNameController.text.trim();
     final password = _passwordController.text;
     final classroomId = _registrationClassroomId;
+    final gender = _registrationGender;
 
     if (username.isEmpty ||
         firstName.isEmpty ||
         lastName.isEmpty ||
         password.length < 8 ||
-        classroomId == null) {
+        classroomId == null ||
+        gender == null) {
       await _showRegistrationFailure(
-        'Complète username, prénom, nom, mot de passe (8+) et classe.',
+        'Complète username, prénom, nom, mot de passe (8+), classe et genre.',
       );
       return false;
     }
@@ -490,6 +495,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             firstName: firstName,
             lastName: lastName,
             password: password,
+            gender: gender,
             email: _emailController.text.trim(),
             phone: _phoneController.text.trim(),
             classroomId: classroomId,
@@ -510,6 +516,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       _clearRegistrationPhotoSelection();
       _birthDate = null;
       _registrationParentId = null;
+      _registrationGender = null;
       setState(() {
         _searchController.clear();
         _classFilterId = null;
@@ -619,6 +626,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final hasParentChanges = _selectedParentUpdateId != student.parentId;
     final hasBirthDateChanges =
         _apiDateOrEmpty(_updateBirthDate) != _apiDateOrEmpty(student.birthDate);
+    final hasGenderChanges = (_updateGender ?? '') != student.gender.trim();
     final hasPhotoChanges =
         (_updatePhotoPath ?? '').trim().isNotEmpty ||
         (_updatePhotoBytes != null && _updatePhotoBytes!.isNotEmpty);
@@ -627,6 +635,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         !hasClassroomChanges &&
         !hasParentChanges &&
         !hasBirthDateChanges &&
+        !hasGenderChanges &&
         !hasPhotoChanges) {
       _showMessage('Aucune modification détectée.');
       return false;
@@ -640,7 +649,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       if (hasUserChanges ||
           hasClassroomChanges ||
           hasParentChanges ||
-          hasBirthDateChanges) {
+          hasBirthDateChanges ||
+          hasGenderChanges) {
         final updated = await repository.updateStudentProfile(
           studentId: student.id,
           userId: student.userId,
@@ -651,6 +661,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           classroomId: _selectedClassroomUpdateId,
           parentId: _selectedParentUpdateId,
           birthDate: _updateBirthDate,
+          gender: _updateGender,
         );
         selectedId = updated.id;
       }
@@ -1668,6 +1679,27 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               ),
             ),
             SizedBox(
+              width: 200,
+              child: DropdownButtonFormField<String>(
+                initialValue: _registrationGender,
+                decoration: const InputDecoration(labelText: 'Genre *'),
+                items: const [
+                  DropdownMenuItem<String>(
+                    value: 'M',
+                    child: Text('Masculin'),
+                  ),
+                  DropdownMenuItem<String>(
+                    value: 'F',
+                    child: Text('Féminin'),
+                  ),
+                ],
+                onChanged: (value) {
+                  _registrationGender = value;
+                  refreshPanel();
+                },
+              ),
+            ),
+            SizedBox(
               width: 260,
               child: DropdownButtonFormField<int>(
                 initialValue: _registrationClassroomId,
@@ -1900,6 +1932,27 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 _updateBirthDate == null
                     ? 'Date naissance'
                     : _apiDate(_updateBirthDate!),
+              ),
+            ),
+            SizedBox(
+              width: 200,
+              child: DropdownButtonFormField<String>(
+                initialValue: _updateGender,
+                decoration: const InputDecoration(labelText: 'Genre'),
+                items: const [
+                  DropdownMenuItem<String>(
+                    value: 'M',
+                    child: Text('Masculin'),
+                  ),
+                  DropdownMenuItem<String>(
+                    value: 'F',
+                    child: Text('Féminin'),
+                  ),
+                ],
+                onChanged: (value) {
+                  _updateGender = value;
+                  refreshPanel();
+                },
               ),
             ),
             SizedBox(
@@ -4362,6 +4415,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         DataColumn(label: Text('N°')),
                         DataColumn(label: Text('Matricule')),
                         DataColumn(label: Text('Nom complet')),
+                        DataColumn(label: Text('Genre')),
                         DataColumn(label: Text('Classe')),
                         DataColumn(label: Text('Date naissance')),
                         DataColumn(label: Text('Téléphone')),
@@ -4410,6 +4464,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
+                            DataCell(Text(_genderLabel(student.gender))),
                             DataCell(
                               Text(
                                 student.classroomName.isEmpty
@@ -5081,6 +5136,17 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       visualDensity: VisualDensity.compact,
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
+  }
+
+  String _genderLabel(String gender) {
+    switch (gender.trim().toUpperCase()) {
+      case 'M':
+        return 'Masculin';
+      case 'F':
+        return 'Féminin';
+      default:
+        return '-';
+    }
   }
 
   String _parentLabel(Map<String, dynamic> row) {

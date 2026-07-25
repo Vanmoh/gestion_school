@@ -26,8 +26,8 @@ class StudentModelTest(TestCase):
 
         self.academic_year = AcademicYear.objects.create(
             name='2024-2025',
-            start_date='2024-09-01',
-            end_date='2025-06-30'
+            start_date=date(2024, 9, 1),
+            end_date=date(2025, 6, 30)
         )
 
         self.classroom = ClassRoom.objects.create(
@@ -89,7 +89,7 @@ class StudentModelTest(TestCase):
             user=self.user,
             gender='M',
             classroom=self.classroom,
-            establishment=self.etablissement,
+            etablissement=self.etablissement,
             birth_date=future_date
         )
 

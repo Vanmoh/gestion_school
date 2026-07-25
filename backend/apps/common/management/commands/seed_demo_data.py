@@ -15,6 +15,7 @@ from apps.school.models import (
     CanteenSubscription,
     ClassRoom,
     DisciplineIncident,
+    Etablissement,
     ExamPlanning,
     ExamInvigilation,
     ExamResult,
@@ -81,6 +82,15 @@ class Command(BaseCommand):
         admin_user.is_staff = True
         admin_user.is_superuser = True
         admin_user.save(update_fields=["password", "is_active", "is_staff", "is_superuser"])
+
+        demo_etablissement, _ = Etablissement.objects.get_or_create(
+            name="Établissement Démo",
+            defaults={
+                "address": "Quartier Centre",
+                "phone": "78 00 00 00",
+                "email": "demo@gestionschool.local",
+            },
+        )
 
         director_user, _ = User.objects.get_or_create(
             username="directeur",
@@ -173,6 +183,19 @@ class Command(BaseCommand):
         student_user_2.is_active = True
         student_user_2.save(update_fields=["password", "is_active"])
 
+        for demo_user in [
+            director_user,
+            accountant_user,
+            teacher_user,
+            parent_user,
+            supervisor_user,
+            student_user_1,
+            student_user_2,
+        ]:
+            if demo_user.etablissement_id is None:
+                demo_user.etablissement = demo_etablissement
+                demo_user.save(update_fields=["etablissement"])
+
         academic_year, _ = AcademicYear.objects.get_or_create(
             name="2025-2026",
             defaults={
@@ -186,6 +209,9 @@ class Command(BaseCommand):
             name="6A",
             academic_year=academic_year,
         )
+        if class_6a.etablissement_id is None:
+            class_6a.etablissement = demo_etablissement
+            class_6a.save(update_fields=["etablissement"])
 
         math = self._get_or_create_subject_for_classroom(
             class_6a,
@@ -243,6 +269,17 @@ class Command(BaseCommand):
                 "parent": parent_profile,
             },
         )
+
+        for student, gender in [(student_1, "M"), (student_2, "F")]:
+            changed = False
+            if student.etablissement_id is None:
+                student.etablissement = demo_etablissement
+                changed = True
+            if not student.gender:
+                student.gender = gender
+                changed = True
+            if changed:
+                student.save()
 
         for student in [student_1, student_2]:
             for subject, value in [(math, Decimal("14.5")), (french, Decimal("13.0")), (english, Decimal("15.0"))]:
