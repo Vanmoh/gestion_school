@@ -223,7 +223,7 @@ class EtablissementDetailsScreen extends StatelessWidget {
                                             ? Image.network(
                                                 etablissement.logoUrlForDisplay!,
                                                 fit: BoxFit.contain,
-                                                errorBuilder: (_, __, ___) => Image.asset(
+                                                errorBuilder: (_, _, _) => Image.asset(
                                                   'assets/images/ecole_photo.png',
                                                   fit: BoxFit.contain,
                                                 ),

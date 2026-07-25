@@ -3506,7 +3506,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                       _recordReminderHistory(
                                         action: 'Export historique relances',
                                         scope:
-                                            'Filtre ${_reminderHistoryActionFilter} / ${_reminderPeriodLabel(_reminderHistoryPeriodFilter)} / tri ${_reminderHistorySort}',
+                                            'Filtre $_reminderHistoryActionFilter / ${_reminderPeriodLabel(_reminderHistoryPeriodFilter)} / tri $_reminderHistorySort',
                                         itemCount: filteredReminderHistory.length,
                                         totalAmount: totalAmount,
                                       );
@@ -3889,7 +3889,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                               )
                             else ...[
                               Text(
-                                'Affichage ${outstandingStart + 1}-${outstandingEnd} sur ${outstandingFees.length} frais en attente',
+                                'Affichage ${outstandingStart + 1}-$outstandingEnd sur ${outstandingFees.length} frais en attente',
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                               const SizedBox(height: 8),

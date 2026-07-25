@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -446,7 +445,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                   ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
-                    value: _createScope,
+                    initialValue: _createScope,
                     decoration: const InputDecoration(labelText: 'Type'),
                     items: [
                       if (isSuperAdmin)
@@ -507,7 +506,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                   ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
-                    value: _restoreScope,
+                    initialValue: _restoreScope,
                     decoration: const InputDecoration(labelText: 'Mode restauration'),
                     items: [
                       if (isSuperAdmin)

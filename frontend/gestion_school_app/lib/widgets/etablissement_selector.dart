@@ -392,7 +392,12 @@ class _EtablissementTileState extends State<_EtablissementTile> {
               duration: const Duration(milliseconds: 220),
               curve: Curves.easeOut,
               transform: Matrix4.identity()
-                ..translate(dx * 0.55, (_hovered ? -5.0 : 0.0) + (dy * 0.40))
+                ..translateByDouble(
+                  dx * 0.55,
+                  (_hovered ? -5.0 : 0.0) + (dy * 0.40),
+                  0.0,
+                  1.0,
+                )
                 ..rotateZ(dx * 0.0035),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(18),

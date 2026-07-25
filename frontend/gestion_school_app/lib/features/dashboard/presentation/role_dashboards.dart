@@ -675,7 +675,7 @@ class _RoleTrendPanel extends StatelessWidget {
                     color: const Color(0xFF5B8CFF),
                     dotData: FlDotData(
                       show: true,
-                      getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
+                      getDotPainter: (_, _, _, _) => FlDotCirclePainter(
                         radius: 3,
                         color: const Color(0xFF7CD7FF),
                         strokeColor: Colors.white,
