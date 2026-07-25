@@ -463,11 +463,18 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                 : width >= 640
                 ? 2
                 : 1;
-            final kpiAspectRatio = kpiColumns == 1
-                ? 3.2
-                : kpiColumns == 2
-                ? 2.15
-                : 1.7;
+            // La hauteur d'une carte KPI ne depend pas de sa largeur: on fixe
+            // la hauteur de cellule au lieu de la deduire via
+            // childAspectRatio, qui faisait deborder les cartes. Le chrome
+            // (pastille 36 + sparkline 34 + paddings et espacements) est
+            // constant; seul le bloc de trois lignes de texte suit le reglage
+            // de police du systeme, d'ou le facteur d'echelle.
+            const kpiChromeHeight = 136.0;
+            const kpiTextBlockHeight = 64.0;
+            final kpiCardHeight =
+                kpiChromeHeight +
+                kpiTextBlockHeight *
+                    MediaQuery.textScalerOf(context).scale(1);
             final profitColor = scopedProfit >= 0
                 ? const Color(0xFF39D68F)
                 : const Color(0xFFFF7A6A);
@@ -568,7 +575,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                           crossAxisCount: kpiColumns,
                           crossAxisSpacing: 12,
                           mainAxisSpacing: 12,
-                          childAspectRatio: kpiAspectRatio,
+                          mainAxisExtent: kpiCardHeight,
                         ),
                         itemBuilder: (context, index) => _StaggerReveal(
                           index: index + 1,
@@ -1582,6 +1589,8 @@ class _KpiCard extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text(
                   data.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Colors.white.withValues(alpha: 0.8),
                   ),

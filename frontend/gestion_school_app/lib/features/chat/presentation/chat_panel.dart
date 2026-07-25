@@ -81,7 +81,6 @@ class _ChatPanelState extends State<ChatPanel> {
   Timer? _presenceRefreshTimer;
   CancelToken? _activeUploadCancelToken;
   String? _activeUploadClientMessageId;
-  int? _activeUploadConversationId;
   bool _wsConnected = false;
   bool _awaitingPong = false;
   int _wsReconnectAttempt = 0;
@@ -769,13 +768,10 @@ class _ChatPanelState extends State<ChatPanel> {
 
   Future<void> _markRead(int conversationId) async {
     try {
-      final response = await widget.dio.post(
+      await widget.dio.post(
         '/chat/conversations/$conversationId/mark-read/',
         data: <String, dynamic>{},
       );
-      final map = response.data is Map
-          ? Map<String, dynamic>.from(response.data as Map)
-          : const <String, dynamic>{};
       _channel?.sink.add(jsonEncode(<String, dynamic>{
         'action': 'mark_read',
         'conversation_id': conversationId,
@@ -2070,7 +2066,6 @@ class _ChatPanelState extends State<ChatPanel> {
       _sendError = null;
       _activeUploadCancelToken = cancelToken;
       _activeUploadClientMessageId = clientMessageId;
-      _activeUploadConversationId = conversationId;
       if (reuseExistingPendingMessage) {
         _messages = _messages.map((row) {
           if (_asString(row['client_message_id']) != clientMessageId) {
@@ -2180,7 +2175,6 @@ class _ChatPanelState extends State<ChatPanel> {
           if (identical(_activeUploadCancelToken, cancelToken)) {
             _activeUploadCancelToken = null;
             _activeUploadClientMessageId = null;
-            _activeUploadConversationId = null;
           }
         });
       }

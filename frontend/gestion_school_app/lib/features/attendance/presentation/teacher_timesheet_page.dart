@@ -231,8 +231,8 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
 
       if (!mounted) return;
 
-      var teachers = results[0] as List<Map<String, dynamic>>;
-      var timeEntries = results[1] as List<Map<String, dynamic>>;
+      var teachers = results[0];
+      var timeEntries = results[1];
 
       if (_isTeacherRole(authUser?.role)) {
         teachers = teachers

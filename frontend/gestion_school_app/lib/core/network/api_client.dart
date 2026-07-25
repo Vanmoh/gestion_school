@@ -65,7 +65,6 @@ final dioProvider = Provider<Dio>((ref) {
           tokenStorage.apiBaseUrl(),
           tokenStorage.accessToken(),
           tokenStorage.selectedEtablissement(),
-          tokenStorage.cachedUser(),
         ]);
 
         final storedBaseUrl = values[0];
@@ -84,21 +83,6 @@ final dioProvider = Provider<Dio>((ref) {
         }
 
         final selectedEtablissementRaw = values[2];
-        final cachedUserRaw = values[3];
-
-        String? role;
-        int? userEtablissementId;
-        String? userEtablissementName;
-        if (cachedUserRaw != null && cachedUserRaw.isNotEmpty) {
-          try {
-            final decoded = jsonDecode(cachedUserRaw) as Map<String, dynamic>;
-            role = decoded['role']?.toString();
-            userEtablissementId = (decoded['etablissementId'] as num?)?.toInt();
-            userEtablissementName = decoded['etablissementName']?.toString();
-          } catch (_) {
-            // Ignore malformed cached user payload.
-          }
-        }
 
         if (selectedEtablissementRaw != null &&
           selectedEtablissementRaw.isNotEmpty) {

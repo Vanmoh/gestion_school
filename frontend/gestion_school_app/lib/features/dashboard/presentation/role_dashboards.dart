@@ -8,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/providers/navigation_intents.dart';
 import '../../auth/presentation/auth_controller.dart';
-import '../../payments/presentation/payments_controller.dart';
 import 'dashboard_shared_ui.dart';
 
 List<Map<String, dynamic>> _rows(dynamic data) {

@@ -1,6 +1,5 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'dart:typed_data';
 import '../../../core/models/paginated_result.dart';
 import '../domain/student.dart';
 

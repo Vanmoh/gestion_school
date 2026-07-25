@@ -24,7 +24,6 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
 
   bool _loading = true;
   bool _saving = false;
-  String _profileFilter = 'all';
 
   List<Map<String, dynamic>> _teacherUsers = [];
   List<Map<String, dynamic>> _teachers = [];

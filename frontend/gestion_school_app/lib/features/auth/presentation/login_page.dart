@@ -228,15 +228,19 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                       size: 32,
                                     ),
                                     const SizedBox(width: 10),
-                                    Text(
-                                      'Connexion ${selectedEtablissement.name}',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .headlineSmall
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w800,
-                                            letterSpacing: 1.5,
-                                          ),
+                                    Expanded(
+                                      child: Text(
+                                        'Connexion ${selectedEtablissement.name}',
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .headlineSmall
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w800,
+                                              letterSpacing: 1.5,
+                                            ),
+                                      ),
                                     ),
                                     const SizedBox(width: 8),
                                     IconButton(
