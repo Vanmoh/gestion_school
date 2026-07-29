@@ -90,7 +90,6 @@ enum _RoleQuickAction {
   attendance,
   discipline,
   students,
-  teacherAttendance,
   teacherTimesheet,
   timetable,
   reports,
@@ -122,11 +121,6 @@ _RoleQuickActionMeta _roleQuickActionMeta(_RoleQuickAction action) {
       return const _RoleQuickActionMeta(
         label: 'Élèves',
         icon: Icons.groups_rounded,
-      );
-    case _RoleQuickAction.teacherAttendance:
-      return const _RoleQuickActionMeta(
-        label: 'Absences enseignants',
-        icon: Icons.assignment_ind_outlined,
       );
     case _RoleQuickAction.teacherTimesheet:
       return const _RoleQuickActionMeta(
@@ -175,9 +169,6 @@ void _handleRoleQuickAction(WidgetRef ref, _RoleQuickAction action) {
       return;
     case _RoleQuickAction.students:
       _navigateToRoleShellItem(ref, 'students');
-      return;
-    case _RoleQuickAction.teacherAttendance:
-      _navigateToRoleShellItem(ref, 'teacher_attendance');
       return;
     case _RoleQuickAction.teacherTimesheet:
       _navigateToRoleShellItem(ref, 'teacher_timesheet');
@@ -933,7 +924,6 @@ class _CensorDashboardPageState extends ConsumerState<CensorDashboardPage> {
       ],
       quickActions: const [
         _RoleQuickAction.students,
-        _RoleQuickAction.teacherAttendance,
         _RoleQuickAction.teacherTimesheet,
         _RoleQuickAction.timetable,
         _RoleQuickAction.discipline,

@@ -13,7 +13,6 @@ import 'core/providers/navigation_intents.dart';
 import 'core/theme/app_theme.dart';
 import 'features/attendance/presentation/attendance_controller.dart';
 import 'features/attendance/presentation/attendance_page.dart';
-import 'features/attendance/presentation/teacher_attendance_page.dart';
 import 'features/attendance/presentation/teacher_timesheet_page.dart';
 import 'features/academics/presentation/academics_page.dart';
 import 'features/activity_logs/presentation/activity_logs_page.dart';
@@ -69,7 +68,7 @@ Future<void> _invalidateRefreshProvidersForView(
     return;
   }
 
-  if (view is AttendancePage || view is TeacherAttendancePage) {
+  if (view is AttendancePage) {
     ref.invalidate(attendanceStudentsProvider);
     ref.invalidate(attendancesProvider);
     ref.invalidate(attendanceMonthlyStatsProvider);
@@ -295,12 +294,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       view: AttendancePage(),
     ),
     _AdminMenuItem(
-      keyName: 'teacher_attendance',
-      label: 'Absences enseignants',
-      icon: Icons.assignment_ind_outlined,
-      view: TeacherAttendancePage(),
-    ),
-    _AdminMenuItem(
       keyName: 'teacher_timesheet',
       label: 'Emargement enseignants',
       icon: Icons.access_time_rounded,
@@ -399,7 +392,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         'students',
         'teachers',
         'attendance',
-        'teacher_attendance',
         'teacher_timesheet',
         'discipline',
       ],
@@ -481,7 +473,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         'dashboard',
         'students',
         'attendance',
-        'teacher_attendance',
         'teacher_timesheet',
         'discipline',
         'timetable',
@@ -528,10 +519,23 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     return 'dashboard';
   }
 
+  /// Maps retired menu keys onto their replacement so a stale navigation
+  /// intent never resolves to a missing item.
+  static const _retiredMenuKeys = <String, String>{
+    // Le module "Absences enseignants" est remplace par l'emargement.
+    'teacher_attendance': 'teacher_timesheet',
+  };
+
+  String _resolveMenuKey(String key) => _retiredMenuKeys[key] ?? key;
+
   _AdminMenuItem _selectedItemForRole(String? role) {
-    final isVisible = _isItemVisibleForRole(_selectedKey, role);
-    final targetKey = isVisible ? _selectedKey : _firstVisibleKeyForRole(role);
-    return _items.firstWhere((item) => item.keyName == targetKey);
+    final currentKey = _resolveMenuKey(_selectedKey);
+    final isVisible = _isItemVisibleForRole(currentKey, role);
+    final targetKey = isVisible ? currentKey : _firstVisibleKeyForRole(role);
+    return _items.firstWhere(
+      (item) => item.keyName == targetKey,
+      orElse: () => _items.first,
+    );
   }
 
   Widget _buildRoleSpecificView(_AdminMenuItem item, String? role) {
@@ -851,7 +855,8 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     }
   }
 
-  void _selectItem(String key) {
+  void _selectItem(String rawKey) {
+    final key = _resolveMenuKey(rawKey);
     if (key == 'academic_imports') {
       showAcademicImportsFloatingWindow(context);
       return;
@@ -1161,8 +1166,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         if (!mounted) {
           return;
         }
-        if (_isItemVisibleForRole(pendingShellNavigationKey, user?.role)) {
-          _selectItem(pendingShellNavigationKey);
+        final resolvedKey = _resolveMenuKey(pendingShellNavigationKey);
+        if (_isItemVisibleForRole(resolvedKey, user?.role)) {
+          _selectItem(resolvedKey);
         }
         ref.read(adminShellNavigationKeyProvider.notifier).state = null;
       });
