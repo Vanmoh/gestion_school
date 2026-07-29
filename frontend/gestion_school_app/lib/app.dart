@@ -30,6 +30,7 @@ import 'features/exams/presentation/exams_controller.dart';
 import 'features/exams/presentation/exams_page.dart';
 import 'features/communication/presentation/communication_page.dart';
 import 'features/discipline/presentation/discipline_page.dart';
+import 'features/discipline/presentation/parent_discipline_page.dart';
 import 'features/etablissements/presentation/etablissements_page.dart';
 import 'features/grades/presentation/grades_page.dart';
 import 'features/imports/presentation/academic_imports_page.dart';
@@ -434,6 +435,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (role == 'parent' || role == 'student') {
       const parentStudentKeys = {
         'dashboard',
+        'discipline',
         'reports',
       };
       return parentStudentKeys.contains(key);
@@ -539,6 +541,14 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   }
 
   Widget _buildRoleSpecificView(_AdminMenuItem item, String? role) {
+    // Parents et eleves consultent une vue discipline dediee, en lecture
+    // seule: la page d'administration exposerait un formulaire de saisie
+    // desactive, ce qui n'a pas de sens pour eux.
+    if (item.keyName == 'discipline' &&
+        (role == 'parent' || role == 'student')) {
+      return const ParentDisciplinePage();
+    }
+
     if (item.keyName != 'dashboard') {
       return item.view;
     }

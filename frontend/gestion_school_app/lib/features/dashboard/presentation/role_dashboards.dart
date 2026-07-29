@@ -1250,6 +1250,7 @@ class _ParentDashboardPageState extends ConsumerState<ParentDashboardPage> {
         'Lire les rapports disponibles',
       ],
       quickActions: const [
+        _RoleQuickAction.discipline,
         _RoleQuickAction.reports,
       ],
       onQuickActionSelected: (action) => _handleRoleQuickAction(ref, action),
@@ -1332,6 +1333,7 @@ class _StudentDashboardPageState extends ConsumerState<StudentDashboardPage> {
         'Voir vos incidents disciplinaires',
       ],
       quickActions: const [
+        _RoleQuickAction.discipline,
         _RoleQuickAction.reports,
       ],
       onQuickActionSelected: (action) => _handleRoleQuickAction(ref, action),
