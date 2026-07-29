@@ -16,6 +16,7 @@ import '../../payments/presentation/payment_entry_dialog.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../../../models/etablissement.dart';
 import '../domain/student.dart';
+import '../domain/students_sort.dart';
 import 'students_controller.dart';
 
 class StudentsPage extends ConsumerStatefulWidget {
@@ -316,21 +317,26 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     setState(() {
       _classFilterId = null;
       _statusFilter = 'all';
-      _sortBy = 'name';
+      _sortBy = defaultStudentSortKey;
       _sortAscending = true;
     });
     _reloadStudentsTable(page: 1);
   }
 
-  String _studentsOrdering() {
-    final field = switch (_sortBy) {
-      'matricule' => 'matricule',
-      'classroom' => 'classroom__name',
-      'status' => 'is_archived',
-      _ => 'user__last_name',
-    };
-    return _sortAscending ? field : '-$field';
+  int? get _sortColumnIndex => studentSortColumnIndex(_sortBy);
+
+  void _onStudentColumnSort(int columnIndex, bool ascending) {
+    final sortKey = studentSortKeyForColumn(columnIndex);
+    if (sortKey == null) return;
+    setState(() {
+      _sortBy = sortKey;
+      _sortAscending = ascending;
+    });
+    _reloadStudentsTable(page: 1);
   }
+
+  String _studentsOrdering() =>
+      studentsOrdering(sortKey: _sortBy, ascending: _sortAscending);
 
   Future<void> _pickProfilePhoto({required bool forRegistration}) async {
     try {
@@ -2812,12 +2818,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         ? 0
         : ((archived / pageCount) * 100).round();
     final activeShare = pageCount == 0 ? 0.0 : active / pageCount;
+    // Le tri n'est plus compte ici: il se lit directement dans l'en-tete du
+    // tableau, l'inclure dans le compteur de filtres induisait en erreur.
     final appliedFilters =
         (_searchController.text.trim().isNotEmpty ? 1 : 0) +
         (_classFilterId != null ? 1 : 0) +
-        (_statusFilter != 'active' ? 1 : 0) +
-        (_sortBy != 'name' ? 1 : 0) +
-        (!_sortAscending ? 1 : 0);
+        (_statusFilter != 'active' ? 1 : 0);
     final selectedClassLabel = _classFilterId == null
         ? 'Toutes classes'
         : _classroomName(_classFilterId!);
@@ -4101,7 +4107,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          'Affichage type tableau: applique les filtres puis sélectionne une ligne pour ouvrir le dossier.',
+                          'Affichage type tableau: applique les filtres, trie en cliquant sur un en-tête de colonne, puis sélectionne une ligne pour ouvrir le dossier.',
                           style: textTheme.bodySmall,
                         ),
                       ],
@@ -4210,39 +4216,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       _reloadStudentsTable(page: 1);
                     },
                   ),
-                ),
-                SizedBox(
-                  width: 200,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _sortBy,
-                    decoration: const InputDecoration(labelText: 'Trier par'),
-                    items: const [
-                      DropdownMenuItem(value: 'name', child: Text('Nom')),
-                      DropdownMenuItem(
-                        value: 'matricule',
-                        child: Text('Matricule'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'classroom',
-                        child: Text('Classe'),
-                      ),
-                      DropdownMenuItem(value: 'status', child: Text('Statut')),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _sortBy = value ?? 'name');
-                      _reloadStudentsTable(page: 1);
-                    },
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() => _sortAscending = !_sortAscending);
-                    _reloadStudentsTable(page: 1);
-                  },
-                  icon: Icon(
-                    _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
-                  ),
-                  label: Text(_sortAscending ? 'Ascendant' : 'Descendant'),
                 ),
                 FilledButton.icon(
                   onPressed: _saving
@@ -4411,16 +4384,34 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       headingRowHeight: 48,
                       dataRowMinHeight: 52,
                       dataRowMaxHeight: 62,
-                      columns: const [
-                        DataColumn(label: Text('N°')),
-                        DataColumn(label: Text('Matricule')),
-                        DataColumn(label: Text('Nom complet')),
-                        DataColumn(label: Text('Genre')),
-                        DataColumn(label: Text('Classe')),
-                        DataColumn(label: Text('Date naissance')),
-                        DataColumn(label: Text('Téléphone')),
-                        DataColumn(label: Text('Statut')),
-                        DataColumn(label: Text('Accès')),
+                      sortColumnIndex: _sortColumnIndex,
+                      sortAscending: _sortAscending,
+                      columns: [
+                        const DataColumn(label: Text('N°')),
+                        DataColumn(
+                          label: const Text('Matricule'),
+                          tooltip: 'Trier par matricule',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        DataColumn(
+                          label: const Text('Nom complet'),
+                          tooltip: 'Trier par nom',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        const DataColumn(label: Text('Genre')),
+                        DataColumn(
+                          label: const Text('Classe'),
+                          tooltip: 'Trier par classe',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        const DataColumn(label: Text('Date naissance')),
+                        const DataColumn(label: Text('Téléphone')),
+                        DataColumn(
+                          label: const Text('Statut'),
+                          tooltip: 'Trier par statut',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        const DataColumn(label: Text('Accès')),
                       ],
                       rows: visibleStudents.asMap().entries.map((entry) {
                         final rowIndex = entry.key;
