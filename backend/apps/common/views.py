@@ -1,17 +1,34 @@
 from datetime import datetime
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import traceback
+import zipfile
 from pathlib import Path
 
 from django.conf import settings
+from django.apps import apps
+from django.core import serializers
+from django.core.files.uploadedfile import UploadedFile
+from django.db import close_old_connections, connection, transaction
+from django.db import models
 from django.db.models import Q
-from django.http import HttpResponse
+from django.db.models.deletion import ProtectedError
+from django.http import FileResponse, HttpResponse
 from django.utils import timezone
-from rest_framework import permissions, viewsets
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.response import Response
 
-from apps.accounts.permissions import IsAdminOrDirector
+from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import AuditLogPagination
-from .models import ActivityLog
-from .serializers import ActivityLogSerializer
+from .models import ActivityLog, BackupArchive
+from .serializers import ActivityLogSerializer, BackupArchiveSerializer
 
 
 def _pdf_text(value) -> str:
@@ -31,10 +48,11 @@ def _school_logo_path() -> str | None:
 
 
 class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
+    access_module = "activity_logs"
     queryset = ActivityLog.objects.select_related("user").all()
     serializer_class = ActivityLogSerializer
     pagination_class = AuditLogPagination
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrDirector]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     filterset_fields = ["user", "etablissement", "role", "action", "method", "module", "success", "status_code"]
     search_fields = [
         "action",
@@ -396,3 +414,845 @@ class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
         response = HttpResponse(data, content_type="application/pdf")
         response["Content-Disposition"] = 'attachment; filename="activity_logs.pdf"'
         return response
+
+
+class BackupArchiveViewSet(viewsets.ModelViewSet):
+    access_module = "backup_restore"
+    queryset = BackupArchive.objects.select_related("created_by", "restored_by", "etablissement").all()
+    serializer_class = BackupArchiveSerializer
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+    http_method_names = ["get", "post"]
+    filterset_fields = ["scope", "status", "etablissement", "created_by", "restored_by"]
+    search_fields = ["filename", "notes", "etablissement__name", "created_by__username"]
+    ordering_fields = ["created_at", "status", "scope", "file_size_bytes"]
+    ordering = ["-created_at"]
+
+    def _is_super_admin(self):
+        return getattr(self.request.user, "role", "") == "super_admin"
+
+    def _require_super_admin_restore(self):
+        if not self._is_super_admin():
+            return Response(
+                {"detail": "Seul un super admin peut lancer une restauration."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
+
+    def _resolve_etablissement(self):
+        from apps.school.models import Etablissement
+
+        etablissement_id = self.request.data.get("etablissement") or self.request.data.get("etablissement_id")
+        if etablissement_id in (None, ""):
+            return getattr(self.request.user, "etablissement", None)
+        try:
+            parsed = int(etablissement_id)
+        except (TypeError, ValueError):
+            return None
+        return Etablissement.objects.filter(id=parsed).first()
+
+    def _backups_root(self) -> Path:
+        root = Path(settings.BASE_DIR) / "backups" / "archives"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _sha256_file(self, file_path: Path) -> str:
+        digest = hashlib.sha256()
+        with file_path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _serialize_global(self) -> str:
+        serialized_payload = []
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin"}:
+                continue
+            queryset = model.objects.all().order_by("pk")
+            if not queryset.exists():
+                continue
+            serialized_payload.append(serializers.serialize("json", queryset))
+
+        if not serialized_payload:
+            return "[]"
+
+        merged = []
+        for payload in serialized_payload:
+            merged.extend(json.loads(payload))
+        return json.dumps(merged, ensure_ascii=False)
+
+    def _serialize_etablissement(self, etablissement) -> str:
+        from apps.accounts.models import User
+
+        scoped_user_ids = set(
+            User.objects.filter(etablissement=etablissement).values_list("pk", flat=True)
+        )
+
+        # Include users referenced by establishment-scoped rows even if those
+        # users are not attached to the same establishment.
+        referenced_user_ids = set()
+        serialized_payload = []
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin"}:
+                continue
+
+            field_names = {field.name for field in opts.fields}
+            queryset = None
+
+            if model.__name__ == "Etablissement":
+                queryset = model.objects.filter(pk=etablissement.pk)
+            elif opts.app_label == "accounts" and model.__name__ == "User":
+                queryset = model.objects.filter(Q(etablissement=etablissement) | Q(pk__in=scoped_user_ids))
+            elif "etablissement" in field_names:
+                queryset = model.objects.filter(etablissement=etablissement)
+
+                user_field = next(
+                    (
+                        field
+                        for field in opts.fields
+                        if field.name == "user"
+                        and isinstance(field, (models.ForeignKey, models.OneToOneField))
+                        and getattr(getattr(field, "remote_field", None), "model", None) is User
+                    ),
+                    None,
+                )
+                if user_field is not None:
+                    referenced_user_ids.update(
+                        queryset.exclude(user_id__isnull=True).values_list("user_id", flat=True)
+                    )
+
+            if queryset is None or not queryset.exists():
+                continue
+
+            serialized_payload.append(serializers.serialize("json", queryset.order_by("pk")))
+
+        missing_referenced_user_ids = referenced_user_ids - scoped_user_ids
+        if missing_referenced_user_ids:
+            user_queryset = User.objects.filter(pk__in=missing_referenced_user_ids).order_by("pk")
+            if user_queryset.exists():
+                serialized_payload.append(serializers.serialize("json", user_queryset))
+
+        if not serialized_payload:
+            return "[]"
+
+        merged = []
+        for payload in serialized_payload:
+            merged.extend(json.loads(payload))
+        return json.dumps(merged, ensure_ascii=False)
+
+    def _build_archive(self, backup: BackupArchive) -> BackupArchive:
+        stamp = timezone.localtime().strftime("%Y%m%d_%H%M%S")
+        suffix = "global" if backup.scope == BackupArchive.Scope.GLOBAL else f"etab_{backup.etablissement_id}"
+        backup_name = f"backup_{suffix}_{stamp}.zip"
+        backup_dir = self._backups_root()
+        archive_path = backup_dir / backup_name
+
+        backup.status = BackupArchive.Status.RUNNING
+        backup.filename = backup_name
+        backup.file_path = str(archive_path)
+        backup.save(update_fields=["status", "filename", "file_path", "updated_at"])
+
+        payload_json = self._serialize_global()
+        if backup.scope == BackupArchive.Scope.ETABLISSEMENT:
+            payload_json = self._serialize_etablissement(backup.etablissement)
+
+        manifest = {
+            "version": 1,
+            "kind": backup.kind,
+            "scope": backup.scope,
+            "created_at": timezone.localtime().isoformat(),
+            "created_by": getattr(backup.created_by, "username", ""),
+            "etablissement_id": backup.etablissement_id,
+            "include_media": bool(backup.include_media),
+        }
+
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+            zf.writestr("data.json", payload_json)
+
+            if backup.include_media:
+                media_root = Path(settings.MEDIA_ROOT)
+                if media_root.exists() and media_root.is_dir():
+                    for item in media_root.rglob("*"):
+                        if item.is_file():
+                            relative = item.relative_to(media_root)
+                            zf.write(item, arcname=str(Path("media") / relative))
+
+        backup.file_size_bytes = archive_path.stat().st_size
+        backup.sha256 = self._sha256_file(archive_path)
+        backup.manifest = manifest
+        backup.status = BackupArchive.Status.COMPLETED
+        backup.save(
+            update_fields=[
+                "file_size_bytes",
+                "sha256",
+                "manifest",
+                "status",
+                "updated_at",
+            ]
+        )
+        return backup
+
+    def _set_restore_progress(self, backup_ref, *, progress=None, phase=None):
+        backup_id = backup_ref.id if isinstance(backup_ref, BackupArchive) else int(backup_ref)
+        update_kwargs = {}
+        update_fields = []
+
+        if progress is not None:
+            bounded = max(0, min(100, int(progress)))
+            update_kwargs["restore_progress"] = bounded
+            update_fields.append("restore_progress")
+
+        if phase is not None:
+            update_kwargs["restore_phase"] = str(phase or "")[:120]
+            update_fields.append("restore_phase")
+
+        if not update_kwargs:
+            return
+
+        update_kwargs["updated_at"] = timezone.now()
+        update_fields.append("updated_at")
+        BackupArchive.objects.filter(pk=backup_id).update(**update_kwargs)
+
+    def _mark_restore_failed(self, backup_id: int, exc: Exception):
+        try:
+            backup = BackupArchive.objects.get(pk=backup_id)
+            backup.status = BackupArchive.Status.FAILED
+            backup.restore_phase = "Echec"
+            backup.restore_progress = max(int(backup.restore_progress or 0), 100)
+            backup.restore_log = f"{exc}\n\n{traceback.format_exc()}"
+            backup.save(
+                update_fields=[
+                    "status",
+                    "restore_phase",
+                    "restore_progress",
+                    "restore_log",
+                    "updated_at",
+                ]
+            )
+        except Exception:
+            pass
+
+    def _restore_from_archive(self, backup: BackupArchive, archive_path: Path, actor=None):
+        self._set_restore_progress(backup, progress=3, phase="Preparation de l'archive")
+        restore_notes = []
+        is_global_restore = backup.scope == BackupArchive.Scope.GLOBAL
+        with tempfile.TemporaryDirectory(prefix="restore_backup_") as tmp:
+            tmp_path = Path(tmp)
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                zf.extractall(tmp_path)
+            self._set_restore_progress(backup, progress=15, phase="Archive extraite")
+
+            data_json = tmp_path / "data.json"
+            if not data_json.exists():
+                raise ValueError("Archive invalide: data.json manquant.")
+
+            payload = json.loads(data_json.read_text(encoding="utf-8"))
+            self._set_restore_progress(backup, progress=20, phase="Verification integrite")
+            payload, orphan_stats = self._drop_orphan_foreign_key_relations(
+                payload,
+                check_db=not is_global_restore,
+            )
+            if orphan_stats:
+                orphan_details = ", ".join(f"{k}: {v}" for k, v in orphan_stats.items())
+                restore_notes.append(f"Lignes orphelines ignorees ({orphan_details}).")
+
+            if is_global_restore:
+                restore_notes.append("Preparation globale optimisee (verification DB ignoree).")
+            else:
+                self._set_restore_progress(backup, progress=24, phase="Adaptation des identifiants")
+                payload, rewrite_stats = self._resolve_unique_field_conflicts(payload)
+                if rewrite_stats:
+                    details = ", ".join(f"{k}: {v}" for k, v in rewrite_stats.items())
+                    restore_notes.append(f"Identifiants uniques adaptes ({details}).")
+
+            data_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            self._set_restore_progress(backup, progress=28, phase="Donnees preparees")
+
+            media_dir = tmp_path / "media"
+
+            with transaction.atomic():
+                from django.core.management import call_command
+
+                # For establishment restores, remove current scoped data first to
+                # avoid duplicate PK / unique constraint conflicts on loaddata.
+                if backup.scope == BackupArchive.Scope.ETABLISSEMENT and backup.etablissement_id:
+                    self._set_restore_progress(backup, progress=40, phase="Nettoyage etablissement")
+                    self._clear_establishment_scope_data(backup.etablissement)
+                    restore_notes.append("Donnees existantes de l'etablissement nettoyees.")
+                elif backup.scope == BackupArchive.Scope.GLOBAL:
+                    self._set_restore_progress(backup, progress=40, phase="Nettoyage plateforme")
+                    self._clear_global_scope_data()
+                    restore_notes.append("Donnees existantes de la plateforme nettoyees.")
+
+                self._set_restore_progress(backup, progress=62, phase="Chargement des donnees")
+                with connection.constraint_checks_disabled():
+                    call_command("loaddata", str(data_json), verbosity=0)
+                connection.check_constraints()
+                self._set_restore_progress(backup, progress=82, phase="Donnees restaurees")
+
+            if media_dir.exists() and media_dir.is_dir():
+                media_root = Path(settings.MEDIA_ROOT)
+                media_root.mkdir(parents=True, exist_ok=True)
+                for src in media_dir.rglob("*"):
+                    if not src.is_file():
+                        continue
+                    dst = media_root / src.relative_to(media_dir)
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+                restore_notes.append("Medias restaures.")
+            self._set_restore_progress(backup, progress=94, phase="Finalisation")
+
+        backup.restored_by = actor
+        backup.restored_at = timezone.now()
+        backup.restore_log = "\n".join(restore_notes) if restore_notes else "Restauration terminee."
+        backup.restore_phase = "Terminee"
+        backup.restore_progress = 100
+        backup.status = BackupArchive.Status.COMPLETED
+        backup.save(
+            update_fields=[
+                "restored_by",
+                "restored_at",
+                "restore_log",
+                "restore_phase",
+                "restore_progress",
+                "status",
+                "updated_at",
+            ]
+        )
+
+    def _resolve_unique_field_conflicts(self, payload):
+        if not isinstance(payload, list):
+            return payload, {}
+
+        string_unique_fields = (
+            models.CharField,
+            models.EmailField,
+            models.SlugField,
+            models.TextField,
+        )
+
+        model_specs = {}
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+
+            unique_fields = []
+            for field in opts.fields:
+                if field.primary_key or not getattr(field, "unique", False):
+                    continue
+                if not isinstance(field, string_unique_fields):
+                    continue
+                max_length = getattr(field, "max_length", None) or 255
+                unique_fields.append((field.name, max_length))
+
+            if unique_fields:
+                model_specs[opts.label_lower] = {
+                    "model": model,
+                    "fields": unique_fields,
+                }
+
+        seen_by_spec = {
+            (model_label, field_name): set()
+            for model_label, spec in model_specs.items()
+            for field_name, _ in spec["fields"]
+        }
+        rewrite_stats = {}
+
+        def _normalize_model_label(value: str) -> str:
+            normalized_label = str(value or "").strip().lower()
+            parts = [part for part in normalized_label.split(".") if part]
+            if len(parts) >= 2:
+                return ".".join(parts[-2:])
+            return normalized_label
+
+        def _unique_prefix(model_label: str, field_name: str) -> str:
+            model_name = model_label.split(".")[-1] if "." in model_label else model_label
+            model_name = (model_name or "value").replace("_", "")
+            field_bits = "".join(part[:2] for part in field_name.split("_")) or field_name[:3]
+            return f"{model_name[:6]}{field_bits[:4]}".lower()
+
+        def _matches_spec(entry_model_label: str, spec_model_label: str) -> bool:
+            normalized_label = str(entry_model_label or "").strip().lower()
+            normalized_spec = str(spec_model_label or "").strip().lower()
+            if normalized_label == normalized_spec:
+                return True
+            parts = [part for part in normalized_label.split(".") if part]
+            if len(parts) >= 2:
+                tail2 = ".".join(parts[-2:])
+                if tail2 == normalized_spec:
+                    return True
+            return False
+
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            model_label = str(entry.get("model") or "").strip().lower()
+            fields = entry.get("fields")
+            if not isinstance(fields, dict):
+                continue
+            pk_value = entry.get("pk")
+
+            normalized_model_label = _normalize_model_label(model_label)
+            spec = model_specs.get(normalized_model_label)
+            if spec is None:
+                for spec_model_label in model_specs.keys():
+                    if _matches_spec(model_label, spec_model_label):
+                        normalized_model_label = spec_model_label
+                        spec = model_specs[spec_model_label]
+                        break
+
+            if spec is None:
+                continue
+
+            model_cls = spec["model"]
+            for field_name, max_length in spec["fields"]:
+                original_value = str(fields.get(field_name) or "").strip()
+                if not original_value:
+                    original_value = f"{_unique_prefix(normalized_model_label, field_name)}_{pk_value or 'restored'}"
+
+                new_value = original_value
+                suffix = 0
+                seen_values = seen_by_spec[(normalized_model_label, field_name)]
+
+                while True:
+                    normalized_candidate = new_value.strip().lower()
+                    collision_in_payload = normalized_candidate in seen_values
+                    collision_in_db = (
+                        model_cls.objects.filter(**{f"{field_name}__iexact": new_value})
+                        .exclude(pk=pk_value)
+                        .exists()
+                    )
+                    if not collision_in_payload and not collision_in_db:
+                        break
+
+                    suffix += 1
+                    base_max = max(4, max_length - 18)
+                    base = original_value[:base_max]
+                    new_value = f"{base}_r{pk_value}_{suffix}"[:max_length]
+
+                if new_value != original_value:
+                    fields[field_name] = new_value
+                    key = f"{normalized_model_label}.{field_name}"
+                    rewrite_stats[key] = rewrite_stats.get(key, 0) + 1
+
+                seen_values.add(new_value.strip().lower())
+
+        return payload, rewrite_stats
+
+    def _drop_orphan_foreign_key_relations(self, payload, *, check_db=True):
+        if not isinstance(payload, list):
+            return payload, {}
+
+        model_map = {}
+        fk_specs = {}
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            model_map[opts.label_lower] = model
+
+            specs = []
+            for field in opts.fields:
+                if not isinstance(field, (models.ForeignKey, models.OneToOneField)):
+                    continue
+                remote_model = getattr(getattr(field, "remote_field", None), "model", None)
+                if remote_model is None:
+                    continue
+                specs.append(
+                    {
+                        "field_name": field.name,
+                        "target_label": remote_model._meta.label_lower,
+                        "nullable": bool(getattr(field, "null", False)),
+                    }
+                )
+            fk_specs[opts.label_lower] = specs
+
+        def _normalize_model_label(value: str) -> str:
+            normalized = str(value or "").strip().lower()
+            parts = [part for part in normalized.split(".") if part]
+            if len(parts) >= 2:
+                return ".".join(parts[-2:])
+            return normalized
+
+
+        def _payload_pk_index(rows):
+            index = {}
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                label = _normalize_model_label(item.get("model"))
+                pk_value = item.get("pk")
+                if label and pk_value not in (None, ""):
+                    index.setdefault(label, set()).add(str(pk_value))
+            return index
+
+        db_fk_cache = {}
+
+        def _exists_in_db(target_label: str, pk_value: str) -> bool:
+            if not check_db:
+                return False
+
+            cache_key = (target_label, pk_value)
+            if cache_key in db_fk_cache:
+                return db_fk_cache[cache_key]
+
+            model_cls = model_map.get(target_label)
+            if model_cls is None:
+                db_fk_cache[cache_key] = True
+                return True
+
+            exists = model_cls.objects.filter(pk=pk_value).exists()
+            db_fk_cache[cache_key] = exists
+            return exists
+
+        cleaned_payload = list(payload)
+        dropped_stats = {}
+
+        while True:
+            removed_in_pass = 0
+            payload_pk_index = _payload_pk_index(cleaned_payload)
+            next_payload = []
+
+            for entry in cleaned_payload:
+                if not isinstance(entry, dict):
+                    next_payload.append(entry)
+                    continue
+
+                model_label = _normalize_model_label(entry.get("model"))
+                fields = entry.get("fields")
+                if not isinstance(fields, dict):
+                    next_payload.append(entry)
+                    continue
+
+                entry_invalid = False
+                for spec in fk_specs.get(model_label, []):
+                    field_name = spec["field_name"]
+                    target_label = spec["target_label"]
+                    nullable = spec["nullable"]
+                    fk_value = fields.get(field_name)
+
+                    if fk_value in (None, ""):
+                        if nullable:
+                            continue
+                        entry_invalid = True
+                        break
+
+                    fk_key = str(fk_value)
+                    if fk_key in payload_pk_index.get(target_label, set()):
+                        continue
+
+                    if _exists_in_db(target_label, fk_key):
+                        continue
+
+                    entry_invalid = True
+                    break
+
+                if entry_invalid:
+                    dropped_stats[model_label] = dropped_stats.get(model_label, 0) + 1
+                    removed_in_pass += 1
+                    continue
+
+                next_payload.append(entry)
+
+            cleaned_payload = next_payload
+            if removed_in_pass == 0:
+                break
+
+        return cleaned_payload, dropped_stats
+
+    def _clear_global_scope_data(self):
+        # Preserve backup history rows while cleaning platform data.
+        global_models = []
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin", "auth"}:
+                continue
+            if model.__name__ in {"BackupArchive"}:
+                continue
+            global_models.append(model)
+
+        retry_models = []
+        for model in reversed(global_models):
+            try:
+                model.objects.all().delete()
+            except ProtectedError:
+                retry_models.append(model)
+
+        for model in retry_models:
+            model.objects.all().delete()
+
+    def _clear_establishment_scope_data(self, etablissement):
+        if etablissement is None:
+            return
+
+        from apps.accounts.models import User
+
+        # Delete remaining establishment-scoped rows in reverse model order to
+        # reduce protected relation conflicts between dependent tables.
+        scoped_models = []
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin", "auth"}:
+                continue
+
+            field_names = {field.name for field in opts.fields}
+            if model.__name__ in {"Etablissement", "BackupArchive"}:
+                continue
+            if "etablissement" not in field_names:
+                continue
+
+            scoped_models.append(model)
+
+        retry_models = []
+        for model in reversed(scoped_models):
+            try:
+                model.objects.filter(etablissement=etablissement).delete()
+            except ProtectedError:
+                retry_models.append(model)
+
+        # Some models (ex: PromotionDecision) do not carry etablissement but
+        # protect Student deletion. Remove those references before retrying.
+        self._clear_protected_student_dependencies(etablissement)
+
+        # Second pass once most child rows are gone.
+        for model in retry_models:
+            model.objects.filter(etablissement=etablissement).delete()
+
+        # Delete users of the establishment last, once protected student
+        # dependencies have been removed.
+        User.objects.filter(etablissement=etablissement).delete()
+
+    def _clear_protected_student_dependencies(self, etablissement):
+        from apps.school.models import Student
+
+        student_ids = list(
+            Student.objects.filter(etablissement=etablissement).values_list("pk", flat=True)
+        )
+        if not student_ids:
+            return
+
+        for model in apps.get_models():
+            opts = model._meta
+            if opts.proxy or not opts.managed:
+                continue
+            if opts.app_label in {"contenttypes", "sessions", "admin", "auth"}:
+                continue
+
+            for field in opts.fields:
+                if not isinstance(field, (models.ForeignKey, models.OneToOneField)):
+                    continue
+                remote_model = getattr(getattr(field, "remote_field", None), "model", None)
+                on_delete = getattr(getattr(field, "remote_field", None), "on_delete", None)
+                if remote_model is not Student or on_delete is not models.PROTECT:
+                    continue
+
+                lookup = {f"{field.name}_id__in": student_ids}
+                model.objects.filter(**lookup).delete()
+
+    def _run_restore_in_background(self, backup_id: int, archive_path: str, actor_id: int | None):
+        manage_py = Path(settings.BASE_DIR) / "manage.py"
+        command = [
+            sys.executable,
+            str(manage_py),
+            "run_backup_restore",
+            f"--backup-id={backup_id}",
+            f"--archive-path={archive_path}",
+        ]
+        if actor_id:
+            command.append(f"--actor-id={actor_id}")
+
+        env = os.environ.copy()
+        env.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+
+        try:
+            subprocess.Popen(
+                command,
+                cwd=str(settings.BASE_DIR),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            self._mark_restore_failed(backup_id, exc)
+            raise
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self._is_super_admin():
+            return queryset
+
+        user_etablissement = getattr(self.request.user, "etablissement", None)
+        if user_etablissement is None:
+            return queryset.none()
+        return queryset.filter(scope=BackupArchive.Scope.ETABLISSEMENT, etablissement=user_etablissement)
+
+    def create(self, request, *args, **kwargs):
+        scope = str(request.data.get("scope") or BackupArchive.Scope.ETABLISSEMENT).strip()
+        include_media_raw = request.data.get("include_media", True)
+        include_media = str(include_media_raw).lower() not in {"0", "false", "no"}
+        notes = str(request.data.get("notes") or "").strip()
+
+        if scope not in {BackupArchive.Scope.GLOBAL, BackupArchive.Scope.ETABLISSEMENT}:
+            return Response({"detail": "Scope invalide."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if scope == BackupArchive.Scope.GLOBAL and not self._is_super_admin():
+            return Response(
+                {"detail": "Seul un super admin peut creer une sauvegarde globale."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        etablissement = None
+        if scope == BackupArchive.Scope.ETABLISSEMENT:
+            etablissement = self._resolve_etablissement()
+            if etablissement is None:
+                return Response(
+                    {"detail": "Etablissement introuvable pour la sauvegarde."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if not self._is_super_admin() and getattr(request.user, "etablissement_id", None) != etablissement.id:
+                return Response(
+                    {"detail": "Vous ne pouvez sauvegarder que votre etablissement."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        backup = BackupArchive.objects.create(
+            scope=scope,
+            etablissement=etablissement,
+            created_by=request.user,
+            include_media=include_media,
+            notes=notes,
+            status=BackupArchive.Status.PENDING,
+        )
+
+        try:
+            backup = self._build_archive(backup)
+        except Exception as exc:
+            backup.status = BackupArchive.Status.FAILED
+            backup.restore_log = str(exc)
+            backup.save(update_fields=["status", "restore_log", "updated_at"])
+            return Response({"detail": f"Echec sauvegarde: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(self.get_serializer(backup).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"], url_path="download")
+    def download(self, request, pk=None):
+        backup = self.get_object()
+        archive_path = Path(str(backup.file_path or "")).expanduser()
+        if not archive_path.exists() or not archive_path.is_file():
+            return Response({"detail": "Fichier backup introuvable."}, status=status.HTTP_404_NOT_FOUND)
+
+        response = FileResponse(archive_path.open("rb"), as_attachment=True, filename=backup.filename or archive_path.name)
+        return response
+
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, pk=None):
+        denied = self._require_super_admin_restore()
+        if denied is not None:
+            return denied
+
+        backup = self.get_object()
+        if backup.scope == BackupArchive.Scope.GLOBAL and not self._is_super_admin():
+            return Response(
+                {"detail": "Seul un super admin peut restaurer une sauvegarde globale."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        archive_path = Path(str(backup.file_path or "")).expanduser()
+        if not archive_path.exists() or not archive_path.is_file():
+            return Response({"detail": "Fichier backup introuvable."}, status=status.HTTP_404_NOT_FOUND)
+
+        backup.status = BackupArchive.Status.RUNNING
+        backup.restore_log = "Restauration lancee en arriere-plan."
+        backup.restore_phase = "En attente du traitement"
+        backup.restore_progress = 1
+        backup.save(
+            update_fields=["status", "restore_log", "restore_phase", "restore_progress", "updated_at"]
+        )
+        self._run_restore_in_background(backup.id, str(archive_path), getattr(request.user, "id", None))
+        return Response(
+            {
+                "detail": "Restauration lancee en arriere-plan.",
+                "backup": self.get_serializer(backup).data,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=False, methods=["post"], url_path="upload-restore")
+    def upload_restore(self, request):
+        denied = self._require_super_admin_restore()
+        if denied is not None:
+            return denied
+
+        uploaded = request.FILES.get("file")
+        if not isinstance(uploaded, UploadedFile):
+            return Response({"detail": "Fichier requis."}, status=status.HTTP_400_BAD_REQUEST)
+
+        scope = str(request.data.get("scope") or BackupArchive.Scope.ETABLISSEMENT).strip()
+        if scope not in {BackupArchive.Scope.GLOBAL, BackupArchive.Scope.ETABLISSEMENT}:
+            return Response({"detail": "Scope invalide."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if scope == BackupArchive.Scope.GLOBAL and not self._is_super_admin():
+            return Response(
+                {"detail": "Seul un super admin peut restaurer globalement."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        etablissement = None
+        if scope == BackupArchive.Scope.ETABLISSEMENT:
+            etablissement = self._resolve_etablissement()
+            if etablissement is None:
+                return Response(
+                    {"detail": "Etablissement introuvable pour la restauration."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not self._is_super_admin() and getattr(request.user, "etablissement_id", None) != etablissement.id:
+                return Response(
+                    {"detail": "Vous ne pouvez restaurer que votre etablissement."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        backup_dir = self._backups_root()
+        stamp = timezone.localtime().strftime("%Y%m%d_%H%M%S")
+        target = backup_dir / f"uploaded_restore_{scope}_{stamp}.zip"
+        with target.open("wb") as out:
+            for chunk in uploaded.chunks():
+                out.write(chunk)
+
+        backup = BackupArchive.objects.create(
+            scope=scope,
+            etablissement=etablissement,
+            created_by=request.user,
+            filename=target.name,
+            file_path=str(target),
+            file_size_bytes=target.stat().st_size,
+            sha256=self._sha256_file(target),
+            notes=str(request.data.get("notes") or "").strip(),
+            status=BackupArchive.Status.RUNNING,
+            restore_phase="Archive recue",
+            restore_progress=1,
+        )
+        backup.restore_log = "Archive recue. Restauration lancee en arriere-plan."
+        backup.save(update_fields=["restore_log", "restore_phase", "restore_progress", "updated_at"])
+        self._run_restore_in_background(backup.id, str(target), getattr(request.user, "id", None))
+        return Response(
+            {
+                "detail": "Archive recue. Restauration lancee en arriere-plan.",
+                "backup": self.get_serializer(backup).data,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )

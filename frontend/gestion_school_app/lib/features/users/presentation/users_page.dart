@@ -1,13 +1,12 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-<<<<<<< HEAD
-=======
+import '../../../core/network/api_client.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../models/etablissement.dart';
->>>>>>> main
 import '../domain/user_account.dart';
 import 'users_controller.dart';
 
@@ -33,31 +32,42 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   String _selectedRole = 'teacher';
   String _roleFilter = 'all';
   int? _selectedUserId;
-<<<<<<< HEAD
-=======
   int? _selectedCreateEtablissementId;
+  int? _selectedCreateClassroomId;
+  final Set<int> _selectedCreateStudentIds = <int>{};
+  List<Map<String, dynamic>> _classroomOptions = const [];
+  List<Map<String, dynamic>> _studentOptions = const [];
+  bool _loadingCreationRefs = false;
+  int? _loadedCreationRefsEtablissementId;
   int _currentPage = 1;
   int _pageSize = 25;
   String _searchTerm = '';
   Timer? _searchDebounce;
->>>>>>> main
 
   static const List<(String, String)> _roles = [
     ('super_admin', 'Super Admin'),
-    ('director', 'Directeur'),
+    ('director', 'Directeur/Proviseur'),
+    ('promoter', 'Promoteur'),
     ('accountant', 'Comptable'),
     ('teacher', 'Enseignant'),
+    ('censor', 'Censeur'),
     ('supervisor', 'Surveillant'),
     ('parent', 'Parent'),
     ('student', 'Eleve'),
   ];
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncCreationReferences(force: true);
+    });
+  }
+
+  @override
   void dispose() {
-<<<<<<< HEAD
-=======
     _searchDebounce?.cancel();
->>>>>>> main
     _searchController.dispose();
     _usernameController.dispose();
     _firstNameController.dispose();
@@ -69,11 +79,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   }
 
   Future<void> _refreshUsers() async {
-<<<<<<< HEAD
-    ref.invalidate(usersProvider);
-    try {
-      await ref.read(usersProvider.future);
-=======
     final query = UsersPageQuery(
       page: _currentPage,
       pageSize: _pageSize,
@@ -83,51 +88,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     ref.invalidate(usersPaginatedProvider(query));
     try {
       await ref.read(usersPaginatedProvider(query).future);
->>>>>>> main
     } catch (_) {
       // Keep pull-to-refresh responsive even when API fails.
     }
   }
 
-<<<<<<< HEAD
-  void _showMessage(String text, {bool isSuccess = false}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(text),
-        backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
-      ),
-    );
-  }
-
-  String _roleLabel(String role) {
-    for (final item in _roles) {
-      if (item.$1 == role) {
-        return item.$2;
-      }
-    }
-    return role;
-  }
-
-  Color _roleColor(String role) {
-    switch (role) {
-      case 'super_admin':
-      case 'director':
-        return const Color(0xFF2D6FD6);
-      case 'accountant':
-        return const Color(0xFF2A8E58);
-      case 'teacher':
-      case 'supervisor':
-        return const Color(0xFF8B5CF6);
-      case 'parent':
-      case 'student':
-        return const Color(0xFFB9721B);
-      default:
-        return const Color(0xFF546172);
-    }
-  }
-
-=======
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 300), () {
@@ -181,10 +146,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     switch (role) {
       case 'super_admin':
       case 'director':
+      case 'promoter':
         return const Color(0xFF2D6FD6);
       case 'accountant':
         return const Color(0xFF2A8E58);
       case 'teacher':
+      case 'censor':
       case 'supervisor':
         return const Color(0xFF8B5CF6);
       case 'parent':
@@ -195,7 +162,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     }
   }
 
->>>>>>> main
   String _userInitials(UserAccount user) {
     final parts = user.fullName
         .trim()
@@ -213,24 +179,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   }
 
   List<UserAccount> _filteredUsers(List<UserAccount> users) {
-<<<<<<< HEAD
-    final query = _searchController.text.trim().toLowerCase();
-
-    final rows = users.where((user) {
-      if (_roleFilter != 'all' && user.role != _roleFilter) {
-        return false;
-      }
-      if (query.isEmpty) {
-        return true;
-      }
-      final haystack =
-          '${user.fullName} ${user.username} ${user.email} ${user.phone}'
-              .toLowerCase();
-      return haystack.contains(query);
-    }).toList();
-=======
     final rows = users.toList();
->>>>>>> main
 
     rows.sort(
       (left, right) =>
@@ -277,10 +226,242 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     _passwordController.clear();
     _phoneController.clear();
     _selectedRole = 'teacher';
-<<<<<<< HEAD
-=======
     _selectedCreateEtablissementId = null;
->>>>>>> main
+    _selectedCreateClassroomId = null;
+    _selectedCreateStudentIds.clear();
+  }
+
+  bool _roleNeedsClassroom(String role) {
+    return role == 'student' || role == 'parent';
+  }
+
+  bool _roleNeedsStudents(String role) {
+    return role == 'parent';
+  }
+
+  List<Map<String, dynamic>> _extractRows(dynamic payload) {
+    if (payload is List) {
+      return payload
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList(growable: false);
+    }
+    if (payload is Map && payload['results'] is List) {
+      return (payload['results'] as List)
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList(growable: false);
+    }
+    return const <Map<String, dynamic>>[];
+  }
+
+  int _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? 0;
+    return 0;
+  }
+
+  String _studentDisplayName(Map<String, dynamic> row) {
+    final fullName = row['user_full_name']?.toString().trim() ?? '';
+    if (fullName.isNotEmpty) {
+      return fullName;
+    }
+    final firstName = row['user_first_name']?.toString().trim() ?? '';
+    final lastName = row['user_last_name']?.toString().trim() ?? '';
+    final fallback = '$firstName $lastName'.trim();
+    if (fallback.isNotEmpty) {
+      return fallback;
+    }
+    final username = row['user_username']?.toString().trim() ?? '';
+    if (username.isNotEmpty) {
+      return username;
+    }
+    return 'Eleve #${_asInt(row['id'])}';
+  }
+
+  String _classroomDisplayName(int? classroomId) {
+    if (classroomId == null) {
+      return 'Non selectionnee';
+    }
+    for (final row in _classroomOptions) {
+      if (_asInt(row['id']) == classroomId) {
+        final name = row['name']?.toString().trim() ?? '';
+        if (name.isNotEmpty) {
+          return name;
+        }
+      }
+    }
+    return 'Classe #$classroomId';
+  }
+
+  List<String> _selectedStudentNames() {
+    if (_selectedCreateStudentIds.isEmpty) {
+      return const <String>[];
+    }
+    final labels = <String>[];
+    for (final row in _studentOptions) {
+      final id = _asInt(row['id']);
+      if (_selectedCreateStudentIds.contains(id)) {
+        labels.add(_studentDisplayName(row));
+      }
+    }
+    return labels;
+  }
+
+  Future<void> _syncCreationReferences({bool force = false}) async {
+    final authUser = ref.read(authControllerProvider).value;
+    final selectedEtablissement = ref.read(etablissementProvider).selected;
+    final isSuperAdmin = authUser?.role == 'super_admin';
+    final etablissementId = isSuperAdmin
+        ? (_selectedCreateEtablissementId ?? selectedEtablissement?.id)
+        : selectedEtablissement?.id;
+
+    if (!_roleNeedsClassroom(_selectedRole)) {
+      if (!mounted) return;
+      setState(() {
+        _classroomOptions = const [];
+        _studentOptions = const [];
+        _selectedCreateClassroomId = null;
+        _selectedCreateStudentIds.clear();
+        _loadedCreationRefsEtablissementId = etablissementId;
+        _loadingCreationRefs = false;
+      });
+      return;
+    }
+
+    if (!force &&
+        !_loadingCreationRefs &&
+        _loadedCreationRefsEtablissementId == etablissementId) {
+      return;
+    }
+
+    if (etablissementId == null) {
+      if (!mounted) return;
+      setState(() {
+        _classroomOptions = const [];
+        _studentOptions = const [];
+        _selectedCreateClassroomId = null;
+        _selectedCreateStudentIds.clear();
+        _loadedCreationRefsEtablissementId = null;
+        _loadingCreationRefs = false;
+      });
+      return;
+    }
+
+    setState(() => _loadingCreationRefs = true);
+    final dio = ref.read(dioProvider);
+
+    try {
+      final responses = await Future.wait<Response<dynamic>>(<Future<Response<dynamic>>>[
+        dio.get('/classrooms/?etablissement=$etablissementId&page_size=500'),
+        dio.get('/students/?etablissement=$etablissementId&page_size=500'),
+      ]);
+
+      final classrooms = _extractRows(responses[0].data);
+      final students = _extractRows(responses[1].data);
+
+      if (!mounted) return;
+      setState(() {
+        _classroomOptions = classrooms;
+        _studentOptions = students;
+        final hasClassroomSelection = classrooms.any(
+          (row) => _asInt(row['id']) == _selectedCreateClassroomId,
+        );
+        if (!hasClassroomSelection) {
+          _selectedCreateClassroomId = null;
+        }
+
+        final allowedStudentIds = students
+            .map((row) => _asInt(row['id']))
+            .where((id) => id > 0)
+            .toSet();
+        _selectedCreateStudentIds.removeWhere((id) => !allowedStudentIds.contains(id));
+
+        _loadedCreationRefsEtablissementId = etablissementId;
+      });
+    } on DioException catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _classroomOptions = const [];
+        _studentOptions = const [];
+        _selectedCreateClassroomId = null;
+        _selectedCreateStudentIds.clear();
+        _loadedCreationRefsEtablissementId = etablissementId;
+      });
+      _showMessage('Impossible de charger classes/eleves pour cet etablissement.');
+    } finally {
+      if (mounted) {
+        setState(() => _loadingCreationRefs = false);
+      }
+    }
+  }
+
+  Future<void> _openStudentMultiSelectDialog() async {
+    if (_studentOptions.isEmpty) {
+      _showMessage('Aucun eleve disponible pour cet etablissement.');
+      return;
+    }
+
+    final selected = Set<int>.from(_selectedCreateStudentIds);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Selectionner un ou plusieurs eleves'),
+              content: SizedBox(
+                width: 460,
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _studentOptions.length,
+                  itemBuilder: (context, index) {
+                    final row = _studentOptions[index];
+                    final studentId = _asInt(row['id']);
+                    final label = _studentDisplayName(row);
+                    final classLabel = row['classroom_name']?.toString().trim() ?? '';
+                    return CheckboxListTile(
+                      dense: true,
+                      value: selected.contains(studentId),
+                      title: Text(label),
+                      subtitle: classLabel.isEmpty ? null : Text(classLabel),
+                      onChanged: (value) {
+                        setDialogState(() {
+                          if (value == true) {
+                            selected.add(studentId);
+                          } else {
+                            selected.remove(studentId);
+                          }
+                        });
+                      },
+                    );
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Annuler'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('Valider'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirmed == true && mounted) {
+      setState(() {
+        _selectedCreateStudentIds
+          ..clear()
+          ..addAll(selected);
+      });
+    }
   }
 
   Future<void> _createUser() async {
@@ -288,8 +469,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       return;
     }
 
-<<<<<<< HEAD
-=======
     final authUser = ref.read(authControllerProvider).value;
     final selectedEtablissement = ref.read(etablissementProvider).selected;
     final isSuperAdmin = authUser?.role == 'super_admin';
@@ -302,7 +481,15 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       return;
     }
 
->>>>>>> main
+    if (_roleNeedsClassroom(_selectedRole) && _selectedCreateClassroomId == null) {
+      _showMessage('Selectionnez une classe pour ce role.');
+      return;
+    }
+    if (_roleNeedsStudents(_selectedRole) && _selectedCreateStudentIds.isEmpty) {
+      _showMessage('Selectionnez au moins un eleve pour ce parent.');
+      return;
+    }
+
     await ref
         .read(userMutationProvider.notifier)
         .createUser(
@@ -313,23 +500,23 @@ class _UsersPageState extends ConsumerState<UsersPage> {
           password: _passwordController.text,
           role: _selectedRole,
           phone: _phoneController.text.trim(),
-<<<<<<< HEAD
-=======
           etablissementId: etablissementId,
->>>>>>> main
+          classroomId: _roleNeedsClassroom(_selectedRole)
+              ? _selectedCreateClassroomId
+              : null,
+          studentIds: _roleNeedsStudents(_selectedRole)
+              ? _selectedCreateStudentIds.toList(growable: false)
+              : null,
         );
 
     final mutation = ref.read(userMutationProvider);
     if (mutation.hasError) {
-<<<<<<< HEAD
-      _showMessage('Erreur creation utilisateur: ${mutation.error}');
-=======
       _showMessage('Erreur creation utilisateur: ${_errorText(mutation.error)}');
->>>>>>> main
       return;
     }
 
     setState(_resetCreateForm);
+    unawaited(_syncCreationReferences(force: true));
     _showMessage('Utilisateur cree avec succes.', isSuccess: true);
   }
 
@@ -348,15 +535,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                 _detailRow('Nom complet', user.fullName),
                 _detailRow('Username', user.username),
                 _detailRow('Role', _roleLabel(user.role)),
-<<<<<<< HEAD
-=======
                 _detailRow(
                   'Etablissement',
                   user.etablissementName.trim().isEmpty
                       ? '-'
                       : user.etablissementName,
                 ),
->>>>>>> main
                 _detailRow('Email', user.email.isEmpty ? '-' : user.email),
                 _detailRow('Telephone', user.phone.isEmpty ? '-' : user.phone),
                 _detailRow('ID', '${user.id}'),
@@ -382,13 +566,10 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     final emailController = TextEditingController(text: user.email);
     final phoneController = TextEditingController(text: user.phone);
     var editRole = user.role;
-<<<<<<< HEAD
-=======
     final authUser = ref.read(authControllerProvider).value;
     final selectedEtablissement = ref.read(etablissementProvider).selected;
     final isSuperAdmin = authUser?.role == 'super_admin';
     var editEtablissementId = user.etablissementId ?? selectedEtablissement?.id;
->>>>>>> main
     var saving = false;
 
     final updated = await showDialog<bool>(
@@ -455,8 +636,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                           }
                         },
                       ),
-<<<<<<< HEAD
-=======
                       const SizedBox(height: 10),
                       DropdownButtonFormField<int>(
                         initialValue: editEtablissementId,
@@ -487,7 +666,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                           return null;
                         },
                       ),
->>>>>>> main
                     ],
                   ),
                 ),
@@ -518,22 +696,15 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                 email: emailController.text.trim(),
                                 role: editRole,
                                 phone: phoneController.text.trim(),
-<<<<<<< HEAD
-=======
                                 etablissementId: isSuperAdmin
                                     ? editEtablissementId
                                     : selectedEtablissement?.id,
->>>>>>> main
                               );
 
                           final mutation = ref.read(userMutationProvider);
                           if (mutation.hasError) {
                             _showMessage(
-<<<<<<< HEAD
-                              'Erreur modification utilisateur: ${mutation.error}',
-=======
                               'Erreur modification utilisateur: ${_errorText(mutation.error)}',
->>>>>>> main
                             );
                             setDialogState(() => saving = false);
                             return;
@@ -601,13 +772,9 @@ class _UsersPageState extends ConsumerState<UsersPage> {
 
     final mutation = ref.read(userMutationProvider);
     if (mutation.hasError) {
-<<<<<<< HEAD
-      _showMessage('Erreur suppression utilisateur: ${mutation.error}');
-=======
       _showMessage(
         'Erreur suppression utilisateur: ${_errorText(mutation.error)}',
       );
->>>>>>> main
       return;
     }
 
@@ -685,13 +852,22 @@ class _UsersPageState extends ConsumerState<UsersPage> {
 
   @override
   Widget build(BuildContext context) {
-<<<<<<< HEAD
-    final usersAsync = ref.watch(usersProvider);
-=======
     final authUser = ref.watch(authControllerProvider).value;
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
     final allEtablissements = ref.watch(etablissementProvider).etablissements;
     final isSuperAdmin = authUser?.role == 'super_admin';
+
+    final effectiveCreateEtablissementId = isSuperAdmin
+        ? (_selectedCreateEtablissementId ?? selectedEtablissement?.id)
+        : selectedEtablissement?.id;
+    if (_roleNeedsClassroom(_selectedRole) &&
+        !_loadingCreationRefs &&
+        _loadedCreationRefsEtablissementId != effectiveCreateEtablissementId) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(_syncCreationReferences(force: true));
+      });
+    }
 
     final query = UsersPageQuery(
       page: _currentPage,
@@ -700,7 +876,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       role: _roleFilter == 'all' ? null : _roleFilter,
     );
     final usersAsync = ref.watch(usersPaginatedProvider(query));
->>>>>>> main
     final mutationState = ref.watch(userMutationProvider);
     final isMutating = mutationState.isLoading;
     final colorScheme = Theme.of(context).colorScheme;
@@ -750,33 +925,31 @@ class _UsersPageState extends ConsumerState<UsersPage> {
           ],
         ),
       ),
-<<<<<<< HEAD
-      data: (users) {
-=======
       data: (pageData) {
         final users = pageData.results;
         final existingUsernames = users
           .map((user) => user.username.trim().toLowerCase())
           .where((username) => username.isNotEmpty)
           .toSet();
->>>>>>> main
         final filteredUsers = _filteredUsers(users);
         _syncSelectedUser(filteredUsers);
         final selectedUser = _currentSelectedUser(filteredUsers);
 
-<<<<<<< HEAD
-        final totalUsers = users.length;
-=======
         final totalUsers = pageData.count;
->>>>>>> main
         final adminCount = users
             .where(
-              (user) => user.role == 'super_admin' || user.role == 'director',
+              (user) =>
+                  user.role == 'super_admin' ||
+                  user.role == 'director' ||
+                  user.role == 'promoter',
             )
             .length;
         final teachingCount = users
             .where(
-              (user) => user.role == 'teacher' || user.role == 'supervisor',
+              (user) =>
+                  user.role == 'teacher' ||
+                  user.role == 'censor' ||
+                  user.role == 'supervisor',
             )
             .length;
         final familyCount = users
@@ -838,11 +1011,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                       width: 290,
                       child: TextField(
                         controller: _searchController,
-<<<<<<< HEAD
-                        onChanged: (_) => setState(() {}),
-=======
                         onChanged: _onSearchChanged,
->>>>>>> main
                         decoration: InputDecoration(
                           labelText: 'Recherche utilisateur',
                           prefixIcon: const Icon(Icons.search),
@@ -850,17 +1019,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                               ? null
                               : IconButton(
                                   onPressed: () {
-<<<<<<< HEAD
-                                    _searchController.clear();
-                                    setState(() {});
-=======
                                     _searchDebounce?.cancel();
                                     _searchController.clear();
                                     setState(() {
                                       _searchTerm = '';
                                       _currentPage = 1;
                                     });
->>>>>>> main
                                   },
                                   icon: const Icon(Icons.clear),
                                 ),
@@ -887,14 +1051,10 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                           ),
                         ],
                         onChanged: (value) {
-<<<<<<< HEAD
-                          setState(() => _roleFilter = value ?? 'all');
-=======
                           setState(() {
                             _roleFilter = value ?? 'all';
                             _currentPage = 1;
                           });
->>>>>>> main
                         },
                       ),
                     ),
@@ -902,10 +1062,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                       onPressed: isMutating
                           ? null
                           : () {
-<<<<<<< HEAD
-                              _searchController.clear();
-                              setState(() => _roleFilter = 'all');
-=======
                               _searchDebounce?.cancel();
                               _searchController.clear();
                               setState(() {
@@ -913,7 +1069,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                 _searchTerm = '';
                                 _currentPage = 1;
                               });
->>>>>>> main
                             },
                       icon: const Icon(Icons.filter_alt_off_outlined),
                       label: const Text('Reinitialiser'),
@@ -1011,8 +1166,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                                   context,
                                                 ).textTheme.bodySmall,
                                               ),
-<<<<<<< HEAD
-=======
                                               if (user.etablissementName
                                                   .trim()
                                                   .isNotEmpty)
@@ -1025,7 +1178,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                                     context,
                                                   ).textTheme.labelSmall,
                                                 ),
->>>>>>> main
                                             ],
                                           ),
                                         ),
@@ -1069,8 +1221,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                               );
                             },
                           ),
-<<<<<<< HEAD
-=======
                         const SizedBox(height: 8),
                         Wrap(
                           alignment: WrapAlignment.spaceBetween,
@@ -1126,7 +1276,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                             ),
                           ],
                         ),
->>>>>>> main
                       ],
                     ),
                   );
@@ -1180,15 +1329,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                     ? '-'
                                     : selectedUser.phone,
                               ),
-<<<<<<< HEAD
-=======
                               _metricChip(
                                 'Etablissement',
                                 selectedUser.etablissementName.trim().isEmpty
                                     ? '-'
                                     : selectedUser.etablissementName,
                               ),
->>>>>>> main
                             ],
                           ),
                           const SizedBox(height: 10),
@@ -1247,17 +1393,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                       ),
                                       validator: (value) =>
                                           (value == null ||
-<<<<<<< HEAD
-                                              value.trim().isEmpty)
-                                          ? 'Champ requis'
-=======
                                             value.trim().isEmpty)
                                           ? 'Champ requis'
                                           : existingUsernames.contains(
                                             value.trim().toLowerCase(),
                                           )
                                           ? 'Ce nom utilisateur existe deja'
->>>>>>> main
                                           : null,
                                     ),
                                   ),
@@ -1314,14 +1455,17 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                           .toList(),
                                       onChanged: (value) {
                                         if (value != null) {
-                                          setState(() => _selectedRole = value);
+                                          setState(() {
+                                            _selectedRole = value;
+                                            _selectedCreateClassroomId = null;
+                                            _selectedCreateStudentIds.clear();
+                                          });
+                                          unawaited(_syncCreationReferences(force: true));
                                         }
                                       },
                                     ),
                                   ),
                                   SizedBox(
-<<<<<<< HEAD
-=======
                                     width: 280,
                                     child: DropdownButtonFormField<int>(
                                       initialValue: isSuperAdmin
@@ -1345,7 +1489,10 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                               setState(() {
                                                 _selectedCreateEtablissementId =
                                                     value;
+                                                _selectedCreateClassroomId = null;
+                                                _selectedCreateStudentIds.clear();
                                               });
+                                              unawaited(_syncCreationReferences(force: true));
                                             },
                                       validator: (value) {
                                         if ((value ??
@@ -1358,7 +1505,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                     ),
                                   ),
                                   SizedBox(
->>>>>>> main
                                     width: 220,
                                     child: TextFormField(
                                       controller: _passwordController,
@@ -1378,8 +1524,155 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                 ],
                               ),
                               const SizedBox(height: 12),
-<<<<<<< HEAD
-=======
+                              if (_roleNeedsClassroom(_selectedRole))
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                                  margin: const EdgeInsets.only(bottom: 12),
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.surface,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                                    ),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _selectedRole == 'student'
+                                            ? 'Champs supplementaires eleve'
+                                            : 'Champs supplementaires parent',
+                                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Wrap(
+                                        spacing: 10,
+                                        runSpacing: 10,
+                                        crossAxisAlignment: WrapCrossAlignment.center,
+                                        children: [
+                                          SizedBox(
+                                            width: 320,
+                                            child: DropdownButtonFormField<int>(
+                                              initialValue: _selectedCreateClassroomId,
+                                              decoration: const InputDecoration(
+                                                labelText: 'Classe (obligatoire)',
+                                              ),
+                                              items: _classroomOptions
+                                                  .map(
+                                                    (row) => DropdownMenuItem<int>(
+                                                      value: _asInt(row['id']),
+                                                      child: Text(
+                                                        row['name']?.toString() ??
+                                                            'Classe #${_asInt(row['id'])}',
+                                                      ),
+                                                    ),
+                                                  )
+                                                  .toList(),
+                                              onChanged: _loadingCreationRefs
+                                                  ? null
+                                                  : (value) {
+                                                      setState(
+                                                        () => _selectedCreateClassroomId = value,
+                                                      );
+                                                    },
+                                              validator: (value) {
+                                                if (_roleNeedsClassroom(_selectedRole) &&
+                                                    value == null) {
+                                                  return 'Classe requise';
+                                                }
+                                                return null;
+                                              },
+                                            ),
+                                          ),
+                                          if (_roleNeedsStudents(_selectedRole))
+                                            SizedBox(
+                                              width: 350,
+                                              child: FormField<Set<int>>(
+                                                initialValue: _selectedCreateStudentIds,
+                                                validator: (_) {
+                                                  if (_roleNeedsStudents(_selectedRole) &&
+                                                      _selectedCreateStudentIds.isEmpty) {
+                                                    return 'Selectionnez au moins un eleve';
+                                                  }
+                                                  return null;
+                                                },
+                                                builder: (field) {
+                                                  final selectedNames = _selectedStudentNames();
+                                                  return Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      OutlinedButton.icon(
+                                                        onPressed: _loadingCreationRefs
+                                                            ? null
+                                                            : () async {
+                                                                await _openStudentMultiSelectDialog();
+                                                                field.didChange(
+                                                                  Set<int>.from(_selectedCreateStudentIds),
+                                                                );
+                                                              },
+                                                        icon: const Icon(Icons.groups_2_outlined),
+                                                        label: Text(
+                                                          _selectedCreateStudentIds.isEmpty
+                                                              ? 'Selectionner les eleves (obligatoire)'
+                                                              : '${_selectedCreateStudentIds.length} eleve(s) selectionne(s)',
+                                                        ),
+                                                      ),
+                                                      if (selectedNames.isNotEmpty) ...[
+                                                        const SizedBox(height: 8),
+                                                        Wrap(
+                                                          spacing: 6,
+                                                          runSpacing: 6,
+                                                          children: selectedNames
+                                                              .map((name) => Chip(label: Text(name)))
+                                                              .toList(growable: false),
+                                                        ),
+                                                      ],
+                                                      if (field.errorText != null)
+                                                        Padding(
+                                                          padding: const EdgeInsets.only(top: 6),
+                                                          child: Text(
+                                                            field.errorText!,
+                                                            style: TextStyle(
+                                                              color: Theme.of(context).colorScheme.error,
+                                                              fontSize: 12,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        _selectedRole == 'student'
+                                            ? 'Un eleve doit obligatoirement etre associe a une classe.'
+                                            : 'Un parent doit avoir une classe de reference et au moins un eleve. Les eleves peuvent venir de classes differentes.',
+                                        style: Theme.of(context).textTheme.bodySmall,
+                                      ),
+                                      if (_selectedCreateClassroomId != null)
+                                        Padding(
+                                          padding: const EdgeInsets.only(top: 4),
+                                          child: Text(
+                                            'Classe selectionnee: ${_classroomDisplayName(_selectedCreateClassroomId)}',
+                                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              if (_roleNeedsClassroom(_selectedRole) && _loadingCreationRefs)
+                                const Padding(
+                                  padding: EdgeInsets.only(bottom: 10),
+                                  child: LinearProgressIndicator(minHeight: 2),
+                                ),
                               if (!isSuperAdmin &&
                                   selectedEtablissement != null)
                                 Padding(
@@ -1391,7 +1684,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                     ).textTheme.bodySmall,
                                   ),
                                 ),
->>>>>>> main
                               FilledButton.icon(
                                 onPressed: isMutating ? null : _createUser,
                                 icon: isMutating

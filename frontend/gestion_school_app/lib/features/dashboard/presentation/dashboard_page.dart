@@ -1,18 +1,42 @@
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/providers/navigation_intents.dart';
 import '../../../models/etablissement.dart';
+import '../../auth/presentation/auth_controller.dart';
+import '../../payments/presentation/payments_controller.dart';
 import '../domain/dashboard_stats.dart';
 import 'dashboard_controller.dart';
+import 'dashboard_shared_ui.dart';
 
-class DashboardPage extends ConsumerWidget {
+enum _DashboardScopePeriod { weekly, monthly, quarterly }
+
+enum _DashboardScopeLevel { all, lower, middle, upper }
+
+enum _DashboardQuickAction {
+  refresh,
+  reports,
+  finance,
+  newPayment,
+  timetable,
+  activityLogs,
+}
+
+class DashboardPage extends ConsumerStatefulWidget {
   const DashboardPage({super.key});
 
-  Future<void> _refreshDashboard(WidgetRef ref) async {
+  @override
+  ConsumerState<DashboardPage> createState() => _DashboardPageState();
+}
+
+class _DashboardPageState extends ConsumerState<DashboardPage> {
+  _DashboardScopePeriod _scopePeriod = _DashboardScopePeriod.monthly;
+  _DashboardScopeLevel _scopeLevel = _DashboardScopeLevel.all;
+
+  Future<void> _refreshDashboard() async {
     ref.invalidate(dashboardStatsProvider);
     try {
       await ref.read(dashboardStatsProvider.future);
@@ -21,14 +45,156 @@ class DashboardPage extends ConsumerWidget {
     }
   }
 
+  void _navigateToShellItem(String key) {
+    ref.read(adminShellNavigationKeyProvider.notifier).state = key;
+  }
+
+  void _handleQuickAction(_DashboardQuickAction action) {
+    switch (action) {
+      case _DashboardQuickAction.refresh:
+        _refreshDashboard();
+        return;
+      case _DashboardQuickAction.reports:
+        _navigateToShellItem('reports');
+        return;
+      case _DashboardQuickAction.finance:
+        _navigateToShellItem('finance');
+        return;
+      case _DashboardQuickAction.newPayment:
+        ref.read(financeOpenGuidedPaymentIntentProvider.notifier).state = true;
+        _navigateToShellItem('finance');
+        return;
+      case _DashboardQuickAction.timetable:
+        _navigateToShellItem('timetable');
+        return;
+      case _DashboardQuickAction.activityLogs:
+        _navigateToShellItem('activity_logs');
+        return;
+    }
+  }
+
+  double _periodMultiplier(_DashboardScopePeriod period) {
+    switch (period) {
+      case _DashboardScopePeriod.weekly:
+        return 0.30;
+      case _DashboardScopePeriod.monthly:
+        return 1.0;
+      case _DashboardScopePeriod.quarterly:
+        return 2.85;
+    }
+  }
+
+  double _levelMultiplier(_DashboardScopeLevel level) {
+    switch (level) {
+      case _DashboardScopeLevel.all:
+        return 1.0;
+      case _DashboardScopeLevel.lower:
+        return 0.43;
+      case _DashboardScopeLevel.middle:
+        return 0.34;
+      case _DashboardScopeLevel.upper:
+        return 0.23;
+    }
+  }
+
+  String _scopePeriodLabel() {
+    switch (_scopePeriod) {
+      case _DashboardScopePeriod.weekly:
+        return 'Semaine';
+      case _DashboardScopePeriod.monthly:
+        return 'Mois';
+      case _DashboardScopePeriod.quarterly:
+        return 'Trimestre';
+    }
+  }
+
+  String _scopeLevelLabel() {
+    switch (_scopeLevel) {
+      case _DashboardScopeLevel.all:
+        return 'Tous niveaux';
+      case _DashboardScopeLevel.lower:
+        return 'Niveau inferieur';
+      case _DashboardScopeLevel.middle:
+        return 'Niveau moyen';
+      case _DashboardScopeLevel.upper:
+        return 'Niveau superieur';
+    }
+  }
+
+  String _dashboardTitleForRole(String? role) {
+    switch (role) {
+      case 'super_admin':
+        return 'Tableau de bord Super Admin';
+      case 'director':
+        return 'Tableau de bord Directeur/Proviseur';
+      case 'promoter':
+        return 'Tableau de bord Promoteur';
+      default:
+        return 'Tableau de bord Administration';
+    }
+  }
+
+  List<String> _responsibilitiesForRole(String? role) {
+    switch (role) {
+      case 'super_admin':
+        return const [
+          'Piloter toutes les opérations',
+          'Superviser sécurité et audit',
+          'Arbitrer performance globale',
+        ];
+      case 'director':
+        return const [
+          'Diriger la performance établissement',
+          'Superviser pédagogie et finances',
+          'Valider les décisions critiques',
+        ];
+      case 'promoter':
+        return const [
+          'Suivre les indicateurs stratégiques',
+          'Coordonner les priorités de direction',
+          'Arbitrer objectifs financiers',
+        ];
+      default:
+        return const ['Consulter les indicateurs de pilotage'];
+    }
+  }
+
+  List<_DashboardQuickAction> _quickActionsForRole(String? role) {
+    switch (role) {
+      case 'super_admin':
+        return const [
+          _DashboardQuickAction.refresh,
+          _DashboardQuickAction.reports,
+          _DashboardQuickAction.finance,
+          _DashboardQuickAction.newPayment,
+          _DashboardQuickAction.timetable,
+          _DashboardQuickAction.activityLogs,
+        ];
+      case 'director':
+      case 'promoter':
+        return const [
+          _DashboardQuickAction.refresh,
+          _DashboardQuickAction.reports,
+          _DashboardQuickAction.finance,
+          _DashboardQuickAction.newPayment,
+          _DashboardQuickAction.timetable,
+        ];
+      default:
+        return const [_DashboardQuickAction.refresh];
+    }
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final statsAsync = ref.watch(dashboardStatsProvider);
+    final authUser = ref.watch(authControllerProvider).value;
+    final recentPayments = ref.watch(paymentsProvider).valueOrNull ?? const [];
+    final fees = ref.watch(feesProvider).valueOrNull ?? const [];
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
 
     return statsAsync.when(
       loading: () => RefreshIndicator(
-        onRefresh: () => _refreshDashboard(ref),
+        onRefresh: _refreshDashboard,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
@@ -41,7 +207,7 @@ class DashboardPage extends ConsumerWidget {
         ),
       ),
       error: (error, _) => RefreshIndicator(
-        onRefresh: () => _refreshDashboard(ref),
+        onRefresh: _refreshDashboard,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(18, 24, 18, 24),
@@ -67,7 +233,7 @@ class DashboardPage extends ConsumerWidget {
                           const SizedBox(height: 12),
                           FilledButton.icon(
                             onPressed: () {
-                              _refreshDashboard(ref);
+                              _refreshDashboard();
                             },
                             icon: const Icon(Icons.refresh_rounded),
                             label: const Text('Réessayer'),
@@ -83,6 +249,16 @@ class DashboardPage extends ConsumerWidget {
         ),
       ),
       data: (stats) {
+        final scopeFactor = _periodMultiplier(_scopePeriod) *
+            _levelMultiplier(_scopeLevel);
+        final scopedStudents = math.max(1, (stats.students * scopeFactor).round());
+        final scopedTeachers = math.max(1, (stats.teachers * scopeFactor).round());
+        final scopedClassrooms = math.max(1, (stats.classrooms * scopeFactor).round());
+        final scopedRevenue = stats.monthlyRevenue * scopeFactor;
+        final scopedExpenses = stats.monthlyExpenses * scopeFactor;
+        final scopedProfit = stats.monthlyProfit * scopeFactor;
+        final scopedAbsences = math.max(0, (stats.monthlyAbsences * scopeFactor).round());
+
         final activeEtablissementName =
             (stats.activeEtablissementName != null &&
                 stats.activeEtablissementName!.trim().isNotEmpty)
@@ -123,37 +299,40 @@ class DashboardPage extends ConsumerWidget {
             : establishmentLines.join('  •  ');
         final heroSubtitleWithContext =
             '$activeEtablissementName • $heroSubtitle';
-        final contextLabel = stats.monthlyProfit >= 0
+        final contextLabel = scopedProfit >= 0
             ? 'Équilibre financier stable'
             : 'Vigilance financière active';
+        final roleQuickActions = _quickActionsForRole(authUser?.role);
+        final roleResponsibilities = _responsibilitiesForRole(authUser?.role);
 
-        final revenueM = stats.monthlyRevenue / 1000000;
-        final expensesM = stats.monthlyExpenses / 1000000;
-        final profitM = stats.monthlyProfit / 1000000;
+        final revenueM = scopedRevenue / 1000000;
+        final expensesM = scopedExpenses / 1000000;
+        final profitM = scopedProfit / 1000000;
 
-        final profitMargin = stats.monthlyRevenue <= 0
+        final profitMargin = scopedRevenue <= 0
             ? 0.0
-            : (stats.monthlyProfit / stats.monthlyRevenue) * 100;
-        final expenseRate = stats.monthlyRevenue <= 0
+          : (scopedProfit / scopedRevenue) * 100;
+        final expenseRate = scopedRevenue <= 0
             ? 0.0
-            : (stats.monthlyExpenses / stats.monthlyRevenue) * 100;
-        final revenuePerStudent = stats.students <= 0
+          : (scopedExpenses / scopedRevenue) * 100;
+        final revenuePerStudent = scopedStudents <= 0
             ? 0.0
-            : stats.monthlyRevenue / stats.students;
-        final expensesPerStudent = stats.students <= 0
+          : scopedRevenue / scopedStudents;
+        final expensesPerStudent = scopedStudents <= 0
             ? 0.0
-            : stats.monthlyExpenses / stats.students;
-        final absencesPerStudent = stats.students <= 0
+          : scopedExpenses / scopedStudents;
+        final absencesPerStudent = scopedStudents <= 0
             ? 0.0
-            : stats.monthlyAbsences / stats.students;
+          : scopedAbsences / scopedStudents;
 
         final profitabilityLevel = _clamp01((profitMargin + 25) / 65);
         final expenseControlLevel = _clamp01(1 - (expenseRate / 100));
         final attendanceLevel = _clamp01(1 - (absencesPerStudent / 1.5));
+        final enrollmentMomentum = _clamp01(scopedStudents / 720);
         final operationalScore =
             ((profitabilityLevel * 0.65) + (attendanceLevel * 0.35)) * 100;
 
-        final heroTone = stats.monthlyProfit >= 0
+        final heroTone = scopedProfit >= 0
             ? const Color(0xFF18D18A)
             : const Color(0xFFFF8C61);
         final refreshedAt = TimeOfDay.fromDateTime(
@@ -163,57 +342,67 @@ class DashboardPage extends ConsumerWidget {
         final kpis = [
           _DashboardKpi(
             title: 'Effectif total',
-            value: stats.students.toString(),
+            metricValue: scopedStudents.toDouble(),
+            valueFormat: _KpiValueFormat.integer,
             subtitle: 'Élèves actifs',
             icon: Icons.groups_2_rounded,
             color: const Color(0xFF2CC2FF),
             helper: 'Suivi des inscriptions',
             trend: '+5%',
             trendUp: true,
+            sparkline: _sparklinePoints(scopedStudents.toDouble(), trendUp: true),
           ),
           _DashboardKpi(
             title: 'Recettes du mois',
-            value: _formatFcfa(stats.monthlyRevenue),
+            metricValue: scopedRevenue,
+            valueFormat: _KpiValueFormat.currency,
             subtitle: 'CA / élève: ${_formatFcfa(revenuePerStudent)}',
             icon: Icons.trending_up_rounded,
             color: const Color(0xFF2ED68F),
             helper: 'Entrées financières',
             trend: '+3.2%',
             trendUp: true,
+            sparkline: _sparklinePoints(scopedRevenue, trendUp: true),
           ),
           _DashboardKpi(
             title: 'Dépenses du mois',
-            value: _formatFcfa(stats.monthlyExpenses),
+            metricValue: scopedExpenses,
+            valueFormat: _KpiValueFormat.currency,
             subtitle: 'Charge / élève: ${_formatFcfa(expensesPerStudent)}',
             icon: Icons.account_balance_wallet_rounded,
             color: const Color(0xFFFFA45B),
             helper: 'Sorties financières',
             trend: '+1.1%',
             trendUp: false,
+            sparkline: _sparklinePoints(scopedExpenses, trendUp: false),
           ),
           _DashboardKpi(
             title: 'Bénéfice net',
-            value: _formatFcfa(stats.monthlyProfit),
+            metricValue: scopedProfit,
+            valueFormat: _KpiValueFormat.currency,
             subtitle: 'Marge: ${_signedPercent(profitMargin)}',
             icon: Icons.insights_rounded,
-            color: stats.monthlyProfit >= 0
+            color: scopedProfit >= 0
                 ? const Color(0xFF3ECF8E)
                 : const Color(0xFFFF756B),
-            helper: stats.monthlyProfit >= 0
+            helper: scopedProfit >= 0
                 ? 'Rentabilité maîtrisée'
                 : 'Rentabilité à redresser',
-            trend: stats.monthlyProfit >= 0 ? '+2.6%' : '-2.4%',
-            trendUp: stats.monthlyProfit >= 0,
+            trend: scopedProfit >= 0 ? '+2.6%' : '-2.4%',
+            trendUp: scopedProfit >= 0,
+            sparkline: _sparklinePoints(scopedProfit.abs(), trendUp: scopedProfit >= 0),
           ),
           _DashboardKpi(
             title: 'Absences du mois',
-            value: stats.monthlyAbsences.toString(),
+            metricValue: scopedAbsences.toDouble(),
+            valueFormat: _KpiValueFormat.integer,
             subtitle: '${absencesPerStudent.toStringAsFixed(2)} / élève',
             icon: Icons.event_busy_rounded,
             color: const Color(0xFF8FA7FF),
             helper: 'Climat de présence',
             trend: '${absencesPerStudent <= 0.55 ? '-' : '+'}2%',
             trendUp: absencesPerStudent <= 0.55,
+            sparkline: _sparklinePoints(scopedAbsences.toDouble(), trendUp: absencesPerStudent <= 0.55),
           ),
         ];
 
@@ -223,6 +412,45 @@ class DashboardPage extends ConsumerWidget {
           expenseRate: expenseRate,
           absencesPerStudent: absencesPerStudent,
         );
+        final pendingFees = fees
+            .where((fee) => fee.balance > 0)
+            .toList(growable: false)
+          ..sort((a, b) => b.balance.compareTo(a.balance));
+        final paymentRows = <_StatusRow>[
+          ...recentPayments.take(3).map(
+            (payment) => _StatusRow(
+              title: '${payment.studentFullName} - ${_feeTypeLabel(payment.feeType)}',
+              subtitle:
+                  '${_formatFcfa(payment.amount)} • ${payment.method} • ${_compactDateTime(payment.createdAt)}',
+              status: _StatusKind.paid,
+              onTap: () => _handleQuickAction(_DashboardQuickAction.finance),
+            ),
+          ),
+          ...pendingFees
+              .take(2)
+              .map(
+                (fee) => _StatusRow(
+                  title: '${fee.studentFullName} - ${_feeTypeLabel(fee.feeType)}',
+                  subtitle:
+                      'Reste ${_formatFcfa(fee.balance)} • Du ${_formatFcfa(fee.amountDue)}',
+                  status: _StatusKind.pending,
+                  onTap: () {
+                    ref.read(financeOpenGuidedPaymentIntentProvider.notifier).state = true;
+                    _navigateToShellItem('finance');
+                  },
+                ),
+              ),
+        ];
+
+        if (paymentRows.isEmpty) {
+          paymentRows.add(
+            const _StatusRow(
+              title: 'Aucun mouvement recent',
+              subtitle: 'Les encaissements et soldes a traiter apparaitront ici.',
+              status: _StatusKind.failed,
+            ),
+          );
+        }
 
         return LayoutBuilder(
           builder: (context, constraints) {
@@ -235,26 +463,33 @@ class DashboardPage extends ConsumerWidget {
                 : width >= 640
                 ? 2
                 : 1;
-            final kpiAspectRatio = kpiColumns == 1
-                ? 3.2
-                : kpiColumns == 2
-                ? 2.15
-                : 1.7;
-            final profitColor = stats.monthlyProfit >= 0
+            // La hauteur d'une carte KPI ne depend pas de sa largeur: on fixe
+            // la hauteur de cellule au lieu de la deduire via
+            // childAspectRatio, qui faisait deborder les cartes. Le chrome
+            // (pastille 36 + sparkline 34 + paddings et espacements) est
+            // constant; seul le bloc de trois lignes de texte suit le reglage
+            // de police du systeme, d'ou le facteur d'echelle.
+            const kpiChromeHeight = 136.0;
+            const kpiTextBlockHeight = 64.0;
+            final kpiCardHeight =
+                kpiChromeHeight +
+                kpiTextBlockHeight *
+                    MediaQuery.textScalerOf(context).scale(1);
+            final profitColor = scopedProfit >= 0
                 ? const Color(0xFF39D68F)
                 : const Color(0xFFFF7A6A);
-            final cashHeadroom = stats.monthlyRevenue - stats.monthlyExpenses;
-            final expenseToRevenue = stats.monthlyRevenue <= 0
+            final cashHeadroom = scopedRevenue - scopedExpenses;
+            final expenseToRevenue = scopedRevenue <= 0
                 ? 0.0
-                : (stats.monthlyExpenses / stats.monthlyRevenue) * 100;
+              : (scopedExpenses / scopedRevenue) * 100;
 
             return Stack(
               children: [
                 const Positioned.fill(
-                  child: IgnorePointer(child: _DashboardBackdrop()),
+                  child: IgnorePointer(child: SharedDashboardBackdrop()),
                 ),
                 RefreshIndicator(
-                  onRefresh: () => _refreshDashboard(ref),
+                  onRefresh: _refreshDashboard,
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
@@ -265,15 +500,33 @@ class DashboardPage extends ConsumerWidget {
                           establishmentName: activeEtablissementName,
                           contextLabel: contextLabel,
                           refreshedAt: refreshedAt,
+                          quickActions: roleQuickActions,
+                          onActionSelected: _handleQuickAction,
                         ),
                       ),
                       const SizedBox(height: 12),
                       _StaggerReveal(
                         index: 1,
+                        child: _DashboardVisualFilters(
+                          period: _scopePeriod,
+                          level: _scopeLevel,
+                          periodLabel: _scopePeriodLabel(),
+                          levelLabel: _scopeLevelLabel(),
+                          onPeriodChanged: (next) {
+                            setState(() => _scopePeriod = next);
+                          },
+                          onLevelChanged: (next) {
+                            setState(() => _scopeLevel = next);
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _StaggerReveal(
+                        index: 2,
                         child: _DashboardHeroPanel(
-                          title: 'Dashboard Exécutif',
+                          title: _dashboardTitleForRole(authUser?.role),
                           subtitle: heroSubtitleWithContext,
-                          statusLabel: stats.monthlyProfit >= 0
+                          statusLabel: scopedProfit >= 0
                               ? 'Performance saine'
                               : 'Vigilance financière',
                           statusColor: heroTone,
@@ -294,20 +547,23 @@ class DashboardPage extends ConsumerWidget {
                             ),
                             _HeroBadgeData(
                               icon: Icons.schedule_rounded,
-                              text: 'Synchro $refreshedAt',
+                              text: '${_scopePeriodLabel()} • $refreshedAt',
                             ),
                             _HeroBadgeData(
                               icon: Icons.apartment_rounded,
-                              text: 'Classes ${stats.classrooms}',
+                              text: 'Classes $scopedClassrooms',
                             ),
                             _HeroBadgeData(
                               icon: Icons.badge_rounded,
-                              text: 'Enseignants ${stats.teachers}',
+                              text: 'Enseignants $scopedTeachers',
                             ),
                           ],
+                          quickActions: roleQuickActions,
+                          responsibilities: roleResponsibilities,
                           onRefresh: () {
-                            _refreshDashboard(ref);
+                            _refreshDashboard();
                           },
+                          onActionSelected: _handleQuickAction,
                         ),
                       ),
                       const SizedBox(height: 14),
@@ -319,7 +575,7 @@ class DashboardPage extends ConsumerWidget {
                           crossAxisCount: kpiColumns,
                           crossAxisSpacing: 12,
                           mainAxisSpacing: 12,
-                          childAspectRatio: kpiAspectRatio,
+                          mainAxisExtent: kpiCardHeight,
                         ),
                         itemBuilder: (context, index) => _StaggerReveal(
                           index: index + 1,
@@ -355,6 +611,17 @@ class DashboardPage extends ConsumerWidget {
                         ),
                       ),
                       const SizedBox(height: 14),
+                      _StaggerReveal(
+                        index: 7,
+                        child: _PerformanceStoryPanel(
+                          profitabilityLevel: profitabilityLevel,
+                          attendanceLevel: attendanceLevel,
+                          expenseControlLevel: expenseControlLevel,
+                          enrollmentMomentum: enrollmentMomentum,
+                          operationalScore: operationalScore,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
                       if (isWide)
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -362,7 +629,7 @@ class DashboardPage extends ConsumerWidget {
                             Expanded(
                               flex: 7,
                               child: _StaggerReveal(
-                                index: 7,
+                                index: 8,
                                 child: _FinancePanel(
                                   revenueM: revenueM,
                                   expensesM: expensesM,
@@ -379,7 +646,7 @@ class DashboardPage extends ConsumerWidget {
                               child: Column(
                                 children: [
                                   _StaggerReveal(
-                                    index: 8,
+                                    index: 9,
                                     child: _OperationsPanel(
                                       operationalScore: operationalScore,
                                       profitLevel: profitabilityLevel,
@@ -392,8 +659,11 @@ class DashboardPage extends ConsumerWidget {
                                   ),
                                   const SizedBox(height: 12),
                                   _StaggerReveal(
-                                    index: 9,
-                                    child: _InsightsPanel(insights: insights),
+                                    index: 10,
+                                    child: _InsightsPanel(
+                                      insights: insights,
+                                      paymentRows: paymentRows,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -402,7 +672,7 @@ class DashboardPage extends ConsumerWidget {
                         )
                       else ...[
                         _StaggerReveal(
-                          index: 7,
+                          index: 8,
                           child: _FinancePanel(
                             revenueM: revenueM,
                             expensesM: expensesM,
@@ -414,7 +684,7 @@ class DashboardPage extends ConsumerWidget {
                         ),
                         const SizedBox(height: 12),
                         _StaggerReveal(
-                          index: 8,
+                          index: 9,
                           child: _OperationsPanel(
                             operationalScore: operationalScore,
                             profitLevel: profitabilityLevel,
@@ -427,8 +697,11 @@ class DashboardPage extends ConsumerWidget {
                         ),
                         const SizedBox(height: 12),
                         _StaggerReveal(
-                          index: 9,
-                          child: _InsightsPanel(insights: insights),
+                          index: 10,
+                          child: _InsightsPanel(
+                            insights: insights,
+                            paymentRows: paymentRows,
+                          ),
                         ),
                       ],
                     ],
@@ -441,106 +714,6 @@ class DashboardPage extends ConsumerWidget {
       },
     );
   }
-}
-
-class _DashboardBackdrop extends StatelessWidget {
-  const _DashboardBackdrop();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF0F172A), Color(0xFF162338), Color(0xFF1E293B)],
-        ),
-      ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: -160,
-            right: -110,
-            child: Container(
-              width: 380,
-              height: 380,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF8B5CF6).withValues(alpha: 0.18),
-              ),
-            ),
-          ),
-          Positioned(
-            left: -120,
-            bottom: -90,
-            child: Container(
-              width: 330,
-              height: 330,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF6366F1).withValues(alpha: 0.18),
-              ),
-            ),
-          ),
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white.withValues(alpha: 0.02),
-                    Colors.transparent,
-                    Colors.black.withValues(alpha: 0.1),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const Positioned.fill(
-            child: IgnorePointer(
-              child: RepaintBoundary(child: CustomPaint(painter: _StarDust())),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StarDust extends CustomPainter {
-  const _StarDust();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final starPaint = Paint()..style = PaintingStyle.fill;
-    final random = math.Random(42);
-
-    for (var i = 0; i < 95; i++) {
-      final x = random.nextDouble() * size.width;
-      final y = random.nextDouble() * size.height;
-      final r = (random.nextDouble() * 1.3) + 0.25;
-      final alpha = (random.nextDouble() * 0.22) + 0.04;
-      starPaint.color = Colors.white.withValues(alpha: alpha);
-      canvas.drawCircle(Offset(x, y), r, starPaint);
-    }
-
-    final hazePaint = Paint()
-      ..shader =
-          const RadialGradient(
-            colors: [Color(0x2E8B5CF6), Color(0x206366F1), Color(0x0010182A)],
-          ).createShader(
-            Rect.fromCircle(
-              center: Offset(size.width * 0.66, size.height * 0.26),
-              radius: size.shortestSide * 0.52,
-            ),
-          );
-
-    canvas.drawRect(Offset.zero & size, hazePaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _StaggerReveal extends StatefulWidget {
@@ -579,61 +752,6 @@ class _StaggerRevealState extends State<_StaggerReveal> {
         duration: const Duration(milliseconds: 400),
         curve: Curves.easeOutCubic,
         child: widget.child,
-      ),
-    );
-  }
-}
-
-class _GlassCard extends StatelessWidget {
-  final Widget child;
-  final BorderRadius borderRadius;
-  final List<Color>? gradient;
-  final EdgeInsetsGeometry padding;
-
-  const _GlassCard({
-    required this.child,
-    this.borderRadius = const BorderRadius.all(Radius.circular(20)),
-    this.gradient,
-    this.padding = const EdgeInsets.all(14),
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: borderRadius,
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            borderRadius: borderRadius,
-            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors:
-                  gradient ??
-                  [
-                    Colors.white.withValues(alpha: 0.12),
-                    Colors.white.withValues(alpha: 0.06),
-                  ],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF6366F1).withValues(alpha: 0.14),
-                blurRadius: 24,
-                offset: const Offset(0, 8),
-              ),
-              BoxShadow(
-                color: const Color(0xFF8B5CF6).withValues(alpha: 0.08),
-                blurRadius: 18,
-                spreadRadius: -3,
-                offset: const Offset(0, -2),
-              ),
-            ],
-          ),
-          child: child,
-        ),
       ),
     );
   }
@@ -709,7 +827,7 @@ class _ExecutiveHighlightsStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCard(
+    return DashboardGlassCard(
       borderRadius: BorderRadius.circular(16),
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       child: Wrap(
@@ -771,7 +889,10 @@ class _DashboardHeroPanel extends StatelessWidget {
   final String statusLabel;
   final Color statusColor;
   final List<_HeroBadgeData> badges;
+  final List<_DashboardQuickAction> quickActions;
+  final List<String> responsibilities;
   final VoidCallback onRefresh;
+  final ValueChanged<_DashboardQuickAction> onActionSelected;
 
   const _DashboardHeroPanel({
     required this.title,
@@ -779,12 +900,15 @@ class _DashboardHeroPanel extends StatelessWidget {
     required this.statusLabel,
     required this.statusColor,
     required this.badges,
+    required this.quickActions,
+    required this.responsibilities,
     required this.onRefresh,
+    required this.onActionSelected,
   });
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCard(
+    return DashboardGlassCard(
       borderRadius: BorderRadius.circular(20),
       gradient: [
         const Color(0xFF2C2E7D).withValues(alpha: 0.34),
@@ -828,11 +952,44 @@ class _DashboardHeroPanel extends StatelessWidget {
                 children: [
                   _RefreshMicroButton(onPressed: onRefresh),
                   const SizedBox(width: 8),
-                  const _HeroActionBubble(icon: Icons.more_horiz_rounded),
+                  _HeroActionMenu(
+                    actions: quickActions,
+                    onSelected: onActionSelected,
+                  ),
                 ],
               ),
             ],
           ),
+          if (responsibilities.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final item in responsibilities)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(999),
+                      color: Colors.white.withValues(alpha: 0.08),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.15),
+                      ),
+                    ),
+                    child: Text(
+                      item,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.9),
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -868,22 +1025,66 @@ class _DashboardHeroPanel extends StatelessWidget {
   }
 }
 
-class _HeroActionBubble extends StatelessWidget {
-  final IconData icon;
+class _HeroActionMenu extends StatelessWidget {
+  final List<_DashboardQuickAction> actions;
+  final ValueChanged<_DashboardQuickAction> onSelected;
 
-  const _HeroActionBubble({required this.icon});
+  const _HeroActionMenu({
+    required this.actions,
+    required this.onSelected,
+  });
+
+  static ({String label, IconData icon}) _meta(_DashboardQuickAction action) {
+    switch (action) {
+      case _DashboardQuickAction.refresh:
+        return (label: 'Actualiser', icon: Icons.refresh_rounded);
+      case _DashboardQuickAction.reports:
+        return (label: 'Rapports', icon: Icons.assessment_rounded);
+      case _DashboardQuickAction.finance:
+        return (
+          label: 'Finances',
+          icon: Icons.account_balance_wallet_rounded,
+        );
+      case _DashboardQuickAction.newPayment:
+        return (label: 'Encaisser maintenant', icon: Icons.point_of_sale_rounded);
+      case _DashboardQuickAction.timetable:
+        return (label: 'Emploi du temps', icon: Icons.schedule_rounded);
+      case _DashboardQuickAction.activityLogs:
+        return (label: 'Journal d\'activité', icon: Icons.history_rounded);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 38,
-      height: 38,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(11),
-        color: Colors.white.withValues(alpha: 0.1),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+    return PopupMenuButton<_DashboardQuickAction>(
+      tooltip: 'Actions rapides',
+      onSelected: onSelected,
+      itemBuilder: (context) => actions
+          .map(
+            (action) => PopupMenuItem(
+              value: action,
+              child: ListTile(
+                leading: Icon(_meta(action).icon),
+                title: Text(_meta(action).label),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          )
+          .toList(growable: false),
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(11),
+          color: Colors.white.withValues(alpha: 0.1),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+        ),
+        child: Icon(
+          Icons.more_horiz_rounded,
+          color: Colors.white.withValues(alpha: 0.88),
+          size: 18,
+        ),
       ),
-      child: Icon(icon, color: Colors.white.withValues(alpha: 0.88), size: 18),
     );
   }
 }
@@ -892,16 +1093,20 @@ class _ContextRibbon extends StatelessWidget {
   final String establishmentName;
   final String contextLabel;
   final String refreshedAt;
+  final List<_DashboardQuickAction> quickActions;
+  final ValueChanged<_DashboardQuickAction> onActionSelected;
 
   const _ContextRibbon({
     required this.establishmentName,
     required this.contextLabel,
     required this.refreshedAt,
+    required this.quickActions,
+    required this.onActionSelected,
   });
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCard(
+    return DashboardGlassCard(
       borderRadius: BorderRadius.circular(16),
       gradient: [
         Colors.white.withValues(alpha: 0.08),
@@ -932,26 +1137,38 @@ class _ContextRibbon extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              gradient: const LinearGradient(
-                colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF8B5CF6).withValues(alpha: 0.34),
-                  blurRadius: 16,
-                  spreadRadius: -4,
+          PopupMenuButton<_DashboardQuickAction>(
+            tooltip: 'Raccourcis dashboard',
+            onSelected: onActionSelected,
+            itemBuilder: (context) => quickActions
+                .map(
+                  (action) => PopupMenuItem(
+                    value: action,
+                    child: Text(_HeroActionMenu._meta(action).label),
+                  ),
+                )
+                .toList(growable: false),
+            child: Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
                 ),
-              ],
-            ),
-            child: const Icon(
-              Icons.more_horiz_rounded,
-              color: Colors.white,
-              size: 18,
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF8B5CF6).withValues(alpha: 0.34),
+                    blurRadius: 16,
+                    spreadRadius: -4,
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.more_horiz_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
             ),
           ),
         ],
@@ -988,6 +1205,143 @@ class _ContextPill extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _DashboardVisualFilters extends StatelessWidget {
+  final _DashboardScopePeriod period;
+  final _DashboardScopeLevel level;
+  final String periodLabel;
+  final String levelLabel;
+  final ValueChanged<_DashboardScopePeriod> onPeriodChanged;
+  final ValueChanged<_DashboardScopeLevel> onLevelChanged;
+
+  const _DashboardVisualFilters({
+    required this.period,
+    required this.level,
+    required this.periodLabel,
+    required this.levelLabel,
+    required this.onPeriodChanged,
+    required this.onLevelChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return DashboardGlassCard(
+      borderRadius: BorderRadius.circular(16),
+      gradient: [
+        Colors.white.withValues(alpha: 0.09),
+        const Color(0xFF1B2442).withValues(alpha: 0.28),
+      ],
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _ContextPill(
+                icon: Icons.filter_alt_rounded,
+                label: 'Periode: $periodLabel',
+              ),
+              _ContextPill(
+                icon: Icons.account_tree_rounded,
+                label: 'Niveau: $levelLabel',
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _VisualToggleChip(
+                label: 'Semaine',
+                selected: period == _DashboardScopePeriod.weekly,
+                onTap: () => onPeriodChanged(_DashboardScopePeriod.weekly),
+              ),
+              _VisualToggleChip(
+                label: 'Mois',
+                selected: period == _DashboardScopePeriod.monthly,
+                onTap: () => onPeriodChanged(_DashboardScopePeriod.monthly),
+              ),
+              _VisualToggleChip(
+                label: 'Trimestre',
+                selected: period == _DashboardScopePeriod.quarterly,
+                onTap: () => onPeriodChanged(_DashboardScopePeriod.quarterly),
+              ),
+              const SizedBox(width: 8),
+              _VisualToggleChip(
+                label: 'Tous',
+                selected: level == _DashboardScopeLevel.all,
+                onTap: () => onLevelChanged(_DashboardScopeLevel.all),
+              ),
+              _VisualToggleChip(
+                label: 'Inf',
+                selected: level == _DashboardScopeLevel.lower,
+                onTap: () => onLevelChanged(_DashboardScopeLevel.lower),
+              ),
+              _VisualToggleChip(
+                label: 'Moyen',
+                selected: level == _DashboardScopeLevel.middle,
+                onTap: () => onLevelChanged(_DashboardScopeLevel.middle),
+              ),
+              _VisualToggleChip(
+                label: 'Sup',
+                selected: level == _DashboardScopeLevel.upper,
+                onTap: () => onLevelChanged(_DashboardScopeLevel.upper),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _VisualToggleChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _VisualToggleChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          gradient: selected
+              ? const LinearGradient(
+                  colors: [Color(0xFF4E7CFF), Color(0xFF8B5CF6)],
+                )
+              : null,
+          color: selected ? null : Colors.white.withValues(alpha: 0.07),
+          border: Border.all(
+            color: selected
+                ? Colors.white.withValues(alpha: 0.28)
+                : Colors.white.withValues(alpha: 0.14),
+          ),
+        ),
+        child: Text(
+          label,
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: selected ? Colors.white : Colors.white.withValues(alpha: 0.78),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
     );
   }
@@ -1103,25 +1457,31 @@ class _HeroBadge extends StatelessWidget {
 
 class _DashboardKpi {
   final String title;
-  final String value;
+  final double metricValue;
+  final _KpiValueFormat valueFormat;
   final String subtitle;
   final String helper;
   final String trend;
   final bool trendUp;
   final IconData icon;
   final Color color;
+  final List<double> sparkline;
 
   const _DashboardKpi({
     required this.title,
-    required this.value,
+    required this.metricValue,
+    required this.valueFormat,
     required this.subtitle,
     required this.helper,
     required this.trend,
     required this.trendUp,
     required this.icon,
     required this.color,
+    required this.sparkline,
   });
 }
+
+enum _KpiValueFormat { integer, currency }
 
 class _KpiCard extends StatelessWidget {
   final _DashboardKpi data;
@@ -1141,7 +1501,7 @@ class _KpiCard extends StatelessWidget {
               color: data.color,
             ),
           ),
-          _GlassCard(
+          DashboardGlassCard(
             borderRadius: borderRadius,
             gradient: [
               data.color.withValues(alpha: 0.2),
@@ -1229,16 +1589,17 @@ class _KpiCard extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text(
                   data.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Colors.white.withValues(alpha: 0.8),
                   ),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  data.value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                _AnimatedKpiValue(
+                  value: data.metricValue,
+                  format: data.valueFormat,
+                  textStyle: Theme.of(context).textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: Colors.white,
                   ),
@@ -1252,11 +1613,119 @@ class _KpiCard extends StatelessWidget {
                     color: Colors.white.withValues(alpha: 0.68),
                   ),
                 ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 34,
+                  child: _KpiSparkline(
+                    points: data.sparkline,
+                    tone: data.color,
+                  ),
+                ),
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+String _formatKpiValue(double value, _KpiValueFormat format) {
+  switch (format) {
+    case _KpiValueFormat.integer:
+      return value.round().toString();
+    case _KpiValueFormat.currency:
+      return _formatFcfa(value);
+  }
+}
+
+class _KpiSparkline extends StatelessWidget {
+  final List<double> points;
+  final Color tone;
+
+  const _KpiSparkline({required this.points, required this.tone});
+
+  @override
+  Widget build(BuildContext context) {
+    if (points.length < 2) {
+      return const SizedBox.shrink();
+    }
+    final maxY = points.reduce(math.max);
+    final minY = points.reduce(math.min);
+    final span = (maxY - minY).abs();
+    final adjustedMinY = span < 0.01 ? minY - 1 : minY;
+    final adjustedMaxY = span < 0.01 ? maxY + 1 : maxY;
+
+    return LineChart(
+      LineChartData(
+        minX: 0,
+        maxX: (points.length - 1).toDouble(),
+        minY: adjustedMinY,
+        maxY: adjustedMaxY,
+        lineTouchData: const LineTouchData(enabled: false),
+        titlesData: const FlTitlesData(
+          show: false,
+        ),
+        borderData: FlBorderData(show: false),
+        gridData: FlGridData(show: false),
+        lineBarsData: [
+          LineChartBarData(
+            spots: List.generate(
+              points.length,
+              (index) => FlSpot(index.toDouble(), points[index]),
+            ),
+            isCurved: true,
+            curveSmoothness: 0.3,
+            color: tone,
+            barWidth: 2.2,
+            isStrokeCapRound: true,
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(
+              show: true,
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  tone.withValues(alpha: 0.24),
+                  tone.withValues(alpha: 0.02),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutCubic,
+    );
+  }
+}
+
+class _AnimatedKpiValue extends StatelessWidget {
+  final double value;
+  final _KpiValueFormat format;
+  final TextStyle? textStyle;
+
+  const _AnimatedKpiValue({
+    required this.value,
+    required this.format,
+    required this.textStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      key: ValueKey<String>('kpi-${format.name}-${value.toStringAsFixed(2)}'),
+      duration: const Duration(milliseconds: 760),
+      curve: Curves.easeOutCubic,
+      tween: Tween<double>(begin: 0, end: value),
+      builder: (context, animated, _) {
+        return Text(
+          _formatKpiValue(animated, format),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: textStyle,
+        );
+      },
     );
   }
 }
@@ -1338,7 +1807,7 @@ class _PanelShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCard(
+    return DashboardGlassCard(
       borderRadius: BorderRadius.circular(20),
       gradient: [
         Colors.white.withValues(alpha: 0.1),
@@ -1646,6 +2115,14 @@ List<FlSpot> _trendSpots(
   ];
 }
 
+List<double> _sparklinePoints(double base, {required bool trendUp}) {
+  final safe = base.abs() < 1 ? 1 : base.abs();
+  if (trendUp) {
+    return [safe * 0.58, safe * 0.71, safe * 0.66, safe * 0.83, safe * 1.0];
+  }
+  return [safe * 1.0, safe * 0.92, safe * 0.95, safe * 0.86, safe * 0.78];
+}
+
 double _axisInterval(double maxY, double minY) {
   final span = (maxY - minY).abs();
   if (span <= 0.15) {
@@ -1747,6 +2224,430 @@ class _FinanceFootValue extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+enum _StoryPeriod { weekly, monthly }
+
+class _PerformanceStoryPanel extends StatefulWidget {
+  final double profitabilityLevel;
+  final double attendanceLevel;
+  final double expenseControlLevel;
+  final double enrollmentMomentum;
+  final double operationalScore;
+
+  const _PerformanceStoryPanel({
+    required this.profitabilityLevel,
+    required this.attendanceLevel,
+    required this.expenseControlLevel,
+    required this.enrollmentMomentum,
+    required this.operationalScore,
+  });
+
+  @override
+  State<_PerformanceStoryPanel> createState() => _PerformanceStoryPanelState();
+}
+
+class _PerformanceStoryPanelState extends State<_PerformanceStoryPanel> {
+  _StoryPeriod _period = _StoryPeriod.monthly;
+
+  @override
+  Widget build(BuildContext context) {
+    final periodFactor = _period == _StoryPeriod.weekly ? 0.94 : 1.0;
+    final realValues = <double>[
+      (widget.profitabilityLevel * periodFactor).clamp(0.0, 1.0),
+      (widget.attendanceLevel * periodFactor).clamp(0.0, 1.0),
+      (widget.expenseControlLevel * periodFactor).clamp(0.0, 1.0),
+      (widget.enrollmentMomentum * (periodFactor + 0.02)).clamp(0.0, 1.0),
+    ];
+    final objectiveValues = _period == _StoryPeriod.weekly
+        ? const <double>[0.70, 0.72, 0.68, 0.66]
+        : const <double>[0.78, 0.79, 0.75, 0.72];
+    final labels = const <String>[
+      'Rentabilite',
+      'Presence',
+      'Charges',
+      'Croissance',
+    ];
+
+    final dynamicScore = (realValues.reduce((a, b) => a + b) / realValues.length) *
+        100;
+    final signal = dynamicScore >= 74
+        ? ('Signal fort', const Color(0xFF3BD39A))
+        : dynamicScore >= 58
+        ? ('Signal modere', const Color(0xFFFFB56E))
+        : ('Signal fragile', const Color(0xFFFF7A68));
+
+    return _PanelShell(
+      title: 'Radar strategique & benchmark',
+      subtitle:
+          'Lecture rapide du niveau reel vs objectif sur 4 axes decisifs.',
+      trailing: _StoryPeriodSwitch(
+        period: _period,
+        onChanged: (next) => setState(() => _period = next),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 840;
+          final radar = _StoryRadar(
+            labels: labels,
+            realValues: realValues,
+            objectiveValues: objectiveValues,
+          );
+          final bars = _StoryBars(
+            labels: labels,
+            realValues: realValues,
+            objectiveValues: objectiveValues,
+          );
+
+          final summary = Container(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: Colors.white.withValues(alpha: 0.07),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+            ),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: [
+                _LegendPill(label: 'Reel', color: const Color(0xFF3ABBF7)),
+                _LegendPill(label: 'Objectif', color: const Color(0xFF8B5CF6)),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: signal.$2.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: signal.$2.withValues(alpha: 0.48)),
+                  ),
+                  child: Text(
+                    '${signal.$1} • ${dynamicScore.toStringAsFixed(0)}',
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: signal.$2,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6DA8FF).withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: const Color(0xFF6DA8FF).withValues(alpha: 0.42),
+                    ),
+                  ),
+                  child: Text(
+                    'Score global ${widget.operationalScore.toStringAsFixed(0)}',
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: const Color(0xFF8BBCFF),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+
+          if (wide) {
+            return Column(
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: radar),
+                    const SizedBox(width: 12),
+                    Expanded(child: bars),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                summary,
+              ],
+            );
+          }
+
+          return Column(
+            children: [
+              radar,
+              const SizedBox(height: 12),
+              bars,
+              const SizedBox(height: 12),
+              summary,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _StoryPeriodSwitch extends StatelessWidget {
+  final _StoryPeriod period;
+  final ValueChanged<_StoryPeriod> onChanged;
+
+  const _StoryPeriodSwitch({required this.period, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: Colors.white.withValues(alpha: 0.09),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _StoryPeriodButton(
+            label: 'Semaine',
+            selected: period == _StoryPeriod.weekly,
+            onTap: () => onChanged(_StoryPeriod.weekly),
+          ),
+          _StoryPeriodButton(
+            label: 'Mois',
+            selected: period == _StoryPeriod.monthly,
+            onTap: () => onChanged(_StoryPeriod.monthly),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StoryPeriodButton extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _StoryPeriodButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          gradient: selected
+              ? const LinearGradient(
+                  colors: [Color(0xFF5B8BFF), Color(0xFF8B5CF6)],
+                )
+              : null,
+          color: selected ? null : Colors.transparent,
+        ),
+        child: Text(
+          label,
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: selected ? Colors.white : Colors.white.withValues(alpha: 0.72),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StoryRadar extends StatelessWidget {
+  final List<String> labels;
+  final List<double> realValues;
+  final List<double> objectiveValues;
+
+  const _StoryRadar({
+    required this.labels,
+    required this.realValues,
+    required this.objectiveValues,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: Colors.white.withValues(alpha: 0.06),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+      ),
+      child: SizedBox(
+        height: 250,
+        child: RadarChart(
+          RadarChartData(
+            radarShape: RadarShape.circle,
+            tickCount: 4,
+            ticksTextStyle: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: Colors.white.withValues(alpha: 0.55),
+            ),
+            gridBorderData: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
+            radarBorderData: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+            titlePositionPercentageOffset: 0.18,
+            getTitle: (index, angle) {
+              return RadarChartTitle(
+                text: labels[index],
+                angle: angle,
+                positionPercentageOffset: 0.1,
+              );
+            },
+            titleTextStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: Colors.white.withValues(alpha: 0.8),
+              fontWeight: FontWeight.w600,
+            ),
+            dataSets: [
+              RadarDataSet(
+                fillColor: const Color(0xFF38BDF8).withValues(alpha: 0.22),
+                borderColor: const Color(0xFF38BDF8),
+                entryRadius: 2.8,
+                borderWidth: 2.3,
+                dataEntries: realValues
+                    .map((v) => RadarEntry(value: (v * 100).clamp(0, 100)))
+                    .toList(growable: false),
+              ),
+              RadarDataSet(
+                fillColor: const Color(0xFF8B5CF6).withValues(alpha: 0.16),
+                borderColor: const Color(0xFF8B5CF6),
+                entryRadius: 2.1,
+                borderWidth: 2,
+                dataEntries: objectiveValues
+                    .map((v) => RadarEntry(value: (v * 100).clamp(0, 100)))
+                    .toList(growable: false),
+              ),
+            ],
+          ),
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOutCubic,
+        ),
+      ),
+    );
+  }
+}
+
+class _StoryBars extends StatelessWidget {
+  final List<String> labels;
+  final List<double> realValues;
+  final List<double> objectiveValues;
+
+  const _StoryBars({
+    required this.labels,
+    required this.realValues,
+    required this.objectiveValues,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: Colors.white.withValues(alpha: 0.06),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+      ),
+      child: SizedBox(
+        height: 250,
+        child: BarChart(
+          BarChartData(
+            minY: 0,
+            maxY: 100,
+            barTouchData: BarTouchData(
+              enabled: true,
+              touchTooltipData: BarTouchTooltipData(
+                getTooltipColor: (_) => const Color(0xFF101B2E).withValues(alpha: 0.95),
+                getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                  final metric = labels[group.x.toInt()];
+                  final series = rodIndex == 0 ? 'Reel' : 'Objectif';
+                  return BarTooltipItem(
+                    '$metric\n$series: ${rod.toY.toStringAsFixed(0)}%',
+                    const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                  );
+                },
+              ),
+            ),
+            titlesData: FlTitlesData(
+              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  interval: 25,
+                  reservedSize: 30,
+                  getTitlesWidget: (value, _) => Text(
+                    '${value.toStringAsFixed(0)}%',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Colors.white.withValues(alpha: 0.58),
+                    ),
+                  ),
+                ),
+              ),
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  getTitlesWidget: (value, _) {
+                    final i = value.toInt();
+                    if (i < 0 || i >= labels.length) {
+                      return const SizedBox.shrink();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        labels[i],
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            gridData: FlGridData(
+              show: true,
+              drawVerticalLine: false,
+              horizontalInterval: 25,
+              getDrawingHorizontalLine: (_) =>
+                  FlLine(color: Colors.white.withValues(alpha: 0.11), strokeWidth: 1),
+            ),
+            borderData: FlBorderData(show: false),
+            barGroups: List.generate(labels.length, (index) {
+              final realY = (realValues[index] * 100).clamp(0, 100);
+              final targetY = (objectiveValues[index] * 100).clamp(0, 100);
+              return BarChartGroupData(
+                x: index,
+                barsSpace: 4,
+                barRods: [
+                  BarChartRodData(
+                    toY: realY.toDouble(),
+                    width: 10,
+                    borderRadius: BorderRadius.circular(4),
+                    gradient: const LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [Color(0xFF1FA8FF), Color(0xFF46D4FF)],
+                    ),
+                  ),
+                  BarChartRodData(
+                    toY: targetY.toDouble(),
+                    width: 10,
+                    borderRadius: BorderRadius.circular(4),
+                    gradient: const LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [Color(0xFF7C63FF), Color(0xFFAE7BFF)],
+                    ),
+                  ),
+                ],
+              );
+            }),
+          ),
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOutCubic,
+        ),
       ),
     );
   }
@@ -1925,29 +2826,12 @@ class _ProgressMetricRow extends StatelessWidget {
 
 class _InsightsPanel extends StatelessWidget {
   final List<_DashboardInsight> insights;
+  final List<_StatusRow> paymentRows;
 
-  const _InsightsPanel({required this.insights});
+  const _InsightsPanel({required this.insights, required this.paymentRows});
 
   @override
   Widget build(BuildContext context) {
-    const paymentRows = [
-      _StatusRow(
-        title: '3A - Scolarité Mars',
-        subtitle: 'Famille Kone',
-        status: _StatusKind.paid,
-      ),
-      _StatusRow(
-        title: '2B - Trimestre 2',
-        subtitle: 'Famille Diallo',
-        status: _StatusKind.pending,
-      ),
-      _StatusRow(
-        title: '6eA - Cantine',
-        subtitle: 'Famille Niamke',
-        status: _StatusKind.failed,
-      ),
-    ];
-
     return _PanelShell(
       title: 'Insights & priorités',
       subtitle: 'Suggestions automatiques pour le pilotage quotidien.',
@@ -1985,11 +2869,13 @@ class _StatusRow {
   final String title;
   final String subtitle;
   final _StatusKind status;
+  final VoidCallback? onTap;
 
   const _StatusRow({
     required this.title,
     required this.subtitle,
     required this.status,
+    this.onTap,
   });
 }
 
@@ -2008,76 +2894,81 @@ class _StatusListTileState extends State<_StatusListTile> {
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (widget.row.status) {
-      _StatusKind.paid => ('Paid', const Color(0xFF22C55E)),
-      _StatusKind.pending => ('Pending', const Color(0xFFF59E0B)),
-      _StatusKind.failed => ('Failed', const Color(0xFFEF4444)),
+      _StatusKind.paid => ('Paye', const Color(0xFF22C55E)),
+      _StatusKind.pending => ('En attente', const Color(0xFFF59E0B)),
+      _StatusKind.failed => ('Info', const Color(0xFF60A5FA)),
     };
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 170),
-        curve: Curves.easeOut,
-        padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          gradient: LinearGradient(
-            colors: [
-              Colors.white.withValues(alpha: _hovered ? 0.14 : 0.09),
-              const Color(0xFF242B4A).withValues(alpha: _hovered ? 0.24 : 0.18),
-            ],
-          ),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
-          boxShadow: _hovered
-              ? [
-                  BoxShadow(
-                    color: const Color(0xFF8B5CF6).withValues(alpha: 0.2),
-                    blurRadius: 14,
-                    spreadRadius: -2,
-                  ),
-                ]
-              : null,
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.row.title,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    widget.row.subtitle,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: Colors.white.withValues(alpha: 0.66),
-                    ),
-                  ),
-                ],
-              ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: widget.row.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 170),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            gradient: LinearGradient(
+              colors: [
+                Colors.white.withValues(alpha: _hovered ? 0.14 : 0.09),
+                const Color(0xFF242B4A).withValues(alpha: _hovered ? 0.24 : 0.18),
+              ],
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(999),
-                color: color.withValues(alpha: 0.2),
-                border: Border.all(color: color.withValues(alpha: 0.55)),
-              ),
-              child: Text(
-                label,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: color,
-                  fontWeight: FontWeight.w700,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+            boxShadow: _hovered
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFF8B5CF6).withValues(alpha: 0.2),
+                      blurRadius: 14,
+                      spreadRadius: -2,
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.row.title,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.row.subtitle,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.66),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  color: color.withValues(alpha: 0.2),
+                  border: Border.all(color: color.withValues(alpha: 0.55)),
+                ),
+                child: Text(
+                  label,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2268,4 +3159,31 @@ String _formatFcfa(double value) {
 
   final formatted = negative ? '-${buffer.toString()}' : buffer.toString();
   return '$formatted FCFA';
+}
+
+String _feeTypeLabel(String raw) {
+  final value = raw.trim().toLowerCase();
+  switch (value) {
+    case 'registration':
+      return 'Frais inscription';
+    case 'monthly':
+      return 'Frais mensuels';
+    case 'exam':
+      return 'Frais examen';
+    default:
+      return raw.trim().isEmpty ? 'Frais' : raw;
+  }
+}
+
+String _compactDateTime(String raw) {
+  final parsed = DateTime.tryParse(raw);
+  if (parsed == null) {
+    return '-';
+  }
+  final local = parsed.toLocal();
+  final day = local.day.toString().padLeft(2, '0');
+  final month = local.month.toString().padLeft(2, '0');
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '$day/$month $hour:$minute';
 }

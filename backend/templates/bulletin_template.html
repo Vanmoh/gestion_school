@@ -74,12 +74,7 @@
         <th style="width: 12%">Note classe</th>
         <th style="width: 12%">Note examen</th>
         <th style="width: 12%">Note finale</th>
-<<<<<<< HEAD
-        <th style="width: 12%">Moy. classe</th>
-        <th style="width: 9%">Points</th>
-=======
         <th style="width: 17%">Appréciation</th>
->>>>>>> main
       </tr>
     </thead>
     <tbody>
@@ -91,20 +86,11 @@
           <td>{{ row.note_classe|default:"-" }}</td>
           <td>{{ row.note_examen|default:"-" }}</td>
           <td>{{ row.note_finale|default:"-" }}</td>
-<<<<<<< HEAD
-          <td>{{ row.moyenne_classe|default:"-" }}</td>
-          <td>{{ row.points|default:"-" }}</td>
-        </tr>
-      {% empty %}
-        <tr>
-          <td colspan="8">Aucune note disponible pour cette période.</td>
-=======
           <td>{{ row.appreciation|default:"-" }}</td>
         </tr>
       {% empty %}
         <tr>
           <td colspan="7">Aucune note disponible pour cette période.</td>
->>>>>>> main
         </tr>
       {% endfor %}
     </tbody>

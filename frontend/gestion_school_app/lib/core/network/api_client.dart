@@ -1,11 +1,25 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/api_constants.dart';
+import '../permissions/module_permissions.dart';
 import 'token_storage.dart';
 
 final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
+
+final StreamController<void> _sessionExpiredController =
+    StreamController<void>.broadcast();
+
+Stream<void> get sessionExpiredStream => _sessionExpiredController.stream;
+
+void _notifySessionExpired() {
+  if (_sessionExpiredController.isClosed) {
+    return;
+  }
+  _sessionExpiredController.add(null);
+}
 
 bool _isTransientNetworkError(DioException error) {
   return error.type == DioExceptionType.connectionTimeout ||
@@ -18,15 +32,19 @@ bool _isIdempotentMethod(String method) {
   return normalized == 'GET' || normalized == 'HEAD' || normalized == 'OPTIONS';
 }
 
-<<<<<<< HEAD
-=======
 bool _sameBaseUrl(String left, String right) {
   final l = left.trim().replaceAll(RegExp(r'/+$'), '');
   final r = right.trim().replaceAll(RegExp(r'/+$'), '');
   return l == r;
 }
 
->>>>>>> main
+bool _isAttendanceSheetEndpoint(String path) {
+  return path.contains('/attendances/sheet_classrooms/') ||
+      path.contains('/attendances/class-sheet/') ||
+      path.contains('/attendances/class-sheet-validate/') ||
+      path.contains('/attendances/class-sheet-export/');
+}
+
 final dioProvider = Provider<Dio>((ref) {
   final tokenStorage = ref.read(tokenStorageProvider);
   final dio = Dio(
@@ -34,16 +52,33 @@ final dioProvider = Provider<Dio>((ref) {
       baseUrl: ApiConstants.baseUrl,
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(seconds: 45),
-<<<<<<< HEAD
-      headers: {'Content-Type': 'application/json'},
-=======
->>>>>>> main
     ),
   );
 
   dio.interceptors.add(
     InterceptorsWrapper(
       onRequest: (options, handler) async {
+        // Refus local des ecritures que la matrice interdit: un bouton oublie
+        // quelque part dans l'interface ne peut plus lancer un appel voue au
+        // 403. Seules les routes CRUD certaines sont concernees, le backend
+        // reste l'autorite sur le reste.
+        final refusal = ModulePermissionsRegistry.refusalFor(
+          options.method,
+          options.path,
+        );
+        if (refusal != null) {
+          handler.reject(
+            DioException(
+              requestOptions: options,
+              type: DioExceptionType.cancel,
+              error: refusal,
+              message: refusal,
+            ),
+            true,
+          );
+          return;
+        }
+
         if (options.data is FormData) {
           options.contentType = Headers.multipartFormDataContentType;
         }
@@ -52,7 +87,6 @@ final dioProvider = Provider<Dio>((ref) {
           tokenStorage.apiBaseUrl(),
           tokenStorage.accessToken(),
           tokenStorage.selectedEtablissement(),
-          tokenStorage.cachedUser(),
         ]);
 
         final storedBaseUrl = values[0];
@@ -71,21 +105,6 @@ final dioProvider = Provider<Dio>((ref) {
         }
 
         final selectedEtablissementRaw = values[2];
-        final cachedUserRaw = values[3];
-
-        String? role;
-        int? userEtablissementId;
-        String? userEtablissementName;
-        if (cachedUserRaw != null && cachedUserRaw.isNotEmpty) {
-          try {
-            final decoded = jsonDecode(cachedUserRaw) as Map<String, dynamic>;
-            role = decoded['role']?.toString();
-            userEtablissementId = (decoded['etablissementId'] as num?)?.toInt();
-            userEtablissementName = decoded['etablissementName']?.toString();
-          } catch (_) {
-            // Ignore malformed cached user payload.
-          }
-        }
 
         if (selectedEtablissementRaw != null &&
           selectedEtablissementRaw.isNotEmpty) {
@@ -106,15 +125,9 @@ final dioProvider = Provider<Dio>((ref) {
           }
         }
 
-        // Non-superadmin users are always pinned to their own establishment.
-        // Backend also enforces this, this is only a client-side safety layer.
-        if (role != 'super_admin' && userEtablissementId != null) {
-          options.headers['X-Etablissement-Id'] = userEtablissementId.toString();
-          final cleanedName = userEtablissementName?.trim();
-          if (cleanedName != null && cleanedName.isNotEmpty) {
-            options.headers['X-Etablissement-Name'] = cleanedName;
-          }
-        }
+        // Do not pin non-superadmin scope from cached user metadata.
+        // Cached storage can be stale across account switches; backend enforces
+        // effective establishment from the authenticated user on every request.
         handler.next(options);
       },
       onError: (error, handler) async {
@@ -172,7 +185,11 @@ final dioProvider = Provider<Dio>((ref) {
               return;
             } catch (_) {
               await tokenStorage.clear();
+              _notifySessionExpired();
             }
+          } else {
+            await tokenStorage.clear();
+            _notifySessionExpired();
           }
         }
 
@@ -181,8 +198,10 @@ final dioProvider = Provider<Dio>((ref) {
             _isIdempotentMethod(request.method) &&
             request.extra['retried_network'] != true;
 
-<<<<<<< HEAD
-=======
+        final is404 = error.response?.statusCode == 404;
+        final canFallbackOnSheet404 =
+          is404 && _isAttendanceSheetEndpoint(request.path);
+
         final hadCustomBaseUrl = request.extra['had_custom_base_url'] == true;
         final usedBaseUrl =
             request.extra['effective_base_url']?.toString() ?? '';
@@ -193,8 +212,9 @@ final dioProvider = Provider<Dio>((ref) {
             request.extra['retried_with_default_base_url'] != true;
 
         if (fallbackToDefaultAvailable &&
-            _isTransientNetworkError(error) &&
-            _isIdempotentMethod(request.method)) {
+          ((_isTransientNetworkError(error) &&
+              _isIdempotentMethod(request.method)) ||
+            canFallbackOnSheet404)) {
           final fallbackOptions = request.copyWith(
             baseUrl: ApiConstants.baseUrl,
           );
@@ -209,7 +229,6 @@ final dioProvider = Provider<Dio>((ref) {
           }
         }
 
->>>>>>> main
         if (canRetryNetworkError) {
           final retriedOptions = request.copyWith();
           retriedOptions.extra['retried_network'] = true;

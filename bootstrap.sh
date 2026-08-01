@@ -3,6 +3,32 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="$ROOT_DIR/infra"
+FORCE_REBUILD=0
+
+usage() {
+  cat <<'EOF'
+Usage: ./bootstrap.sh [--rebuild]
+
+Démarre la stack backend (MySQL, Redis, Django, Celery), applique les
+migrations et injecte les données de démonstration.
+
+Options:
+  --rebuild   Force la reconstruction des images backend/worker/beat.
+              Par défaut la reconstruction n'a lieu que si l'image est
+              absente ou si Dockerfile/requirements.txt ont changé depuis
+              sa construction. Le code source est monté en volume
+              (../backend:/app), il est donc toujours à jour sans rebuild.
+  -h, --help  Affiche cette aide.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rebuild) FORCE_REBUILD=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Option inconnue: $1"; usage; exit 1 ;;
+  esac
+done
 
 log() {
   printf "\n[%s] %s\n" "$(date +"%H:%M:%S")" "$1"
@@ -39,9 +65,129 @@ docker_compose() {
   "${DOCKER_CMD[@]}" compose "$@"
 }
 
+# Le code backend est monté en volume (../backend:/app dans docker-compose.yml),
+# il est donc déjà à jour sans reconstruction. Un rebuild n'apporte quelque
+# chose que si la recette de l'image ou ses dépendances changent: on compare la
+# date de l'image aux mtimes de ces fichiers. En cas de doute (image absente,
+# date illisible) on reconstruit, ne jamais reconstruire serait pire.
+needs_rebuild() {
+  if [[ "$FORCE_REBUILD" -eq 1 ]]; then
+    return 0
+  fi
+
+  local image_id image_created_iso image_created_epoch source source_mtime
+
+  image_id="$(docker_compose images -q backend 2>/dev/null | head -1)"
+  if [[ -z "$image_id" ]]; then
+    log "Image backend absente: construction initiale."
+    return 0
+  fi
+
+  image_created_iso="$("${DOCKER_CMD[@]}" image inspect "$image_id" \
+    --format '{{.Created}}' 2>/dev/null || true)"
+  if [[ -z "$image_created_iso" ]]; then
+    return 0
+  fi
+
+  image_created_epoch="$(date -d "$image_created_iso" +%s 2>/dev/null || true)"
+  if [[ -z "$image_created_epoch" ]]; then
+    return 0
+  fi
+
+  for source in Dockerfile requirements.txt .dockerignore; do
+    if [[ ! -f "$ROOT_DIR/backend/$source" ]]; then
+      continue
+    fi
+    source_mtime="$(stat -c %Y "$ROOT_DIR/backend/$source" 2>/dev/null || echo 0)"
+    if [[ "$source_mtime" -gt "$image_created_epoch" ]]; then
+      log "backend/$source modifié depuis la dernière image: reconstruction."
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+compose_up_with_retries() {
+  local max_attempts=3
+  local attempt=1
+  local up_log
+  local up_args=(up -d)
+  local python_image_candidates=(
+    "${PYTHON_BASE_IMAGE:-python:3.12-slim}"
+    "mirror.gcr.io/library/python:3.12-slim"
+    "ghcr.io/docker-library/python:3.12-slim"
+  )
+  local current_image_index=0
+  local python_base_image="${python_image_candidates[$current_image_index]}"
+
+  if needs_rebuild; then
+    up_args+=(--build)
+  else
+    log "Images à jour: démarrage sans reconstruction (--rebuild pour forcer)."
+  fi
+
+  while [[ "$attempt" -le "$max_attempts" ]]; do
+    up_log="$(mktemp)"
+    set +e
+    PYTHON_BASE_IMAGE="$python_base_image" docker_compose "${up_args[@]}" 2>&1 | tee "$up_log"
+    local up_rc=${PIPESTATUS[0]}
+    set -e
+
+    if [[ "$up_rc" -eq 0 ]]; then
+      rm -f "$up_log"
+      return 0
+    fi
+
+    if grep -qiE "failed to resolve source metadata|lookup registry-1\.docker\.io|i/o timeout|temporary failure in name resolution|dial tcp|Name or service not known|network is unreachable" "$up_log"; then
+      rm -f "$up_log"
+      if [[ "$current_image_index" -lt $((${#python_image_candidates[@]} - 1)) ]]; then
+        # Affectation arithmetique explicite: `((i++))` renvoie l'ancienne
+        # valeur, donc un statut 1 quand i vaut 0, et `set -e` tuait le script
+        # avant meme la premiere bascule vers le mirror.
+        current_image_index=$((current_image_index + 1))
+        python_base_image="${python_image_candidates[$current_image_index]}"
+        log "Bascule automatique de l'image Python vers le mirror: $python_base_image"
+        log "Echec reseau Docker Hub detecte (tentative ${attempt}/${max_attempts}). Nouvelle tentative dans 8s..."
+        sleep 8
+        attempt=$((attempt + 1))
+        continue
+      fi
+
+      echo "Erreur: impossible de joindre Docker Hub apres ${max_attempts} tentatives."
+      echo "Cause probable: DNS/reseau intermittent (ex: registry-1.docker.io)."
+      echo "Action conseillee: relancez ./bootstrap.sh, ou configurez des DNS stables pour Docker (1.1.1.1 / 8.8.8.8)."
+      echo "Contournement image Python: PYTHON_BASE_IMAGE=${python_image_candidates[1]} ./bootstrap.sh"
+      echo "Si le mirror principal echoue egalement: PYTHON_BASE_IMAGE=${python_image_candidates[2]} ./bootstrap.sh"
+      return 1
+    fi
+
+    cat "$up_log"
+    rm -f "$up_log"
+    return 1
+  done
+
+  return 1
+}
+
 all_columns_exist() {
   local checks_python="$1"
   docker_compose exec -T backend python manage.py shell -c "$checks_python"
+}
+
+mysql_query() {
+  local sql="$1"
+  docker_compose exec -T db sh -lc 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -e "$1"' -- "$sql"
+}
+
+school_0026_schema_complete() {
+  local payroll_cols timeentry_cols checkout_nullable
+
+  payroll_cols="$(mysql_query "USE gestion_school; SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='gestion_school' AND TABLE_NAME='school_teacherpayroll' AND COLUMN_NAME IN ('level_one_validated_at','level_one_validated_by_id','level_two_validated_at','level_two_validated_by_id');")"
+  timeentry_cols="$(mysql_query "USE gestion_school; SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='gestion_school' AND TABLE_NAME='school_teachertimeentry' AND COLUMN_NAME IN ('auto_closed_reason','is_auto_closed','late_minutes','tolerated_late_minutes');")"
+  checkout_nullable="$(mysql_query "USE gestion_school; SELECT COALESCE(MAX(CASE WHEN IS_NULLABLE='YES' THEN 1 ELSE 0 END), 0) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='gestion_school' AND TABLE_NAME='school_teachertimeentry' AND COLUMN_NAME='check_out_time';")"
+
+  [[ "$payroll_cols" == "4" && "$timeentry_cols" == "4" && "$checkout_nullable" == "1" ]]
 }
 
 if ! docker_compose version >/dev/null 2>&1; then
@@ -51,7 +197,7 @@ fi
 
 log "Démarrage de la stack backend (MySQL, Redis, Django, Celery)..."
 cd "$INFRA_DIR"
-docker_compose up -d --build
+compose_up_with_retries
 
 log "Attente de disponibilité du service backend..."
 ready=0
@@ -77,7 +223,13 @@ migrate_rc=${PIPESTATUS[0]}
 set -e
 
 if [[ "$migrate_rc" -ne 0 ]]; then
-  if grep -q "Duplicate column name 'etablissement_id'" "$migrate_log_file"; then
+  if grep -q "disk is full" "$migrate_log_file"; then
+    echo "Erreur: espace disque insuffisant pendant les migrations MySQL."
+    echo "Liberez de l'espace sur la partition racine puis relancez ./bootstrap.sh."
+    cat "$migrate_log_file"
+    rm -f "$migrate_log_file"
+    exit 1
+  elif grep -q "Duplicate column name 'etablissement_id'" "$migrate_log_file"; then
     log "Schéma existant détecté (colonnes etablissement_id déjà présentes), tentative de rattrapage des migrations..."
 
     if [[ "$(all_columns_exist "from django.db import connection; cols={c.name for c in connection.introspection.get_table_description(connection.cursor(), 'common_activitylog')}; print('1' if 'etablissement_id' in cols else '0')")" == "1" ]]; then
@@ -89,6 +241,72 @@ if [[ "$migrate_rc" -ne 0 ]]; then
     fi
 
     docker_compose exec -T backend python manage.py migrate --noinput
+  elif grep -q "Table 'school_promotionrun' already exists" "$migrate_log_file" || grep -q "Table 'school_promotiondecision' already exists" "$migrate_log_file"; then
+    log "Schéma passation déjà présent détecté, tentative de rattrapage de la migration school.0018..."
+
+    if [[ "$(all_columns_exist "from django.db import connection; tables=set(connection.introspection.table_names()); print('1' if {'school_promotionrun','school_promotiondecision'}.issubset(tables) else '0')")" == "1" ]]; then
+      docker_compose exec -T backend python manage.py migrate school 0018 --fake
+      docker_compose exec -T backend python manage.py migrate --noinput
+    else
+      echo "Erreur: les tables de passation sont incohérentes (présence partielle)."
+      cat "$migrate_log_file"
+      rm -f "$migrate_log_file"
+      exit 1
+    fi
+  elif grep -q "Table 'school_attendancesheetvalidation' already exists" "$migrate_log_file"; then
+    log "Schéma de validation des fiches de présence déjà présent détecté, tentative de rattrapage de la migration school.0025..."
+
+    if [[ "$(all_columns_exist "from django.db import connection; tables=set(connection.introspection.table_names()); print('1' if 'school_attendancesheetvalidation' in tables else '0')")" == "1" ]]; then
+      docker_compose exec -T backend python manage.py migrate school 0025 --fake
+      docker_compose exec -T backend python manage.py migrate --noinput
+    else
+      echo "Erreur: la table school_attendancesheetvalidation est incohérente ou absente."
+      cat "$migrate_log_file"
+      rm -f "$migrate_log_file"
+      exit 1
+    fi
+  elif grep -q "Table 'chat_conversation' already exists" "$migrate_log_file" || grep -q "Table 'chat_chatmessage' already exists" "$migrate_log_file" || grep -q "Table 'chat_conversationparticipant' already exists" "$migrate_log_file" || grep -q "Table 'chat_chatpresence' already exists" "$migrate_log_file"; then
+    log "Schéma chat déjà présent détecté, tentative de rattrapage des migrations chat..."
+
+    if [[ "$(all_columns_exist "from django.db import connection; tables=set(connection.introspection.table_names()); needed={'chat_conversation','chat_chatmessage','chat_conversationparticipant','chat_chatpresence'}; print('1' if needed.issubset(tables) else '0')")" == "1" ]]; then
+      docker_compose exec -T backend python manage.py migrate chat 0001 --fake
+
+      if [[ "$(all_columns_exist "from django.db import connection; cursor=connection.cursor(); cols={c.name for c in connection.introspection.get_table_description(cursor, 'chat_conversationparticipant')}; print('1' if 'is_admin' in cols else '0')")" == "1" ]]; then
+        docker_compose exec -T backend python manage.py migrate chat 0002 --fake
+      fi
+
+      docker_compose exec -T backend python manage.py migrate --noinput
+    else
+      echo "Erreur: les tables chat sont incohérentes (présence partielle)."
+      cat "$migrate_log_file"
+      rm -f "$migrate_log_file"
+      exit 1
+    fi
+  elif grep -q "Duplicate column name 'is_admin'" "$migrate_log_file"; then
+    log "Colonne chat_conversationparticipant.is_admin déjà présente, tentative de rattrapage de la migration chat.0002..."
+
+    if [[ "$(all_columns_exist "from django.db import connection; cursor=connection.cursor(); cols={c.name for c in connection.introspection.get_table_description(cursor, 'chat_conversationparticipant')}; print('1' if 'is_admin' in cols else '0')")" == "1" ]]; then
+      docker_compose exec -T backend python manage.py migrate chat 0002 --fake
+      docker_compose exec -T backend python manage.py migrate --noinput
+    else
+      echo "Erreur: la colonne is_admin est absente malgré l'erreur duplicate."
+      cat "$migrate_log_file"
+      rm -f "$migrate_log_file"
+      exit 1
+    fi
+  elif grep -q "Duplicate column name 'level_one_validated_at'" "$migrate_log_file" || grep -q "Duplicate column name 'level_one_validated_by_id'" "$migrate_log_file" || grep -q "Duplicate column name 'level_two_validated_at'" "$migrate_log_file" || grep -q "Duplicate column name 'level_two_validated_by_id'" "$migrate_log_file" || grep -q "Duplicate column name 'auto_closed_reason'" "$migrate_log_file" || grep -q "Duplicate column name 'is_auto_closed'" "$migrate_log_file" || grep -q "Duplicate column name 'late_minutes'" "$migrate_log_file" || grep -q "Duplicate column name 'tolerated_late_minutes'" "$migrate_log_file"; then
+    log "Schéma pointage/paie enseignants déjà présent détecté, tentative de rattrapage de la migration school.0026..."
+
+    if school_0026_schema_complete; then
+      docker_compose exec -T backend python manage.py migrate school 0026 --fake
+      docker_compose exec -T backend python manage.py migrate --noinput
+    else
+      echo "Erreur: la migration school.0026 semble partiellement appliquée mais le schéma n'est pas complet."
+      echo "Complétez ou réparez le schéma school_teacherpayroll/school_teachertimeentry puis relancez ./bootstrap.sh."
+      cat "$migrate_log_file"
+      rm -f "$migrate_log_file"
+      exit 1
+    fi
   else
     echo "Erreur: échec des migrations."
     cat "$migrate_log_file"

@@ -24,6 +24,16 @@ class Etablissement {
   final String? phone;
   final String? email;
   final String? logoUrl;
+  final String? stampImageUrl;
+  final String? principalSignatureImageUrl;
+  final String? cashierSignatureImageUrl;
+  final String? principalSignatureLabel;
+  final String? cashierSignatureLabel;
+  final String? parentSignatureLabel;
+  final String? principalSignaturePosition;
+  final String? stampPosition;
+  final int? principalSignatureScale;
+  final int? stampScale;
 
   Etablissement({
     required this.id,
@@ -32,6 +42,16 @@ class Etablissement {
     this.phone,
     this.email,
     this.logoUrl,
+    this.stampImageUrl,
+    this.principalSignatureImageUrl,
+    this.cashierSignatureImageUrl,
+    this.principalSignatureLabel,
+    this.cashierSignatureLabel,
+    this.parentSignatureLabel,
+    this.principalSignaturePosition,
+    this.stampPosition,
+    this.principalSignatureScale,
+    this.stampScale,
   });
 
   factory Etablissement.fromJson(Map<String, dynamic> json) {
@@ -42,6 +62,16 @@ class Etablissement {
       phone: json['phone'],
       email: json['email'],
       logoUrl: json['logo'],
+      stampImageUrl: json['stamp_image'],
+      principalSignatureImageUrl: json['principal_signature_image'],
+      cashierSignatureImageUrl: json['cashier_signature_image'],
+      principalSignatureLabel: json['principal_signature_label'],
+      cashierSignatureLabel: json['cashier_signature_label'],
+      parentSignatureLabel: json['parent_signature_label'],
+      principalSignaturePosition: json['principal_signature_position'],
+      stampPosition: json['stamp_position'],
+      principalSignatureScale: (json['principal_signature_scale'] as num?)?.toInt(),
+      stampScale: (json['stamp_scale'] as num?)?.toInt(),
     );
   }
 
@@ -53,11 +83,20 @@ class Etablissement {
       'phone': phone,
       'email': email,
       'logo': logoUrl,
+      'stamp_image': stampImageUrl,
+      'principal_signature_image': principalSignatureImageUrl,
+      'cashier_signature_image': cashierSignatureImageUrl,
+      'principal_signature_label': principalSignatureLabel,
+      'cashier_signature_label': cashierSignatureLabel,
+      'parent_signature_label': parentSignatureLabel,
+      'principal_signature_position': principalSignaturePosition,
+      'stamp_position': stampPosition,
+      'principal_signature_scale': principalSignatureScale,
+      'stamp_scale': stampScale,
     };
   }
 
-  String? get logoUrlForDisplay {
-    final raw = logoUrl;
+  String? _cacheBustedAsset(String? raw) {
     if (raw == null || raw.isEmpty) {
       return raw;
     }
@@ -69,6 +108,18 @@ class Etablissement {
     queryParams['v'] = _logoCacheBustToken.toString();
     return uri.replace(queryParameters: queryParams).toString();
   }
+
+  String? get logoUrlForDisplay {
+    return _cacheBustedAsset(logoUrl);
+  }
+
+  String? get stampImageUrlForDisplay => _cacheBustedAsset(stampImageUrl);
+
+  String? get principalSignatureImageUrlForDisplay =>
+      _cacheBustedAsset(principalSignatureImageUrl);
+
+  String? get cashierSignatureImageUrlForDisplay =>
+      _cacheBustedAsset(cashierSignatureImageUrl);
 }
 
 class EtablissementProvider extends ChangeNotifier {

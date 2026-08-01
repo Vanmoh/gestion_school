@@ -9,9 +9,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/models/paginated_result.dart';
+import '../../../core/permissions/module_permissions.dart';
+import '../../../core/theme/academic_imports_ui_reference.dart';
+import '../../../core/widgets/foreground_notice.dart';
 import '../../../features/auth/presentation/auth_controller.dart';
+import '../../payments/presentation/payment_entry_dialog.dart';
+import '../../imports/presentation/academic_imports_window.dart';
 import '../../../models/etablissement.dart';
 import '../domain/student.dart';
+import '../domain/students_sort.dart';
 import 'students_controller.dart';
 
 class StudentsPage extends ConsumerStatefulWidget {
@@ -38,6 +44,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   bool _serverHasNext = false;
   bool _serverHasPrevious = false;
   int? _lastScopeEtablissementId;
+
+  void _openAcademicImports() {
+    showAcademicImportsFloatingWindow(context);
+  }
 
   final _usernameController = TextEditingController();
   final _firstNameController = TextEditingController();
@@ -76,6 +86,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   bool _tableRefreshing = false;
   bool _saving = false;
   bool _detailLoading = false;
+  Student? _lastRegisteredStudent;
   DateTime? _lastStudentsRefreshAt;
 
   List<Student> _students = [];
@@ -93,6 +104,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   int? _registrationClassroomId;
   int? _registrationParentId;
+  String? _registrationGender;
   DateTime? _birthDate;
   int? _historyYearId;
   int? _historyClassroomId;
@@ -114,12 +126,17 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   int? _selectedClassroomUpdateId;
   int? _selectedParentUpdateId;
   DateTime? _updateBirthDate;
+  String? _updateGender;
 
   List<Map<String, dynamic>> _history = [];
   List<Map<String, dynamic>> _incidents = [];
   List<Map<String, dynamic>> _attendances = [];
   List<Map<String, dynamic>> _fees = [];
   List<Map<String, dynamic>> _payments = [];
+
+  bool _isStudentsReadOnlyRole() {
+    return !ref.read(currentPermissionsProvider).canWrite('students');
+  }
 
   @override
   void initState() {
@@ -300,21 +317,26 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     setState(() {
       _classFilterId = null;
       _statusFilter = 'all';
-      _sortBy = 'name';
+      _sortBy = defaultStudentSortKey;
       _sortAscending = true;
     });
     _reloadStudentsTable(page: 1);
   }
 
-  String _studentsOrdering() {
-    final field = switch (_sortBy) {
-      'matricule' => 'matricule',
-      'classroom' => 'classroom__name',
-      'status' => 'is_archived',
-      _ => 'user__last_name',
-    };
-    return _sortAscending ? field : '-$field';
+  int? get _sortColumnIndex => studentSortColumnIndex(_sortBy);
+
+  void _onStudentColumnSort(int columnIndex, bool ascending) {
+    final sortKey = studentSortKeyForColumn(columnIndex);
+    if (sortKey == null) return;
+    setState(() {
+      _sortBy = sortKey;
+      _sortAscending = ascending;
+    });
+    _reloadStudentsTable(page: 1);
   }
+
+  String _studentsOrdering() =>
+      studentsOrdering(sortKey: _sortBy, ascending: _sortAscending);
 
   Future<void> _pickProfilePhoto({required bool forRegistration}) async {
     try {
@@ -404,6 +426,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     _selectedClassroomUpdateId = student.classroomId;
     _selectedParentUpdateId = student.parentId;
     _updateBirthDate = student.birthDate;
+    _updateGender = student.gender.isEmpty ? null : student.gender;
     _clearUpdateProfilePhotoSelection();
     _updateFirstNameController.text = student.firstName;
     _updateLastNameController.text = student.lastName;
@@ -445,19 +468,26 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _registerStudent() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: creation eleve non autorisee.');
+      return false;
+    }
+
     final username = _usernameController.text.trim();
     final firstName = _firstNameController.text.trim();
     final lastName = _lastNameController.text.trim();
     final password = _passwordController.text;
     final classroomId = _registrationClassroomId;
+    final gender = _registrationGender;
 
     if (username.isEmpty ||
         firstName.isEmpty ||
         lastName.isEmpty ||
         password.length < 8 ||
-        classroomId == null) {
+        classroomId == null ||
+        gender == null) {
       await _showRegistrationFailure(
-        'Complète username, prénom, nom, mot de passe (8+) et classe.',
+        'Complète username, prénom, nom, mot de passe (8+), classe et genre.',
       );
       return false;
     }
@@ -471,6 +501,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             firstName: firstName,
             lastName: lastName,
             password: password,
+            gender: gender,
             email: _emailController.text.trim(),
             phone: _phoneController.text.trim(),
             classroomId: classroomId,
@@ -491,6 +522,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       _clearRegistrationPhotoSelection();
       _birthDate = null;
       _registrationParentId = null;
+      _registrationGender = null;
       setState(() {
         _searchController.clear();
         _classFilterId = null;
@@ -500,6 +532,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       if (_selectedStudent?.id != student.id) {
         await _focusStudentInTable(student.id);
       }
+      _lastRegisteredStudent = student;
       return true;
     } catch (error) {
       await _showRegistrationFailure(_extractErrorMessage(error));
@@ -510,6 +543,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<void> _toggleArchive(Student student) async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: archivage non autorise.');
+      return;
+    }
+
     final confirmed = await _confirmToggleArchive(student);
     if (!confirmed || !mounted) return;
 
@@ -566,6 +604,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _saveStudentAssignments() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: modification profil non autorisee.');
+      return false;
+    }
+
     final student = _selectedStudent;
     if (student == null) return false;
 
@@ -589,6 +632,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final hasParentChanges = _selectedParentUpdateId != student.parentId;
     final hasBirthDateChanges =
         _apiDateOrEmpty(_updateBirthDate) != _apiDateOrEmpty(student.birthDate);
+    final hasGenderChanges = (_updateGender ?? '') != student.gender.trim();
     final hasPhotoChanges =
         (_updatePhotoPath ?? '').trim().isNotEmpty ||
         (_updatePhotoBytes != null && _updatePhotoBytes!.isNotEmpty);
@@ -597,6 +641,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         !hasClassroomChanges &&
         !hasParentChanges &&
         !hasBirthDateChanges &&
+        !hasGenderChanges &&
         !hasPhotoChanges) {
       _showMessage('Aucune modification détectée.');
       return false;
@@ -610,7 +655,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       if (hasUserChanges ||
           hasClassroomChanges ||
           hasParentChanges ||
-          hasBirthDateChanges) {
+          hasBirthDateChanges ||
+          hasGenderChanges) {
         final updated = await repository.updateStudentProfile(
           studentId: student.id,
           userId: student.userId,
@@ -621,6 +667,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           classroomId: _selectedClassroomUpdateId,
           parentId: _selectedParentUpdateId,
           birthDate: _updateBirthDate,
+          gender: _updateGender,
         );
         selectedId = updated.id;
       }
@@ -647,6 +694,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _updateStudentPhoto() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: mise a jour photo non autorisee.');
+      return false;
+    }
+
     final student = _selectedStudent;
     if (student == null) return false;
 
@@ -679,6 +731,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _createHistoryEntry() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: ajout historique non autorise.');
+      return false;
+    }
+
     final student = _selectedStudent;
     final yearId = _historyYearId;
     final classroomId = _historyClassroomId;
@@ -722,6 +779,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _createDisciplineIncident() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: incident disciplinaire non autorise.');
+      return false;
+    }
+
     final student = _selectedStudent;
     if (student == null) return false;
 
@@ -763,6 +825,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<void> _toggleIncidentStatus(Map<String, dynamic> incident) async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: changement statut incident non autorise.');
+      return;
+    }
+
     final student = _selectedStudent;
     if (student == null) return;
 
@@ -798,6 +865,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _createAttendanceEntry() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: saisie absence/retard non autorisee.');
+      return false;
+    }
+
     final student = _selectedStudent;
     if (student == null) return false;
 
@@ -837,6 +909,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _createStudentFeeEntry() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: creation de frais non autorisee.');
+      return false;
+    }
+
     final student = _selectedStudent;
     final academicYearId = _feeAcademicYearId;
     if (student == null || academicYearId == null) {
@@ -875,6 +952,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   Future<bool> _createPaymentEntry() async {
+    if (_isStudentsReadOnlyRole()) {
+      _showMessage('Mode lecture seule: enregistrement paiement non autorise.');
+      return false;
+    }
+
     final student = _selectedStudent;
     final feeId = _paymentFeeId;
     if (student == null || feeId == null) {
@@ -1195,7 +1277,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int?>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -1391,6 +1473,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required BuildContext panelContext,
     required Future<bool> Function() action,
     required String successMessage,
+    Future<void> Function()? afterSuccess,
   }) async {
     final success = await action();
     if (!success || !mounted) return;
@@ -1402,6 +1485,62 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       }
     }
     _showMessage(successMessage, isSuccess: true);
+    if (afterSuccess != null) {
+      await afterSuccess();
+    }
+  }
+
+  Future<void> _offerRegistrationPaymentFlow() async {
+    final student = _lastRegisteredStudent;
+    if (student == null || !mounted) {
+      return;
+    }
+
+    final shouldCollectNow = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Encaisser les frais maintenant ?'),
+          content: Text(
+            'L\'eleve ${student.fullName} a ete inscrit. Voulez-vous ouvrir la fenetre d\'encaissement pour les frais d\'inscription ?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Plus tard'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Encaisser maintenant'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldCollectNow != true || !mounted) {
+      _lastRegisteredStudent = null;
+      return;
+    }
+
+    final saved = await showGuidedPaymentEntryDialog(
+      context: context,
+      ref: ref,
+      title: 'Encaissement apres inscription',
+      initialStudent: student,
+      initialClassroomId: student.classroomId,
+      preferredFeeType: 'registration',
+      lockStudentSelection: true,
+      onPaymentSaved: () async {
+        await _loadBaseData(keepSelectedId: student.id);
+        await _loadStudentLinkedData(student.id);
+      },
+    );
+
+    if (saved == true && mounted) {
+      _showMessage('Paiement d\'inscription enregistre.', isSuccess: true);
+    }
+    _lastRegisteredStudent = null;
   }
 
   Future<void> _openHistoryForm() {
@@ -1421,7 +1560,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int?>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -1442,7 +1581,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int?>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -1546,6 +1685,27 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               ),
             ),
             SizedBox(
+              width: 200,
+              child: DropdownButtonFormField<String>(
+                initialValue: _registrationGender,
+                decoration: const InputDecoration(labelText: 'Genre *'),
+                items: const [
+                  DropdownMenuItem<String>(
+                    value: 'M',
+                    child: Text('Masculin'),
+                  ),
+                  DropdownMenuItem<String>(
+                    value: 'F',
+                    child: Text('Féminin'),
+                  ),
+                ],
+                onChanged: (value) {
+                  _registrationGender = value;
+                  refreshPanel();
+                },
+              ),
+            ),
+            SizedBox(
               width: 260,
               child: DropdownButtonFormField<int>(
                 initialValue: _registrationClassroomId,
@@ -1554,7 +1714,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -1698,6 +1858,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       panelContext: panelContext,
                       action: _registerStudent,
                       successMessage: 'Élève inscrit avec succès.',
+                      afterSuccess: _offerRegistrationPaymentFlow,
                     ),
               icon: const Icon(Icons.person_add_alt_1),
               label: const Text('Inscrire élève'),
@@ -1780,6 +1941,27 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               ),
             ),
             SizedBox(
+              width: 200,
+              child: DropdownButtonFormField<String>(
+                initialValue: _updateGender,
+                decoration: const InputDecoration(labelText: 'Genre'),
+                items: const [
+                  DropdownMenuItem<String>(
+                    value: 'M',
+                    child: Text('Masculin'),
+                  ),
+                  DropdownMenuItem<String>(
+                    value: 'F',
+                    child: Text('Féminin'),
+                  ),
+                ],
+                onChanged: (value) {
+                  _updateGender = value;
+                  refreshPanel();
+                },
+              ),
+            ),
+            SizedBox(
               width: 280,
               child: DropdownButtonFormField<int?>(
                 initialValue: _selectedClassroomUpdateId,
@@ -1790,7 +1972,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int?>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -2227,7 +2409,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     .map(
                       (row) => DropdownMenuItem<int?>(
                         value: _asInt(row['id']),
-                        child: Text('${row['name']} (ID ${row['id']})'),
+                        child: Text('${row['name']}'),
                       ),
                     )
                     .toList(),
@@ -2592,6 +2774,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   @override
   Widget build(BuildContext context) {
     final authUser = ref.watch(authControllerProvider).value;
+    final isStudentsReadOnly = authUser?.role == 'censor';
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
     final scopedEtablissementId = authUser?.role == 'super_admin'
         ? selectedEtablissement?.id
@@ -2635,12 +2818,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         ? 0
         : ((archived / pageCount) * 100).round();
     final activeShare = pageCount == 0 ? 0.0 : active / pageCount;
+    // Le tri n'est plus compte ici: il se lit directement dans l'en-tete du
+    // tableau, l'inclure dans le compteur de filtres induisait en erreur.
     final appliedFilters =
         (_searchController.text.trim().isNotEmpty ? 1 : 0) +
         (_classFilterId != null ? 1 : 0) +
-        (_statusFilter != 'active' ? 1 : 0) +
-        (_sortBy != 'name' ? 1 : 0) +
-        (!_sortAscending ? 1 : 0);
+        (_statusFilter != 'active' ? 1 : 0);
     final selectedClassLabel = _classFilterId == null
         ? 'Toutes classes'
         : _classroomName(_classFilterId!);
@@ -2666,6 +2849,14 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       controller: _pageScrollController,
       padding: EdgeInsets.all(pagePadding),
       children: [
+        if (isStudentsReadOnly)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(
+              'Mode lecture seule: consultation des eleves uniquement pour ce profil.',
+              style: textTheme.bodySmall,
+            ),
+          ),
         _buildStudentsDashboardCard(
           textTheme: textTheme,
           colorScheme: colorScheme,
@@ -2975,97 +3166,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                   'Absent: ${row['is_absent'] == true ? 'Oui' : 'Non'} • Retard: ${row['is_late'] == true ? 'Oui' : 'Non'} • Justificatif: ${hasProof ? 'Oui' : 'Non'}'
                                   '${hasProof ? '\nFichier: ${_fileNameFromPath(proofPath)}' : ''}',
                                 ),
-<<<<<<< HEAD
-                                OutlinedButton.icon(
-                                  onPressed: _saving
-                                      ? null
-                                      : () async {
-                                          final success =
-                                              await _quickPreviewStudentCard();
-                                          if (success) {
-                                            _showMessage(
-                                              'Aperçu rapide affiché.',
-                                              isSuccess: true,
-                                            );
-                                          }
-                                        },
-                                  icon: const Icon(Icons.visibility_outlined),
-                                  label: const Text('Aperçu rapide'),
-                                ),
-                                OutlinedButton.icon(
-                                  onPressed: _saving
-                                      ? null
-                                      : () async {
-                                          final success =
-                                              await _exportStudentCardPdf();
-                                          if (success) {
-                                            _showMessage(
-                                              'Carte élève exportée en PDF.',
-                                              isSuccess: true,
-                                            );
-                                          }
-                                        },
-                                  icon: const Icon(
-                                    Icons.picture_as_pdf_outlined,
-                                  ),
-                                  label: const Text('Exporter PDF'),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      if (_detailLoading)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 18),
-                          child: Center(child: CircularProgressIndicator()),
-                        )
-                      else ...[
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            _metricChip(
-                              'Historique académique',
-                              '${_history.length}',
-                            ),
-                            _metricChip(
-                              'Incidents ouverts',
-                              '${_incidents.where((i) => (i['status']?.toString() ?? '') != 'resolved').length}',
-                            ),
-                            _metricChip(
-                              'Absences',
-                              '${_attendances.where((a) => a['is_absent'] == true).length}',
-                            ),
-                            _metricChip(
-                              'Retards',
-                              '${_attendances.where((a) => a['is_late'] == true).length}',
-                            ),
-                            _metricChip(
-                              'Solde frais',
-                              _money(
-                                _fees.fold<double>(
-                                  0,
-                                  (sum, row) => sum + _toDouble(row['balance']),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Container(
-                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                          decoration: BoxDecoration(
-                            color: colorScheme.surfaceContainerLowest,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: colorScheme.outlineVariant.withValues(
-                                alpha: 0.5,
-                              ),
-                            ),
-                          ),
-=======
                                 isThreeLine: hasProof,
                               );
                             }).toList(),
@@ -3076,7 +3176,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       children: [
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
->>>>>>> main
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
@@ -3969,6 +4068,14 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required int appliedFilters,
     required String selectedClassLabel,
   }) {
+    final role = ref.read(authControllerProvider).value?.role;
+    final canOpenAcademicImports =
+        role != 'teacher' &&
+        role != 'supervisor' &&
+        role != 'accountant' &&
+        role != 'parent' &&
+        role != 'student';
+
     return Card(
       child: Padding(
         padding: EdgeInsets.all(isCompactLayout ? 12 : 16),
@@ -4000,7 +4107,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          'Affichage type tableau: applique les filtres puis sélectionne une ligne pour ouvrir le dossier.',
+                          'Affichage type tableau: applique les filtres, trie en cliquant sur un en-tête de colonne, puis sélectionne une ligne pour ouvrir le dossier.',
                           style: textTheme.bodySmall,
                         ),
                       ],
@@ -4081,7 +4188,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       ..._classrooms.map(
                         (row) => DropdownMenuItem<int?>(
                           value: _asInt(row['id']),
-                          child: Text('${row['name']} (ID ${row['id']})'),
+                          child: Text('${row['name']}'),
                         ),
                       ),
                     ],
@@ -4110,39 +4217,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     },
                   ),
                 ),
-                SizedBox(
-                  width: 200,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _sortBy,
-                    decoration: const InputDecoration(labelText: 'Trier par'),
-                    items: const [
-                      DropdownMenuItem(value: 'name', child: Text('Nom')),
-                      DropdownMenuItem(
-                        value: 'matricule',
-                        child: Text('Matricule'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'classroom',
-                        child: Text('Classe'),
-                      ),
-                      DropdownMenuItem(value: 'status', child: Text('Statut')),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _sortBy = value ?? 'name');
-                      _reloadStudentsTable(page: 1);
-                    },
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() => _sortAscending = !_sortAscending);
-                    _reloadStudentsTable(page: 1);
-                  },
-                  icon: Icon(
-                    _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
-                  ),
-                  label: Text(_sortAscending ? 'Ascendant' : 'Descendant'),
-                ),
                 FilledButton.icon(
                   onPressed: _saving
                       ? null
@@ -4161,6 +4235,16 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       : _copyFilteredStudentsCsv,
                   icon: const Icon(Icons.content_copy_outlined),
                   label: const Text('Copier CSV'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: (_saving || !canOpenAcademicImports)
+                      ? null
+                      : _openAcademicImports,
+                  icon: const Icon(Icons.upload_file_outlined),
+                  label: const Text('Imports académiques'),
+                  style: AcademicImportsUiReference.importActionStyle(
+                    Theme.of(context).colorScheme,
+                  ),
                 ),
               ],
             ),
@@ -4300,15 +4384,34 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       headingRowHeight: 48,
                       dataRowMinHeight: 52,
                       dataRowMaxHeight: 62,
-                      columns: const [
-                        DataColumn(label: Text('N°')),
-                        DataColumn(label: Text('Matricule')),
-                        DataColumn(label: Text('Nom complet')),
-                        DataColumn(label: Text('Classe')),
-                        DataColumn(label: Text('Date naissance')),
-                        DataColumn(label: Text('Téléphone')),
-                        DataColumn(label: Text('Statut')),
-                        DataColumn(label: Text('Accès')),
+                      sortColumnIndex: _sortColumnIndex,
+                      sortAscending: _sortAscending,
+                      columns: [
+                        const DataColumn(label: Text('N°')),
+                        DataColumn(
+                          label: const Text('Matricule'),
+                          tooltip: 'Trier par matricule',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        DataColumn(
+                          label: const Text('Nom complet'),
+                          tooltip: 'Trier par nom',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        const DataColumn(label: Text('Genre')),
+                        DataColumn(
+                          label: const Text('Classe'),
+                          tooltip: 'Trier par classe',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        const DataColumn(label: Text('Date naissance')),
+                        const DataColumn(label: Text('Téléphone')),
+                        DataColumn(
+                          label: const Text('Statut'),
+                          tooltip: 'Trier par statut',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        const DataColumn(label: Text('Accès')),
                       ],
                       rows: visibleStudents.asMap().entries.map((entry) {
                         final rowIndex = entry.key;
@@ -4352,6 +4455,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
+                            DataCell(Text(_genderLabel(student.gender))),
                             DataCell(
                               Text(
                                 student.classroomName.isEmpty
@@ -5025,15 +5129,33 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
+  String _genderLabel(String gender) {
+    switch (gender.trim().toUpperCase()) {
+      case 'M':
+        return 'Masculin';
+      case 'F':
+        return 'Féminin';
+      default:
+        return '-';
+    }
+  }
+
   String _parentLabel(Map<String, dynamic> row) {
+    final fullName = (row['user_full_name'] ?? '').toString().trim();
+    if (fullName.isNotEmpty) {
+      return fullName;
+    }
+
     final first = (row['user_first_name'] ?? row['first_name'] ?? '')
         .toString();
     final last = (row['user_last_name'] ?? row['last_name'] ?? '').toString();
     final name = '$first $last'.trim();
+    final username = (row['user_username'] ?? '').toString().trim();
     final user = (row['user'] ?? '').toString();
-    if (name.isNotEmpty) return '$name (ID ${row['id']})';
-    if (user.isNotEmpty) return '$user (ID ${row['id']})';
-    return 'Parent ID ${row['id']}';
+    if (name.isNotEmpty) return name;
+    if (username.isNotEmpty) return username;
+    if (user.isNotEmpty) return user;
+    return 'Parent';
   }
 
   bool _matchesClassPanelQuery({
@@ -5441,17 +5563,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style: isSuccess ? const TextStyle(color: Colors.white) : null,
-        ),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
-      ),
+    ForegroundNotice.show(
+      context,
+      message,
+      isSuccess: isSuccess,
+      isError: !isSuccess,
     );
   }
 }

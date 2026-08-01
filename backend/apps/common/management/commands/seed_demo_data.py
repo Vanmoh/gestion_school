@@ -15,6 +15,7 @@ from apps.school.models import (
     CanteenSubscription,
     ClassRoom,
     DisciplineIncident,
+    Etablissement,
     ExamPlanning,
     ExamInvigilation,
     ExamResult,
@@ -22,12 +23,10 @@ from apps.school.models import (
     Expense,
     FeeType,
     Grade,
-    Level,
     Notification,
     NotificationChannel,
     ParentProfile,
     Payment,
-    Section,
     SmsProviderConfig,
     StockItem,
     StockMovement,
@@ -46,6 +45,22 @@ from apps.school.models import (
 
 class Command(BaseCommand):
     help = "Seed demo data for GESTION SCHOOL"
+
+    @staticmethod
+    def _get_or_create_subject_for_classroom(classroom, code, name, coefficient):
+        subject = (
+            Subject.objects.filter(classroom=classroom, code=code)
+            .order_by("id")
+            .first()
+        )
+        if subject:
+            return subject
+        return Subject.objects.create(
+            classroom=classroom,
+            code=code,
+            name=name,
+            coefficient=coefficient,
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -67,6 +82,15 @@ class Command(BaseCommand):
         admin_user.is_staff = True
         admin_user.is_superuser = True
         admin_user.save(update_fields=["password", "is_active", "is_staff", "is_superuser"])
+
+        demo_etablissement, _ = Etablissement.objects.get_or_create(
+            name="Établissement Démo",
+            defaults={
+                "address": "Quartier Centre",
+                "phone": "78 00 00 00",
+                "email": "demo@gestionschool.local",
+            },
+        )
 
         director_user, _ = User.objects.get_or_create(
             username="directeur",
@@ -159,6 +183,19 @@ class Command(BaseCommand):
         student_user_2.is_active = True
         student_user_2.save(update_fields=["password", "is_active"])
 
+        for demo_user in [
+            director_user,
+            accountant_user,
+            teacher_user,
+            parent_user,
+            supervisor_user,
+            student_user_1,
+            student_user_2,
+        ]:
+            if demo_user.etablissement_id is None:
+                demo_user.etablissement = demo_etablissement
+                demo_user.save(update_fields=["etablissement"])
+
         academic_year, _ = AcademicYear.objects.get_or_create(
             name="2025-2026",
             defaults={
@@ -168,26 +205,31 @@ class Command(BaseCommand):
             },
         )
 
-        level_6eme, _ = Level.objects.get_or_create(name="6ème")
-        section_college, _ = Section.objects.get_or_create(name="Collège")
         class_6a, _ = ClassRoom.objects.get_or_create(
             name="6A",
-            level=level_6eme,
-            section=section_college,
             academic_year=academic_year,
         )
+        if class_6a.etablissement_id is None:
+            class_6a.etablissement = demo_etablissement
+            class_6a.save(update_fields=["etablissement"])
 
-        math, _ = Subject.objects.get_or_create(
-            code="MATH",
-            defaults={"name": "Mathématiques", "coefficient": Decimal("4")},
+        math = self._get_or_create_subject_for_classroom(
+            class_6a,
+            "MATH",
+            "Mathématiques",
+            Decimal("4"),
         )
-        french, _ = Subject.objects.get_or_create(
-            code="FR",
-            defaults={"name": "Français", "coefficient": Decimal("3")},
+        french = self._get_or_create_subject_for_classroom(
+            class_6a,
+            "FR",
+            "Français",
+            Decimal("3"),
         )
-        english, _ = Subject.objects.get_or_create(
-            code="EN",
-            defaults={"name": "Anglais", "coefficient": Decimal("2")},
+        english = self._get_or_create_subject_for_classroom(
+            class_6a,
+            "EN",
+            "Anglais",
+            Decimal("2"),
         )
 
         teacher, _ = Teacher.objects.get_or_create(
@@ -227,6 +269,17 @@ class Command(BaseCommand):
                 "parent": parent_profile,
             },
         )
+
+        for student, gender in [(student_1, "M"), (student_2, "F")]:
+            changed = False
+            if student.etablissement_id is None:
+                student.etablissement = demo_etablissement
+                changed = True
+            if not student.gender:
+                student.gender = gender
+                changed = True
+            if changed:
+                student.save()
 
         for student in [student_1, student_2]:
             for subject, value in [(math, Decimal("14.5")), (french, Decimal("13.0")), (english, Decimal("15.0"))]:

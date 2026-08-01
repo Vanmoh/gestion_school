@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../auth/presentation/auth_controller.dart';
 
 class DisciplinePage extends ConsumerStatefulWidget {
@@ -27,6 +28,13 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
   String _severity = 'medium';
   String _status = 'open';
   bool _parentNotified = false;
+
+  /// Lecture seule d'apres la matrice servie par le backend, et non d'apres
+  /// une liste de roles recopiee ici: les deux finissaient toujours par
+  /// diverger, et c'est l'API qui tranchait au moment du clic.
+  bool _isDisciplineReadOnlyRole() {
+    return !ref.read(currentPermissionsProvider).canWrite('discipline');
+  }
 
   @override
   void initState() {
@@ -115,6 +123,11 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
   }
 
   Future<void> _createIncident() async {
+    if (_isDisciplineReadOnlyRole()) {
+      _showMessage('Mode lecture seule: creation d\'incident non autorisee.');
+      return;
+    }
+
     final studentId = _selectedStudentId;
     final category = _categoryController.text.trim();
     final description = _descriptionController.text.trim();
@@ -185,6 +198,14 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
     final studentById = {for (final s in _students) _asInt(s['id']): s};
     final authUser = ref.watch(authControllerProvider).value;
     final isTeacherUser = authUser?.role == 'teacher';
+    final isTeacherReportingOnly = isTeacherUser;
+    final isReadOnlyMode =
+      authUser?.role != 'super_admin' &&
+      authUser?.role != 'director' &&
+      authUser?.role != 'promoter' &&
+      authUser?.role != 'censor' &&
+      authUser?.role != 'supervisor' &&
+      authUser?.role != 'teacher';
 
     return ListView(
       padding: const EdgeInsets.all(18),
@@ -198,7 +219,14 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
         if (isTeacherUser) ...[
           const SizedBox(height: 6),
           Text(
-            'Affichage limité aux élèves de vos classes.',
+            'Affichage limité aux élèves de vos classes. Vous pouvez déclarer un incident, sans appliquer de sanction ni le marquer comme traité.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+        if (isReadOnlyMode) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Mode lecture seule: consultation uniquement pour ce profil.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -225,7 +253,9 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                         ),
                       )
                       .toList(),
-                  onChanged: (value) =>
+                    onChanged: isReadOnlyMode
+                      ? null
+                      : (value) =>
                       setState(() => _selectedStudentId = value),
                 ),
                 const SizedBox(height: 10),
@@ -234,7 +264,9 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                   title: const Text('Date de l\'incident'),
                   subtitle: Text(_apiDate(_incidentDate)),
                   trailing: const Icon(Icons.calendar_month),
-                  onTap: () async {
+                  onTap: isReadOnlyMode
+                      ? null
+                      : () async {
                     final picked = await showDatePicker(
                       context: context,
                       initialDate: _incidentDate,
@@ -246,11 +278,13 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                 ),
                 TextField(
                   controller: _categoryController,
+                  enabled: !isReadOnlyMode,
                   decoration: const InputDecoration(labelText: 'Catégorie'),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: _descriptionController,
+                  enabled: !isReadOnlyMode,
                   minLines: 2,
                   maxLines: 4,
                   decoration: const InputDecoration(labelText: 'Description *'),
@@ -264,7 +298,9 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                     DropdownMenuItem(value: 'medium', child: Text('Moyenne')),
                     DropdownMenuItem(value: 'high', child: Text('Élevée')),
                   ],
-                  onChanged: (value) =>
+                    onChanged: isReadOnlyMode
+                      ? null
+                      : (value) =>
                       setState(() => _severity = value ?? 'medium'),
                 ),
                 const SizedBox(height: 10),
@@ -275,12 +311,15 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                     DropdownMenuItem(value: 'open', child: Text('Ouvert')),
                     DropdownMenuItem(value: 'resolved', child: Text('Traité')),
                   ],
-                  onChanged: (value) =>
+                    onChanged: (isReadOnlyMode || isTeacherReportingOnly)
+                      ? null
+                      : (value) =>
                       setState(() => _status = value ?? 'open'),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: _sanctionController,
+                  enabled: !isReadOnlyMode && !isTeacherReportingOnly,
                   minLines: 1,
                   maxLines: 3,
                   decoration: const InputDecoration(
@@ -292,10 +331,12 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                   contentPadding: EdgeInsets.zero,
                   value: _parentNotified,
                   title: const Text('Parent informé'),
-                  onChanged: (value) => setState(() => _parentNotified = value),
+                  onChanged: (isReadOnlyMode || isTeacherReportingOnly)
+                      ? null
+                      : (value) => setState(() => _parentNotified = value),
                 ),
                 FilledButton(
-                  onPressed: _saving ? null : _createIncident,
+                  onPressed: (_saving || isReadOnlyMode) ? null : _createIncident,
                   child: const Text('Enregistrer incident'),
                 ),
               ],

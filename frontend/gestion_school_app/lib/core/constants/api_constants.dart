@@ -8,4 +8,5 @@ class ApiConstants {
   static const String login = '$authBase/login/';
   static const String refresh = '$authBase/refresh/';
   static const String me = '$authBase/users/me/';
+  static const String permissions = '$authBase/permissions/';
 }

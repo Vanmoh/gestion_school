@@ -1,10 +1,11 @@
+import re
+import unicodedata
 from decimal import Decimal
+from datetime import timedelta
+from django.utils import timezone
 from rest_framework import serializers
 from .term_utils import normalize_term
-<<<<<<< HEAD
-=======
 from apps.accounts.models import UserRole
->>>>>>> main
 from .models import (
     AcademicYear,
     Announcement,
@@ -24,11 +25,11 @@ from .models import (
     Expense,
     Grade,
     GradeValidation,
-    Level,
     Notification,
     ParentProfile,
     Payment,
-    Section,
+    PromotionDecision,
+    PromotionRun,
     StockItem,
     StockMovement,
     Student,
@@ -40,11 +41,9 @@ from .models import (
     Teacher,
     TeacherAttendance,
     TeacherAssignment,
-<<<<<<< HEAD
-=======
     TeacherAvailabilitySlot,
->>>>>>> main
     TeacherScheduleSlot,
+    TeacherTimeEntry,
     TimetablePublication,
     TeacherPayroll,
 )
@@ -58,35 +57,54 @@ class AcademicYearSerializer(serializers.ModelSerializer):
 
 class EtablissementSerializer(serializers.ModelSerializer):
     logo = serializers.ImageField(required=False, allow_null=True)
+    stamp_image = serializers.ImageField(required=False, allow_null=True)
+    principal_signature_image = serializers.ImageField(required=False, allow_null=True)
+    cashier_signature_image = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = Etablissement
-        fields = ['id', 'name', 'address', 'phone', 'email', 'logo']
+        fields = [
+            'id',
+            'name',
+            'address',
+            'phone',
+            'email',
+            'logo',
+            'stamp_image',
+            'principal_signature_image',
+            'cashier_signature_image',
+            'principal_signature_label',
+            'cashier_signature_label',
+            'parent_signature_label',
+            'principal_signature_position',
+            'stamp_position',
+            'principal_signature_scale',
+            'stamp_scale',
+        ]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        for key in ('principal_signature_scale', 'stamp_scale'):
+            value = attrs.get(key)
+            if value is None:
+                continue
+            if value < 40 or value > 200:
+                raise serializers.ValidationError({key: 'La valeur doit etre comprise entre 40 et 200.'})
+        return attrs
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get("request")
-        if not instance.logo:
-            data["logo"] = None
-            return data
-
-        if request is None:
-            data["logo"] = instance.logo.url
-        else:
-            data["logo"] = request.build_absolute_uri(instance.logo.url)
+        for field_name in ("logo", "stamp_image", "principal_signature_image", "cashier_signature_image"):
+            field = getattr(instance, field_name, None)
+            if not field:
+                data[field_name] = None
+                continue
+            if request is None:
+                data[field_name] = field.url
+            else:
+                data[field_name] = request.build_absolute_uri(field.url)
         return data
-
-
-class LevelSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Level
-        fields = "__all__"
-
-
-class SectionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Section
-        fields = "__all__"
 
 
 class ClassRoomSerializer(serializers.ModelSerializer):
@@ -98,9 +116,69 @@ class ClassRoomSerializer(serializers.ModelSerializer):
 
 
 class SubjectSerializer(serializers.ModelSerializer):
+    classroom_name = serializers.SerializerMethodField(read_only=True)
+    code = serializers.CharField(required=False, allow_blank=True)
+
+    @staticmethod
+    def _base_subject_code(name):
+        compact = re.sub(r"[^A-Za-z0-9]+", "", (name or "").upper())
+        if not compact:
+            return "MAT"
+        return compact[:8]
+
+    def _next_available_subject_code(self, classroom, base_code):
+        candidate = base_code[:20]
+        suffix = 2
+        while True:
+            existing = Subject.objects.filter(classroom=classroom, code__iexact=candidate)
+            if self.instance is not None:
+                existing = existing.exclude(pk=self.instance.pk)
+            if not existing.exists():
+                return candidate
+
+            suffix_text = str(suffix)
+            stem = base_code[: max(1, 20 - len(suffix_text))]
+            candidate = f"{stem}{suffix_text}"
+            suffix += 1
+
+    def get_classroom_name(self, obj):
+        classroom = obj.classroom
+        return classroom.name if classroom else ""
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        classroom = attrs.get("classroom") or getattr(self.instance, "classroom", None)
+        provided_code = (attrs.get("code") or "").strip()
+        current_code = (getattr(self.instance, "code", "") or "").strip()
+        code = provided_code or current_code
+        name = (attrs.get("name") or getattr(self.instance, "name", "") or "").strip()
+
+        if not classroom:
+            raise serializers.ValidationError({"classroom": "La classe est obligatoire pour une matiere."})
+
+        if not code:
+            base_code = self._base_subject_code(name)
+            code = self._next_available_subject_code(classroom, base_code)
+            attrs["code"] = code
+
+        existing = Subject.objects.filter(classroom=classroom, code__iexact=code)
+        if self.instance is not None:
+            existing = existing.exclude(pk=self.instance.pk)
+        if existing.exists():
+            if provided_code:
+                raise serializers.ValidationError(
+                    {"code": "Ce code matiere existe deja pour cette classe."}
+                )
+
+            base_code = self._base_subject_code(name)
+            attrs["code"] = self._next_available_subject_code(classroom, base_code)
+
+        return attrs
+
     class Meta:
         model = Subject
         fields = "__all__"
+        validators = []
 
 
 
@@ -109,11 +187,8 @@ class TeacherSerializer(serializers.ModelSerializer):
     user_first_name = serializers.SerializerMethodField(read_only=True)
     user_last_name = serializers.SerializerMethodField(read_only=True)
     user_username = serializers.SerializerMethodField(read_only=True)
-<<<<<<< HEAD
-=======
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
     etablissement_name = serializers.SerializerMethodField(read_only=True)
->>>>>>> main
 
     def get_user_full_name(self, obj):
         if not obj.user:
@@ -130,13 +205,10 @@ class TeacherSerializer(serializers.ModelSerializer):
     def get_user_username(self, obj):
         return obj.user.username if obj.user else ""
 
-<<<<<<< HEAD
-=======
     def get_etablissement_name(self, obj):
         etablissement = obj.etablissement
         return etablissement.name if etablissement else ""
 
->>>>>>> main
     class Meta:
         model = Teacher
         fields = "__all__"
@@ -346,8 +418,6 @@ class TeacherScheduleSlotSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-<<<<<<< HEAD
-=======
 class TeacherAvailabilitySlotSerializer(serializers.ModelSerializer):
     teacher_name = serializers.SerializerMethodField(read_only=True)
     etablissement_name = serializers.SerializerMethodField(read_only=True)
@@ -420,7 +490,6 @@ class TeacherAvailabilitySlotSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
->>>>>>> main
 class TimetablePublicationSerializer(serializers.ModelSerializer):
     classroom_name = serializers.SerializerMethodField(read_only=True)
     published_by_name = serializers.SerializerMethodField(read_only=True)
@@ -443,6 +512,26 @@ class TimetablePublicationSerializer(serializers.ModelSerializer):
 
 class ParentProfileSerializer(serializers.ModelSerializer):
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    user_full_name = serializers.SerializerMethodField(read_only=True)
+    user_username = serializers.SerializerMethodField(read_only=True)
+    user_first_name = serializers.SerializerMethodField(read_only=True)
+    user_last_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_user_full_name(self, obj):
+        user = obj.user
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    def get_user_username(self, obj):
+        return obj.user.username if obj.user else ""
+
+    def get_user_first_name(self, obj):
+        return obj.user.first_name if obj.user else ""
+
+    def get_user_last_name(self, obj):
+        return obj.user.last_name if obj.user else ""
 
     class Meta:
         model = ParentProfile
@@ -497,12 +586,15 @@ class StudentSerializer(serializers.ModelSerializer):
         return user.phone if user else ""
 
     def validate(self, attrs):
+        if self.instance is None and not attrs.get("gender"):
+            raise serializers.ValidationError({"gender": "Le genre est requis pour l'inscription de l'élève."})
+
         if "conduite" in attrs:
             request = self.context.get("request")
             role = getattr(getattr(request, "user", None), "role", "")
-            if role not in {UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
+            if role not in {UserRole.CENSOR, UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
                 raise serializers.ValidationError(
-                    {"conduite": "Seuls le surveillant et le super admin peuvent modifier la conduite."}
+                    {"conduite": "Seuls le censeur, le surveillant et le super admin peuvent modifier la conduite."}
                 )
         return attrs
 
@@ -538,15 +630,12 @@ class StudentAcademicHistorySerializer(serializers.ModelSerializer):
 
 class GradeSerializer(serializers.ModelSerializer):
     TERM_ERROR_MESSAGE = "Période invalide. Utilisez uniquement T1, T2 ou T3."
-<<<<<<< HEAD
-=======
     value = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
     homework_scores = serializers.ListField(
         child=serializers.DecimalField(max_digits=5, decimal_places=2),
         required=False,
         allow_empty=True,
     )
->>>>>>> main
 
     def validate_term(self, value):
         normalized = normalize_term(value)
@@ -560,11 +649,6 @@ class GradeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("La note doit être comprise entre 0 et 20.")
         return value
 
-<<<<<<< HEAD
-    def validate(self, attrs):
-        attrs = super().validate(attrs)
-
-=======
     def validate_homework_scores(self, value):
         if value is None:
             return []
@@ -599,7 +683,6 @@ class GradeSerializer(serializers.ModelSerializer):
             attrs["value"] = average.quantize(Decimal("0.01"))
             attrs["homework_scores"] = [str(score) for score in provided_homework_scores]
 
->>>>>>> main
         student = attrs.get("student") or getattr(self.instance, "student", None)
         classroom = attrs.get("classroom") or getattr(self.instance, "classroom", None)
         subject = attrs.get("subject") or getattr(self.instance, "subject", None)
@@ -684,9 +767,9 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
         if "conduite" in attrs:
             role = getattr(getattr(request, "user", None), "role", "")
-            if role not in {UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
+            if role not in {UserRole.CENSOR, UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
                 raise serializers.ValidationError(
-                    {"conduite": "Seuls le surveillant et le super admin peuvent modifier la conduite."}
+                    {"conduite": "Seuls le censeur, le surveillant et le super admin peuvent modifier la conduite."}
                 )
 
         if student and attendance_date:
@@ -750,6 +833,63 @@ class TeacherAttendanceSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class TeacherTimeEntrySerializer(serializers.ModelSerializer):
+    teacher_full_name = serializers.SerializerMethodField(read_only=True)
+    teacher_employee_code = serializers.SerializerMethodField(read_only=True)
+    check_out_time = serializers.TimeField(required=False, allow_null=True)
+
+    def get_teacher_full_name(self, obj):
+        teacher = obj.teacher
+        user = teacher.user if teacher else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_teacher_employee_code(self, obj):
+        teacher = obj.teacher
+        return teacher.employee_code if teacher else ""
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        teacher = attrs.get("teacher") or getattr(self.instance, "teacher", None)
+        entry_date = attrs.get("entry_date") or getattr(self.instance, "entry_date", None)
+        check_in_time = attrs.get("check_in_time") or getattr(self.instance, "check_in_time", None)
+        check_out_time = attrs.get("check_out_time") or getattr(self.instance, "check_out_time", None)
+
+        if teacher and entry_date:
+            day_code = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][entry_date.weekday()]
+            if day_code == "SUN":
+                raise serializers.ValidationError(
+                    {"entry_date": "Le pointage enseignant est interdit le dimanche."}
+                )
+
+            has_slot = TeacherScheduleSlot.objects.filter(
+                assignment__teacher=teacher,
+                day_of_week=day_code,
+            ).exists()
+            if not has_slot:
+                raise serializers.ValidationError(
+                    {
+                        "entry_date": (
+                            "Aucun creneau d'emploi du temps pour cet enseignant ce jour. "
+                            "Le pointage est bloque."
+                        )
+                    }
+                )
+
+        if check_in_time and check_out_time and check_out_time <= check_in_time:
+            raise serializers.ValidationError(
+                {"check_out_time": "L'heure de sortie doit être après l'heure d'entrée."}
+            )
+
+        return attrs
+
+    class Meta:
+        model = TeacherTimeEntry
+        fields = "__all__"
+
+
 class DisciplineIncidentSerializer(serializers.ModelSerializer):
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
@@ -775,6 +915,7 @@ class StudentFeeSerializer(serializers.ModelSerializer):
     balance = serializers.SerializerMethodField(read_only=True)
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
+    classroom_name = serializers.SerializerMethodField(read_only=True)
 
     def get_amount_paid(self, obj):
         annotated = getattr(obj, "amount_paid_annotated", None)
@@ -797,10 +938,32 @@ class StudentFeeSerializer(serializers.ModelSerializer):
     def get_student_matricule(self, obj):
         return obj.student.matricule if obj.student else ""
 
+    def get_classroom_name(self, obj):
+        classroom = obj.student.classroom if obj.student else None
+        return classroom.name if classroom else ""
+
     def validate_amount_due(self, value):
         if value <= 0:
             raise serializers.ValidationError("Le montant dû doit être supérieur à 0.")
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        academic_year = attrs.get("academic_year") or getattr(self.instance, "academic_year", None)
+        due_date = attrs.get("due_date") or getattr(self.instance, "due_date", None)
+
+        if academic_year and due_date:
+            if due_date < academic_year.start_date or due_date > academic_year.end_date:
+                raise serializers.ValidationError(
+                    {
+                        "due_date": (
+                            "La date d'echeance doit etre comprise dans l'annee scolaire selectionnee."
+                        )
+                    }
+                )
+
+        return attrs
 
     class Meta:
         model = StudentFee
@@ -811,6 +974,39 @@ class PaymentSerializer(serializers.ModelSerializer):
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
     fee_type = serializers.SerializerMethodField(read_only=True)
+    classroom_name = serializers.SerializerMethodField(read_only=True)
+
+    PAYMENT_METHOD_ALIASES = {
+        "cash": "Especes",
+        "espece": "Especes",
+        "especes": "Especes",
+        "liquide": "Especes",
+        "mobilemoney": "Mobile Money",
+        "mobile_money": "Mobile Money",
+        "mobile money": "Mobile Money",
+        "momo": "Mobile Money",
+        "orange money": "Mobile Money",
+        "wave": "Mobile Money",
+        "virement": "Virement",
+        "transfer": "Virement",
+        "bank_transfer": "Virement",
+        "banque": "Virement",
+        "cheque": "Cheque",
+        "check": "Cheque",
+        "carte": "Carte",
+        "card": "Carte",
+        "autre": "Autre",
+        "other": "Autre",
+    }
+
+    NON_CASH_METHODS = {"Mobile Money", "Virement", "Cheque", "Carte"}
+
+    @staticmethod
+    def _normalize_token(value: str) -> str:
+        text = str(value or "").strip().lower()
+        text = unicodedata.normalize("NFD", text)
+        text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+        return re.sub(r"\s+", " ", text)
 
     def get_student_full_name(self, obj):
         student = obj.fee.student if obj.fee else None
@@ -827,12 +1023,46 @@ class PaymentSerializer(serializers.ModelSerializer):
     def get_fee_type(self, obj):
         return obj.fee.get_fee_type_display() if obj.fee else ""
 
+    def get_classroom_name(self, obj):
+        student = obj.fee.student if obj.fee else None
+        classroom = student.classroom if student else None
+        return classroom.name if classroom else ""
+
     def validate(self, attrs):
         fee = attrs.get("fee") or getattr(self.instance, "fee", None)
         amount = attrs.get("amount")
+        method = attrs.get("method")
+        reference = attrs.get("reference")
 
         if amount is None and self.instance is not None:
             amount = self.instance.amount
+        if method is None and self.instance is not None:
+            method = self.instance.method
+        if reference is None and self.instance is not None:
+            reference = self.instance.reference
+
+        normalized_method_key = self._normalize_token(method)
+        normalized_method = self.PAYMENT_METHOD_ALIASES.get(normalized_method_key)
+        if not normalized_method:
+            allowed_methods = sorted(set(self.PAYMENT_METHOD_ALIASES.values()))
+            raise serializers.ValidationError(
+                {"method": f"Méthode invalide. Valeurs autorisées: {', '.join(allowed_methods)}."}
+            )
+
+        attrs["method"] = normalized_method
+
+        cleaned_reference = str(reference or "").strip()
+        attrs["reference"] = cleaned_reference
+
+        if normalized_method in self.NON_CASH_METHODS and not cleaned_reference:
+            raise serializers.ValidationError(
+                {"reference": "Référence obligatoire pour les paiements non espèces."}
+            )
+
+        if normalized_method in self.NON_CASH_METHODS and cleaned_reference and len(cleaned_reference) < 4:
+            raise serializers.ValidationError(
+                {"reference": "La référence doit contenir au moins 4 caractères pour un paiement non espèces."}
+            )
 
         if fee is None or amount is None:
             return attrs
@@ -847,25 +1077,232 @@ class PaymentSerializer(serializers.ModelSerializer):
         if amount > (fee.balance + existing_amount):
             raise serializers.ValidationError("Le montant dépasse le solde restant du frais.")
 
+        duplicate_window_start = timezone.now() - timedelta(minutes=3)
+        duplicate_qs = Payment.objects.filter(
+            fee=fee,
+            amount=amount,
+            method=normalized_method,
+            is_cancelled=False,
+            created_at__gte=duplicate_window_start,
+        )
+        if cleaned_reference:
+            duplicate_qs = duplicate_qs.filter(reference__iexact=cleaned_reference)
+        if self.instance is not None:
+            duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
+        if duplicate_qs.exists():
+            raise serializers.ValidationError(
+                "Paiement potentiellement duplique: meme frais, montant et methode deja enregistre recemment."
+            )
+
+        if normalized_method in self.NON_CASH_METHODS and cleaned_reference:
+            etablissement_id = getattr(getattr(fee, "student", None), "etablissement_id", None)
+            duplicate_qs = Payment.objects.filter(
+                reference__iexact=cleaned_reference,
+                method=normalized_method,
+            )
+            if etablissement_id:
+                duplicate_qs = duplicate_qs.filter(fee__student__etablissement_id=etablissement_id)
+            if self.instance is not None:
+                duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
+            if duplicate_qs.exists():
+                raise serializers.ValidationError(
+                    {
+                        "reference": (
+                            "Cette reference existe deja pour la meme methode dans l'etablissement."
+                        )
+                    }
+                )
+
         return attrs
 
     class Meta:
         model = Payment
         fields = "__all__"
+        read_only_fields = (
+            "received_by",
+            "etablissement",
+            "is_cancelled",
+            "cancelled_at",
+            "cancelled_by",
+            "cancel_reason",
+        )
 
 
 class ExpenseSerializer(serializers.ModelSerializer):
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    validation_stage = serializers.CharField(read_only=True)
+    is_fully_validated = serializers.BooleanField(read_only=True)
+    level_one_validated_by_name = serializers.SerializerMethodField(read_only=True)
+    level_two_validated_by_name = serializers.SerializerMethodField(read_only=True)
+
+    CATEGORY_ALIASES = {
+        "salaire enseignant": "Salaires enseignants",
+        "paie enseignant": "Salaires enseignants",
+        "teacher payroll": "Salaires enseignants",
+        "salaire personnel": "Salaires personnels",
+        "paie personnel": "Salaires personnels",
+        "staff salary": "Salaires personnels",
+        "electricite": "Utilites",
+        "eau": "Utilites",
+        "internet": "Utilites",
+        "utilite": "Utilites",
+        "maintenance": "Maintenance",
+        "reparation": "Maintenance",
+        "fourniture": "Fournitures",
+        "achat fourniture": "Fournitures",
+        "taxe": "Taxes",
+        "impot": "Taxes",
+        "transport": "Transport",
+        "carburant": "Transport",
+        "loyer": "Loyer",
+        "charge": "Charges operationnelles",
+        "depense": "Charges operationnelles",
+        "sortie": "Charges operationnelles",
+        "autre": "Autres",
+    }
+
+    @staticmethod
+    def _normalize_token(value: str) -> str:
+        text = str(value or "").strip().lower()
+        text = unicodedata.normalize("NFD", text)
+        text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+        return re.sub(r"\s+", " ", text)
+
+    def validate_amount(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError("Le montant de la dépense doit être supérieur à 0.")
+        return value
+
+    def validate_date(self, value):
+        if value is None:
+            return value
+        if value > timezone.localdate():
+            raise serializers.ValidationError("La date de dépense ne peut pas être dans le futur.")
+        return value
+
+    def validate_category(self, value):
+        normalized = self._normalize_token(value)
+        if not normalized:
+            raise serializers.ValidationError("La catégorie est obligatoire.")
+
+        if normalized in self.CATEGORY_ALIASES:
+            return self.CATEGORY_ALIASES[normalized]
+
+        for token, mapped in self.CATEGORY_ALIASES.items():
+            if token in normalized:
+                return mapped
+
+        # Keep backward compatibility for edits on pre-existing custom categories.
+        if self.instance is not None and normalized == self._normalize_token(self.instance.category):
+            return self.instance.category
+
+        allowed = sorted(set(self.CATEGORY_ALIASES.values()))
+        raise serializers.ValidationError(
+            f"Catégorie invalide. Utilisez l'une des catégories standards: {', '.join(allowed)}."
+        )
+
+    def get_level_one_validated_by_name(self, obj):
+        user = obj.level_one_validated_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    def get_level_two_validated_by_name(self, obj):
+        user = obj.level_two_validated_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
 
     class Meta:
         model = Expense
         fields = "__all__"
+        read_only_fields = (
+            "etablissement",
+            "paid_by",
+            "paid_on",
+            "level_one_validated_by",
+            "level_one_validated_at",
+            "level_two_validated_by",
+            "level_two_validated_at",
+            "validation_stage",
+            "is_fully_validated",
+        )
 
 
 class TeacherPayrollSerializer(serializers.ModelSerializer):
+    teacher_full_name = serializers.SerializerMethodField(read_only=True)
+    teacher_employee_code = serializers.SerializerMethodField(read_only=True)
+    validation_stage = serializers.CharField(read_only=True)
+    is_fully_validated = serializers.BooleanField(read_only=True)
+    level_one_validated_by_name = serializers.SerializerMethodField(read_only=True)
+    level_two_validated_by_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_teacher_full_name(self, obj):
+        teacher = obj.teacher
+        user = teacher.user if teacher else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_teacher_employee_code(self, obj):
+        teacher = obj.teacher
+        return teacher.employee_code if teacher else ""
+
+    def get_level_one_validated_by_name(self, obj):
+        user = obj.level_one_validated_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    def get_level_two_validated_by_name(self, obj):
+        user = obj.level_two_validated_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        month = attrs.get("month") or getattr(self.instance, "month", None)
+        if month and month.day != 1:
+            raise serializers.ValidationError(
+                {"month": "Le mois de paie doit etre en debut de mois (jour 01)."}
+            )
+
+        hours_attributed = attrs.get("hours_attributed")
+        hours_worked = attrs.get("hours_worked")
+        hourly_rate = attrs.get("hourly_rate")
+
+        for field_name, value in (
+            ("hours_attributed", hours_attributed),
+            ("hours_worked", hours_worked),
+            ("hourly_rate", hourly_rate),
+        ):
+            if value is not None and Decimal(str(value)) < Decimal("0"):
+                raise serializers.ValidationError(
+                    {field_name: "La valeur ne peut pas etre negative."}
+                )
+
+        return attrs
+
     class Meta:
         model = TeacherPayroll
         fields = "__all__"
+        read_only_fields = (
+            "amount",
+            "paid_by",
+            "level_one_validated_by",
+            "level_one_validated_at",
+            "level_two_validated_by",
+            "level_two_validated_at",
+            "validation_stage",
+            "is_fully_validated",
+        )
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):
@@ -1052,4 +1489,40 @@ class StockItemSerializer(serializers.ModelSerializer):
 class StockMovementSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockMovement
+        fields = "__all__"
+
+
+class PromotionDecisionSerializer(serializers.ModelSerializer):
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.SerializerMethodField(read_only=True)
+    source_classroom_name = serializers.SerializerMethodField(read_only=True)
+    target_classroom_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_student_full_name(self, obj):
+        student = obj.student
+        user = student.user if student else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_student_matricule(self, obj):
+        return obj.student.matricule if obj.student else ""
+
+    def get_source_classroom_name(self, obj):
+        return obj.source_classroom.name if obj.source_classroom else ""
+
+    def get_target_classroom_name(self, obj):
+        return obj.target_classroom.name if obj.target_classroom else ""
+
+    class Meta:
+        model = PromotionDecision
+        fields = "__all__"
+
+
+class PromotionRunSerializer(serializers.ModelSerializer):
+    decisions = PromotionDecisionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PromotionRun
         fields = "__all__"

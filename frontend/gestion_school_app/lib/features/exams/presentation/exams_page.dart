@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/theme/academic_imports_ui_reference.dart';
+import '../../../core/permissions/module_permissions.dart';
+import '../../../core/widgets/foreground_notice.dart';
+import '../../imports/presentation/academic_imports_window.dart';
+import '../domain/exam_models.dart';
 import 'exams_controller.dart';
 
 class ExamsPage extends ConsumerStatefulWidget {
@@ -31,6 +36,10 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
   int? _selectedResultStudent;
   int? _selectedResultSubject;
 
+  void _openAcademicImports() {
+    showAcademicImportsFloatingWindow(context);
+  }
+
   @override
   void dispose() {
     _sessionTitleController.dispose();
@@ -51,27 +60,16 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     await Future<void>.delayed(const Duration(milliseconds: 120));
   }
 
-<<<<<<< HEAD
-=======
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-    const successColor = Color(0xFF197A43);
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          backgroundColor: isSuccess ? successColor : null,
-          content: Text(
-            message,
-            style: isSuccess ? const TextStyle(color: Colors.white) : null,
-          ),
-        ),
-      );
+    ForegroundNotice.show(
+      context,
+      message,
+      isSuccess: isSuccess,
+      isError: !isSuccess,
+    );
   }
 
->>>>>>> main
   Widget _metricChip(String label, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -97,17 +95,45 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isReadOnlyMode = !ref
+        .watch(currentPermissionsProvider)
+        .canWrite('exams');
     final sessionsAsync = ref.watch(examSessionsProvider);
     final planningsAsync = ref.watch(examPlanningsProvider);
     final resultsAsync = ref.watch(examResultsProvider);
     final invigilationsAsync = ref.watch(examInvigilationsProvider);
     final yearsAsync = ref.watch(examAcademicYearsProvider);
     final classroomsAsync = ref.watch(examClassroomsProvider);
-    final subjectsAsync = ref.watch(examSubjectsProvider);
     final studentsAsync = ref.watch(examStudentsProvider);
     final supervisorsAsync = ref.watch(examSupervisorsProvider);
     final mutationState = ref.watch(examMutationProvider);
+    final students = studentsAsync.valueOrNull ?? const <OptionItem>[];
+    final selectedResultStudent = _selectedResultStudent == null
+        ? null
+        : students.where((item) => item.id == _selectedResultStudent).firstOrNull;
+    final planningSubjectsAsync = ref.watch(
+      examSubjectsProvider(_selectedPlanningClassroom),
+    );
+    final resultSubjectsAsync = ref.watch(
+      examSubjectsProvider(selectedResultStudent?.classroomId),
+    );
     final planningsSnapshot = planningsAsync.valueOrNull ?? const [];
+    final sessionLabelById = {
+      for (final s in sessionsAsync.valueOrNull ?? const <ExamSessionItem>[])
+        s.id: '[${s.term}] ${s.title}',
+    };
+    final classroomLabelById = {
+      for (final c in classroomsAsync.valueOrNull ?? const <OptionItem>[])
+        c.id: c.label,
+    };
+    final subjectLabelById = {
+      for (final s in {
+        ...planningSubjectsAsync.valueOrNull ?? const <OptionItem>[],
+        ...resultSubjectsAsync.valueOrNull ?? const <OptionItem>[],
+      })
+        s.id: s.label,
+    };
+    final studentLabelById = {for (final s in students) s.id: s.label};
     final sessionsCount = sessionsAsync.valueOrNull?.length ?? 0;
     final planningsCount = planningsAsync.valueOrNull?.length ?? 0;
     final resultsCount = resultsAsync.valueOrNull?.length ?? 0;
@@ -145,13 +171,36 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                       'Sessions, plannings et publication des resultats.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
+                    if (isReadOnlyMode) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Mode lecture seule: consultation uniquement pour ce profil.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ],
                 ),
               ),
-              OutlinedButton.icon(
-                onPressed: mutationState.isLoading ? null : _refreshExams,
-                icon: const Icon(Icons.sync),
-                label: const Text('Actualiser'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: mutationState.isLoading ? null : _refreshExams,
+                    icon: const Icon(Icons.sync),
+                    label: const Text('Actualiser'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: (mutationState.isLoading || isReadOnlyMode)
+                        ? null
+                        : _openAcademicImports,
+                    icon: const Icon(Icons.upload_file_outlined),
+                    label: const Text('Imports académiques'),
+                    style: AcademicImportsUiReference.importActionStyle(
+                      Theme.of(context).colorScheme,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -248,7 +297,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   ),
                   const SizedBox(height: 10),
                   FilledButton(
-                    onPressed: mutationState.isLoading
+                    onPressed: (mutationState.isLoading || isReadOnlyMode)
                         ? null
                         : () async {
                             final academicYear = _selectedAcademicYear;
@@ -332,13 +381,15 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     },
                   ),
                   const SizedBox(height: 8),
-                  subjectsAsync.when(
+                  planningSubjectsAsync.when(
                     loading: () => const SizedBox.shrink(),
                     error: (e, _) => Text('Erreur matières: $e'),
                     data: (subjects) {
                       if (subjects.isEmpty) return const Text('Aucune matière');
-                      _selectedPlanningSubject ??= subjects.first.id;
-                      _selectedResultSubject ??= subjects.first.id;
+                      if (_selectedPlanningSubject == null ||
+                          !subjects.any((s) => s.id == _selectedPlanningSubject)) {
+                        _selectedPlanningSubject = subjects.first.id;
+                      }
                       return DropdownButtonFormField<int>(
                         initialValue: _selectedPlanningSubject,
                         items: subjects
@@ -373,7 +424,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   ),
                   const SizedBox(height: 10),
                   FilledButton.tonal(
-                    onPressed: mutationState.isLoading
+                    onPressed: (mutationState.isLoading || isReadOnlyMode)
                         ? null
                         : () async {
                             final session = _selectedPlanningSession;
@@ -456,12 +507,15 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     },
                   ),
                   const SizedBox(height: 8),
-                  subjectsAsync.when(
+                  resultSubjectsAsync.when(
                     loading: () => const SizedBox.shrink(),
                     error: (e, _) => Text('Erreur matières: $e'),
                     data: (subjects) {
                       if (subjects.isEmpty) return const Text('Aucune matière');
-                      _selectedResultSubject ??= subjects.first.id;
+                      if (_selectedResultSubject == null ||
+                          !subjects.any((s) => s.id == _selectedResultSubject)) {
+                        _selectedResultSubject = subjects.first.id;
+                      }
                       return DropdownButtonFormField<int>(
                         initialValue: _selectedResultSubject,
                         items: subjects
@@ -488,7 +542,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   ),
                   const SizedBox(height: 10),
                   FilledButton.tonal(
-                    onPressed: mutationState.isLoading
+                    onPressed: (mutationState.isLoading || isReadOnlyMode)
                         ? null
                         : () async {
                             final session = _selectedResultSession;
@@ -562,7 +616,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     data: (supervisors) {
                       if (supervisors.isEmpty) {
                         return const Text(
-                          'Aucun surveillant trouvé. Créez un utilisateur avec rôle "supervisor".',
+                          'Aucun censeur trouvé. Créez un utilisateur avec rôle "censor".',
                         );
                       }
                       _selectedInvigilationSupervisor ??= supervisors.first.id;
@@ -586,7 +640,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   ),
                   const SizedBox(height: 10),
                   FilledButton.tonal(
-                    onPressed: mutationState.isLoading
+                    onPressed: (mutationState.isLoading || isReadOnlyMode)
                         ? null
                         : () async {
                             final planning = _selectedInvigilationPlanning;
@@ -636,7 +690,9 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     (p) => Card(
                       child: ListTile(
                         title: Text(
-                          'Session #${p.sessionId} / Classe #${p.classroomId} / Matière #${p.subjectId}',
+                          '${sessionLabelById[p.sessionId] ?? 'Session'} / '
+                          '${classroomLabelById[p.classroomId] ?? 'Classe'} / '
+                          '${subjectLabelById[p.subjectId] ?? 'Matière'}',
                         ),
                         subtitle: Text(
                           '${p.examDate} • ${p.startTime} - ${p.endTime}',
@@ -688,7 +744,9 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                     (r) => Card(
                       child: ListTile(
                         title: Text(
-                          'Session #${r.sessionId} / Élève #${r.studentId} / Matière #${r.subjectId}',
+                          '${sessionLabelById[r.sessionId] ?? 'Session'} / '
+                          '${studentLabelById[r.studentId] ?? 'Élève'} / '
+                          '${subjectLabelById[r.subjectId] ?? 'Matière'}',
                         ),
                         subtitle: Text('Score: ${r.score.toStringAsFixed(2)}'),
                       ),

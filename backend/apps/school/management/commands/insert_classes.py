@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from apps.school.models import AcademicYear, ClassRoom, Etablissement, Level, Section
+from apps.school.models import AcademicYear, ClassRoom, Etablissement
 
 
 ESTABLISSEMENT_CLASSES = {
@@ -89,9 +89,6 @@ ESTABLISSEMENT_CLASSES = {
     },
 }
 
-DEFAULT_LEVEL = "Général"
-DEFAULT_SECTION = "Aucune"
-
 class Command(BaseCommand):
     help = 'Insère les classes dans chaque établissement selon la liste fournie.'
 
@@ -109,9 +106,6 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **options):
         self.stdout.write(self.style.WARNING("Début de l'insertion des classes par établissement..."))
-        # Récupère ou crée le niveau et la section par défaut
-        level, _ = Level.objects.get_or_create(name=DEFAULT_LEVEL)
-        section, _ = Section.objects.get_or_create(name=DEFAULT_SECTION)
         # Récupère l'année académique active
         academic_year = AcademicYear.objects.filter(is_active=True).order_by('-start_date').first()
         if not academic_year:
@@ -133,8 +127,6 @@ class Command(BaseCommand):
             for class_name in classes:
                 obj, was_created = ClassRoom.objects.get_or_create(
                     name=class_name,
-                    level=level,
-                    section=section,
                     academic_year=academic_year,
                     etablissement=etab
                 )

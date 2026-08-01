@@ -9,6 +9,7 @@ class TokenStorage {
   static const _userKey = 'cached_user';
   static const _apiBaseUrlKey = 'api_base_url';
   static const _selectedEtablissementKey = 'selected_etablissement';
+  static const _reminderHistoryKey = 'finance_reminder_history';
 
   Future<void> _safeWrite(String key, String value) async {
     _memoryCache[key] = value;
@@ -62,6 +63,7 @@ class TokenStorage {
   Future<String?> apiBaseUrl() => _safeRead(_apiBaseUrlKey);
   Future<String?> selectedEtablissement() =>
       _safeRead(_selectedEtablissementKey);
+  Future<String?> reminderHistory() => _safeRead(_reminderHistoryKey);
 
   Future<void> saveCachedUser(String userJson) async {
     await _safeWrite(_userKey, userJson);
@@ -75,6 +77,10 @@ class TokenStorage {
     await _safeWrite(_selectedEtablissementKey, value);
   }
 
+  Future<void> saveReminderHistory(String value) async {
+    await _safeWrite(_reminderHistoryKey, value);
+  }
+
   Future<void> clearApiBaseUrl() async {
     await _safeDelete(_apiBaseUrlKey);
   }
@@ -83,8 +89,8 @@ class TokenStorage {
     await _safeDelete(_selectedEtablissementKey);
   }
 
-  Future<void> clearApiBaseUrl() async {
-    await _storage.delete(key: _apiBaseUrlKey);
+  Future<void> clearReminderHistory() async {
+    await _safeDelete(_reminderHistoryKey);
   }
 
   Future<void> clear() async {

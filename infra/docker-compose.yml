@@ -26,6 +26,8 @@ services:
   backend:
     build:
       context: ../backend
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim}
     container_name: gestion_school_backend
     env_file:
       - ../backend/.env.example
@@ -42,6 +44,8 @@ services:
   worker:
     build:
       context: ../backend
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim}
     container_name: gestion_school_worker
     command: celery -A config worker -l info
     env_file:
@@ -55,6 +59,8 @@ services:
   beat:
     build:
       context: ../backend
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim}
     container_name: gestion_school_beat
     command: celery -A config beat -l info
     env_file:

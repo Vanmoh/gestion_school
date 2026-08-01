@@ -117,14 +117,18 @@ class ExamsRepository {
     }).toList();
   }
 
-  Future<List<OptionItem>> fetchSubjects() async {
-    final response = await dio.get('/subjects/');
+  Future<List<OptionItem>> fetchSubjects({int? classroomId}) async {
+    final response = await dio.get(
+      '/subjects/',
+      queryParameters: classroomId != null ? {'classroom': classroomId} : null,
+    );
     final rows = _extractRows(response.data);
     return rows.map((row) {
       final map = row as Map<String, dynamic>;
       return OptionItem(
         id: map['id'] as int,
         label: map['name']?.toString() ?? '',
+        classroomId: map['classroom'] as int?,
       );
     }).toList();
   }
@@ -136,14 +140,20 @@ class ExamsRepository {
       final map = row as Map<String, dynamic>;
       final fullName = map['user_full_name']?.toString() ?? 'Inconnu';
       final matricule = map['matricule']?.toString() ?? '';
-      return OptionItem(id: map['id'] as int, label: '$fullName ($matricule)');
+      return OptionItem(
+        id: map['id'] as int,
+        label: '$fullName ($matricule)',
+        classroomId: map['classroom'] as int?,
+      );
     }).toList();
   }
 
   Future<List<OptionItem>> fetchSupervisors() async {
     final response = await dio.get(
-      '/auth/users/',
-      queryParameters: {'role': 'supervisor'},
+      // Annuaire en lecture: l'administration des comptes est un autre
+      // module, ferme aux profils qui planifient les surveillances.
+      '/auth/users/directory/',
+      queryParameters: {'role': 'censor'},
     );
     final rows = _extractRows(response.data);
     return rows.map((row) {
@@ -152,7 +162,7 @@ class ExamsRepository {
       final last = map['last_name']?.toString() ?? '';
       final fullName = '$first $last'.trim();
       final label = fullName.isEmpty
-          ? map['username']?.toString() ?? 'Surveillant'
+          ? map['username']?.toString() ?? 'Censeur'
           : fullName;
       return OptionItem(id: map['id'] as int, label: label);
     }).toList();

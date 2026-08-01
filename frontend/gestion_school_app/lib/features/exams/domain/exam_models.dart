@@ -69,6 +69,7 @@ class ExamInvigilationItem {
 class OptionItem {
   final int id;
   final String label;
+  final int? classroomId;
 
-  const OptionItem({required this.id, required this.label});
+  const OptionItem({required this.id, required this.label, this.classroomId});
 }

@@ -1,13 +1,12 @@
 import hashlib
+import io
 import tempfile
+from datetime import date
 from pathlib import Path
 
 from django.conf import settings
-<<<<<<< HEAD
-from django.db.models import Avg
-=======
+from django.core.paginator import Paginator
 from django.db.models import Avg, Q
->>>>>>> main
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -16,23 +15,24 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from PIL import Image
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
+
+from apps.accounts.permissions import HasModuleAccess
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from apps.accounts.models import UserRole
 from apps.school.models import (
     AcademicYear,
     ClassRoom,
-<<<<<<< HEAD
-=======
     Etablissement,
->>>>>>> main
     ExamPlanning,
     ExamResult,
+    Expense,
     Grade,
     Payment,
     Student,
+    StudentAcademicHistory,
     Subject,
     TeacherAssignment,
 )
@@ -83,6 +83,70 @@ def _etablissement_logo_path(student: Student) -> str | None:
             return str(candidate)
 
     return None
+
+
+def _student_etablissement(student: Student | None) -> Etablissement | None:
+    if student is None:
+        return None
+    etablissement = getattr(student, "etablissement", None)
+    if etablissement is None and getattr(student, "classroom", None) is not None:
+        etablissement = getattr(student.classroom, "etablissement", None)
+    return etablissement
+
+
+def _payment_etablissement(payment: Payment | None) -> Etablissement | None:
+    if payment is None:
+        return None
+    etablissement = getattr(payment, "etablissement", None)
+    if etablissement is not None:
+        return etablissement
+    fee = getattr(payment, "fee", None)
+    student = getattr(fee, "student", None) if fee is not None else None
+    return _student_etablissement(student)
+
+
+def _etablissement_media_field_path(etablissement: Etablissement | None, field_name: str) -> str | None:
+    if etablissement is None:
+        return None
+
+    media_field = getattr(etablissement, field_name, None)
+    if not media_field:
+        return None
+
+    try:
+        direct_path = Path(getattr(media_field, "path", "") or "")
+    except Exception:
+        direct_path = None
+
+    if direct_path and direct_path.exists():
+        return str(direct_path)
+
+    media_name = str(getattr(media_field, "name", "") or "").strip()
+    media_root = str(getattr(settings, "MEDIA_ROOT", "") or "").strip()
+    if media_name and media_root:
+        candidate = Path(media_root) / media_name
+        if candidate.exists():
+            return str(candidate)
+
+    return None
+
+
+def _safe_scale_percent(value, default: int = 100) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(40, min(200, parsed))
+
+
+def _positioned_x(position: str, *, min_x: float, max_x: float, box_width: float, default_x: float) -> float:
+    if max_x <= min_x:
+        return min_x
+    if position == "left":
+        return min_x
+    if position == "center":
+        return min_x + max(0.0, (max_x - min_x - box_width) / 2.0)
+    return min(max(default_x, min_x), max_x - box_width)
 
 
 def _school_signature_asset_path() -> str | None:
@@ -457,25 +521,42 @@ def _draw_student_card_template(
     number_label_font = 8.8 if width >= 120 else 6.9 if width >= 85 else 5.6 if width >= 72 else 4.8
     number_value_font = number_label_font * 1.02
 
-    signature_asset_path = _pdf_compatible_image_path(
-        _school_signature_asset_path(),
-        cache_prefix="signature",
-    )
-    stamp_asset_path = _pdf_compatible_image_path(
-        _school_stamp_asset_path(),
-        cache_prefix="stamp",
-    )
+    etablissement = _student_etablissement(student)
+    signature_source = _etablissement_media_field_path(etablissement, "principal_signature_image") or _school_signature_asset_path()
+    stamp_source = _etablissement_media_field_path(etablissement, "stamp_image") or _school_stamp_asset_path()
+    signature_asset_path = _pdf_compatible_image_path(signature_source, cache_prefix="signature")
+    stamp_asset_path = _pdf_compatible_image_path(stamp_source, cache_prefix="stamp")
+    signature_label = str(getattr(etablissement, "principal_signature_label", "") or "").strip() or "Le Principal"
+    signature_position = str(getattr(etablissement, "principal_signature_position", "") or "right").strip().lower()
+    stamp_position = str(getattr(etablissement, "stamp_position", "") or "right").strip().lower()
+    signature_scale = _safe_scale_percent(getattr(etablissement, "principal_signature_scale", 100)) / 100.0
+    stamp_scale = _safe_scale_percent(getattr(etablissement, "stamp_scale", 100)) / 100.0
 
-    stamp_d = max(9.5, min(22.0, footer_h * 1.02))
-    stamp_x = content_x + content_w - stamp_d - max(0.25, content_w * 0.002)
+    stamp_d = max(9.5, min(28.0, footer_h * 1.02 * stamp_scale))
+    stamp_x = _positioned_x(
+        stamp_position,
+        min_x=content_x + max(0.15, content_w * 0.004),
+        max_x=content_x + content_w - max(0.15, content_w * 0.004),
+        box_width=stamp_d,
+        default_x=content_x + content_w - stamp_d - max(0.25, content_w * 0.002),
+    )
     stamp_y = footer_y + max(0.2, (footer_h - stamp_d) * 0.54)
 
-    signature_w = max(13.0, min(34.0, content_w * 0.30))
-    signature_h = max(4.3, min(9.0, footer_h * 0.48))
-    signature_x = stamp_x - signature_w - max(0.9, content_w * 0.015)
+    signature_w = max(13.0, min(40.0, content_w * 0.30 * signature_scale))
+    signature_h = max(4.3, min(11.0, footer_h * 0.48 * signature_scale))
+    signature_x = _positioned_x(
+        signature_position,
+        min_x=content_x + max(0.15, content_w * 0.004),
+        max_x=content_x + content_w - max(0.15, content_w * 0.004),
+        box_width=signature_w,
+        default_x=stamp_x - signature_w - max(0.9, content_w * 0.015),
+    )
     signature_y = footer_y + max(0.18, footer_h * 0.30)
 
-    number_max_x = max(number_x + 12.0, signature_x - max(0.8, content_w * 0.01))
+    if signature_position == "right":
+        number_max_x = max(number_x + 12.0, signature_x - max(0.8, content_w * 0.01))
+    else:
+        number_max_x = max(number_x + 12.0, content_x + (content_w * 0.58))
     number_line_w = max(8.0, number_max_x - number_x)
 
     pdf.set_xy(number_x, number_y)
@@ -522,7 +603,7 @@ def _draw_student_card_template(
     pdf.set_xy(signature_x, signature_y + signature_h + max(0.18, footer_h * 0.02))
     pdf.set_text_color(44, 48, 59)
     pdf.set_font("Helvetica", "B", 5.9 if width >= 85 else 4.8)
-    pdf.cell(signature_w, max(1.8, footer_h * 0.2), _pdf_text("Le Principal"), align="C")
+    pdf.cell(signature_w, max(1.8, footer_h * 0.2), _pdf_text(signature_label), align="C")
 
     if stamp_asset_path:
         try:
@@ -704,6 +785,24 @@ def _effective_etablissement_id(request):
     return getattr(user, "etablissement_id", None)
 
 
+def _ensure_reports_module_access(request) -> None:
+    role = getattr(request.user, "role", "")
+    if role not in {
+        UserRole.SUPER_ADMIN,
+        UserRole.DIRECTOR,
+        UserRole.ACCOUNTANT,
+        UserRole.PARENT,
+        UserRole.STUDENT,
+    }:
+        raise PermissionDenied("Accès refusé au module rapports.")
+
+
+def _ensure_sensitive_export_access(request) -> None:
+    role = getattr(request.user, "role", "")
+    if role not in {UserRole.SUPER_ADMIN, UserRole.DIRECTOR, UserRole.ACCOUNTANT}:
+        raise PermissionDenied("Accès refusé: export sensible réservé à l'administration/finance.")
+
+
 def _allowed_students_queryset(request):
     user = request.user
     queryset = Student.objects.select_related(
@@ -738,13 +837,16 @@ def _allowed_payments_queryset(request):
         "fee__student__parent__user",
         "fee__academic_year",
         "received_by",
-    ).all()
+    ).filter(is_cancelled=False)
     role = getattr(user, "role", "")
 
     if role == UserRole.STUDENT:
         return queryset.filter(fee__student__user_id=user.id)
     if role == UserRole.PARENT:
         return queryset.filter(fee__student__parent__user_id=user.id)
+
+    if role == UserRole.SUPER_ADMIN:
+        return queryset
 
     target_etablissement_id = _effective_etablissement_id(request)
     if target_etablissement_id:
@@ -756,6 +858,136 @@ def _allowed_payments_queryset(request):
             )
         )
     return queryset.none()
+
+
+def _allowed_expenses_queryset(request):
+    user = request.user
+    queryset = Expense.objects.select_related(
+        "paid_by",
+        "level_one_validated_by",
+        "level_two_validated_by",
+        "etablissement",
+    ).all()
+    role = getattr(user, "role", "")
+
+    target_etablissement_id = _effective_etablissement_id(request)
+    if target_etablissement_id:
+        return queryset.filter(etablissement_id=target_etablissement_id)
+
+    if role == UserRole.SUPER_ADMIN:
+        return queryset.none()
+
+    return queryset.filter(etablissement_id=getattr(user, "etablissement_id", None))
+
+
+def _query_param_date(request, key: str) -> date | None:
+    raw_value = str(request.query_params.get(key, "") or "").strip()
+    if not raw_value:
+        return None
+    try:
+        return date.fromisoformat(raw_value)
+    except ValueError:
+        return None
+
+
+def _journal_period_bounds(request) -> tuple[date | None, date | None]:
+    date_from = _query_param_date(request, "date_from")
+    date_to = _query_param_date(request, "date_to")
+    if date_from and date_to and date_to < date_from:
+        date_from, date_to = date_to, date_from
+    return date_from, date_to
+
+
+def _apply_payment_journal_filters(queryset, request):
+    search = str(request.query_params.get("search", "") or "").strip()
+    method = str(request.query_params.get("method", "") or "").strip()
+    date_from, date_to = _journal_period_bounds(request)
+
+    if search:
+        queryset = queryset.filter(
+            Q(reference__icontains=search)
+            | Q(fee__student__matricule__icontains=search)
+            | Q(fee__student__user__first_name__icontains=search)
+            | Q(fee__student__user__last_name__icontains=search)
+            | Q(fee__fee_type__icontains=search)
+        )
+    if method:
+        queryset = queryset.filter(method__iexact=method)
+    if date_from:
+        queryset = queryset.filter(created_at__date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(created_at__date__lte=date_to)
+
+    return queryset
+
+
+def _apply_expense_journal_filters(queryset, request):
+    search = str(request.query_params.get("search", "") or "").strip()
+    category = str(request.query_params.get("category", "") or "").strip()
+    stage = str(request.query_params.get("stage", "") or "").strip().lower()
+    date_from, date_to = _journal_period_bounds(request)
+
+    if search:
+        queryset = queryset.filter(Q(label__icontains=search) | Q(notes__icontains=search))
+    if category:
+        queryset = queryset.filter(category__iexact=category)
+    if stage == "draft":
+        queryset = queryset.filter(level_one_validated_at__isnull=True, level_two_validated_at__isnull=True)
+    elif stage == "level_one":
+        queryset = queryset.filter(level_one_validated_at__isnull=False, level_two_validated_at__isnull=True)
+    elif stage == "level_two":
+        queryset = queryset.filter(level_two_validated_at__isnull=False)
+    if date_from:
+        queryset = queryset.filter(date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(date__lte=date_to)
+
+    return queryset
+
+
+def _payment_journal_row(payment: Payment) -> dict:
+    student = payment.fee.student if payment.fee else None
+    student_user = student.user if student else None
+    receiver = payment.received_by
+    receiver_name = ""
+    if receiver:
+        receiver_name = receiver.get_full_name().strip() or receiver.username
+    return {
+        "id": payment.id,
+        "created_at": timezone.localtime(payment.created_at).isoformat(),
+        "student_full_name": (
+            (student_user.get_full_name().strip() or student_user.username)
+            if student_user
+            else ""
+        ),
+        "student_matricule": student.matricule if student else "",
+        "fee_type": payment.fee.get_fee_type_display() if payment.fee else "",
+        "amount": float(payment.amount),
+        "method": payment.method,
+        "reference": payment.reference or "",
+        "received_by": receiver_name,
+    }
+
+
+def _expense_journal_row(expense: Expense) -> dict:
+    return {
+        "id": expense.id,
+        "date": expense.date.isoformat() if expense.date else "",
+        "label": expense.label,
+        "category": expense.category,
+        "amount": float(expense.amount),
+        "validation_stage": expense.validation_stage,
+        "paid_on": expense.paid_on.isoformat() if expense.paid_on else "",
+        "notes": expense.notes or "",
+    }
+
+
+def _parse_page_size(request, default: int = 100, max_size: int = 1000) -> int:
+    try:
+        parsed = int(request.query_params.get("page_size", default))
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, min(max_size, parsed))
 
 
 def _ensure_student_access(request, student: Student) -> None:
@@ -924,7 +1156,7 @@ def _build_bulletin_rows(
         }
     ]
 
-    weighted_sum += conduite_note * conduite_coef
+    weighted_sum += round(conduite_note * conduite_coef, 2)
     coef_sum += conduite_coef
 
     for index, subject in enumerate(subjects, start=2):
@@ -933,29 +1165,25 @@ def _build_bulletin_rows(
         note_examen = exam_note_by_subject.get(subject.id)
 
         if note_classe is not None and note_examen is not None:
-            note_finale = round((note_classe * coef) + (note_examen * coef), 2)
-            effective_coef = coef * 2
+            note_finale = round((note_classe + note_examen) / 2.0, 2)
+            effective_coef = coef
         elif note_classe is not None:
-            note_finale = round(note_classe * coef, 2)
+            note_finale = round(note_classe, 2)
             effective_coef = coef
         elif note_examen is not None:
-            note_finale = round(note_examen * coef, 2)
+            note_finale = round(note_examen, 2)
             effective_coef = coef
         else:
             note_finale = None
             effective_coef = 0.0
 
-        appreciation_score = (
-            (note_finale / effective_coef)
-            if (note_finale is not None and effective_coef > 0)
-            else None
-        )
+        appreciation_score = note_finale
 
         note_moyenne_classe = class_average_by_subject.get(subject.id)
-        points = note_finale
+        points = round(note_finale * coef, 2) if note_finale is not None else None
 
-        if note_finale is not None and effective_coef > 0:
-            weighted_sum += note_finale
+        if points is not None and effective_coef > 0:
+            weighted_sum += points
             coef_sum += effective_coef
 
         rows.append(
@@ -974,6 +1202,76 @@ def _build_bulletin_rows(
 
     average = round(weighted_sum / coef_sum, 2) if coef_sum else 0.0
     return rows, average, coef_sum
+
+
+def _subject_name_key(name: str) -> str:
+    return " ".join(str(name or "").strip().lower().split())
+
+
+def _deduplicate_bulletin_subjects(
+    *,
+    subjects,
+    student_note_by_subject: dict[int, float],
+    exam_note_by_subject: dict[int, float],
+    class_average_by_subject: dict[int, float],
+):
+    grouped: dict[str, dict] = {}
+
+    for subject in subjects:
+        key = _subject_name_key(getattr(subject, "name", ""))
+        if not key:
+            key = f"id:{subject.id}"
+
+        entry = grouped.get(key)
+        if entry is None:
+            grouped[key] = {
+                "subject": subject,
+                "ids": [subject.id],
+            }
+            continue
+
+        entry["ids"].append(subject.id)
+        try:
+            current_coef = float(entry["subject"].coefficient)
+            new_coef = float(subject.coefficient)
+            if new_coef > current_coef:
+                entry["subject"].coefficient = subject.coefficient
+        except Exception:
+            pass
+
+    deduped_subjects = []
+    merged_student_note_by_subject: dict[int, float] = {}
+    merged_exam_note_by_subject: dict[int, float] = {}
+    merged_class_average_by_subject: dict[int, float] = {}
+
+    for entry in grouped.values():
+        subject = entry["subject"]
+        ids = entry["ids"]
+        rep_id = subject.id
+        deduped_subjects.append(subject)
+
+        class_notes = [student_note_by_subject[sid] for sid in ids if sid in student_note_by_subject]
+        if class_notes:
+            merged_student_note_by_subject[rep_id] = max(class_notes)
+
+        exam_notes = [exam_note_by_subject[sid] for sid in ids if sid in exam_note_by_subject]
+        if exam_notes:
+            merged_exam_note_by_subject[rep_id] = max(exam_notes)
+
+        class_averages = [class_average_by_subject[sid] for sid in ids if sid in class_average_by_subject]
+        if class_averages:
+            merged_class_average_by_subject[rep_id] = round(
+                sum(class_averages) / len(class_averages),
+                2,
+            )
+
+    deduped_subjects.sort(key=lambda subject: (str(subject.name or "").lower(), subject.id))
+    return (
+        deduped_subjects,
+        merged_student_note_by_subject,
+        merged_exam_note_by_subject,
+        merged_class_average_by_subject,
+    )
 
 
 def _term_variants(term: str) -> list[str]:
@@ -1055,9 +1353,12 @@ def _format_coef_value(value: float | None) -> str:
 
 
 class ReportsContextView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
+        _ensure_reports_module_access(request)
+
         students = _allowed_students_queryset(request).order_by(
             "user__last_name",
             "user__first_name",
@@ -1076,7 +1377,8 @@ class ReportsContextView(APIView):
 
 
 class BulletinPdfView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request, student_id: int, academic_year_id: int, term: str):
         normalized_term = normalize_term(term)
@@ -1085,149 +1387,6 @@ class BulletinPdfView(APIView):
                 {"detail": "Période invalide. Utilisez uniquement T1, T2 ou T3."},
                 status=400,
             )
-<<<<<<< HEAD
-
-        student = get_object_or_404(
-            Student.objects.select_related(
-                "user",
-                "classroom",
-                "parent",
-                "parent__user",
-            ),
-            id=student_id,
-        )
-        _ensure_student_access(request.user, student)
-
-        school_name = getattr(settings, "SCHOOL_NAME", "LYCEE TECHNIQUE OUMAR BAH")
-        school_short = getattr(settings, "SCHOOL_SHORT", "LTOB")
-        school_level = getattr(settings, "SCHOOL_LEVEL", "1er etage")
-        school_phone = getattr(settings, "SCHOOL_PHONE", "")
-        logo_path = _school_logo_path()
-
-        student_name = student.user.get_full_name().strip() or student.user.username
-        class_name = student.classroom.name if student.classroom else "N/A"
-        period_label = normalized_term
-        academic_year_name = (
-            AcademicYear.objects.filter(id=academic_year_id)
-            .values_list("name", flat=True)
-            .first()
-            or str(academic_year_id)
-        )
-
-        student_grades_qs = Grade.objects.filter(
-            student_id=student_id,
-            academic_year_id=academic_year_id,
-            term=normalized_term,
-        ).select_related("subject")
-
-        student_note_by_subject: dict[int, float] = {}
-        for grade in student_grades_qs.order_by("subject_id", "-created_at", "-id"):
-            student_note_by_subject.setdefault(grade.subject_id, float(grade.value))
-
-        classroom_id = student.classroom_id
-        subject_ids: set[int] = set(student_note_by_subject.keys())
-        class_average_by_subject: dict[int, float] = {}
-
-        if classroom_id:
-            class_grades_qs = Grade.objects.filter(
-                classroom_id=classroom_id,
-                academic_year_id=academic_year_id,
-                term=normalized_term,
-            )
-            subject_ids.update(
-                class_grades_qs.values_list("subject_id", flat=True)
-            )
-
-            class_avg_rows = class_grades_qs.values("subject_id").annotate(
-                avg_note=Avg("value")
-            )
-            class_average_by_subject = {
-                int(row["subject_id"]): float(row["avg_note"])
-                for row in class_avg_rows
-                if row.get("avg_note") is not None
-            }
-
-            subject_ids.update(
-                TeacherAssignment.objects.filter(classroom_id=classroom_id)
-                .values_list("subject_id", flat=True)
-            )
-            subject_ids.update(
-                ExamPlanning.objects.filter(
-                    classroom_id=classroom_id,
-                    session__academic_year_id=academic_year_id,
-                ).values_list("subject_id", flat=True)
-            )
-
-        student_exam_results_qs = ExamResult.objects.filter(
-            student_id=student_id,
-            session__academic_year_id=academic_year_id,
-            session__term=normalized_term,
-        )
-        subject_ids.update(
-            student_exam_results_qs.values_list("subject_id", flat=True)
-        )
-
-        exam_note_by_subject: dict[int, float] = {}
-        for exam_result in student_exam_results_qs.order_by(
-            "subject_id",
-            "-session__end_date",
-            "-session__start_date",
-            "-created_at",
-            "-id",
-        ):
-            exam_note_by_subject.setdefault(exam_result.subject_id, float(exam_result.score))
-
-        subjects = Subject.objects.filter(id__in=subject_ids).order_by("name", "id")
-
-        weighted_sum = 0.0
-        coef_sum = 0.0
-        rows = []
-
-        for index, subject in enumerate(subjects, start=1):
-            coef = float(subject.coefficient)
-            note_classe = student_note_by_subject.get(subject.id)
-            note_examen = exam_note_by_subject.get(subject.id)
-
-            if note_classe is not None and note_examen is not None:
-                note_finale = round((note_classe + note_examen) / 2.0, 2)
-            else:
-                note_finale = note_classe if note_classe is not None else note_examen
-
-            note_moyenne_classe = class_average_by_subject.get(subject.id)
-            points = round(note_finale * coef, 2) if note_finale is not None else None
-
-            if note_finale is not None and coef > 0:
-                weighted_sum += note_finale * coef
-                coef_sum += coef
-
-            rows.append(
-                {
-                    "index": index,
-                    "subject": subject.name,
-                    "coef": coef,
-                    "note_classe": note_classe,
-                    "note_examen": note_examen,
-                    "note_finale": note_finale,
-                    "moyenne_classe": note_moyenne_classe,
-                    "points": points,
-                }
-            )
-
-        average = round(weighted_sum / coef_sum, 2) if coef_sum else 0.0
-
-        if average >= 16:
-            mention = "Tres bien"
-        elif average >= 14:
-            mention = "Bien"
-        elif average >= 12:
-            mention = "Assez bien"
-        elif average >= 10:
-            mention = "Passable"
-        else:
-            mention = "Insuffisant"
-
-        pdf = FPDF(orientation="L", format="A4")
-=======
 
         student = get_object_or_404(
             Student.objects.select_related(
@@ -1248,38 +1407,9 @@ class BulletinPdfView(APIView):
 
         pdf = FPDF(orientation="L", format="A4")
         pdf.set_auto_page_break(auto=False)
->>>>>>> main
         pdf.add_page()
         _render_bulletin_page(pdf, payload)
 
-<<<<<<< HEAD
-        left_margin = 10
-        right_margin = pdf.w - 10
-
-        if logo_path:
-            try:
-                pdf.image(logo_path, x=left_margin, y=8, w=20)
-            except Exception:
-                pass
-
-        pdf.set_xy(34 if logo_path else left_margin, 8)
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(0, 7, _pdf_text(school_name), ln=True)
-
-        pdf.set_x(34 if logo_path else left_margin)
-        pdf.set_font("Helvetica", size=10)
-        header_line = f"{school_level} | Tel: {school_phone}" if school_phone else school_level
-        pdf.cell(0, 5, _pdf_text(header_line), ln=True)
-
-        pdf.set_x(34 if logo_path else left_margin)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(0, 5, _pdf_text(f"Application: {school_short} - GESTION SCHOOL"), ln=True)
-
-        top_line_y = max(pdf.get_y() + 2, 28)
-        pdf.set_draw_color(60, 60, 60)
-        pdf.line(left_margin, top_line_y, right_margin, top_line_y)
-        pdf.set_y(top_line_y + 4)
-=======
         safe_term = str(payload["period_label"] or term or "periode").replace("/", "-")
         return pdf_output_response(pdf, f"bulletin_{student.matricule}_{safe_term}.pdf")
 
@@ -1307,130 +1437,11 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
         academic_year_id=academic_year_id,
         term=normalized_term,
     ).select_related("subject")
->>>>>>> main
 
     student_note_by_subject: dict[int, float] = {}
     for grade in student_grades_qs.order_by("subject_id", "-created_at", "-id"):
         student_note_by_subject.setdefault(grade.subject_id, float(grade.value))
 
-<<<<<<< HEAD
-        info_label_w = 28
-        info_value_w = 50
-        info_rows = [
-            ("Eleve", student_name),
-            ("Matricule", student.matricule),
-            ("Classe", class_name),
-            ("Annee", academic_year_name),
-            ("Periode", period_label),
-        ]
-
-        for index, (label, value) in enumerate(info_rows):
-            if index % 2 == 0:
-                pdf.set_x(left_margin)
-            pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(info_label_w, 7, _pdf_text(label), border=1)
-            pdf.set_font("Helvetica", size=10)
-            pdf.cell(info_value_w, 7, _pdf_text(value)[:34], border=1)
-            if index % 2 == 1:
-                pdf.ln(7)
-        if len(info_rows) % 2 == 1:
-            pdf.ln(7)
-
-        table_columns = [
-            ("N", 12, "index"),
-            ("Matiere", 88, "subject"),
-            ("Coef", 20, "coef"),
-            ("Note classe", 28, "note_classe"),
-            ("Note examen", 28, "note_examen"),
-            ("Note finale", 28, "note_finale"),
-            ("Moy. classe", 28, "moyenne_classe"),
-            ("Points", 30, "points"),
-        ]
-        table_width = sum(column[1] for column in table_columns)
-        table_x = max(left_margin, (pdf.w - table_width) / 2)
-
-        def draw_table_header() -> None:
-            pdf.set_x(table_x)
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_fill_color(228, 234, 244)
-            for title, width, key in table_columns:
-                align = "L" if key == "subject" else "C"
-                pdf.cell(width, 8, _pdf_text(title), border=1, fill=True, align=align)
-            pdf.ln(8)
-
-        pdf.ln(3)
-        draw_table_header()
-
-        pdf.set_font("Helvetica", size=8.8)
-        if not rows:
-            pdf.set_x(table_x)
-            pdf.cell(
-                table_width,
-                8,
-                _pdf_text("Aucune note disponible pour cette periode."),
-                border=1,
-                align="C",
-            )
-            pdf.ln(8)
-        else:
-            for row in rows:
-                if pdf.get_y() > (pdf.h - 24):
-                    pdf.add_page()
-                    draw_table_header()
-                    pdf.set_font("Helvetica", size=8.8)
-
-                fill_row = row["index"] % 2 == 0
-                if fill_row:
-                    pdf.set_fill_color(248, 250, 253)
-
-                pdf.set_x(table_x)
-                pdf.cell(12, 7, _pdf_text(str(row["index"])), border=1, align="C", fill=fill_row)
-                pdf.cell(88, 7, _pdf_text(str(row["subject"])[:58]), border=1, fill=fill_row)
-                pdf.cell(20, 7, _pdf_text(_format_coef_value(row["coef"])), border=1, align="C", fill=fill_row)
-                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["note_classe"])), border=1, align="C", fill=fill_row)
-                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["note_examen"])), border=1, align="C", fill=fill_row)
-                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["note_finale"])), border=1, align="C", fill=fill_row)
-                pdf.cell(28, 7, _pdf_text(_format_cell_value(row["moyenne_classe"])), border=1, align="C", fill=fill_row)
-                pdf.cell(30, 7, _pdf_text(_format_cell_value(row["points"])), border=1, align="C", fill=fill_row)
-                pdf.ln(7)
-
-        pdf.ln(4)
-        pdf.set_font("Helvetica", "B", 11)
-        pdf.cell(0, 6, _pdf_text(f"Moyenne generale ponderee: {average:.2f}/20"), ln=True)
-        pdf.cell(0, 6, _pdf_text(f"Total coefficients utilises: {_format_coef_value(coef_sum)}"), ln=True)
-        pdf.cell(0, 6, _pdf_text(f"Mention: {mention}"), ln=True)
-
-        pdf.ln(2)
-        pdf.set_font("Helvetica", size=9)
-        pdf.set_text_color(70, 70, 70)
-        pdf.multi_cell(
-            0,
-            5,
-            _pdf_text(
-                "Formule: Note finale = (Note classe + Note examen) / 2. "
-                "Si l'une des deux notes est absente, la note disponible est retenue."
-            ),
-        )
-        pdf.set_text_color(0, 0, 0)
-
-        signature_y = min(pdf.h - 16, pdf.get_y() + 8)
-        left_sig_x1 = left_margin + 5
-        left_sig_x2 = left_sig_x1 + 70
-        right_sig_x2 = right_margin - 5
-        right_sig_x1 = right_sig_x2 - 70
-
-        pdf.line(left_sig_x1, signature_y, left_sig_x2, signature_y)
-        pdf.line(right_sig_x1, signature_y, right_sig_x2, signature_y)
-        pdf.set_y(signature_y + 2)
-        pdf.set_font("Helvetica", size=9)
-        pdf.set_x(left_sig_x1)
-        pdf.cell(left_sig_x2 - left_sig_x1, 5, _pdf_text("Titulaire / Enseignant"), align="C")
-        pdf.set_x(right_sig_x1)
-        pdf.cell(right_sig_x2 - right_sig_x1, 5, _pdf_text("Direction"), align="C")
-
-        safe_term = str(period_label or term or "periode").replace("/", "-")
-        return pdf_output_response(pdf, f"bulletin_{student.matricule}_{safe_term}.pdf")
-=======
     classroom_id = student.classroom_id
     subject_ids: set[int] = set(student_note_by_subject.keys())
     class_average_by_subject: dict[int, float] = {}
@@ -1477,7 +1488,18 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
     ):
         exam_note_by_subject.setdefault(exam_result.subject_id, float(exam_result.score))
 
-    subjects = Subject.objects.filter(id__in=subject_ids).order_by("name", "id")
+    subjects = list(Subject.objects.filter(id__in=subject_ids).order_by("name", "id"))
+    (
+        subjects,
+        student_note_by_subject,
+        exam_note_by_subject,
+        class_average_by_subject,
+    ) = _deduplicate_bulletin_subjects(
+        subjects=subjects,
+        student_note_by_subject=student_note_by_subject,
+        exam_note_by_subject=exam_note_by_subject,
+        class_average_by_subject=class_average_by_subject,
+    )
 
     conduite_note = float(student.conduite if student.conduite is not None else 18)
     conduite_coef = 2.0
@@ -1501,6 +1523,20 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
         conduite_moyenne_classe=conduite_moyenne_classe,
     )
 
+    rank_value = None
+    if classroom_id:
+        history = (
+            StudentAcademicHistory.objects.filter(
+                student_id=student.id,
+                academic_year_id=academic_year_id,
+                classroom_id=classroom_id,
+            )
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        if history and history.rank:
+            rank_value = int(history.rank)
+
     if average >= 16:
         mention = "Tres bien"
     elif average >= 14:
@@ -1511,6 +1547,17 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
         mention = "Passable"
     else:
         mention = "Insuffisant"
+
+    etablissement = _student_etablissement(student)
+    signature_source = _etablissement_media_field_path(etablissement, "principal_signature_image") or _school_signature_asset_path()
+    stamp_source = _etablissement_media_field_path(etablissement, "stamp_image") or _school_stamp_asset_path()
+    signature_asset_path = _pdf_compatible_image_path(signature_source, cache_prefix="bulletin_signature")
+    stamp_asset_path = _pdf_compatible_image_path(stamp_source, cache_prefix="bulletin_stamp")
+    signature_label = str(getattr(etablissement, "principal_signature_label", "") or "").strip() or "Direction"
+    signature_position = str(getattr(etablissement, "principal_signature_position", "") or "right").strip().lower()
+    stamp_position = str(getattr(etablissement, "stamp_position", "") or "right").strip().lower()
+    signature_scale = _safe_scale_percent(getattr(etablissement, "principal_signature_scale", 100)) / 100.0
+    stamp_scale = _safe_scale_percent(getattr(etablissement, "stamp_scale", 100)) / 100.0
 
     return {
         "logo_path": logo_path,
@@ -1523,10 +1570,19 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
         "class_name": class_name,
         "academic_year_name": academic_year_name,
         "period_label": period_label,
+        "rank": rank_value,
+        "rank_display": str(rank_value) if rank_value else "-",
         "rows": rows,
         "average": average,
         "coef_sum": coef_sum,
         "mention": mention,
+        "signature_asset_path": signature_asset_path,
+        "stamp_asset_path": stamp_asset_path,
+        "signature_label": signature_label,
+        "signature_position": signature_position,
+        "stamp_position": stamp_position,
+        "signature_scale": signature_scale,
+        "stamp_scale": stamp_scale,
     }
 
 
@@ -1579,6 +1635,7 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
         ("Eleve", payload["student_name"]),
         ("Matricule", payload["student_matricule"]),
         ("Classe", payload["class_name"]),
+        ("Rang", payload["rank_display"]),
         ("Etablissement", payload["school_name"]),
         ("Annee", payload["academic_year_name"]),
         ("Periode", payload["period_label"]),
@@ -1594,27 +1651,34 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
         if index % 2 == 1:
             pdf.ln(info_h)
 
+    # If the info table has an odd number of cells, force a line break
+    # so the grades table always starts below it.
+    if len(info_rows) % 2 == 1:
+        pdf.ln(info_h)
+
     rows = payload["rows"]
     table_columns = [
         ("N", 10, "index"),
-        ("Matiere", 96, "subject"),
-        ("Coef", 16, "coef"),
-        ("Note classe", 27, "note_classe"),
-        ("Note examen", 27, "note_examen"),
-        ("Note finale", 27, "note_finale"),
-        ("Appreciation", 42, "appreciation"),
+        ("Matiere", 86, "subject"),
+        ("Coef", 14, "coef"),
+        ("Classe /20", 22, "note_classe"),
+        ("Examen /20", 22, "note_examen"),
+        ("Moyenne /20", 22, "note_finale"),
+        ("Points", 22, "points"),
+        ("Appreciation", 34, "appreciation"),
     ]
     table_width = sum(column[1] for column in table_columns)
     table_x = max(left_margin, (pdf.w - table_width) / 2)
 
     table_y = pdf.get_y() + 2.4
-    summary_start_y = 172
+    # Keep enough bottom space for director signature + stamp block.
+    summary_start_y = 154
     header_h = 5.6
     available_for_rows = max(26.0, summary_start_y - table_y - header_h)
     row_count = max(len(rows), 1)
     row_h = max(2.5, min(5.4, available_for_rows / row_count))
     body_font_size = max(6.1, min(8.2, row_h + 2.0))
-    subject_max_len = max(24, min(78, int(78 * (row_h / 5.4))))
+    subject_max_len = max(22, min(64, int(64 * (row_h / 5.4))))
 
     pdf.set_y(table_y)
     pdf.set_x(table_x)
@@ -1643,18 +1707,22 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
                 pdf.set_fill_color(248, 250, 253)
             pdf.set_x(table_x)
             pdf.cell(10, row_h, _pdf_text(str(row["index"])), border=1, align="C", fill=fill_row)
-            pdf.cell(96, row_h, _pdf_text(str(row["subject"])[:subject_max_len]), border=1, fill=fill_row)
-            pdf.cell(16, row_h, _pdf_text(_format_coef_value(row["coef"])), border=1, align="C", fill=fill_row)
-            pdf.cell(27, row_h, _pdf_text(_format_cell_value(row["note_classe"])), border=1, align="C", fill=fill_row)
-            pdf.cell(27, row_h, _pdf_text(_format_cell_value(row["note_examen"])), border=1, align="C", fill=fill_row)
-            pdf.cell(27, row_h, _pdf_text(_format_cell_value(row["note_finale"])), border=1, align="C", fill=fill_row)
-            pdf.cell(42, row_h, _pdf_text(str(row.get("appreciation") or "-")[:20]), border=1, align="C", fill=fill_row)
+            pdf.cell(86, row_h, _pdf_text(str(row["subject"])[:subject_max_len]), border=1, fill=fill_row)
+            pdf.cell(14, row_h, _pdf_text(_format_coef_value(row["coef"])), border=1, align="C", fill=fill_row)
+            pdf.cell(22, row_h, _pdf_text(_format_cell_value(row["note_classe"])), border=1, align="C", fill=fill_row)
+            pdf.cell(22, row_h, _pdf_text(_format_cell_value(row["note_examen"])), border=1, align="C", fill=fill_row)
+            pdf.cell(22, row_h, _pdf_text(_format_cell_value(row["note_finale"])), border=1, align="C", fill=fill_row)
+            pdf.cell(22, row_h, _pdf_text(_format_cell_value(row.get("points"))), border=1, align="C", fill=fill_row)
+            pdf.cell(34, row_h, _pdf_text(str(row.get("appreciation") or "-")[:20]), border=1, align="C", fill=fill_row)
             pdf.ln(row_h)
 
-    pdf.set_y(summary_start_y)
+    # Keep at least 1 cm (10 mm) between the end of the table and the summary block.
+    summary_y = max(summary_start_y, pdf.get_y() + 10.0)
+    pdf.set_y(summary_y)
     pdf.set_font("Helvetica", "B", 9.2)
     pdf.cell(0, 4.3, _pdf_text(f"Moyenne generale ponderee: {payload['average']:.2f}/20"), ln=True)
     pdf.cell(0, 4.3, _pdf_text(f"Total coefficients utilises: {_format_coef_value(payload['coef_sum'])}"), ln=True)
+    pdf.cell(0, 4.3, _pdf_text(f"Rang: {payload['rank_display']}"), ln=True)
     pdf.cell(0, 4.3, _pdf_text(f"Mention: {payload['mention']}"), ln=True)
 
     pdf.set_font("Helvetica", size=7.2)
@@ -1663,8 +1731,8 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
         0,
         3.8,
         _pdf_text(
-            "Formule: Note finale = (Note classe x Coef classe) + (Note examen x Coef examen). "
-            "Coef classe et coef examen sont egaux au coefficient de la matiere."
+            "Formule: Moyenne matiere = (Note classe + Note examen) / 2 si les deux existent, "
+            "sinon la note disponible. Points = Moyenne matiere x Coefficient."
         ),
     )
     pdf.set_text_color(0, 0, 0)
@@ -1675,20 +1743,97 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
     right_sig_x2 = right_margin - 12
     right_sig_x1 = right_sig_x2 - 62
 
+    signature_asset_path = payload.get("signature_asset_path")
+    stamp_asset_path = payload.get("stamp_asset_path")
+    signature_label = str(payload.get("signature_label") or "Direction")
+    signature_position = str(payload.get("signature_position") or "right").strip().lower()
+    stamp_position = str(payload.get("stamp_position") or "right").strip().lower()
+    signature_scale = float(payload.get("signature_scale") or 1.0)
+    stamp_scale = float(payload.get("stamp_scale") or 1.0)
+
+    right_line_w = right_sig_x2 - right_sig_x1
+    signature_w = max(16.0, min(46.0, right_line_w * 0.90 * signature_scale))
+    signature_h = max(4.2, min(12.0, 5.8 * signature_scale))
+    stamp_size = max(11.0, min(24.0, 16.0 * stamp_scale))
+
+    # Compute the lowest safe baseline so images stay fully visible.
+    signature_bottom_padding = 5.2 + signature_h + (stamp_size * 0.42) + 2.0
+    signature_max_y = pdf.h - signature_bottom_padding
+    signature_pref_y = max(pdf.get_y() + 2.0, 176.0)
+    signature_y = min(signature_pref_y, signature_max_y)
+    if signature_y < 166.0:
+        signature_y = 166.0
+
     pdf.line(left_sig_x1, signature_y, left_sig_x2, signature_y)
     pdf.line(right_sig_x1, signature_y, right_sig_x2, signature_y)
+    signature_default_x = right_sig_x1 + max(0.0, (right_line_w - signature_w) / 2.0)
+    signature_x = _positioned_x(
+        signature_position,
+        min_x=right_sig_x1,
+        max_x=right_sig_x2,
+        box_width=signature_w,
+        default_x=signature_default_x,
+    )
+    # Keep signature and stamp under the "Le Directeur" label.
+    signature_img_y = signature_y + 5.2
+
+    if signature_asset_path:
+        try:
+            pdf.image(signature_asset_path, x=signature_x, y=signature_img_y, w=signature_w, h=signature_h)
+        except Exception:
+            signature_asset_path = None
+
+    if not signature_asset_path:
+        fallback_line_y = signature_img_y + (signature_h * 0.62)
+        pdf.set_draw_color(85, 96, 112)
+        pdf.set_line_width(0.16)
+        pdf.line(signature_x + 0.3, fallback_line_y, signature_x + signature_w - 0.3, fallback_line_y)
+
+    stamp_default_x = min(right_sig_x2 - stamp_size, signature_x + signature_w - (stamp_size * 0.5))
+    stamp_x = _positioned_x(
+        stamp_position,
+        min_x=right_sig_x1,
+        max_x=right_sig_x2,
+        box_width=stamp_size,
+        default_x=stamp_default_x,
+    )
+    stamp_y = signature_img_y + max(0.2, signature_h - (stamp_size * 0.58))
+    if stamp_asset_path:
+        try:
+            pdf.image(stamp_asset_path, x=stamp_x, y=stamp_y, w=stamp_size, h=stamp_size)
+        except Exception:
+            stamp_asset_path = None
+
+    if not stamp_asset_path:
+        pdf.set_draw_color(31, 90, 161)
+        pdf.set_line_width(0.18)
+        try:
+            pdf.ellipse(stamp_x, stamp_y, stamp_size, stamp_size)
+            pdf.ellipse(stamp_x + 1.7, stamp_y + 1.7, stamp_size - 3.4, stamp_size - 3.4)
+        except Exception:
+            pdf.rect(stamp_x, stamp_y, stamp_size, stamp_size)
+            pdf.rect(stamp_x + 1.7, stamp_y + 1.7, stamp_size - 3.4, stamp_size - 3.4)
+
+        pdf.set_xy(stamp_x, stamp_y + (stamp_size * 0.45))
+        pdf.set_font("Helvetica", "B", 5.8)
+        pdf.set_text_color(31, 90, 161)
+        pdf.cell(stamp_size, 2.4, _pdf_text("Cachet"), align="C")
+
     pdf.set_y(signature_y + 1.2)
     pdf.set_font("Helvetica", size=7.8)
     pdf.set_x(left_sig_x1)
     pdf.cell(left_sig_x2 - left_sig_x1, 3.8, _pdf_text("Titulaire / Enseignant"), align="C")
     pdf.set_x(right_sig_x1)
-    pdf.cell(right_sig_x2 - right_sig_x1, 3.8, _pdf_text("Direction"), align="C")
+    pdf.cell(right_sig_x2 - right_sig_x1, 3.8, _pdf_text(signature_label), align="C")
 
 
 class ClassBulletinsPdfView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request, classroom_id: int, academic_year_id: int, term: str):
+        _ensure_sensitive_export_access(request)
+
         normalized_term = normalize_term(term)
         if not normalized_term:
             return Response(
@@ -1709,8 +1854,29 @@ class ClassBulletinsPdfView(APIView):
         students = list(
             _allowed_students_queryset(request)
             .filter(classroom_id=classroom.id, is_archived=False)
-            .order_by("user__last_name", "user__first_name", "matricule")
         )
+
+        if students:
+            rank_by_student_id = {
+                int(student_id): int(rank)
+                for student_id, rank in StudentAcademicHistory.objects.filter(
+                    classroom_id=classroom.id,
+                    academic_year_id=academic_year_id,
+                    student_id__in=[student.id for student in students],
+                ).values_list("student_id", "rank")
+                if rank is not None and int(rank) > 0
+            }
+
+            def _student_rank_key(student: Student):
+                rank = rank_by_student_id.get(student.id)
+                last_name = str(getattr(student.user, "last_name", "") or "").lower()
+                first_name = str(getattr(student.user, "first_name", "") or "").lower()
+                matricule = str(getattr(student, "matricule", "") or "").lower()
+                if rank is None:
+                    return (1, 10**9, last_name, first_name, matricule, student.id)
+                return (0, rank, last_name, first_name, matricule, student.id)
+
+            students.sort(key=_student_rank_key)
 
         if not students:
             return Response({"detail": "Aucun élève trouvé pour cette classe."}, status=404)
@@ -1730,26 +1896,22 @@ class ClassBulletinsPdfView(APIView):
         safe_term = str(normalized_term or term or "periode").replace("/", "-")
         class_slug = str(classroom.name or f"classe_{classroom.id}").strip().replace(" ", "_")
         return pdf_output_response(pdf, f"bulletins_{class_slug}_{safe_term}.pdf")
->>>>>>> main
 
 
-class PaymentReceiptPdfView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, payment_id: int):
-        payment = Payment.objects.select_related(
-            "fee__student__user",
-            "fee__student__parent",
-            "fee__student__parent__user",
-            "fee__student__classroom",
-            "fee__academic_year",
-            "received_by",
-        ).get(id=payment_id)
-        _ensure_payment_access(request, payment)
-
+def _render_payment_receipt_page(pdf: FPDF, payment: Payment):
         student = payment.fee.student
         school = _school_identity_for_student(student) if student else _school_identity()
         logo_path = (_etablissement_logo_path(student) if student else None) or _school_logo_path()
+        etablissement = _payment_etablissement(payment)
+        cashier_signature_source = _etablissement_media_field_path(etablissement, "cashier_signature_image") or _school_signature_asset_path()
+        stamp_source = _etablissement_media_field_path(etablissement, "stamp_image") or _school_stamp_asset_path()
+        cashier_signature_path = _pdf_compatible_image_path(cashier_signature_source, cache_prefix="receipt_cashier_signature")
+        stamp_asset_path = _pdf_compatible_image_path(stamp_source, cache_prefix="receipt_stamp")
+        cashier_signature_label = str(getattr(etablissement, "cashier_signature_label", "") or "").strip() or "Signature caissier"
+        parent_signature_label = str(getattr(etablissement, "parent_signature_label", "") or "").strip() or "Signature parent / eleve"
+        stamp_position = str(getattr(etablissement, "stamp_position", "") or "right").strip().lower()
+        stamp_scale = _safe_scale_percent(getattr(etablissement, "stamp_scale", 100)) / 100.0
+        signature_scale = _safe_scale_percent(getattr(etablissement, "principal_signature_scale", 100)) / 100.0
 
         student_user = student.user if student else None
         student_name = student_user.get_full_name().strip() if student_user else ""
@@ -1776,10 +1938,6 @@ class PaymentReceiptPdfView(APIView):
         fee_type = payment.fee.get_fee_type_display() if payment.fee else "N/A"
         method = payment.method or "N/A"
         reference = payment.reference or "-"
-
-        pdf = FPDF(format="A5")
-        pdf.add_page()
-        pdf.set_auto_page_break(auto=False)
 
         page_x = 7
         page_y = 7
@@ -1969,41 +2127,158 @@ class PaymentReceiptPdfView(APIView):
         pdf.line(left_sign_x1, signature_y, left_sign_x2, signature_y)
         pdf.line(right_sign_x1, signature_y, right_sign_x2, signature_y)
 
+        cashier_signature_w = max(14.0, min(34.0, (left_sign_x2 - left_sign_x1) * 0.88 * signature_scale))
+        cashier_signature_h = max(3.6, min(9.2, 4.6 * signature_scale))
+        cashier_signature_x = left_sign_x1 + max(0.0, ((left_sign_x2 - left_sign_x1) - cashier_signature_w) / 2.0)
+        cashier_signature_y = signature_y - cashier_signature_h - 0.8
+        if cashier_signature_path:
+            try:
+                pdf.image(
+                    cashier_signature_path,
+                    x=cashier_signature_x,
+                    y=cashier_signature_y,
+                    w=cashier_signature_w,
+                    h=cashier_signature_h,
+                )
+            except Exception:
+                cashier_signature_path = None
+
         pdf.set_xy(left_sign_x1, signature_y + 0.6)
         pdf.set_font("Helvetica", "B", 7.3)
         pdf.set_text_color(66, 72, 84)
-        pdf.cell(left_sign_x2 - left_sign_x1, 3.4, _pdf_text("Signature caissier"), align="C")
+        pdf.cell(left_sign_x2 - left_sign_x1, 3.4, _pdf_text(cashier_signature_label), align="C")
 
         pdf.set_xy(right_sign_x1, signature_y + 0.6)
-        pdf.cell(right_sign_x2 - right_sign_x1, 3.4, _pdf_text("Signature parent / eleve"), align="C")
+        pdf.cell(right_sign_x2 - right_sign_x1, 3.4, _pdf_text(parent_signature_label), align="C")
 
-        stamp_size = 18
-        stamp_x = content_x + content_w - stamp_size - 1.4
+        stamp_size = max(12.0, min(28.0, 18 * stamp_scale))
+        stamp_default_x = content_x + content_w - stamp_size - 1.4
+        stamp_x = _positioned_x(
+            stamp_position,
+            min_x=content_x + 1.2,
+            max_x=content_x + content_w - 1.2,
+            box_width=stamp_size,
+            default_x=stamp_default_x,
+        )
         stamp_y = page_y + page_h - stamp_size - 13.0
-        pdf.set_draw_color(31, 90, 161)
-        pdf.set_line_width(0.24)
-        try:
-            pdf.ellipse(stamp_x, stamp_y, stamp_size, stamp_size)
-            pdf.ellipse(stamp_x + 2.8, stamp_y + 2.8, stamp_size - 5.6, stamp_size - 5.6)
-        except Exception:
-            pdf.rect(stamp_x, stamp_y, stamp_size, stamp_size)
-            pdf.rect(stamp_x + 2.8, stamp_y + 2.8, stamp_size - 5.6, stamp_size - 5.6)
+        if stamp_asset_path:
+            try:
+                pdf.image(stamp_asset_path, x=stamp_x, y=stamp_y, w=stamp_size, h=stamp_size)
+            except Exception:
+                stamp_asset_path = None
 
-        pdf.set_text_color(31, 90, 161)
-        pdf.set_xy(stamp_x, stamp_y + 6.0)
-        pdf.set_font("Helvetica", "B", 7.8)
-        pdf.cell(stamp_size, 3.2, _pdf_text(school["short"])[:12], align="C")
-        pdf.set_xy(stamp_x, stamp_y + 9.6)
-        pdf.set_font("Helvetica", "B", 6.5)
-        pdf.cell(stamp_size, 2.8, _pdf_text(school["city"])[:12], align="C")
+        if not stamp_asset_path:
+            pdf.set_draw_color(31, 90, 161)
+            pdf.set_line_width(0.24)
+            try:
+                pdf.ellipse(stamp_x, stamp_y, stamp_size, stamp_size)
+                pdf.ellipse(stamp_x + 2.8, stamp_y + 2.8, stamp_size - 5.6, stamp_size - 5.6)
+            except Exception:
+                pdf.rect(stamp_x, stamp_y, stamp_size, stamp_size)
+                pdf.rect(stamp_x + 2.8, stamp_y + 2.8, stamp_size - 5.6, stamp_size - 5.6)
 
+            pdf.set_text_color(31, 90, 161)
+            pdf.set_xy(stamp_x, stamp_y + 6.0)
+            pdf.set_font("Helvetica", "B", 7.8)
+            pdf.cell(stamp_size, 3.2, _pdf_text(school["short"])[:12], align="C")
+            pdf.set_xy(stamp_x, stamp_y + 9.6)
+            pdf.set_font("Helvetica", "B", 6.5)
+            pdf.cell(stamp_size, 2.8, _pdf_text(school["city"])[:12], align="C")
+
+def _build_receipts_pdf(payments: list[Payment]) -> FPDF:
+    pdf = FPDF(format="A5")
+    pdf.set_auto_page_break(auto=False)
+    for payment in payments:
+        pdf.add_page()
+        _render_payment_receipt_page(pdf, payment)
+    return pdf
+
+
+class PaymentReceiptPdfView(APIView):
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request, payment_id: int):
+        payment = Payment.objects.select_related(
+            "fee__student__user",
+            "fee__student__parent",
+            "fee__student__parent__user",
+            "fee__student__classroom",
+            "fee__student__etablissement",
+            "fee__student__classroom__etablissement",
+            "fee__academic_year",
+            "received_by",
+            "etablissement",
+        ).get(id=payment_id, is_cancelled=False)
+        _ensure_payment_access(request, payment)
+        pdf = _build_receipts_pdf([payment])
         return pdf_output_response(pdf, f"receipt_{payment.id}.pdf")
 
 
+class BatchPaymentReceiptsPdfView(APIView):
+    access_module = "reports"
+    # Export en lot: POST par commodite (liste d'identifiants dans le corps),
+    # mais l'operation ne fait que lire. Exiger le niveau ecriture priverait
+    # le comptable de ses recus.
+    access_read_only = True
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def post(self, request):
+        raw_ids = request.data.get("payment_ids") if isinstance(request.data, dict) else None
+        if not isinstance(raw_ids, list):
+            raise ValidationError({"payment_ids": "Fournissez une liste d'identifiants de paiements."})
+
+        payment_ids: list[int] = []
+        for raw in raw_ids:
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                payment_ids.append(parsed)
+
+        payment_ids = list(dict.fromkeys(payment_ids))
+        if not payment_ids:
+            raise ValidationError({"payment_ids": "Aucun identifiant de paiement valide."})
+        if len(payment_ids) > 80:
+            raise ValidationError({"payment_ids": "Limite maximale: 80 reçus par impression groupée."})
+
+        queryset = Payment.objects.select_related(
+            "fee__student__user",
+            "fee__student__parent",
+            "fee__student__parent__user",
+            "fee__student__classroom",
+            "fee__student__etablissement",
+            "fee__student__classroom__etablissement",
+            "fee__academic_year",
+            "received_by",
+            "etablissement",
+        ).filter(id__in=payment_ids, is_cancelled=False)
+
+        payment_by_id = {payment.id: payment for payment in queryset}
+        payments: list[Payment] = []
+        for payment_id in payment_ids:
+            payment = payment_by_id.get(payment_id)
+            if payment is None:
+                continue
+            _ensure_payment_access(request, payment)
+            payments.append(payment)
+
+        if not payments:
+            raise ValidationError({"payment_ids": "Aucun paiement accessible pour cette sélection."})
+
+        pdf = _build_receipts_pdf(payments)
+        timestamp = timezone.localtime(timezone.now()).strftime("%Y%m%d_%H%M")
+        return pdf_output_response(pdf, f"receipts_batch_{timestamp}.pdf")
+
+
 class PaymentExcelExportView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
+        _ensure_sensitive_export_access(request)
+
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Paiements"
@@ -2171,8 +2446,246 @@ class PaymentExcelExportView(APIView):
         return response
 
 
+class PaymentJournalPageView(APIView):
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request):
+        _ensure_sensitive_export_access(request)
+        queryset = _apply_payment_journal_filters(
+            _allowed_payments_queryset(request).order_by("-created_at", "-id"),
+            request,
+        )
+
+        page_size = _parse_page_size(request, default=100, max_size=1000)
+        paginator = Paginator(queryset, page_size)
+        try:
+            page_number = int(request.query_params.get("page", 1))
+        except (TypeError, ValueError):
+            page_number = 1
+        page_number = max(1, page_number)
+        page_obj = paginator.get_page(page_number)
+
+        base_url = request.build_absolute_uri(request.path)
+        query_dict = request.query_params.copy()
+
+        def _page_link(page_no: int | None) -> str | None:
+            if page_no is None:
+                return None
+            query_copy = query_dict.copy()
+            query_copy["page"] = str(page_no)
+            return f"{base_url}?{query_copy.urlencode()}"
+
+        return Response(
+            {
+                "count": paginator.count,
+                "next": _page_link(page_obj.next_page_number() if page_obj.has_next() else None),
+                "previous": _page_link(page_obj.previous_page_number() if page_obj.has_previous() else None),
+                "results": [_payment_journal_row(payment) for payment in page_obj.object_list],
+            }
+        )
+
+
+class ExpenseJournalPageView(APIView):
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request):
+        _ensure_sensitive_export_access(request)
+        queryset = _apply_expense_journal_filters(
+            _allowed_expenses_queryset(request).order_by("-date", "-id"),
+            request,
+        )
+
+        page_size = _parse_page_size(request, default=100, max_size=1000)
+        paginator = Paginator(queryset, page_size)
+        try:
+            page_number = int(request.query_params.get("page", 1))
+        except (TypeError, ValueError):
+            page_number = 1
+        page_number = max(1, page_number)
+        page_obj = paginator.get_page(page_number)
+
+        base_url = request.build_absolute_uri(request.path)
+        query_dict = request.query_params.copy()
+
+        def _page_link(page_no: int | None) -> str | None:
+            if page_no is None:
+                return None
+            query_copy = query_dict.copy()
+            query_copy["page"] = str(page_no)
+            return f"{base_url}?{query_copy.urlencode()}"
+
+        return Response(
+            {
+                "count": paginator.count,
+                "next": _page_link(page_obj.next_page_number() if page_obj.has_next() else None),
+                "previous": _page_link(page_obj.previous_page_number() if page_obj.has_previous() else None),
+                "results": [_expense_journal_row(expense) for expense in page_obj.object_list],
+            }
+        )
+
+
+def _csv_response(*, filename: str, header: list[str], rows: list[list]) -> HttpResponse:
+    def _csv_cell(value) -> str:
+        text = str(value or "")
+        return f'"{text.replace("\"", "\"\"")}"'
+
+    output = io.StringIO()
+    output.write("\ufeff")
+    for line in [header, *rows]:
+        output.write(",".join([_csv_cell(value) for value in line]))
+        output.write("\n")
+
+    response = HttpResponse(output.getvalue(), content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+def _build_journal_pdf(*, title: str, subtitle: str, headers: list[str], rows: list[list[str]]) -> FPDF:
+    pdf = FPDF(orientation="L", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.cell(0, 8, _pdf_text(title), ln=True)
+    pdf.set_font("Helvetica", size=9)
+    pdf.cell(0, 5, _pdf_text(subtitle), ln=True)
+    pdf.cell(0, 5, _pdf_text(f"Genere le: {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"), ln=True)
+    pdf.ln(3)
+
+    page_width = pdf.w - 20
+    col_width = page_width / max(1, len(headers))
+    row_h = 6.2
+
+    pdf.set_fill_color(57, 99, 151)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 8)
+    for title_cell in headers:
+        pdf.cell(col_width, row_h, _pdf_text(title_cell)[:30], border=1, align="C", fill=True)
+    pdf.ln(row_h)
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", size=7.4)
+    for row in rows:
+        for value in row:
+            pdf.cell(col_width, row_h, _pdf_text(str(value or ""))[:36], border=1)
+        pdf.ln(row_h)
+
+    return pdf
+
+
+class PaymentJournalExportView(APIView):
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request):
+        _ensure_sensitive_export_access(request)
+        export_format = str(request.query_params.get("export_format", "csv") or "csv").strip().lower()
+        queryset = _apply_payment_journal_filters(
+            _allowed_payments_queryset(request).order_by("-created_at", "-id"),
+            request,
+        )
+        rows = [_payment_journal_row(payment) for payment in queryset.iterator(chunk_size=1000)]
+
+        stamp = timezone.localtime().strftime("%Y%m%d_%H%M")
+        if export_format == "pdf":
+            pdf = _build_journal_pdf(
+                title="Journal des encaissements",
+                subtitle=f"{len(rows)} ligne(s)",
+                headers=["Date", "Eleve", "Matricule", "Type frais", "Montant", "Methode", "Reference", "Encaisse par"],
+                rows=[
+                    [
+                        row.get("created_at", ""),
+                        row.get("student_full_name", ""),
+                        row.get("student_matricule", ""),
+                        row.get("fee_type", ""),
+                        f"{row.get('amount', 0):.0f}",
+                        row.get("method", ""),
+                        row.get("reference", ""),
+                        row.get("received_by", ""),
+                    ]
+                    for row in rows
+                ],
+            )
+            return pdf_output_response(pdf, f"journal_encaissements_{stamp}.pdf")
+
+        return _csv_response(
+            filename=f"journal_encaissements_{stamp}.csv",
+            header=["id", "date", "eleve", "matricule", "type_frais", "montant", "methode", "reference", "encaisse_par"],
+            rows=[
+                [
+                    row.get("id", ""),
+                    row.get("created_at", ""),
+                    row.get("student_full_name", ""),
+                    row.get("student_matricule", ""),
+                    row.get("fee_type", ""),
+                    f"{row.get('amount', 0):.0f}",
+                    row.get("method", ""),
+                    row.get("reference", ""),
+                    row.get("received_by", ""),
+                ]
+                for row in rows
+            ],
+        )
+
+
+class ExpenseJournalExportView(APIView):
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request):
+        _ensure_sensitive_export_access(request)
+        export_format = str(request.query_params.get("export_format", "csv") or "csv").strip().lower()
+        queryset = _apply_expense_journal_filters(
+            _allowed_expenses_queryset(request).order_by("-date", "-id"),
+            request,
+        )
+        rows = [_expense_journal_row(expense) for expense in queryset.iterator(chunk_size=1000)]
+
+        stamp = timezone.localtime().strftime("%Y%m%d_%H%M")
+        if export_format == "pdf":
+            pdf = _build_journal_pdf(
+                title="Journal des depenses",
+                subtitle=f"{len(rows)} ligne(s)",
+                headers=["Date", "Libelle", "Categorie", "Montant", "Validation", "Paye le", "Notes"],
+                rows=[
+                    [
+                        row.get("date", ""),
+                        row.get("label", ""),
+                        row.get("category", ""),
+                        f"{row.get('amount', 0):.0f}",
+                        row.get("validation_stage", ""),
+                        row.get("paid_on", ""),
+                        row.get("notes", ""),
+                    ]
+                    for row in rows
+                ],
+            )
+            return pdf_output_response(pdf, f"journal_depenses_{stamp}.pdf")
+
+        return _csv_response(
+            filename=f"journal_depenses_{stamp}.csv",
+            header=["id", "date", "libelle", "categorie", "montant", "validation", "paye_le", "notes"],
+            rows=[
+                [
+                    row.get("id", ""),
+                    row.get("date", ""),
+                    row.get("label", ""),
+                    row.get("category", ""),
+                    f"{row.get('amount', 0):.0f}",
+                    row.get("validation_stage", ""),
+                    row.get("paid_on", ""),
+                    row.get("notes", ""),
+                ]
+                for row in rows
+            ],
+        )
+
+
 class StudentCardPdfView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request, student_id: int):
         student = get_object_or_404(
@@ -2191,9 +2704,12 @@ class StudentCardPdfView(APIView):
 
 
 class ClassStudentCardsPdfView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request, classroom_id: int):
+        _ensure_sensitive_export_access(request)
+
         if getattr(request.user, "role", "") in {UserRole.PARENT, UserRole.STUDENT}:
             raise PermissionDenied("Accès refusé aux cartes de classe.")
 

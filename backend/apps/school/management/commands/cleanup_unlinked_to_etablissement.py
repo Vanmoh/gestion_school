@@ -16,10 +16,8 @@ from apps.school.models import (
     Expense,
     Grade,
     GradeValidation,
-    Level,
     ParentProfile,
     Payment,
-    Section,
     Student,
     Subject,
     Teacher,
@@ -32,7 +30,7 @@ from apps.school.models import (
 class Command(BaseCommand):
     help = (
         "Delete records not linked to an etablissement and cleanup orphaned school data "
-        "(classes, students, teachers, parents, grades, levels, sections, years, subjects)."
+        "(classes, students, teachers, parents, grades, years, subjects)."
     )
 
     def add_arguments(self, parser):
@@ -149,14 +147,6 @@ class Command(BaseCommand):
             grade_count=Count("grades"),
             grade_validation_count=Count("grade_validations"),
         ).filter(class_count=0, grade_count=0, grade_validation_count=0).delete()[0]
-
-        summary["level_orphan"] = Level.objects.annotate(class_count=Count("classes")).filter(
-            class_count=0
-        ).delete()[0]
-
-        summary["section_orphan"] = Section.objects.annotate(class_count=Count("classes")).filter(
-            class_count=0
-        ).delete()[0]
 
         # 5) Defensive pass: students whose classroom has a different etablissement.
         mismatch_student_user_ids = list(

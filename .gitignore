@@ -15,6 +15,7 @@ backend/staticfiles/
 backend/media/
 backend/logs/*.log
 backend/backups/*.sql
+backend/backups/archives/
 backend/celerybeat-schedule
 
 # Flutter

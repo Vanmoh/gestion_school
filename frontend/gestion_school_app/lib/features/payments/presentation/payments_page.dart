@@ -1,11 +1,23 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../../core/network/api_client.dart';
+import '../../../core/providers/navigation_intents.dart';
+import '../../../core/permissions/module_permissions.dart';
+import '../../auth/presentation/auth_controller.dart';
 import '../domain/payment.dart';
 import '../domain/student_fee.dart';
+import 'payment_entry_dialog.dart';
 import 'payments_controller.dart';
 
 class PaymentsPage extends ConsumerStatefulWidget {
@@ -15,47 +27,719 @@ class PaymentsPage extends ConsumerStatefulWidget {
   ConsumerState<PaymentsPage> createState() => _PaymentsPageState();
 }
 
+enum _FinancePeriod { day, week, month, all }
+
+enum _PaymentRowAction { view, edit, print, delete }
+
+class _ClassKpiRow {
+  final String className;
+  final int feeCount;
+  final int studentCount;
+  final int overdueCount;
+  final double totalDue;
+  final double totalPaid;
+  final double totalOutstanding;
+
+  const _ClassKpiRow({
+    required this.className,
+    required this.feeCount,
+    required this.studentCount,
+    required this.overdueCount,
+    required this.totalDue,
+    required this.totalPaid,
+    required this.totalOutstanding,
+  });
+
+  double get recoveryRate => totalDue <= 0 ? 0 : (totalPaid / totalDue);
+}
+
+class _LateFeeAlert {
+  final int feeId;
+  final String className;
+  final String studentFullName;
+  final String studentMatricule;
+  final String feeType;
+  final String dueDateRaw;
+  final int daysLate;
+  final double balance;
+
+  const _LateFeeAlert({
+    required this.feeId,
+    required this.className,
+    required this.studentFullName,
+    required this.studentMatricule,
+    required this.feeType,
+    required this.dueDateRaw,
+    required this.daysLate,
+    required this.balance,
+  });
+}
+
+class _LateStudentSummary {
+  final String studentKey;
+  final String studentFullName;
+  final String studentMatricule;
+  final String className;
+  final int lateFeesCount;
+  final int maxDaysLate;
+  final double totalBalance;
+
+  const _LateStudentSummary({
+    required this.studentKey,
+    required this.studentFullName,
+    required this.studentMatricule,
+    required this.className,
+    required this.lateFeesCount,
+    required this.maxDaysLate,
+    required this.totalBalance,
+  });
+}
+
+class _LateTrendMetrics {
+  final int current7Count;
+  final int previous7Count;
+  final int current30Count;
+  final int previous30Count;
+  final double current7Amount;
+  final double previous7Amount;
+  final double current30Amount;
+  final double previous30Amount;
+
+  const _LateTrendMetrics({
+    required this.current7Count,
+    required this.previous7Count,
+    required this.current30Count,
+    required this.previous30Count,
+    required this.current7Amount,
+    required this.previous7Amount,
+    required this.current30Amount,
+    required this.previous30Amount,
+  });
+}
+
+class _ReminderHistoryEntry {
+  final DateTime createdAt;
+  final String action;
+  final String scope;
+  final int itemCount;
+  final double totalAmount;
+
+  const _ReminderHistoryEntry({
+    required this.createdAt,
+    required this.action,
+    required this.scope,
+    required this.itemCount,
+    required this.totalAmount,
+  });
+}
+
 class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   static const List<int> _pageSizeOptions = [15, 25, 50, 100];
+  static const List<int> _outstandingPageSizeOptions = [10, 20, 40];
+  static const List<int> _reminderHistoryPageSizeOptions = [8, 15, 30];
+  static const List<String> _paymentMethodOptions = [
+    'Especes',
+    'Mobile Money',
+    'Virement',
+    'Cheque',
+    'Carte',
+    'Autre',
+  ];
 
-  final _formKey = GlobalKey<FormState>();
   final _searchController = TextEditingController();
-  final _amountController = TextEditingController();
-  final _methodController = TextEditingController(text: 'Especes');
-  final _referenceController = TextEditingController();
+  final _payrollMonthController = TextEditingController();
 
   int? _selectedFeeId;
   int? _selectedPaymentId;
   String _methodFilter = 'all';
-<<<<<<< HEAD
-
-  @override
-  void dispose() {
-=======
   int _currentPage = 1;
   int _pageSize = 25;
+  int _outstandingPage = 1;
+  int _outstandingPageSize = 10;
+  bool _outstandingExpanded = false;
+  final Set<int> _selectedPaymentIds = <int>{};
+  final Set<int> _selectedOutstandingFeeIds = <int>{};
+  final Set<String> _expandedOutstandingClasses = <String>{};
   String _searchTerm = '';
   Timer? _searchDebounce;
+  bool _financeBusy = false;
+  List<Map<String, dynamic>> _financePayrolls = [];
+  List<Map<String, dynamic>> _financeExpenses = [];
+  _FinancePeriod _financePeriod = _FinancePeriod.all;
+  int _lateAlertMinDays = 7;
+  final List<_ReminderHistoryEntry> _reminderHistory = <_ReminderHistoryEntry>[];
+  String _reminderHistoryActionFilter = 'all';
+  String _reminderHistoryPeriodFilter = 'all';
+  String _reminderHistorySort = 'date_desc';
+  final TextEditingController _reminderHistorySearchController = TextEditingController();
+  String _reminderHistorySearchTerm = '';
+  int _reminderHistoryPage = 1;
+  int _reminderHistoryPageSize = 8;
+  bool _openingGuidedDialogFromIntent = false;
+
+  static const List<String> _expenseCategoryOptions = [
+    'Salaires enseignants',
+    'Salaires personnels',
+    'Utilites',
+    'Maintenance',
+    'Fournitures',
+    'Taxes',
+    'Transport',
+    'Loyer',
+    'Charges operationnelles',
+    'Autres',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _payrollMonthController.text =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}';
+    Future<void>.microtask(() async {
+      await _loadReminderHistory();
+      await _loadTeacherFinanceSection();
+      await _consumeGuidedPaymentIntentIfNeeded();
+    });
+  }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
->>>>>>> main
     _searchController.dispose();
-    _amountController.dispose();
-    _methodController.dispose();
-    _referenceController.dispose();
+    _payrollMonthController.dispose();
+    _reminderHistorySearchController.dispose();
     super.dispose();
   }
 
-  Future<void> _refreshPayments() async {
-<<<<<<< HEAD
-    ref.invalidate(paymentsProvider);
-    ref.invalidate(feesProvider);
+  Future<void> _loadReminderHistory() async {
     try {
-      await Future.wait([
-        ref.read(paymentsProvider.future),
-=======
+      final storage = ref.read(tokenStorageProvider);
+      final raw = await storage.reminderHistory();
+      if (raw == null || raw.trim().isEmpty) {
+        return;
+      }
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return;
+      }
+
+      final parsed = <_ReminderHistoryEntry>[];
+      for (final item in decoded) {
+        if (item is! Map) {
+          continue;
+        }
+        final map = Map<String, dynamic>.from(item);
+        final createdAt = DateTime.tryParse(map['created_at']?.toString() ?? '');
+        if (createdAt == null) {
+          continue;
+        }
+        final itemCount = int.tryParse(map['item_count']?.toString() ?? '0') ?? 0;
+        final totalAmount = double.tryParse(map['total_amount']?.toString() ?? '0') ?? 0;
+        parsed.add(
+          _ReminderHistoryEntry(
+            createdAt: createdAt,
+            action: map['action']?.toString() ?? '',
+            scope: map['scope']?.toString() ?? '',
+            itemCount: itemCount,
+            totalAmount: totalAmount,
+          ),
+        );
+      }
+
+      if (parsed.isEmpty || !mounted) {
+        return;
+      }
+
+      setState(() {
+        _reminderHistory
+          ..clear()
+          ..addAll(parsed.take(30));
+      });
+    } catch (_) {
+      // Ignore malformed local payload and keep UI usable.
+    }
+  }
+
+  Future<void> _persistReminderHistory() async {
+    try {
+      final storage = ref.read(tokenStorageProvider);
+      if (_reminderHistory.isEmpty) {
+        await storage.clearReminderHistory();
+        return;
+      }
+
+      final payload = _reminderHistory
+          .map(
+            (entry) => <String, dynamic>{
+              'created_at': entry.createdAt.toIso8601String(),
+              'action': entry.action,
+              'scope': entry.scope,
+              'item_count': entry.itemCount,
+              'total_amount': entry.totalAmount,
+            },
+          )
+          .toList(growable: false);
+      await storage.saveReminderHistory(jsonEncode(payload));
+    } catch (_) {
+      // Silent failure: history remains available in-memory.
+    }
+  }
+
+  Future<void> _consumeGuidedPaymentIntentIfNeeded() async {
+    if (!mounted || _openingGuidedDialogFromIntent) {
+      return;
+    }
+    final shouldOpen = ref.read(financeOpenGuidedPaymentIntentProvider);
+    if (!shouldOpen) {
+      return;
+    }
+
+    ref.read(financeOpenGuidedPaymentIntentProvider.notifier).state = false;
+    _openingGuidedDialogFromIntent = true;
+    try {
+      await showGuidedPaymentEntryDialog(
+        context: context,
+        ref: ref,
+        title: 'Fenetre flottante d\'encaissement',
+      );
+    } finally {
+      _openingGuidedDialogFromIntent = false;
+    }
+  }
+
+  /// Paie enseignants: module distinct des finances courantes, avec sa
+  /// double validation. Les droits viennent de la matrice du backend.
+  bool _isTeacherFinanceVisible(String? role) {
+    return ref.read(currentPermissionsProvider).canRead('payroll');
+  }
+
+  bool _isTeacherFinanceReadOnly(String? role) {
+    return !ref.read(currentPermissionsProvider).canWrite('payroll');
+  }
+
+  String _toApiDate(DateTime value) {
+    return '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
+  }
+
+  String _normalizePointageBusinessMessage(String raw) {
+    final normalized = raw.trim();
+    final lower = normalized.toLowerCase();
+
+    if (lower.contains('dimanche')) {
+      return 'Pointage refuse: le dimanche est interdit. Choisissez un jour autorise (lundi a samedi).';
+    }
+
+    if (lower.contains("aucun creneau") || lower.contains("emploi du temps")) {
+      return 'Pointage bloque: aucun creneau d\'emploi du temps pour cet enseignant a cette date. Configurez le planning du jour puis reessayez.';
+    }
+
+    return normalized;
+  }
+
+  String _extractApiErrorMessage(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+
+      if (data is Map<String, dynamic>) {
+        for (final entry in data.entries) {
+          final value = entry.value;
+          if (value is List && value.isNotEmpty) {
+            return _normalizePointageBusinessMessage(
+              value.map((item) => item.toString()).join(' | '),
+            );
+          }
+          if (value is String && value.trim().isNotEmpty) {
+            return _normalizePointageBusinessMessage(value);
+          }
+        }
+      }
+
+      if (data is List && data.isNotEmpty) {
+        return _normalizePointageBusinessMessage(
+          data.map((item) => item.toString()).join(' | '),
+        );
+      }
+
+      if (data is String && data.trim().isNotEmpty) {
+        return _normalizePointageBusinessMessage(data);
+      }
+
+      final status = error.response?.statusCode;
+      if (status != null) {
+        return 'Requete refusee (HTTP $status).';
+      }
+
+      return error.message ?? error.toString();
+    }
+
+    return error.toString();
+  }
+
+  Future<void> _loadTeacherFinanceSection() async {
+    final authUser = ref.read(authControllerProvider).value;
+    if (!_isTeacherFinanceVisible(authUser?.role)) {
+      return;
+    }
+
+    try {
+      final repo = ref.read(paymentsRepositoryProvider);
+      final results = await Future.wait([
+        repo.fetchTeacherPayrolls(
+          month: _payrollMonthController.text.trim(),
+        ),
+        repo.fetchExpenses(),
+      ]);
+      final payrolls = results[0];
+      final expenses = results[1];
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _financePayrolls = payrolls;
+        _financeExpenses = expenses;
+      });
+    } catch (error) {
+      _showMessage('Erreur chargement paie horaire: $error');
+    }
+  }
+
+  Future<void> _generateTeacherPayroll() async {
+    final month = _payrollMonthController.text.trim();
+    if (!RegExp(r'^\d{4}-\d{2}$').hasMatch(month)) {
+      _showMessage('Mois invalide. Utilisez le format YYYY-MM.');
+      return;
+    }
+
+    setState(() => _financeBusy = true);
+    try {
+      await ref
+          .read(paymentsRepositoryProvider)
+          .generateTeacherPayroll(month: month);
+      _showMessage('Paie horaire generee avec succes.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur generation paie horaire: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _financeBusy = false);
+      }
+    }
+  }
+
+  Future<void> _validatePayrollLevelOne(int payrollId) async {
+    setState(() => _financeBusy = true);
+    try {
+      await ref.read(paymentsRepositoryProvider).validateTeacherPayrollLevelOne(payrollId);
+      _showMessage('Validation niveau 1 enregistree.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur validation niveau 1: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _validatePayrollLevelTwo(int payrollId) async {
+    setState(() => _financeBusy = true);
+    try {
+      await ref.read(paymentsRepositoryProvider).validateTeacherPayrollLevelTwo(payrollId);
+      _showMessage('Validation niveau 2 enregistree.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur validation niveau 2: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _resetPayrollValidation(int payrollId) async {
+    setState(() => _financeBusy = true);
+    try {
+      await ref.read(paymentsRepositoryProvider).resetTeacherPayrollValidation(payrollId);
+      _showMessage('Validation reinitialisee.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur reinitialisation validation: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _validateExpenseLevelOne(int expenseId) async {
+    setState(() => _financeBusy = true);
+    try {
+      await ref.read(paymentsRepositoryProvider).validateExpenseLevelOne(expenseId);
+      _showMessage('Dépense validée niveau 1.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur validation dépense N1: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _validateExpenseLevelTwo(int expenseId) async {
+    setState(() => _financeBusy = true);
+    try {
+      await ref.read(paymentsRepositoryProvider).validateExpenseLevelTwo(expenseId);
+      _showMessage('Dépense validée niveau 2.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur validation dépense N2: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _resetExpenseValidation(int expenseId) async {
+    setState(() => _financeBusy = true);
+    try {
+      await ref.read(paymentsRepositoryProvider).resetExpenseValidation(expenseId);
+      _showMessage('Validation dépense réinitialisée.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur reset dépense: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _openExpenseDialog({Map<String, dynamic>? expense}) async {
+    final formKey = GlobalKey<FormState>();
+    final labelController = TextEditingController(
+      text: (expense?['label'] ?? '').toString(),
+    );
+    final amountController = TextEditingController(
+      text: expense == null
+          ? ''
+          : ((double.tryParse(expense['amount']?.toString() ?? '0') ?? 0)
+                .toStringAsFixed(0)),
+    );
+    final notesController = TextEditingController(
+      text: (expense?['notes'] ?? '').toString(),
+    );
+
+    DateTime selectedDate = expense?['date'] != null
+        ? (DateTime.tryParse(expense!['date'].toString()) ?? DateTime.now())
+        : DateTime.now();
+    String selectedCategory = (expense?['category'] ?? '').toString().trim();
+    if (!_expenseCategoryOptions.contains(selectedCategory)) {
+      selectedCategory = _expenseCategoryOptions.first;
+    }
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        bool saving = false;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(expense == null ? 'Nouvelle depense' : 'Modifier depense'),
+              content: SizedBox(
+                width: 460,
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextFormField(
+                        controller: labelController,
+                        decoration: const InputDecoration(labelText: 'Libelle'),
+                        validator: (value) => (value == null || value.trim().isEmpty)
+                            ? 'Libelle requis'
+                            : null,
+                      ),
+                      const SizedBox(height: 10),
+                      TextFormField(
+                        controller: amountController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(labelText: 'Montant'),
+                        validator: (value) {
+                          final parsed = double.tryParse((value ?? '').trim());
+                          if (parsed == null || parsed <= 0) {
+                            return 'Montant invalide';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedCategory,
+                        decoration: const InputDecoration(labelText: 'Categorie'),
+                        items: _expenseCategoryOptions
+                            .map((item) => DropdownMenuItem<String>(
+                                  value: item,
+                                  child: Text(item),
+                                ))
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setDialogState(() => selectedCategory = value);
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      InkWell(
+                        onTap: saving
+                            ? null
+                            : () async {
+                                final picked = await showDatePicker(
+                                  context: context,
+                                  initialDate: selectedDate,
+                                  firstDate: DateTime(2020),
+                                  lastDate: DateTime.now(),
+                                );
+                                if (picked == null) return;
+                                setDialogState(() => selectedDate = picked);
+                              },
+                        child: InputDecorator(
+                          decoration: const InputDecoration(labelText: 'Date depense'),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(_toApiDate(selectedDate)),
+                              const Icon(Icons.calendar_today_outlined, size: 18),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextFormField(
+                        controller: notesController,
+                        maxLines: 2,
+                        decoration: const InputDecoration(labelText: 'Notes'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: saving ? null : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Annuler'),
+                ),
+                FilledButton(
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          if (!formKey.currentState!.validate()) return;
+
+                          setDialogState(() => saving = true);
+                          try {
+                            final repo = ref.read(paymentsRepositoryProvider);
+                            final amount = double.parse(amountController.text.trim());
+                            final expenseDate = _toApiDate(selectedDate);
+                            if (expense == null) {
+                              await repo.createExpense(
+                                label: labelController.text.trim(),
+                                amount: amount,
+                                date: expenseDate,
+                                category: selectedCategory,
+                                notes: notesController.text.trim(),
+                              );
+                            } else {
+                              await repo.updateExpense(
+                                expenseId: (expense['id'] as num).toInt(),
+                                label: labelController.text.trim(),
+                                amount: amount,
+                                date: expenseDate,
+                                category: selectedCategory,
+                                notes: notesController.text.trim(),
+                              );
+                            }
+                            if (dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop(true);
+                            }
+                          } catch (error) {
+                            _showMessage('Erreur depense: ${_extractApiErrorMessage(error)}');
+                            setDialogState(() => saving = false);
+                          }
+                        },
+                  child: saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Enregistrer'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    labelController.dispose();
+    amountController.dispose();
+    notesController.dispose();
+
+    if (saved == true) {
+      _showMessage(
+        expense == null ? 'Depense enregistree.' : 'Depense modifiee.',
+        isSuccess: true,
+      );
+      await _loadTeacherFinanceSection();
+    }
+  }
+
+  Future<void> _deleteExpense(Map<String, dynamic> expense) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Supprimer depense'),
+          content: Text(
+            'Voulez-vous supprimer la depense "${(expense['label'] ?? '-').toString()}" ?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB42318)),
+              child: const Text('Supprimer'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+    setState(() => _financeBusy = true);
+    try {
+      await ref
+          .read(paymentsRepositoryProvider)
+          .deleteExpense((expense['id'] as num).toInt());
+      _showMessage('Depense supprimee.', isSuccess: true);
+      await _loadTeacherFinanceSection();
+    } catch (error) {
+      _showMessage('Erreur suppression depense: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  String _payrollStageLabel(Map<String, dynamic> row) {
+    final stage = (row['validation_stage'] ?? '').toString();
+    if (stage == 'level_two') return 'N2 valide';
+    if (stage == 'level_one') return 'N1 valide';
+    return 'Brouillon';
+  }
+
+  String _expenseStageLabel(Map<String, dynamic> row) {
+    final stage = (row['validation_stage'] ?? '').toString();
+    if (stage == 'level_two') return 'N2 valide';
+    if (stage == 'level_one') return 'N1 valide';
+    return 'Brouillon';
+  }
+
+  Future<void> _refreshPayments() async {
     final query = PaymentsPageQuery(
       page: _currentPage,
       pageSize: _pageSize,
@@ -67,24 +751,14 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     try {
       await Future.wait([
         ref.read(paymentsPaginatedProvider(query).future),
->>>>>>> main
         ref.read(feesProvider.future),
       ]);
+      await _loadTeacherFinanceSection();
     } catch (_) {
       // Keep pull-to-refresh responsive even when API is temporarily unavailable.
     }
   }
 
-<<<<<<< HEAD
-  void _showMessage(String text, {bool isSuccess = false}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(text),
-        backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
-      ),
-    );
-=======
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 300), () {
@@ -96,7 +770,12 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     });
   }
 
-  void _showMessage(String text, {bool isSuccess = false}) {
+  void _showMessage(
+    String text, {
+    bool isSuccess = false,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
     if (!mounted) return;
 
     final messenger = ScaffoldMessenger.of(context);
@@ -109,15 +788,183 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
             style: isSuccess ? const TextStyle(color: Colors.white) : null,
           ),
           backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
+          action: (actionLabel != null && onAction != null)
+              ? SnackBarAction(
+                  label: actionLabel,
+                  onPressed: onAction,
+                )
+              : null,
         ),
       );
->>>>>>> main
   }
 
   Future<void> _printReceipt(int paymentId) async {
     final repo = ref.read(paymentsRepositoryProvider);
     final bytes = await repo.fetchReceiptPdf(paymentId);
     await Printing.layoutPdf(onLayout: (_) async => bytes);
+  }
+
+  Future<void> _printMultipleReceipts() async {
+    final ids = _selectedPaymentIds.toList(growable: false)..sort();
+    if (ids.isEmpty) {
+      _showMessage('Selectionnez au moins un encaissement.');
+      return;
+    }
+
+    final repo = ref.read(paymentsRepositoryProvider);
+    try {
+      final bytes = await repo.fetchBatchReceiptsPdf(ids);
+      await Printing.layoutPdf(onLayout: (_) async => bytes);
+      _showMessage('Impression lancée pour ${ids.length} reçu(x).', isSuccess: true);
+    } catch (_) {
+      try {
+        for (final paymentId in ids) {
+          final bytes = await repo.fetchReceiptPdf(paymentId);
+          await Printing.layoutPdf(onLayout: (_) async => bytes);
+        }
+        _showMessage(
+          'Impression fallback lancée pour ${ids.length} reçu(x).',
+          isSuccess: true,
+        );
+      } catch (error) {
+        _showMessage('Erreur impression multiple: $error');
+      }
+    }
+  }
+
+  Future<void> _collectSelectedFeesInBulk(List<StudentFeeItem> allOutstandingFees) async {
+    final selectedFees = allOutstandingFees
+        .where((fee) => _selectedOutstandingFeeIds.contains(fee.id) && fee.balance > 0)
+        .toList(growable: false);
+    if (selectedFees.isEmpty) {
+      _showMessage('Selectionnez au moins un frais en attente.');
+      return;
+    }
+
+    final methodNotifier = ValueNotifier<String>(_paymentMethodOptions.first);
+    final amountController = TextEditingController();
+    final referenceController = TextEditingController();
+
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('Encaissement en lot'),
+            content: SizedBox(
+              width: 430,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${selectedFees.length} frais sélectionnés.'),
+                  const SizedBox(height: 10),
+                  ValueListenableBuilder<String>(
+                    valueListenable: methodNotifier,
+                    builder: (context, selectedMethod, _) {
+                      return DropdownButtonFormField<String>(
+                        initialValue: selectedMethod,
+                        decoration: const InputDecoration(labelText: 'Méthode'),
+                        items: _paymentMethodOptions
+                            .map(
+                              (item) => DropdownMenuItem<String>(
+                                value: item,
+                                child: Text(item),
+                              ),
+                            )
+                            .toList(growable: false),
+                        onChanged: (value) {
+                          if (value != null) {
+                            methodNotifier.value = value;
+                          }
+                        },
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: amountController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Montant par frais (optionnel)',
+                      helperText: 'Laisser vide pour encaisser le solde complet de chaque frais.',
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: referenceController,
+                    decoration: const InputDecoration(labelText: 'Référence (optionnel)'),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Annuler'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Encaisser'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (confirmed != true) {
+        return;
+      }
+
+      final fixedAmount = double.tryParse(
+        amountController.text.trim().replaceAll(',', '.'),
+      );
+      if (amountController.text.trim().isNotEmpty && (fixedAmount == null || fixedAmount <= 0)) {
+        _showMessage('Montant par frais invalide.');
+        return;
+      }
+
+      setState(() => _financeBusy = true);
+      final repo = ref.read(paymentsRepositoryProvider);
+      final selectedMethod = methodNotifier.value;
+      final reference = referenceController.text.trim();
+      var created = 0;
+
+      for (final fee in selectedFees) {
+        final baseAmount = fixedAmount ?? fee.balance;
+        final amount = baseAmount > fee.balance ? fee.balance : baseAmount;
+        if (amount <= 0) {
+          continue;
+        }
+        await repo.createPayment(
+          feeId: fee.id,
+          amount: amount,
+          method: selectedMethod,
+          reference: reference,
+        );
+        created += 1;
+      }
+
+      ref.invalidate(paymentsProvider);
+      ref.invalidate(paymentsPaginatedProvider);
+      ref.invalidate(feesProvider);
+
+      setState(() {
+        _selectedOutstandingFeeIds.clear();
+      });
+
+      _showMessage('Encaissement en lot terminé: $created paiement(s) créé(s).', isSuccess: true);
+      await _refreshPayments();
+    } catch (error) {
+      _showMessage('Erreur encaissement en lot: ${_extractApiErrorMessage(error)}');
+    } finally {
+      if (mounted) {
+        setState(() => _financeBusy = false);
+      }
+      methodNotifier.dispose();
+      amountController.dispose();
+      referenceController.dispose();
+    }
   }
 
   String _formatMoney(num value) {
@@ -141,25 +988,486 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     return '#${fee.id} • ${fee.studentFullName} (${fee.studentMatricule}) • ${fee.feeType} • Solde ${_formatMoney(fee.balance)}';
   }
 
-  List<PaymentItem> _filteredPayments(List<PaymentItem> payments) {
-<<<<<<< HEAD
-    final query = _searchController.text.trim().toLowerCase();
+  String _financePeriodLabel(_FinancePeriod value) {
+    switch (value) {
+      case _FinancePeriod.day:
+        return 'Jour';
+      case _FinancePeriod.week:
+        return 'Semaine';
+      case _FinancePeriod.month:
+        return 'Mois';
+      case _FinancePeriod.all:
+        return 'Tout';
+    }
+  }
 
-    final rows = payments.where((payment) {
-      if (_methodFilter != 'all' && payment.method != _methodFilter) {
-        return false;
-      }
-      if (query.isEmpty) {
+  DateTime _dayStart(DateTime value) {
+    return DateTime(value.year, value.month, value.day);
+  }
+
+  bool _isInPeriod(DateTime? value, _FinancePeriod period) {
+    if (value == null) {
+      return false;
+    }
+    if (period == _FinancePeriod.all) {
+      return true;
+    }
+
+    final today = _dayStart(DateTime.now());
+    final target = _dayStart(value.toLocal());
+
+    switch (period) {
+      case _FinancePeriod.day:
+        return target == today;
+      case _FinancePeriod.week:
+        final weekday = today.weekday;
+        final start = today.subtract(Duration(days: weekday - 1));
+        final end = start.add(const Duration(days: 7));
+        return !target.isBefore(start) && target.isBefore(end);
+      case _FinancePeriod.month:
+        return target.year == today.year && target.month == today.month;
+      case _FinancePeriod.all:
         return true;
+    }
+  }
+
+  String _csvEscape(String input) {
+    final needsQuote = input.contains(',') || input.contains('"') || input.contains('\n');
+    if (!needsQuote) {
+      return input;
+    }
+    return '"${input.replaceAll('"', '""')}"';
+  }
+
+  String _periodCode(_FinancePeriod period) {
+    switch (period) {
+      case _FinancePeriod.day:
+        return 'jour';
+      case _FinancePeriod.week:
+        return 'semaine';
+      case _FinancePeriod.month:
+        return 'mois';
+      case _FinancePeriod.all:
+        return 'tout';
+    }
+  }
+
+  String _timestampSuffix() {
+    final now = DateTime.now();
+    return '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+  }
+
+  ({String? from, String? to}) _periodDateBounds(_FinancePeriod period) {
+    if (period == _FinancePeriod.all) {
+      return (from: null, to: null);
+    }
+    final today = _dayStart(DateTime.now());
+    switch (period) {
+      case _FinancePeriod.day:
+        final value = _toApiDate(today);
+        return (from: value, to: value);
+      case _FinancePeriod.week:
+        final weekday = today.weekday;
+        final start = today.subtract(Duration(days: weekday - 1));
+        final end = start.add(const Duration(days: 6));
+        return (from: _toApiDate(start), to: _toApiDate(end));
+      case _FinancePeriod.month:
+        final start = DateTime(today.year, today.month, 1);
+        final end = (today.month == 12)
+            ? DateTime(today.year + 1, 1, 0)
+            : DateTime(today.year, today.month + 1, 0);
+        return (from: _toApiDate(start), to: _toApiDate(end));
+      case _FinancePeriod.all:
+        return (from: null, to: null);
+    }
+  }
+
+  Future<void> _saveTextExport({
+    required String content,
+    required String fileName,
+    required String dialogTitle,
+    required String successMessage,
+  }) async {
+    try {
+      final savePath = await FilePicker.platform.saveFile(
+        dialogTitle: dialogTitle,
+        fileName: fileName,
+        bytes: Uint8List.fromList(utf8.encode(content)),
+      );
+
+      if (savePath == null && !kIsWeb) {
+        _showMessage('Export annule.');
+        return;
       }
-      final haystack =
-          '${payment.studentFullName} ${payment.studentMatricule} ${payment.method} ${payment.feeType} ${payment.reference}'
-              .toLowerCase();
-      return haystack.contains(query);
-    }).toList();
-=======
+
+      _showMessage(successMessage, isSuccess: true);
+      return;
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: content));
+      _showMessage(
+        'Export indisponible: contenu copie dans le presse-papiers.',
+        isSuccess: true,
+      );
+    }
+  }
+
+  Future<void> _savePdfExport({
+    required Uint8List bytes,
+    required String fileName,
+    required String dialogTitle,
+    required String successMessage,
+  }) async {
+    try {
+      final savePath = await FilePicker.platform.saveFile(
+        dialogTitle: dialogTitle,
+        fileName: fileName,
+        bytes: bytes,
+      );
+
+      if (savePath == null && !kIsWeb) {
+        _showMessage('Export PDF annule.');
+        return;
+      }
+
+      _showMessage(successMessage, isSuccess: true);
+      return;
+    } catch (_) {
+      await Printing.layoutPdf(onLayout: (_) async => bytes);
+      _showMessage(
+        'Export PDF ouvert dans la boite d\'impression.',
+        isSuccess: true,
+      );
+    }
+  }
+
+  String _buildExpensesCsv(List<Map<String, dynamic>> rows) {
+    final buffer = StringBuffer();
+    buffer.writeln('id,date,libelle,categorie,montant,validation,paye_le,notes');
+
+    for (final row in rows) {
+      final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
+      buffer.writeln(
+        [
+          _csvEscape((row['id'] ?? '').toString()),
+          _csvEscape((row['date'] ?? '').toString()),
+          _csvEscape((row['label'] ?? '').toString()),
+          _csvEscape((row['category'] ?? '').toString()),
+          _csvEscape(amount.toStringAsFixed(0)),
+          _csvEscape(_expenseStageLabel(row)),
+          _csvEscape((row['paid_on'] ?? '').toString()),
+          _csvEscape((row['notes'] ?? '').toString()),
+        ].join(','),
+      );
+    }
+
+    return buffer.toString();
+  }
+
+  String _buildPaymentsCsv(List<PaymentItem> rows) {
+    final buffer = StringBuffer();
+    buffer.writeln('id,date,eleve,matricule,type_frais,montant,methode,reference');
+
+    for (final row in rows) {
+      buffer.writeln(
+        [
+          _csvEscape(row.id.toString()),
+          _csvEscape(row.createdAt),
+          _csvEscape(row.studentFullName),
+          _csvEscape(row.studentMatricule),
+          _csvEscape(row.feeType),
+          _csvEscape(row.amount.toStringAsFixed(0)),
+          _csvEscape(row.method),
+          _csvEscape(row.reference),
+        ].join(','),
+      );
+    }
+
+    return buffer.toString();
+  }
+
+  Future<Uint8List> _buildJournalPdf({
+    required String title,
+    required String subtitle,
+    required List<String> summaryLines,
+    required List<String> headers,
+    required List<List<String>> rows,
+  }) async {
+    final doc = pw.Document();
+    final generatedAt = _formatDate(DateTime.now().toIso8601String());
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        margin: const pw.EdgeInsets.all(24),
+        build: (_) {
+          return [
+            pw.Container(
+              padding: const pw.EdgeInsets.all(12),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.blue50,
+                border: pw.Border.all(color: PdfColors.blue200),
+                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    title,
+                    style: pw.TextStyle(
+                      fontSize: 18,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.blue900,
+                    ),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text(subtitle),
+                  pw.SizedBox(height: 4),
+                  pw.Text('Genere le: $generatedAt'),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 10),
+            pw.Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: summaryLines
+                  .map(
+                    (line) => pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: pw.BoxDecoration(
+                        color: PdfColors.grey100,
+                        border: pw.Border.all(color: PdfColors.grey400),
+                        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+                      ),
+                      child: pw.Text(line),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+            pw.SizedBox(height: 10),
+            pw.TableHelper.fromTextArray(
+              headers: headers,
+              data: rows,
+              border: pw.TableBorder.all(color: PdfColors.grey400),
+              headerStyle: pw.TextStyle(
+                fontWeight: pw.FontWeight.bold,
+                color: PdfColors.white,
+                fontSize: 10,
+              ),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.blue700),
+              cellStyle: const pw.TextStyle(fontSize: 9),
+              cellAlignment: pw.Alignment.centerLeft,
+              cellPadding: const pw.EdgeInsets.all(6),
+            ),
+          ];
+        },
+      ),
+    );
+
+    return doc.save();
+  }
+
+  Future<List<PaymentItem>> _loadPaymentExportRows({
+    required String search,
+    required String? method,
+    required _FinancePeriod period,
+  }) async {
+    final rows = await ref.read(paymentsRepositoryProvider).fetchPaymentsForJournal(
+          search: search,
+          method: method,
+        );
+    final sorted = _filteredPayments(rows);
+    return sorted
+        .where((payment) => _isInPeriod(DateTime.tryParse(payment.createdAt), period))
+        .toList(growable: false);
+  }
+
+  Future<void> _exportExpensesCsv(List<Map<String, dynamic>> rows) async {
+    final bounds = _periodDateBounds(_financePeriod);
+    try {
+      final bytes = await ref.read(paymentsRepositoryProvider).exportExpensesJournal(
+            format: 'csv',
+            dateFrom: bounds.from,
+            dateTo: bounds.to,
+          );
+      await _saveTextExport(
+        content: utf8.decode(bytes, allowMalformed: true),
+        fileName: 'journal_depenses_${_periodCode(_financePeriod)}_${_timestampSuffix()}.csv',
+        dialogTitle: 'Enregistrer le journal des depenses',
+        successMessage: 'Export CSV depenses backend reussi.',
+      );
+      return;
+    } catch (_) {
+      if (rows.isEmpty) {
+        _showMessage('Aucune depense a exporter pour cette periode.');
+        return;
+      }
+
+      final csv = _buildExpensesCsv(rows);
+      await _saveTextExport(
+        content: csv,
+        fileName: 'journal_depenses_${_periodCode(_financePeriod)}_${_timestampSuffix()}.csv',
+        dialogTitle: 'Enregistrer le journal des depenses',
+        successMessage: 'Export CSV depenses reussi (${rows.length} lignes).',
+      );
+    }
+  }
+
+  Future<void> _exportExpensesPdf(List<Map<String, dynamic>> rows) async {
+    final bounds = _periodDateBounds(_financePeriod);
+    try {
+      final bytes = await ref.read(paymentsRepositoryProvider).exportExpensesJournal(
+            format: 'pdf',
+            dateFrom: bounds.from,
+            dateTo: bounds.to,
+          );
+      await _savePdfExport(
+        bytes: bytes,
+        fileName: 'journal_depenses_${_periodCode(_financePeriod)}_${_timestampSuffix()}.pdf',
+        dialogTitle: 'Exporter le journal des depenses en PDF',
+        successMessage: 'Export PDF depenses backend reussi.',
+      );
+      return;
+    } catch (_) {
+      if (rows.isEmpty) {
+        _showMessage('Aucune depense a exporter en PDF pour cette periode.');
+        return;
+      }
+
+      final bytes = await _buildJournalPdf(
+        title: 'Journal des depenses',
+        subtitle: 'Periode ${_financePeriodLabel(_financePeriod).toLowerCase()} • ${rows.length} ligne(s)',
+        summaryLines: [
+          'Periode: ${_financePeriodLabel(_financePeriod)}',
+          'Depenses: ${rows.length}',
+          'Montant total: ${_formatMoney(rows.fold<double>(0, (sum, row) => sum + (double.tryParse(row['amount']?.toString() ?? '0') ?? 0)))}',
+        ],
+        headers: const ['Date', 'Libelle', 'Categorie', 'Montant', 'Validation', 'Paye le'],
+        rows: rows
+            .map(
+              (row) => [
+                (row['date'] ?? '-').toString(),
+                (row['label'] ?? '-').toString(),
+                (row['category'] ?? '-').toString(),
+                _formatMoney(double.tryParse(row['amount']?.toString() ?? '0') ?? 0),
+                _expenseStageLabel(row),
+                ((row['paid_on'] ?? '').toString().trim().isEmpty) ? '-' : (row['paid_on'] ?? '-').toString(),
+              ],
+            )
+            .toList(growable: false),
+      );
+
+      await _savePdfExport(
+        bytes: bytes,
+        fileName: 'journal_depenses_${_periodCode(_financePeriod)}_${_timestampSuffix()}.pdf',
+        dialogTitle: 'Exporter le journal des depenses en PDF',
+        successMessage: 'Export PDF depenses reussi (${rows.length} lignes).',
+      );
+    }
+  }
+
+  Future<void> _exportPaymentsCsv({required String search, required String? method}) async {
+    final bounds = _periodDateBounds(_financePeriod);
+    try {
+      final bytes = await ref.read(paymentsRepositoryProvider).exportPaymentsJournal(
+            format: 'csv',
+            search: search,
+            method: method,
+            dateFrom: bounds.from,
+            dateTo: bounds.to,
+          );
+      await _saveTextExport(
+        content: utf8.decode(bytes, allowMalformed: true),
+        fileName: 'journal_encaissements_${_periodCode(_financePeriod)}_${_timestampSuffix()}.csv',
+        dialogTitle: 'Enregistrer le journal des encaissements',
+        successMessage: 'Export CSV encaissements backend reussi.',
+      );
+      return;
+    } catch (_) {
+      final rows = await _loadPaymentExportRows(
+        search: search,
+        method: method,
+        period: _financePeriod,
+      );
+      if (rows.isEmpty) {
+        _showMessage('Aucun encaissement a exporter pour cette periode.');
+        return;
+      }
+
+      final csv = _buildPaymentsCsv(rows);
+      await _saveTextExport(
+        content: csv,
+        fileName: 'journal_encaissements_${_periodCode(_financePeriod)}_${_timestampSuffix()}.csv',
+        dialogTitle: 'Enregistrer le journal des encaissements',
+        successMessage: 'Export CSV encaissements reussi (${rows.length} lignes).',
+      );
+    }
+  }
+
+  Future<void> _exportPaymentsPdf({required String search, required String? method}) async {
+    final bounds = _periodDateBounds(_financePeriod);
+    try {
+      final bytes = await ref.read(paymentsRepositoryProvider).exportPaymentsJournal(
+            format: 'pdf',
+            search: search,
+            method: method,
+            dateFrom: bounds.from,
+            dateTo: bounds.to,
+          );
+      await _savePdfExport(
+        bytes: bytes,
+        fileName: 'journal_encaissements_${_periodCode(_financePeriod)}_${_timestampSuffix()}.pdf',
+        dialogTitle: 'Exporter le journal des encaissements en PDF',
+        successMessage: 'Export PDF encaissements backend reussi.',
+      );
+      return;
+    } catch (_) {
+      final rows = await _loadPaymentExportRows(
+        search: search,
+        method: method,
+        period: _financePeriod,
+      );
+      if (rows.isEmpty) {
+        _showMessage('Aucun encaissement a exporter en PDF pour cette periode.');
+        return;
+      }
+
+      final amountTotal = rows.fold<double>(0, (sum, payment) => sum + payment.amount);
+      final bytes = await _buildJournalPdf(
+        title: 'Journal des encaissements',
+        subtitle: 'Periode ${_financePeriodLabel(_financePeriod).toLowerCase()} • ${rows.length} ligne(s)',
+        summaryLines: [
+          'Periode: ${_financePeriodLabel(_financePeriod)}',
+          'Encaissements: ${rows.length}',
+          'Montant total: ${_formatMoney(amountTotal)}',
+        ],
+        headers: const ['Date', 'Eleve', 'Matricule', 'Type frais', 'Montant', 'Methode', 'Reference'],
+        rows: rows
+            .map(
+              (payment) => [
+                _formatDate(payment.createdAt),
+                payment.studentFullName,
+                payment.studentMatricule,
+                payment.feeType,
+                _formatMoney(payment.amount),
+                payment.method,
+                payment.reference.isEmpty ? '-' : payment.reference,
+              ],
+            )
+            .toList(growable: false),
+      );
+
+      await _savePdfExport(
+        bytes: bytes,
+        fileName: 'journal_encaissements_${_periodCode(_financePeriod)}_${_timestampSuffix()}.pdf',
+        dialogTitle: 'Exporter le journal des encaissements en PDF',
+        successMessage: 'Export PDF encaissements reussi (${rows.length} lignes).',
+      );
+    }
+  }
+
+  List<PaymentItem> _filteredPayments(List<PaymentItem> payments) {
     final rows = payments.toList();
->>>>>>> main
 
     rows.sort((left, right) {
       final lDate = DateTime.tryParse(left.createdAt);
@@ -224,35 +1532,616 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     return rows.isEmpty ? null : rows.first;
   }
 
-  Future<void> _createPayment() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
+  String _classLabel(String raw) {
+    final cleaned = raw.trim();
+    return cleaned.isEmpty ? 'Sans classe' : cleaned;
+  }
+
+  DateTime? _parseDateOnly(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    final parsed = DateTime.tryParse(trimmed);
+    if (parsed == null) {
+      return null;
+    }
+    return DateTime(parsed.year, parsed.month, parsed.day);
+  }
+
+  List<_ClassKpiRow> _buildClassKpis(List<StudentFeeItem> fees) {
+    final today = _dayStart(DateTime.now());
+    final grouped = <String, List<StudentFeeItem>>{};
+    for (final fee in fees) {
+      final key = _classLabel(fee.classroomName);
+      grouped.putIfAbsent(key, () => <StudentFeeItem>[]).add(fee);
     }
 
-    final feeId = _selectedFeeId;
-    if (feeId == null) {
-      _showMessage('Selectionnez un frais eleve.');
-      return;
+    final rows = <_ClassKpiRow>[];
+    grouped.forEach((className, classFees) {
+      var totalDue = 0.0;
+      var totalOutstanding = 0.0;
+      var overdueCount = 0;
+      final studentKeys = <String>{};
+
+      for (final fee in classFees) {
+        totalDue += fee.amountDue;
+        totalOutstanding += fee.balance;
+
+        final dueDate = _parseDateOnly(fee.dueDate);
+        if (fee.balance > 0 && dueDate != null && dueDate.isBefore(today)) {
+          overdueCount += 1;
+        }
+
+        final matricule = fee.studentMatricule.trim();
+        if (matricule.isNotEmpty) {
+          studentKeys.add(matricule);
+        } else {
+          studentKeys.add('${fee.studentFullName}_${fee.id}');
+        }
+      }
+
+      rows.add(
+        _ClassKpiRow(
+          className: className,
+          feeCount: classFees.length,
+          studentCount: studentKeys.length,
+          overdueCount: overdueCount,
+          totalDue: totalDue,
+          totalPaid: totalDue - totalOutstanding,
+          totalOutstanding: totalOutstanding,
+        ),
+      );
+    });
+
+    rows.sort((a, b) {
+      final byOutstanding = b.totalOutstanding.compareTo(a.totalOutstanding);
+      if (byOutstanding != 0) {
+        return byOutstanding;
+      }
+      return a.className.compareTo(b.className);
+    });
+    return rows;
+  }
+
+  List<_LateFeeAlert> _buildLateFeeAlerts(List<StudentFeeItem> fees) {
+    final today = _dayStart(DateTime.now());
+    final alerts = <_LateFeeAlert>[];
+    for (final fee in fees) {
+      if (fee.balance <= 0) {
+        continue;
+      }
+      final dueDate = _parseDateOnly(fee.dueDate);
+      if (dueDate == null || !dueDate.isBefore(today)) {
+        continue;
+      }
+
+      alerts.add(
+        _LateFeeAlert(
+          feeId: fee.id,
+          className: _classLabel(fee.classroomName),
+          studentFullName: fee.studentFullName,
+          studentMatricule: fee.studentMatricule,
+          feeType: fee.feeType,
+          dueDateRaw: fee.dueDate,
+          daysLate: today.difference(dueDate).inDays,
+          balance: fee.balance,
+        ),
+      );
     }
 
-    await ref
-        .read(paymentMutationProvider.notifier)
-        .createPayment(
-          feeId: feeId,
-          amount: double.parse(_amountController.text.trim()),
-          method: _methodController.text.trim(),
-          reference: _referenceController.text.trim(),
+    alerts.sort((a, b) {
+      final byDays = b.daysLate.compareTo(a.daysLate);
+      if (byDays != 0) {
+        return byDays;
+      }
+      return b.balance.compareTo(a.balance);
+    });
+    return alerts;
+  }
+
+  List<_LateFeeAlert> _applyLateAlertThreshold(List<_LateFeeAlert> rows) {
+    return rows.where((row) => row.daysLate >= _lateAlertMinDays).toList(growable: false);
+  }
+
+  String _buildLateAlertsCsv(List<_LateFeeAlert> rows) {
+    final buffer = StringBuffer();
+    buffer.writeln('fee_id,classe,eleve,matricule,type_frais,echeance,jours_retard,solde');
+
+    for (final row in rows) {
+      buffer.writeln(
+        [
+          _csvEscape(row.feeId.toString()),
+          _csvEscape(row.className),
+          _csvEscape(row.studentFullName),
+          _csvEscape(row.studentMatricule),
+          _csvEscape(row.feeType),
+          _csvEscape(row.dueDateRaw),
+          _csvEscape(row.daysLate.toString()),
+          _csvEscape(row.balance.toStringAsFixed(0)),
+        ].join(','),
+      );
+    }
+
+    return buffer.toString();
+  }
+
+  String _buildClassReminderMessage({
+    required String className,
+    required List<_LateFeeAlert> alerts,
+  }) {
+    final buffer = StringBuffer();
+    final total = alerts.fold<double>(0, (sum, row) => sum + row.balance);
+    buffer.writeln('Objet: Relance paiement - Classe $className');
+    buffer.writeln('');
+    buffer.writeln('Bonjour,');
+    buffer.writeln(
+      'Merci de regulariser les frais en retard pour la classe $className. Montant total en attente: ${_formatMoney(total)}.',
+    );
+    buffer.writeln('');
+    buffer.writeln('Details prioritaires:');
+    for (final alert in alerts.take(12)) {
+      buffer.writeln(
+        '- ${alert.studentFullName} (${alert.studentMatricule.isEmpty ? '-' : alert.studentMatricule}) | ${alert.feeType} | ${alert.daysLate} j de retard | ${_formatMoney(alert.balance)}',
+      );
+    }
+    if (alerts.length > 12) {
+      buffer.writeln('- ... et ${alerts.length - 12} autre(s) dossier(s).');
+    }
+    buffer.writeln('');
+    buffer.writeln('Cordialement,');
+    buffer.writeln('Service Finances');
+    return buffer.toString();
+  }
+
+  List<_LateStudentSummary> _buildTopLateStudents(List<_LateFeeAlert> alerts) {
+    final grouped = <String, _LateStudentSummary>{};
+    for (final alert in alerts) {
+      final key = alert.studentMatricule.trim().isEmpty
+          ? '${alert.className}|${alert.studentFullName}'
+          : alert.studentMatricule.trim();
+      final previous = grouped[key];
+      if (previous == null) {
+        grouped[key] = _LateStudentSummary(
+          studentKey: key,
+          studentFullName: alert.studentFullName,
+          studentMatricule: alert.studentMatricule,
+          className: alert.className,
+          lateFeesCount: 1,
+          maxDaysLate: alert.daysLate,
+          totalBalance: alert.balance,
         );
+        continue;
+      }
+      grouped[key] = _LateStudentSummary(
+        studentKey: key,
+        studentFullName: previous.studentFullName,
+        studentMatricule: previous.studentMatricule,
+        className: previous.className,
+        lateFeesCount: previous.lateFeesCount + 1,
+        maxDaysLate: alert.daysLate > previous.maxDaysLate ? alert.daysLate : previous.maxDaysLate,
+        totalBalance: previous.totalBalance + alert.balance,
+      );
+    }
 
-    final mutation = ref.read(paymentMutationProvider);
-    if (mutation.hasError) {
-      _showMessage('Erreur creation paiement: ${mutation.error}');
+    final rows = grouped.values.toList(growable: false);
+    rows.sort((a, b) {
+      final byDays = b.maxDaysLate.compareTo(a.maxDaysLate);
+      if (byDays != 0) {
+        return byDays;
+      }
+      return b.totalBalance.compareTo(a.totalBalance);
+    });
+    return rows;
+  }
+
+  _LateTrendMetrics _buildLateTrendMetrics(List<StudentFeeItem> fees) {
+    final today = _dayStart(DateTime.now());
+
+    var current7Count = 0;
+    var previous7Count = 0;
+    var current30Count = 0;
+    var previous30Count = 0;
+    var current7Amount = 0.0;
+    var previous7Amount = 0.0;
+    var current30Amount = 0.0;
+    var previous30Amount = 0.0;
+
+    for (final fee in fees) {
+      if (fee.balance <= 0) {
+        continue;
+      }
+      final dueDate = _parseDateOnly(fee.dueDate);
+      if (dueDate == null || !dueDate.isBefore(today)) {
+        continue;
+      }
+
+      final daysLate = today.difference(dueDate).inDays;
+
+      if (daysLate <= 7) {
+        current7Count += 1;
+        current7Amount += fee.balance;
+      } else if (daysLate <= 14) {
+        previous7Count += 1;
+        previous7Amount += fee.balance;
+      }
+
+      if (daysLate <= 30) {
+        current30Count += 1;
+        current30Amount += fee.balance;
+      } else if (daysLate <= 60) {
+        previous30Count += 1;
+        previous30Amount += fee.balance;
+      }
+    }
+
+    return _LateTrendMetrics(
+      current7Count: current7Count,
+      previous7Count: previous7Count,
+      current30Count: current30Count,
+      previous30Count: previous30Count,
+      current7Amount: current7Amount,
+      previous7Amount: previous7Amount,
+      current30Amount: current30Amount,
+      previous30Amount: previous30Amount,
+    );
+  }
+
+  Future<void> _copyClassReminder({
+    required String className,
+    required List<_LateFeeAlert> alerts,
+  }) async {
+    final message = _buildClassReminderMessage(className: className, alerts: alerts);
+    final total = alerts.fold<double>(0, (sum, row) => sum + row.balance);
+    await Clipboard.setData(ClipboardData(text: message));
+    _recordReminderHistory(
+      action: 'Relance classe',
+      scope: className,
+      itemCount: alerts.length,
+      totalAmount: total,
+    );
+    _showMessage(
+      'Message de relance copie pour la classe $className (${alerts.length} dossier(s)).',
+      isSuccess: true,
+    );
+  }
+
+  void _recordReminderHistory({
+    required String action,
+    required String scope,
+    required int itemCount,
+    required double totalAmount,
+  }) {
+    setState(() {
+      _reminderHistory.insert(
+        0,
+        _ReminderHistoryEntry(
+          createdAt: DateTime.now(),
+          action: action,
+          scope: scope,
+          itemCount: itemCount,
+          totalAmount: totalAmount,
+        ),
+      );
+      if (_reminderHistory.length > 30) {
+        _reminderHistory.removeRange(30, _reminderHistory.length);
+      }
+      _reminderHistoryPage = 1;
+    });
+    unawaited(_persistReminderHistory());
+  }
+
+  String _reminderHistoryAsText([List<_ReminderHistoryEntry>? rows]) {
+    final source = rows ?? _reminderHistory;
+    if (source.isEmpty) {
+      return 'Aucun historique de relance.';
+    }
+    final buffer = StringBuffer();
+    for (final entry in source) {
+      buffer.writeln(
+        '${_formatDate(entry.createdAt.toIso8601String())} | ${entry.action} | ${entry.scope} | ${entry.itemCount} dossier(s) | ${_formatMoney(entry.totalAmount)}',
+      );
+    }
+    return buffer.toString();
+  }
+
+  String _buildReminderHistoryCsv(List<_ReminderHistoryEntry> rows) {
+    final buffer = StringBuffer();
+    buffer.writeln('date,action,scope,nombre_dossiers,montant_total');
+    for (final entry in rows) {
+      buffer.writeln(
+        [
+          _csvEscape(entry.createdAt.toIso8601String()),
+          _csvEscape(entry.action),
+          _csvEscape(entry.scope),
+          _csvEscape(entry.itemCount.toString()),
+          _csvEscape(entry.totalAmount.toStringAsFixed(0)),
+        ].join(','),
+      );
+    }
+    return buffer.toString();
+  }
+
+  List<_ReminderHistoryEntry> _filteredReminderHistory() {
+    final text = _reminderHistorySearchTerm.trim().toLowerCase();
+    final rows = _reminderHistory.where((entry) {
+      if (_reminderHistoryActionFilter != 'all' && entry.action != _reminderHistoryActionFilter) {
+        return false;
+      }
+      if (!_matchesReminderPeriod(entry.createdAt)) {
+        return false;
+      }
+      if (text.isEmpty) {
+        return true;
+      }
+      return entry.action.toLowerCase().contains(text) || entry.scope.toLowerCase().contains(text);
+    }).toList(growable: false);
+
+    rows.sort((left, right) {
+      switch (_reminderHistorySort) {
+        case 'date_asc':
+          return left.createdAt.compareTo(right.createdAt);
+        case 'amount_desc':
+          return right.totalAmount.compareTo(left.totalAmount);
+        case 'amount_asc':
+          return left.totalAmount.compareTo(right.totalAmount);
+        case 'count_desc':
+          return right.itemCount.compareTo(left.itemCount);
+        case 'count_asc':
+          return left.itemCount.compareTo(right.itemCount);
+        case 'date_desc':
+        default:
+          return right.createdAt.compareTo(left.createdAt);
+      }
+    });
+
+    return rows;
+  }
+
+  bool _matchesReminderPeriod(DateTime value) {
+    if (_reminderHistoryPeriodFilter == 'all') {
+      return true;
+    }
+    final now = _dayStart(DateTime.now());
+    final target = _dayStart(value.toLocal());
+    if (_reminderHistoryPeriodFilter == 'today') {
+      return target == now;
+    }
+    if (_reminderHistoryPeriodFilter == '7d') {
+      final start = now.subtract(const Duration(days: 6));
+      return !target.isBefore(start) && !target.isAfter(now);
+    }
+    if (_reminderHistoryPeriodFilter == '30d') {
+      final start = now.subtract(const Duration(days: 29));
+      return !target.isBefore(start) && !target.isAfter(now);
+    }
+    return true;
+  }
+
+  String _reminderPeriodLabel(String value) {
+    switch (value) {
+      case 'today':
+        return 'Aujourd\'hui';
+      case '7d':
+        return '7 jours';
+      case '30d':
+        return '30 jours';
+      case 'all':
+      default:
+        return 'Tout';
+    }
+  }
+
+  Map<String, List<_LateFeeAlert>> _groupLateAlertsByClass(List<_LateFeeAlert> alerts) {
+    final grouped = <String, List<_LateFeeAlert>>{};
+    for (final alert in alerts) {
+      grouped.putIfAbsent(alert.className, () => <_LateFeeAlert>[]).add(alert);
+    }
+    final sortedKeys = grouped.keys.toList()..sort();
+    final sorted = <String, List<_LateFeeAlert>>{};
+    for (final key in sortedKeys) {
+      final rows = grouped[key]!;
+      rows.sort((a, b) {
+        final byDays = b.daysLate.compareTo(a.daysLate);
+        if (byDays != 0) {
+          return byDays;
+        }
+        return b.balance.compareTo(a.balance);
+      });
+      sorted[key] = rows;
+    }
+    return sorted;
+  }
+
+  String _buildClassRemindersCsv(Map<String, List<_LateFeeAlert>> groupedAlerts) {
+    final buffer = StringBuffer();
+    buffer.writeln('classe,nb_alertes,montant_total,message_relance');
+    groupedAlerts.forEach((className, alerts) {
+      final total = alerts.fold<double>(0, (sum, row) => sum + row.balance);
+      final message = _buildClassReminderMessage(className: className, alerts: alerts);
+      buffer.writeln(
+        [
+          _csvEscape(className),
+          _csvEscape(alerts.length.toString()),
+          _csvEscape(total.toStringAsFixed(0)),
+          _csvEscape(message),
+        ].join(','),
+      );
+    });
+    return buffer.toString();
+  }
+
+  Future<void> _copyGlobalReminders(Map<String, List<_LateFeeAlert>> groupedAlerts) async {
+    final blocks = <String>[];
+    var totalItems = 0;
+    var totalAmount = 0.0;
+    groupedAlerts.forEach((className, alerts) {
+      blocks.add(_buildClassReminderMessage(className: className, alerts: alerts));
+      totalItems += alerts.length;
+      totalAmount += alerts.fold<double>(0, (sum, row) => sum + row.balance);
+    });
+
+    final message = blocks.join('\n\n------------------------------\n\n');
+    await Clipboard.setData(ClipboardData(text: message));
+    _recordReminderHistory(
+      action: 'Relance globale',
+      scope: '${groupedAlerts.length} classes',
+      itemCount: totalItems,
+      totalAmount: totalAmount,
+    );
+    _showMessage(
+      'Relance globale copiée (${groupedAlerts.length} classe(s)).',
+      isSuccess: true,
+    );
+  }
+
+  void _selectLateAlertFee({
+    required _LateFeeAlert alert,
+    required List<StudentFeeItem> outstandingFees,
+  }) {
+    final index = outstandingFees.indexWhere((fee) => fee.id == alert.feeId);
+    if (index < 0) {
       return;
     }
 
-    _amountController.clear();
-    _referenceController.clear();
-    _showMessage('Paiement enregistre avec succes.', isSuccess: true);
+    final targetPage = (index ~/ _outstandingPageSize) + 1;
+    setState(() {
+      _selectedOutstandingFeeIds.add(alert.feeId);
+      _outstandingExpanded = true;
+      _outstandingPage = targetPage;
+    });
+  }
+
+  Map<String, List<StudentFeeItem>> _groupOutstandingByClass(List<StudentFeeItem> fees) {
+    final grouped = <String, List<StudentFeeItem>>{};
+    for (final fee in fees) {
+      final key = _classLabel(fee.classroomName);
+      grouped.putIfAbsent(key, () => <StudentFeeItem>[]).add(fee);
+    }
+    final sortedKeys = grouped.keys.toList()..sort();
+    final sorted = <String, List<StudentFeeItem>>{};
+    for (final key in sortedKeys) {
+      final rows = grouped[key]!;
+      rows.sort((a, b) => a.studentFullName.compareTo(b.studentFullName));
+      sorted[key] = rows;
+    }
+    return sorted;
+  }
+
+  Future<void> _handlePaymentRowAction({
+    required _PaymentRowAction action,
+    required PaymentItem payment,
+    required List<StudentFeeItem> fees,
+    required bool isMutating,
+  }) async {
+    switch (action) {
+      case _PaymentRowAction.view:
+        await _openPaymentDetails(payment);
+        break;
+      case _PaymentRowAction.edit:
+        if (isMutating) return;
+        await _openEditDialog(payment, fees);
+        break;
+      case _PaymentRowAction.print:
+        try {
+          await _printReceipt(payment.id);
+        } catch (error) {
+          _showMessage('Erreur generation PDF: $error');
+        }
+        break;
+      case _PaymentRowAction.delete:
+        if (isMutating) return;
+        await _deletePayment(payment);
+        break;
+    }
+  }
+
+  Future<void> _openSelectedPaymentDrawer({
+    required PaymentItem payment,
+    required List<StudentFeeItem> fees,
+    required bool isMutating,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Recu selectionne',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 10),
+                _detailRow('Eleve', payment.studentFullName),
+                _detailRow('Matricule', payment.studentMatricule),
+                _detailRow('Classe', _classLabel(payment.classroomName)),
+                _detailRow('Type frais', payment.feeType),
+                _detailRow('Montant', _formatMoney(payment.amount)),
+                _detailRow('Methode', payment.method),
+                _detailRow('Date', _formatDate(payment.createdAt)),
+                _detailRow('Reference', payment.reference.isEmpty ? '-' : payment.reference),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.tonalIcon(
+                      onPressed: () async {
+                        Navigator.of(context).pop();
+                        await _openPaymentDetails(payment);
+                      },
+                      icon: const Icon(Icons.visibility_outlined),
+                      label: const Text('Afficher'),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: isMutating
+                          ? null
+                          : () async {
+                              Navigator.of(context).pop();
+                              await _openEditDialog(payment, fees);
+                            },
+                      icon: const Icon(Icons.edit_outlined),
+                      label: const Text('Modifier'),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: () async {
+                        Navigator.of(context).pop();
+                        try {
+                          await _printReceipt(payment.id);
+                        } catch (error) {
+                          _showMessage('Erreur generation PDF: $error');
+                        }
+                      },
+                      icon: const Icon(Icons.picture_as_pdf_outlined),
+                      label: const Text('Imprimer'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: isMutating
+                          ? null
+                          : () async {
+                              Navigator.of(context).pop();
+                              await _deletePayment(payment);
+                            },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFFB42318),
+                      ),
+                      icon: const Icon(Icons.delete_outline),
+                      label: const Text('Annuler paiement'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _openPaymentDetails(PaymentItem payment) async {
@@ -292,18 +2181,18 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     );
   }
 
-  Future<void> _openEditDialog(
-    PaymentItem payment,
-    List<StudentFeeItem> fees,
-  ) async {
+  Future<void> _openPaymentDialog({
+    PaymentItem? payment,
+    required List<StudentFeeItem> fees,
+  }) async {
     final formKey = GlobalKey<FormState>();
     final amountController = TextEditingController(
-      text: payment.amount.toStringAsFixed(0),
+      text: payment == null ? '' : payment.amount.toStringAsFixed(0),
     );
-    final methodController = TextEditingController(text: payment.method);
-    final referenceController = TextEditingController(text: payment.reference);
+    final referenceController = TextEditingController(text: payment?.reference ?? '');
 
-    var editFeeId = payment.feeId;
+    var editFeeId = payment?.feeId ?? _selectedFeeId ?? (fees.isEmpty ? null : fees.first.id);
+    var selectedMethod = payment?.method ?? _paymentMethodOptions.first;
     var saving = false;
 
     final updated = await showDialog<bool>(
@@ -312,7 +2201,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Modifier paiement'),
+              title: Text(payment == null ? 'Nouveau paiement' : 'Modifier paiement'),
               content: SizedBox(
                 width: 460,
                 child: Form(
@@ -321,6 +2210,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: editFeeId,
                         decoration: const InputDecoration(
                           labelText: 'Frais eleve',
@@ -329,7 +2219,11 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                             .map(
                               (fee) => DropdownMenuItem<int>(
                                 value: fee.id,
-                                child: Text(_feeLabel(fee)),
+                                child: Text(
+                                  _feeLabel(fee),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             )
                             .toList(),
@@ -355,13 +2249,23 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                         },
                       ),
                       const SizedBox(height: 10),
-                      TextFormField(
-                        controller: methodController,
+                      DropdownButtonFormField<String>(
+                        initialValue: _paymentMethodOptions.contains(selectedMethod)
+                            ? selectedMethod
+                            : _paymentMethodOptions.first,
                         decoration: const InputDecoration(labelText: 'Methode'),
-                        validator: (value) =>
-                            (value == null || value.trim().isEmpty)
-                            ? 'Champ requis'
-                            : null,
+                        items: _paymentMethodOptions
+                            .map(
+                              (item) => DropdownMenuItem<String>(
+                                value: item,
+                                child: Text(item),
+                              ),
+                            )
+                            .toList(growable: false),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setDialogState(() => selectedMethod = value);
+                        },
                       ),
                       const SizedBox(height: 10),
                       TextFormField(
@@ -388,23 +2292,40 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                           if (!formKey.currentState!.validate()) {
                             return;
                           }
+                          if (editFeeId == null) {
+                            _showMessage('Selectionnez un frais eleve.');
+                            return;
+                          }
 
                           setDialogState(() => saving = true);
 
-                          await ref
-                              .read(paymentMutationProvider.notifier)
-                              .updatePayment(
-                                paymentId: payment.id,
-                                feeId: editFeeId,
-                                amount: double.parse(amountController.text),
-                                method: methodController.text.trim(),
-                                reference: referenceController.text.trim(),
-                              );
+                          if (payment == null) {
+                            await ref
+                                .read(paymentMutationProvider.notifier)
+                                .createPayment(
+                                  feeId: editFeeId!,
+                                  amount: double.parse(amountController.text),
+                                  method: selectedMethod,
+                                  reference: referenceController.text.trim(),
+                                );
+                          } else {
+                            await ref
+                                .read(paymentMutationProvider.notifier)
+                                .updatePayment(
+                                  paymentId: payment.id,
+                                  feeId: editFeeId!,
+                                  amount: double.parse(amountController.text),
+                                  method: selectedMethod,
+                                  reference: referenceController.text.trim(),
+                                );
+                          }
 
                           final mutation = ref.read(paymentMutationProvider);
                           if (mutation.hasError) {
                             _showMessage(
-                              'Erreur modification paiement: ${mutation.error}',
+                              payment == null
+                                  ? 'Erreur creation paiement: ${mutation.error}'
+                                  : 'Erreur modification paiement: ${mutation.error}',
                             );
                             setDialogState(() => saving = false);
                             return;
@@ -430,12 +2351,32 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     );
 
     amountController.dispose();
-    methodController.dispose();
     referenceController.dispose();
 
     if (updated == true) {
-      _showMessage('Paiement modifie avec succes.', isSuccess: true);
+      _showMessage(
+        payment == null
+            ? 'Paiement enregistre avec succes.'
+            : 'Paiement modifie avec succes.',
+        isSuccess: true,
+      );
     }
+  }
+
+  Future<void> _openEditDialog(PaymentItem payment, List<StudentFeeItem> fees) {
+    return _openPaymentDialog(payment: payment, fees: fees);
+  }
+
+  Future<void> _openCreatePaymentDialog() {
+    return showGuidedPaymentEntryDialog(
+      context: context,
+      ref: ref,
+      title: 'Fenetre flottante d\'encaissement',
+    ).then((saved) {
+      if (saved == true && mounted) {
+        _showMessage('Paiement enregistre avec succes.', isSuccess: true);
+      }
+    });
   }
 
   Future<void> _deletePayment(PaymentItem payment) async {
@@ -443,9 +2384,9 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Supprimer paiement'),
+          title: const Text('Annuler paiement'),
           content: Text(
-            'Voulez-vous supprimer le paiement #${payment.id} de ${_formatMoney(payment.amount)} ?',
+            'Voulez-vous annuler le paiement #${payment.id} de ${_formatMoney(payment.amount)} ? Cette operation est tracée.',
           ),
           actions: [
             TextButton(
@@ -457,7 +2398,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFFB42318),
               ),
-              child: const Text('Supprimer'),
+              child: const Text('Annuler paiement'),
             ),
           ],
         );
@@ -474,14 +2415,14 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
 
     final mutation = ref.read(paymentMutationProvider);
     if (mutation.hasError) {
-      _showMessage('Erreur suppression paiement: ${mutation.error}');
+      _showMessage('Erreur annulation paiement: ${mutation.error}');
       return;
     }
 
     if (_selectedPaymentId == payment.id) {
       setState(() => _selectedPaymentId = null);
     }
-    _showMessage('Paiement supprime avec succes.', isSuccess: true);
+    _showMessage('Paiement annule avec succes.', isSuccess: true);
   }
 
   Widget _metricChip(String label, String value) {
@@ -557,9 +2498,15 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
 
   @override
   Widget build(BuildContext context) {
-<<<<<<< HEAD
-    final paymentsAsync = ref.watch(paymentsProvider);
-=======
+    ref.listen<bool>(financeOpenGuidedPaymentIntentProvider, (previous, next) {
+      if (next) {
+        Future<void>.microtask(_consumeGuidedPaymentIntentIfNeeded);
+      }
+    });
+
+    final authUser = ref.watch(authControllerProvider).value;
+    final isTeacherFinanceVisible = _isTeacherFinanceVisible(authUser?.role);
+    final isTeacherFinanceReadOnly = _isTeacherFinanceReadOnly(authUser?.role);
     final query = PaymentsPageQuery(
       page: _currentPage,
       pageSize: _pageSize,
@@ -567,7 +2514,6 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
       method: _methodFilter == 'all' ? null : _methodFilter,
     );
     final paymentsAsync = ref.watch(paymentsPaginatedProvider(query));
->>>>>>> main
     final feesAsync = ref.watch(feesProvider);
     final mutationState = ref.watch(paymentMutationProvider);
     final isMutating = mutationState.isLoading;
@@ -666,27 +2612,130 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
               ],
             ),
           ),
-<<<<<<< HEAD
-          data: (payments) {
-=======
           data: (pageData) {
             final payments = pageData.results;
->>>>>>> main
             final filteredPayments = _filteredPayments(payments);
-            _syncSelectedPayment(filteredPayments);
-            final selectedPayment = _selectedPayment(filteredPayments);
+            final periodPayments = payments.where((payment) {
+              return _isInPeriod(DateTime.tryParse(payment.createdAt), _financePeriod);
+            }).toList(growable: false);
+            final visiblePayments = filteredPayments.where((payment) {
+              return _isInPeriod(DateTime.tryParse(payment.createdAt), _financePeriod);
+            }).toList(growable: false);
+            _syncSelectedPayment(visiblePayments);
+            final selectedPayment = _selectedPayment(visiblePayments);
+            final periodExpenses = _financeExpenses.where((row) {
+              return _isInPeriod(
+                DateTime.tryParse((row['date'] ?? '').toString()),
+                _financePeriod,
+              );
+            }).toList(growable: false);
+            final periodValidatedExpenses = periodExpenses
+                .where((row) => (row['validation_stage'] ?? '').toString() == 'level_two')
+                .toList(growable: false);
+            final periodIncomeAmount = periodPayments.fold<double>(
+              0,
+              (sum, payment) => sum + payment.amount,
+            );
+            final periodValidatedExpensesAmount = periodValidatedExpenses.fold<double>(
+              0,
+              (sum, row) => sum + (double.tryParse(row['amount']?.toString() ?? '0') ?? 0),
+            );
+            final periodNetTreasury = periodIncomeAmount - periodValidatedExpensesAmount;
+            final expenseDraftCount = periodExpenses
+                .where((row) => (row['validation_stage'] ?? '').toString() == 'draft')
+                .length;
+            final expensePendingLevelTwoCount = periodExpenses
+                .where((row) => (row['validation_stage'] ?? '').toString() == 'level_one')
+                .length;
+            final expenseValidatedCount = periodExpenses
+                .where((row) => (row['validation_stage'] ?? '').toString() == 'level_two')
+                .length;
+            final totalExpensesAmount = periodExpenses.fold<double>(
+              0,
+              (sum, row) => sum + (double.tryParse(row['amount']?.toString() ?? '0') ?? 0),
+            );
 
             final totalPaid = payments.fold<double>(
               0,
               (sum, payment) => sum + payment.amount,
             );
+            final periodPaymentMethods = <String, double>{};
+            for (final payment in periodPayments) {
+              periodPaymentMethods.update(
+                payment.method,
+                (value) => value + payment.amount,
+                ifAbsent: () => payment.amount,
+              );
+            }
+            final paymentMethodEntries = periodPaymentMethods.entries.toList()
+              ..sort((left, right) => right.value.compareTo(left.value));
+            final dominantMethodLabel = paymentMethodEntries.isEmpty
+                ? '-'
+                : '${paymentMethodEntries.first.key} • ${_formatMoney(paymentMethodEntries.first.value)}';
             final outstandingFees = fees
                 .where((fee) => fee.balance > 0)
                 .toList();
+            final classKpiRows = _buildClassKpis(fees);
+            final lateFeeAlerts = _buildLateFeeAlerts(fees);
+            final filteredLateFeeAlerts = _applyLateAlertThreshold(lateFeeAlerts);
+            final criticalLateAlerts = filteredLateFeeAlerts.where((row) => row.daysLate >= 15).length;
+            final topLateStudents = _buildTopLateStudents(filteredLateFeeAlerts);
+            final lateTrends = _buildLateTrendMetrics(fees);
+            final classReminderGroups = _groupLateAlertsByClass(filteredLateFeeAlerts);
+            final filteredReminderHistory = _filteredReminderHistory();
+            final reminderActionOptions = <String>{'all', ..._reminderHistory.map((entry) => entry.action)}
+              .toList()
+              ..sort();
+            final reminderPages = filteredReminderHistory.isEmpty
+                ? 1
+                : (filteredReminderHistory.length / _reminderHistoryPageSize).ceil();
+            var safeReminderPage = _reminderHistoryPage;
+            if (safeReminderPage > reminderPages) {
+              safeReminderPage = reminderPages;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                if (_reminderHistoryPage != safeReminderPage) {
+                  setState(() => _reminderHistoryPage = safeReminderPage);
+                }
+              });
+            }
+            if (safeReminderPage < 1) {
+              safeReminderPage = 1;
+            }
+            final reminderStart = (safeReminderPage - 1) * _reminderHistoryPageSize;
+            final reminderEnd = filteredReminderHistory.isEmpty
+                ? 0
+                : (reminderStart + _reminderHistoryPageSize).clamp(0, filteredReminderHistory.length);
+            final visibleReminderHistory = filteredReminderHistory.isEmpty
+                ? const <_ReminderHistoryEntry>[]
+                : filteredReminderHistory.sublist(reminderStart, reminderEnd);
             final outstandingTotal = outstandingFees.fold<double>(
               0,
               (sum, fee) => sum + fee.balance,
             );
+            final outstandingPages = outstandingFees.isEmpty
+                ? 1
+                : (outstandingFees.length / _outstandingPageSize).ceil();
+            var safeOutstandingPage = _outstandingPage;
+            if (safeOutstandingPage > outstandingPages) {
+              safeOutstandingPage = outstandingPages;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                if (_outstandingPage != safeOutstandingPage) {
+                  setState(() => _outstandingPage = safeOutstandingPage);
+                }
+              });
+            }
+            if (safeOutstandingPage < 1) {
+              safeOutstandingPage = 1;
+            }
+            final outstandingStart = (safeOutstandingPage - 1) * _outstandingPageSize;
+            final outstandingEnd = outstandingFees.isEmpty
+                ? 0
+                : (outstandingStart + _outstandingPageSize).clamp(0, outstandingFees.length);
+            final visibleOutstandingFees = outstandingFees.isEmpty
+                ? const <StudentFeeItem>[]
+                : outstandingFees.sublist(outstandingStart, outstandingEnd);
 
             final methodOptions = <String>{'all'};
             for (final payment in payments) {
@@ -695,12 +2744,177 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
               }
             }
 
-            return RefreshIndicator(
-              onRefresh: _refreshPayments,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(18),
-                children: [
+            return Column(
+              children: [
+                Container(
+                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surface,
+                    border: Border(
+                      bottom: BorderSide(
+                        color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+                      ),
+                    ),
+                  ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 940;
+                      final searchField = SizedBox(
+                        width: compact ? double.infinity : 270,
+                        child: TextField(
+                          controller: _searchController,
+                          onChanged: _onSearchChanged,
+                          decoration: InputDecoration(
+                            labelText: 'Recherche paiement',
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: _searchController.text.trim().isEmpty
+                                ? null
+                                : IconButton(
+                                    onPressed: () {
+                                      _searchDebounce?.cancel();
+                                      _searchController.clear();
+                                      setState(() {
+                                        _searchTerm = '';
+                                        _currentPage = 1;
+                                      });
+                                    },
+                                    icon: const Icon(Icons.clear),
+                                  ),
+                          ),
+                        ),
+                      );
+                      final methodField = SizedBox(
+                        width: compact ? double.infinity : 220,
+                        child: DropdownButtonFormField<String>(
+                          initialValue: _methodFilter,
+                          decoration: const InputDecoration(
+                            labelText: 'Filtrer par methode',
+                          ),
+                          items: methodOptions
+                              .map(
+                                (method) => DropdownMenuItem<String>(
+                                  value: method,
+                                  child: Text(
+                                    method == 'all' ? 'Toutes les methodes' : method,
+                                  ),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (value) {
+                            setState(() {
+                              _methodFilter = value ?? 'all';
+                              _currentPage = 1;
+                            });
+                          },
+                        ),
+                      );
+                      final periodField = SizedBox(
+                        width: compact ? double.infinity : 170,
+                        child: DropdownButtonFormField<_FinancePeriod>(
+                          initialValue: _financePeriod,
+                          decoration: const InputDecoration(labelText: 'Periode'),
+                          items: _FinancePeriod.values
+                              .map(
+                                (item) => DropdownMenuItem<_FinancePeriod>(
+                                  value: item,
+                                  child: Text(_financePeriodLabel(item)),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() => _financePeriod = value);
+                          },
+                        ),
+                      );
+                      final actions = Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          FilledButton.tonalIcon(
+                            onPressed: isMutating ? null : _openCreatePaymentDialog,
+                            icon: const Icon(Icons.add_card_outlined),
+                            label: const Text('Nouveau paiement'),
+                          ),
+                          FilledButton.icon(
+                            onPressed: isMutating
+                                ? null
+                                : () => _exportPaymentsCsv(
+                                      search: _searchTerm,
+                                      method: _methodFilter == 'all' ? null : _methodFilter,
+                                    ),
+                            icon: const Icon(Icons.download_outlined),
+                            label: const Text('Exporter CSV'),
+                          ),
+                          FilledButton.tonalIcon(
+                            onPressed: isMutating
+                                ? null
+                                : () => _exportPaymentsPdf(
+                                      search: _searchTerm,
+                                      method: _methodFilter == 'all' ? null : _methodFilter,
+                                    ),
+                            icon: const Icon(Icons.picture_as_pdf_outlined),
+                            label: const Text('Exporter PDF'),
+                          ),
+                          FilledButton.tonalIcon(
+                            onPressed: (isMutating || _selectedPaymentIds.isEmpty)
+                                ? null
+                                : _printMultipleReceipts,
+                            icon: const Icon(Icons.print_outlined),
+                            label: Text('Imprimer sélection (${_selectedPaymentIds.length})'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: isMutating
+                                ? null
+                                : () {
+                                    _searchDebounce?.cancel();
+                                    _searchController.clear();
+                                    setState(() {
+                                      _methodFilter = 'all';
+                                      _searchTerm = '';
+                                      _currentPage = 1;
+                                      _financePeriod = _FinancePeriod.all;
+                                      _selectedPaymentIds.clear();
+                                      _selectedOutstandingFeeIds.clear();
+                                    });
+                                  },
+                            icon: const Icon(Icons.filter_alt_off_outlined),
+                            label: const Text('Reinitialiser'),
+                          ),
+                        ],
+                      );
+
+                      if (compact) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            searchField,
+                            const SizedBox(height: 8),
+                            methodField,
+                            const SizedBox(height: 8),
+                            periodField,
+                            const SizedBox(height: 8),
+                            actions,
+                          ],
+                        );
+                      }
+
+                      return Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [searchField, methodField, periodField, actions],
+                      );
+                    },
+                  ),
+                ),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: _refreshPayments,
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.all(18),
+                      children: [
                   Text(
                     'Paiements & Facturation',
                     style: Theme.of(context).textTheme.headlineSmall,
@@ -712,33 +2926,342 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                   ),
                   const SizedBox(height: 14),
                   Container(
-                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                     decoration: BoxDecoration(
                       color: colorScheme.surfaceContainerLowest,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: colorScheme.outlineVariant.withValues(
-                          alpha: 0.55,
-                        ),
+                        color: colorScheme.outlineVariant.withValues(alpha: 0.5),
                       ),
                     ),
-                    child: Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _metricChip('Paiements', '${payments.length}'),
-                        _metricChip(
-                          'Montant encaisse',
-                          _formatMoney(totalPaid),
+                        Text(
+                          'Encaissements & entrees d\'argent',
+                          style: Theme.of(context).textTheme.titleSmall,
                         ),
-                        _metricChip(
-                          'Frais impayes',
-                          '${outstandingFees.length}',
+                        const SizedBox(height: 6),
+                        Text(
+                          'Journal des encaissements avec filtres, creation par dialogue et exports CSV/PDF.',
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
-                        _metricChip(
-                          'Solde restant',
-                          _formatMoney(outstandingTotal),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            _metricChip('Periode', _financePeriodLabel(_financePeriod)),
+                            _metricChip('Encaissements', '${periodPayments.length}'),
+                            _metricChip('Montant periode', _formatMoney(periodIncomeAmount)),
+                            _metricChip('Mode dominant', dominantMethodLabel),
+                            _metricChip('Frais impayes', '${outstandingFees.length}'),
+                            _metricChip('Solde restant', _formatMoney(outstandingTotal)),
+                            _metricChip('Montant page', _formatMoney(totalPaid)),
+                          ],
                         ),
+                        const SizedBox(height: 12),
+                        Text(
+                          pageData.count == 0
+                              ? 'Aucun résultat'
+                              : 'Page $_currentPage • ${visiblePayments.length} visible(s) sur ${payments.length} ligne(s) de la page • ${pageData.count} total',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 8),
+                        if (visiblePayments.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 18),
+                            child: Center(
+                              child: Text('Aucun paiement correspondant a cette periode.'),
+                            ),
+                          )
+                        else
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final compact = constraints.maxWidth < 1080;
+
+                              final paymentsTable = SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: DataTable(
+                                  columns: [
+                                    DataColumn(
+                                      label: Checkbox(
+                                        tristate: true,
+                                        value: visiblePayments.isEmpty
+                                            ? false
+                                            : visiblePayments.every(
+                                                (p) => _selectedPaymentIds.contains(p.id),
+                                              )
+                                            ? true
+                                            : visiblePayments.any(
+                                                (p) => _selectedPaymentIds.contains(p.id),
+                                              )
+                                            ? null
+                                            : false,
+                                        onChanged: (value) {
+                                          setState(() {
+                                            if (value == true) {
+                                              _selectedPaymentIds.addAll(
+                                                visiblePayments.map((p) => p.id),
+                                              );
+                                            } else {
+                                              _selectedPaymentIds.removeAll(
+                                                visiblePayments.map((p) => p.id),
+                                              );
+                                            }
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                    const DataColumn(label: Text('Date')),
+                                    const DataColumn(label: Text('Eleve')),
+                                    const DataColumn(label: Text('Classe')),
+                                    const DataColumn(label: Text('Matricule')),
+                                    const DataColumn(label: Text('Type frais')),
+                                    const DataColumn(label: Text('Montant')),
+                                    const DataColumn(label: Text('Methode')),
+                                    const DataColumn(label: Text('Actions')),
+                                  ],
+                                  rows: visiblePayments.map((payment) {
+                                    final selected = payment.id == _selectedPaymentId;
+                                    return DataRow(
+                                      selected: selected,
+                                      onSelectChanged: (_) {
+                                        setState(() => _selectedPaymentId = payment.id);
+                                      },
+                                      cells: [
+                                        DataCell(
+                                          Checkbox(
+                                            value: _selectedPaymentIds.contains(payment.id),
+                                            onChanged: (value) {
+                                              setState(() {
+                                                if (value == true) {
+                                                  _selectedPaymentIds.add(payment.id);
+                                                } else {
+                                                  _selectedPaymentIds.remove(payment.id);
+                                                }
+                                              });
+                                            },
+                                          ),
+                                        ),
+                                        DataCell(Text(_formatDate(payment.createdAt))),
+                                        DataCell(Text(payment.studentFullName)),
+                                        DataCell(Text(_classLabel(payment.classroomName))),
+                                        DataCell(Text(payment.studentMatricule)),
+                                        DataCell(Text(payment.feeType)),
+                                        DataCell(Text(_formatMoney(payment.amount))),
+                                        DataCell(_methodTag(context, payment.method)),
+                                        DataCell(
+                                          PopupMenuButton<_PaymentRowAction>(
+                                            tooltip: 'Actions',
+                                            onSelected: (action) {
+                                              _handlePaymentRowAction(
+                                                action: action,
+                                                payment: payment,
+                                                fees: fees,
+                                                isMutating: isMutating,
+                                              );
+                                            },
+                                            itemBuilder: (context) => const [
+                                              PopupMenuItem<_PaymentRowAction>(
+                                                value: _PaymentRowAction.view,
+                                                child: Text('Afficher'),
+                                              ),
+                                              PopupMenuItem<_PaymentRowAction>(
+                                                value: _PaymentRowAction.edit,
+                                                child: Text('Modifier'),
+                                              ),
+                                              PopupMenuItem<_PaymentRowAction>(
+                                                value: _PaymentRowAction.print,
+                                                child: Text('Imprimer recu'),
+                                              ),
+                                              PopupMenuItem<_PaymentRowAction>(
+                                                value: _PaymentRowAction.delete,
+                                                child: Text('Annuler paiement'),
+                                              ),
+                                            ],
+                                            child: const Icon(Icons.more_vert),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  }).toList(growable: false),
+                                ),
+                              );
+
+                              if (compact) {
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    if (selectedPayment != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(bottom: 8),
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: FilledButton.tonalIcon(
+                                            onPressed: () => _openSelectedPaymentDrawer(
+                                              payment: selectedPayment,
+                                              fees: fees,
+                                              isMutating: isMutating,
+                                            ),
+                                            icon: const Icon(Icons.receipt_long_outlined),
+                                            label: Text(
+                                              'Recu selectionne • ${selectedPayment.studentMatricule}',
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    paymentsTable,
+                                  ],
+                                );
+                              }
+
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(child: paymentsTable),
+                                  const SizedBox(width: 12),
+                                  SizedBox(
+                                    width: 320,
+                                    child: selectedPayment == null
+                                        ? Card(
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(12),
+                                              child: Text(
+                                                'Selectionne un encaissement pour afficher le detail.',
+                                                style: Theme.of(context).textTheme.bodyMedium,
+                                              ),
+                                            ),
+                                          )
+                                        : Card(
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(12),
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    'Recu selectionne',
+                                                    style: Theme.of(context).textTheme.titleSmall,
+                                                  ),
+                                                  const SizedBox(height: 8),
+                                                  _detailRow('Eleve', selectedPayment.studentFullName),
+                                                  _detailRow('Matricule', selectedPayment.studentMatricule),
+                                                  _detailRow('Classe', _classLabel(selectedPayment.classroomName)),
+                                                  _detailRow('Type frais', selectedPayment.feeType),
+                                                  _detailRow('Montant', _formatMoney(selectedPayment.amount)),
+                                                  _detailRow('Methode', selectedPayment.method),
+                                                  _detailRow('Date', _formatDate(selectedPayment.createdAt)),
+                                                  _detailRow(
+                                                    'Reference',
+                                                    selectedPayment.reference.isEmpty
+                                                        ? '-'
+                                                        : selectedPayment.reference,
+                                                  ),
+                                                  const SizedBox(height: 8),
+                                                  Wrap(
+                                                    spacing: 6,
+                                                    runSpacing: 6,
+                                                    children: [
+                                                      FilledButton.tonalIcon(
+                                                        onPressed: () => _openPaymentDetails(selectedPayment),
+                                                        icon: const Icon(Icons.visibility_outlined),
+                                                        label: const Text('Afficher'),
+                                                      ),
+                                                      FilledButton.tonalIcon(
+                                                        onPressed: isMutating
+                                                            ? null
+                                                            : () => _openEditDialog(selectedPayment, fees),
+                                                        icon: const Icon(Icons.edit_outlined),
+                                                        label: const Text('Modifier'),
+                                                      ),
+                                                      FilledButton.tonalIcon(
+                                                        onPressed: () async {
+                                                          try {
+                                                            await _printReceipt(selectedPayment.id);
+                                                          } catch (error) {
+                                                            _showMessage('Erreur generation PDF: $error');
+                                                          }
+                                                        },
+                                                        icon: const Icon(Icons.picture_as_pdf_outlined),
+                                                        label: const Text('Imprimer'),
+                                                      ),
+                                                      FilledButton.icon(
+                                                        onPressed: isMutating
+                                                            ? null
+                                                            : () => _deletePayment(selectedPayment),
+                                                        style: FilledButton.styleFrom(
+                                                          backgroundColor: const Color(0xFFB42318),
+                                                        ),
+                                                        icon: const Icon(Icons.delete_outline),
+                                                        label: const Text('Annuler paiement'),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                const Text('Lignes/page:'),
+                                DropdownButton<int>(
+                                  value: _pageSize,
+                                  items: _pageSizeOptions
+                                      .map(
+                                        (rows) => DropdownMenuItem<int>(
+                                          value: rows,
+                                          child: Text('$rows'),
+                                        ),
+                                      )
+                                      .toList(growable: false),
+                                  onChanged: (value) {
+                                    if (value == null || value == _pageSize) {
+                                      return;
+                                    }
+                                    setState(() {
+                                      _pageSize = value;
+                                      _currentPage = 1;
+                                    });
+                                  },
+                                ),
+                              ],
+                            ),
+                            Wrap(
+                              spacing: 6,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Page précédente',
+                                  onPressed: pageData.hasPrevious
+                                      ? () => setState(() => _currentPage -= 1)
+                                      : null,
+                                  icon: const Icon(Icons.chevron_left),
+                                ),
+                                IconButton(
+                                  tooltip: 'Page suivante',
+                                  onPressed: pageData.hasNext
+                                      ? () => setState(() => _currentPage += 1)
+                                      : null,
+                                  icon: const Icon(Icons.chevron_right),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
                       ],
                     ),
                   ),
@@ -749,587 +3272,587 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                       color: colorScheme.surfaceContainerLowest,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: colorScheme.outlineVariant.withValues(
-                          alpha: 0.5,
-                        ),
+                        color: colorScheme.outlineVariant.withValues(alpha: 0.5),
                       ),
                     ),
-                    child: Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      crossAxisAlignment: WrapCrossAlignment.center,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        SizedBox(
-                          width: 290,
-                          child: TextField(
-                            controller: _searchController,
-<<<<<<< HEAD
-                            onChanged: (_) => setState(() {}),
-=======
-                            onChanged: _onSearchChanged,
->>>>>>> main
-                            decoration: InputDecoration(
-                              labelText: 'Recherche paiement',
-                              prefixIcon: const Icon(Icons.search),
-                              suffixIcon: _searchController.text.trim().isEmpty
-                                  ? null
-                                  : IconButton(
-                                      onPressed: () {
-<<<<<<< HEAD
-                                        _searchController.clear();
-                                        setState(() {});
-=======
-                                        _searchDebounce?.cancel();
-                                        _searchController.clear();
-                                        setState(() {
-                                          _searchTerm = '';
-                                          _currentPage = 1;
-                                        });
->>>>>>> main
-                                      },
-                                      icon: const Icon(Icons.clear),
-                                    ),
-                            ),
-                          ),
+                        Text(
+                          'KPI par classe & alertes retard',
+                          style: Theme.of(context).textTheme.titleSmall,
                         ),
-                        SizedBox(
-                          width: 240,
-                          child: DropdownButtonFormField<String>(
-                            initialValue: _methodFilter,
-                            decoration: const InputDecoration(
-                              labelText: 'Filtrer par methode',
-                            ),
-                            items: methodOptions
-                                .map(
-                                  (method) => DropdownMenuItem<String>(
-                                    value: method,
-                                    child: Text(
-                                      method == 'all'
-                                          ? 'Toutes les methodes'
-                                          : method,
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) {
-<<<<<<< HEAD
-                              setState(() => _methodFilter = value ?? 'all');
-=======
-                              setState(() {
-                                _methodFilter = value ?? 'all';
-                                _currentPage = 1;
-                              });
->>>>>>> main
-                            },
-                          ),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: isMutating
-                              ? null
-                              : () {
-<<<<<<< HEAD
-                                  _searchController.clear();
-                                  setState(() => _methodFilter = 'all');
-=======
-                                  _searchDebounce?.cancel();
-                                  _searchController.clear();
-                                  setState(() {
-                                    _methodFilter = 'all';
-                                    _searchTerm = '';
-                                    _currentPage = 1;
-                                  });
->>>>>>> main
-                                },
-                          icon: const Icon(Icons.filter_alt_off_outlined),
-                          label: const Text('Reinitialiser'),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      final isWide = constraints.maxWidth >= 1120;
-
-                      final historyPanel = Container(
-                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                        decoration: BoxDecoration(
-                          color: colorScheme.surfaceContainerLowest,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: colorScheme.outlineVariant.withValues(
-                              alpha: 0.5,
-                            ),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
                           children: [
-                            Text(
-                              'Historique paiements (${filteredPayments.length})',
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-<<<<<<< HEAD
-=======
-                            const SizedBox(height: 4),
-                            Text(
-                              pageData.count == 0
-                                  ? 'Aucun résultat'
-                                  : 'Page $_currentPage • ${payments.length} résultat(s) sur ${pageData.count}',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
->>>>>>> main
-                            const SizedBox(height: 8),
-                            if (filteredPayments.isEmpty)
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 18),
-                                child: Center(
-                                  child: Text('Aucun paiement correspondant.'),
-                                ),
-                              )
-                            else
-                              ListView.separated(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                itemCount: filteredPayments.length,
-                                separatorBuilder: (_, _) =>
-                                    const SizedBox(height: 8),
-                                itemBuilder: (context, index) {
-                                  final payment = filteredPayments[index];
-                                  final selected =
-                                      payment.id == _selectedPaymentId;
-
-                                  return Material(
-                                    color: selected
-                                        ? colorScheme.primary.withValues(
-                                            alpha: 0.12,
-                                          )
-                                        : colorScheme.surface,
-                                    borderRadius: BorderRadius.circular(10),
-                                    child: InkWell(
-                                      borderRadius: BorderRadius.circular(10),
-                                      onTap: () {
-                                        setState(
-                                          () => _selectedPaymentId = payment.id,
-                                        );
-                                      },
-                                      child: Padding(
-                                        padding: const EdgeInsets.fromLTRB(
-                                          10,
-                                          8,
-                                          10,
-                                          8,
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            const CircleAvatar(
-                                              radius: 18,
-                                              child: Icon(
-                                                Icons.receipt_long_outlined,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 10),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    payment.studentFullName,
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: Theme.of(
-                                                      context,
-                                                    ).textTheme.titleSmall,
-                                                  ),
-                                                  const SizedBox(height: 2),
-                                                  Text(
-                                                    '${payment.studentMatricule} • ${payment.feeType}',
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: Theme.of(
-                                                      context,
-                                                    ).textTheme.bodySmall,
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.end,
-                                              children: [
-                                                Text(
-                                                  _formatMoney(payment.amount),
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .titleSmall
-                                                      ?.copyWith(
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                      ),
-                                                ),
-                                                const SizedBox(height: 2),
-                                                _methodTag(
-                                                  context,
-                                                  payment.method,
-                                                ),
-                                              ],
-                                            ),
-                                            const SizedBox(width: 4),
-                                            PopupMenuButton<String>(
-                                              tooltip: 'Actions paiement',
-                                              onSelected: (value) async {
-                                                if (value == 'view') {
-                                                  await _openPaymentDetails(
-                                                    payment,
-                                                  );
-                                                  return;
-                                                }
-                                                if (value == 'edit') {
-                                                  await _openEditDialog(
-                                                    payment,
-                                                    fees,
-                                                  );
-                                                  return;
-                                                }
-                                                if (value == 'print') {
-                                                  try {
-                                                    await _printReceipt(
-                                                      payment.id,
-                                                    );
-                                                  } catch (error) {
-                                                    _showMessage(
-                                                      'Erreur generation PDF: $error',
-                                                    );
-                                                  }
-                                                  return;
-                                                }
-                                                if (value == 'delete') {
-                                                  await _deletePayment(payment);
-                                                }
-                                              },
-                                              itemBuilder: (_) => const [
-                                                PopupMenuItem<String>(
-                                                  value: 'view',
-                                                  child: Text('Afficher'),
-                                                ),
-                                                PopupMenuItem<String>(
-                                                  value: 'edit',
-                                                  child: Text('Modifier'),
-                                                ),
-                                                PopupMenuItem<String>(
-                                                  value: 'print',
-                                                  child: Text('Imprimer recu'),
-                                                ),
-                                                PopupMenuItem<String>(
-                                                  value: 'delete',
-                                                  child: Text('Supprimer'),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-<<<<<<< HEAD
-=======
-                            const SizedBox(height: 8),
-                            Wrap(
-                              alignment: WrapAlignment.spaceBetween,
-                              runSpacing: 8,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                Wrap(
-                                  spacing: 6,
-                                  runSpacing: 6,
-                                  crossAxisAlignment: WrapCrossAlignment.center,
-                                  children: [
-                                    const Text('Lignes/page:'),
-                                    DropdownButton<int>(
-                                      value: _pageSize,
-                                      items: _pageSizeOptions
-                                          .map(
-                                            (rows) => DropdownMenuItem<int>(
-                                              value: rows,
-                                              child: Text('$rows'),
-                                            ),
-                                          )
-                                          .toList(),
-                                      onChanged: (value) {
-                                        if (value == null ||
-                                            value == _pageSize) {
-                                          return;
-                                        }
-                                        setState(() {
-                                          _pageSize = value;
-                                          _currentPage = 1;
-                                        });
-                                      },
-                                    ),
-                                  ],
-                                ),
-                                Wrap(
-                                  spacing: 6,
-                                  children: [
-                                    IconButton(
-                                      tooltip: 'Page précédente',
-                                      onPressed: pageData.hasPrevious
-                                          ? () => setState(
-                                              () => _currentPage -= 1,
-                                            )
-                                          : null,
-                                      icon: const Icon(Icons.chevron_left),
-                                    ),
-                                    IconButton(
-                                      tooltip: 'Page suivante',
-                                      onPressed: pageData.hasNext
-                                          ? () => setState(
-                                              () => _currentPage += 1,
-                                            )
-                                          : null,
-                                      icon: const Icon(Icons.chevron_right),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
->>>>>>> main
+                            _metricChip('Classes suivies', '${classKpiRows.length}'),
+                            _metricChip('Alertes retard', '${filteredLateFeeAlerts.length}'),
+                            _metricChip('Retards critiques', '$criticalLateAlerts'),
+                            _metricChip('Impayés totaux', _formatMoney(outstandingTotal)),
                           ],
                         ),
-                      );
-
-                      final detailsPanel = Container(
-                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                        decoration: BoxDecoration(
-                          color: colorScheme.surfaceContainerLowest,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: colorScheme.outlineVariant.withValues(
-                              alpha: 0.5,
-                            ),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Detail paiement',
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                            const SizedBox(height: 8),
-                            if (selectedPayment == null)
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 18),
-                                child: Text(
-                                  'Selectionnez un paiement a gauche.',
+                        const SizedBox(height: 8),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final compact = constraints.maxWidth < 860;
+                            final trendTile7 = Container(
+                              width: compact ? double.infinity : 260,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: colorScheme.outlineVariant.withValues(alpha: 0.45),
                                 ),
-                              )
-                            else ...[
-                              Wrap(
-                                spacing: 10,
-                                runSpacing: 8,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  _metricChip(
-                                    'Eleve',
-                                    selectedPayment.studentFullName,
+                                  Text(
+                                    'Tendance retard <= 7 jours',
+                                    style: Theme.of(context).textTheme.labelLarge,
                                   ),
-                                  _metricChip(
-                                    'Matricule',
-                                    selectedPayment.studentMatricule,
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Actuel: ${lateTrends.current7Count} | Précédent: ${lateTrends.previous7Count}',
+                                    style: Theme.of(context).textTheme.bodySmall,
                                   ),
-                                  _metricChip(
-                                    'Type frais',
-                                    selectedPayment.feeType,
+                                  const SizedBox(height: 4),
+                                  LinearProgressIndicator(
+                                    value: (lateTrends.current7Count + lateTrends.previous7Count) == 0
+                                        ? 0
+                                        : lateTrends.current7Count /
+                                            (lateTrends.current7Count + lateTrends.previous7Count),
                                   ),
-                                  _metricChip(
-                                    'Montant',
-                                    _formatMoney(selectedPayment.amount),
-                                  ),
-                                  _metricChip(
-                                    'Methode',
-                                    selectedPayment.method,
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Montant actuel: ${_formatMoney(lateTrends.current7Amount)}',
+                                    style: Theme.of(context).textTheme.bodySmall,
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 10),
-                              Wrap(
-                                spacing: 10,
-                                runSpacing: 10,
+                            );
+                            final trendTile30 = Container(
+                              width: compact ? double.infinity : 260,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  FilledButton.tonalIcon(
-                                    onPressed: () =>
-                                        _openPaymentDetails(selectedPayment),
-                                    icon: const Icon(Icons.visibility_outlined),
-                                    label: const Text('Afficher'),
+                                  Text(
+                                    'Tendance retard <= 30 jours',
+                                    style: Theme.of(context).textTheme.labelLarge,
                                   ),
-                                  FilledButton.tonalIcon(
-                                    onPressed: isMutating
-                                        ? null
-                                        : () => _openEditDialog(
-                                            selectedPayment,
-                                            fees,
-                                          ),
-                                    icon: const Icon(Icons.edit_outlined),
-                                    label: const Text('Modifier'),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Actuel: ${lateTrends.current30Count} | Précédent: ${lateTrends.previous30Count}',
+                                    style: Theme.of(context).textTheme.bodySmall,
                                   ),
-                                  FilledButton.tonalIcon(
-                                    onPressed: () async {
-                                      try {
-                                        await _printReceipt(selectedPayment.id);
-                                      } catch (error) {
-                                        _showMessage(
-                                          'Erreur generation PDF: $error',
-                                        );
-                                      }
+                                  const SizedBox(height: 4),
+                                  LinearProgressIndicator(
+                                    value: (lateTrends.current30Count + lateTrends.previous30Count) == 0
+                                        ? 0
+                                        : lateTrends.current30Count /
+                                            (lateTrends.current30Count + lateTrends.previous30Count),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Montant actuel: ${_formatMoney(lateTrends.current30Amount)}',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                ],
+                              ),
+                            );
+                            return Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [trendTile7, trendTile30],
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            const Text('Seuil retard:'),
+                            DropdownButton<int>(
+                              value: _lateAlertMinDays,
+                              items: const [
+                                DropdownMenuItem(value: 1, child: Text('>= 1 jour')),
+                                DropdownMenuItem(value: 7, child: Text('>= 7 jours')),
+                                DropdownMenuItem(value: 15, child: Text('>= 15 jours')),
+                                DropdownMenuItem(value: 30, child: Text('>= 30 jours')),
+                              ],
+                              onChanged: (value) {
+                                if (value == null) {
+                                  return;
+                                }
+                                setState(() => _lateAlertMinDays = value);
+                              },
+                            ),
+                            FilledButton.tonalIcon(
+                              onPressed: filteredLateFeeAlerts.isEmpty
+                                  ? null
+                                  : () async {
+                                      final csv = _buildLateAlertsCsv(filteredLateFeeAlerts);
+                                      await _saveTextExport(
+                                        content: csv,
+                                        fileName:
+                                            'alertes_retard_${_lateAlertMinDays}j_${_timestampSuffix()}.csv',
+                                        dialogTitle: 'Exporter les alertes retard',
+                                        successMessage:
+                                            'Export CSV alertes retard reussi (${filteredLateFeeAlerts.length} lignes).',
+                                      );
+                                      final totalAmount = filteredLateFeeAlerts.fold<double>(
+                                        0,
+                                        (sum, row) => sum + row.balance,
+                                      );
+                                      _recordReminderHistory(
+                                        action: 'Export alertes retard',
+                                        scope: 'Seuil ${_lateAlertMinDays}j',
+                                        itemCount: filteredLateFeeAlerts.length,
+                                        totalAmount: totalAmount,
+                                      );
                                     },
-                                    icon: const Icon(Icons.picture_as_pdf),
-                                    label: const Text('Imprimer recu'),
-                                  ),
-                                  FilledButton.icon(
-                                    onPressed: isMutating
-                                        ? null
-                                        : () => _deletePayment(selectedPayment),
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor: const Color(0xFFB42318),
+                              icon: const Icon(Icons.download_outlined),
+                              label: const Text('Exporter alertes CSV'),
+                            ),
+                            FilledButton.tonalIcon(
+                              onPressed: classReminderGroups.isEmpty
+                                  ? null
+                                  : () => _copyGlobalReminders(classReminderGroups),
+                              icon: const Icon(Icons.campaign_outlined),
+                              label: const Text('Relance globale'),
+                            ),
+                            FilledButton.tonalIcon(
+                              onPressed: classReminderGroups.isEmpty
+                                  ? null
+                                  : () async {
+                                      final totalAmount = classReminderGroups.values
+                                          .expand((rows) => rows)
+                                          .fold<double>(0, (sum, row) => sum + row.balance);
+                                      final totalItems = classReminderGroups.values
+                                          .fold<int>(0, (sum, rows) => sum + rows.length);
+                                      final csv = _buildClassRemindersCsv(classReminderGroups);
+                                      await _saveTextExport(
+                                        content: csv,
+                                        fileName:
+                                            'relances_classes_${_lateAlertMinDays}j_${_timestampSuffix()}.csv',
+                                        dialogTitle: 'Exporter relances par classe',
+                                        successMessage:
+                                            'Export CSV relances classes reussi (${classReminderGroups.length} classes).',
+                                      );
+                                      _recordReminderHistory(
+                                        action: 'Export relances classes',
+                                        scope: '${classReminderGroups.length} classes',
+                                        itemCount: totalItems,
+                                        totalAmount: totalAmount,
+                                      );
+                                    },
+                              icon: const Icon(Icons.file_download_outlined),
+                              label: const Text('Exporter relances classes'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Text(
+                              'Historique des relances',
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '(${filteredReminderHistory.length}/${_reminderHistory.length})',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            const Spacer(),
+                            TextButton.icon(
+                              onPressed: filteredReminderHistory.isEmpty
+                                  ? null
+                                  : () async {
+                                      final text = _reminderHistoryAsText(filteredReminderHistory);
+                                      await Clipboard.setData(ClipboardData(text: text));
+                                      _showMessage('Historique copie dans le presse-papiers.', isSuccess: true);
+                                    },
+                              icon: const Icon(Icons.copy_all_outlined, size: 16),
+                              label: const Text('Copier'),
+                            ),
+                            TextButton.icon(
+                              onPressed: filteredReminderHistory.isEmpty
+                                  ? null
+                                  : () async {
+                                      final csv = _buildReminderHistoryCsv(filteredReminderHistory);
+                                      await _saveTextExport(
+                                        content: csv,
+                                        fileName: 'historique_relances_${_timestampSuffix()}.csv',
+                                        dialogTitle: 'Exporter historique des relances',
+                                        successMessage:
+                                            'Export CSV historique relances reussi (${filteredReminderHistory.length} lignes).',
+                                      );
+                                      final totalAmount = filteredReminderHistory.fold<double>(
+                                        0,
+                                        (sum, entry) => sum + entry.totalAmount,
+                                      );
+                                      _recordReminderHistory(
+                                        action: 'Export historique relances',
+                                        scope:
+                                            'Filtre $_reminderHistoryActionFilter / ${_reminderPeriodLabel(_reminderHistoryPeriodFilter)} / tri $_reminderHistorySort',
+                                        itemCount: filteredReminderHistory.length,
+                                        totalAmount: totalAmount,
+                                      );
+                                    },
+                              icon: const Icon(Icons.download_outlined, size: 16),
+                              label: const Text('Exporter CSV'),
+                            ),
+                            TextButton.icon(
+                              onPressed: _reminderHistory.isEmpty
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        _reminderHistory.clear();
+                                        _reminderHistoryPage = 1;
+                                      });
+                                      unawaited(_persistReminderHistory());
+                                      _showMessage('Historique des relances vide.', isSuccess: true);
+                                    },
+                              icon: const Icon(Icons.clear_all_outlined, size: 16),
+                              label: const Text('Vider'),
+                            ),
+                          ],
+                        ),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            SizedBox(
+                              width: 220,
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _reminderHistoryActionFilter,
+                                decoration: const InputDecoration(labelText: 'Filtrer action'),
+                                items: reminderActionOptions
+                                    .map(
+                                      (value) => DropdownMenuItem<String>(
+                                        value: value,
+                                        child: Text(value == 'all' ? 'Toutes' : value),
+                                      ),
+                                    )
+                                    .toList(growable: false),
+                                onChanged: (value) {
+                                  setState(() {
+                                    _reminderHistoryActionFilter = value ?? 'all';
+                                    _reminderHistoryPage = 1;
+                                  });
+                                },
+                              ),
+                            ),
+                            SizedBox(
+                              width: 180,
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _reminderHistoryPeriodFilter,
+                                decoration: const InputDecoration(labelText: 'Periode'),
+                                items: const ['all', 'today', '7d', '30d']
+                                    .map(
+                                      (value) => DropdownMenuItem<String>(
+                                        value: value,
+                                        child: Text(
+                                          value == 'all'
+                                              ? 'Tout'
+                                              : value == 'today'
+                                              ? 'Aujourd\'hui'
+                                              : value == '7d'
+                                              ? '7 jours'
+                                              : '30 jours',
+                                        ),
+                                      ),
+                                    )
+                                    .toList(growable: false),
+                                onChanged: (value) {
+                                  setState(() {
+                                    _reminderHistoryPeriodFilter = value ?? 'all';
+                                    _reminderHistoryPage = 1;
+                                  });
+                                },
+                              ),
+                            ),
+                            SizedBox(
+                              width: 260,
+                              child: TextField(
+                                controller: _reminderHistorySearchController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Recherche classe/action',
+                                  prefixIcon: Icon(Icons.search),
+                                ),
+                                onChanged: (value) {
+                                  setState(() {
+                                    _reminderHistorySearchTerm = value;
+                                    _reminderHistoryPage = 1;
+                                  });
+                                },
+                              ),
+                            ),
+                            SizedBox(
+                              width: 220,
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _reminderHistorySort,
+                                decoration: const InputDecoration(labelText: 'Tri'),
+                                items: const [
+                                  DropdownMenuItem(value: 'date_desc', child: Text('Date décroissante')),
+                                  DropdownMenuItem(value: 'date_asc', child: Text('Date croissante')),
+                                  DropdownMenuItem(value: 'amount_desc', child: Text('Montant décroissant')),
+                                  DropdownMenuItem(value: 'amount_asc', child: Text('Montant croissant')),
+                                  DropdownMenuItem(value: 'count_desc', child: Text('Dossiers décroissants')),
+                                  DropdownMenuItem(value: 'count_asc', child: Text('Dossiers croissants')),
+                                ],
+                                onChanged: (value) {
+                                  setState(() {
+                                    _reminderHistorySort = value ?? 'date_desc';
+                                    _reminderHistoryPage = 1;
+                                  });
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        if (filteredReminderHistory.isEmpty)
+                          const Text('Aucune action de relance enregistrée pour le moment.')
+                        else
+                          ...visibleReminderHistory.map((entry) {
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 6),
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      '${_formatDate(entry.createdAt.toIso8601String())} • ${entry.action} • ${entry.scope}',
+                                      style: Theme.of(context).textTheme.bodySmall,
                                     ),
-                                    icon: const Icon(Icons.delete_outline),
-                                    label: const Text('Supprimer'),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '${entry.itemCount} dossier(s) • ${_formatMoney(entry.totalAmount)}',
+                                    style: Theme.of(context).textTheme.labelSmall,
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        if (filteredReminderHistory.isNotEmpty)
+                          Wrap(
+                            alignment: WrapAlignment.spaceBetween,
+                            runSpacing: 8,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 6,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  const Text('Lignes/page:'),
+                                  DropdownButton<int>(
+                                    value: _reminderHistoryPageSize,
+                                    items: _reminderHistoryPageSizeOptions
+                                        .map(
+                                          (rows) => DropdownMenuItem<int>(
+                                            value: rows,
+                                            child: Text('$rows'),
+                                          ),
+                                        )
+                                        .toList(growable: false),
+                                    onChanged: (value) {
+                                      if (value == null || value == _reminderHistoryPageSize) {
+                                        return;
+                                      }
+                                      setState(() {
+                                        _reminderHistoryPageSize = value;
+                                        _reminderHistoryPage = 1;
+                                      });
+                                    },
+                                  ),
+                                  Text(
+                                    'Affichage ${reminderStart + 1}-$reminderEnd sur ${filteredReminderHistory.length}',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                ],
+                              ),
+                              Wrap(
+                                spacing: 6,
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Page précédente',
+                                    onPressed: safeReminderPage > 1
+                                        ? () => setState(() => _reminderHistoryPage -= 1)
+                                        : null,
+                                    icon: const Icon(Icons.chevron_left),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Page suivante',
+                                    onPressed: safeReminderPage < reminderPages
+                                        ? () => setState(() => _reminderHistoryPage += 1)
+                                        : null,
+                                    icon: const Icon(Icons.chevron_right),
                                   ),
                                 ],
                               ),
                             ],
-                            const SizedBox(height: 12),
-                            Divider(color: colorScheme.outlineVariant),
-                            const SizedBox(height: 10),
-                            Text(
-                              'Nouveau paiement',
-                              style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                        const SizedBox(height: 10),
+                        if (classKpiRows.isEmpty)
+                          const Text('Aucun frais disponible pour calculer les KPI.')
+                        else
+                          SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: DataTable(
+                              columns: const [
+                                DataColumn(label: Text('Classe')),
+                                DataColumn(label: Text('Eleves')),
+                                DataColumn(label: Text('Frais')),
+                                DataColumn(label: Text('Montant du')),
+                                DataColumn(label: Text('Montant paye')),
+                                DataColumn(label: Text('Solde')),
+                                DataColumn(label: Text('Taux recouvrement')),
+                                DataColumn(label: Text('Retards')),
+                                DataColumn(label: Text('Relance')),
+                              ],
+                              rows: classKpiRows.take(15).map((row) {
+                                final isAlert = row.totalOutstanding > 0 && row.overdueCount > 0;
+                                final classAlerts = filteredLateFeeAlerts
+                                    .where((item) => item.className == row.className)
+                                    .toList(growable: false);
+                                return DataRow(
+                                  color: isAlert
+                                      ? WidgetStateProperty.resolveWith(
+                                          (_) => const Color(0xFFFEEFE8),
+                                        )
+                                      : null,
+                                  cells: [
+                                    DataCell(Text(row.className)),
+                                    DataCell(Text('${row.studentCount}')),
+                                    DataCell(Text('${row.feeCount}')),
+                                    DataCell(Text(_formatMoney(row.totalDue))),
+                                    DataCell(Text(_formatMoney(row.totalPaid))),
+                                    DataCell(Text(_formatMoney(row.totalOutstanding))),
+                                    DataCell(Text('${(row.recoveryRate * 100).toStringAsFixed(1)} %')),
+                                    DataCell(Text('${row.overdueCount}')),
+                                    DataCell(
+                                      classAlerts.isEmpty
+                                          ? const Text('-')
+                                          : OutlinedButton.icon(
+                                              onPressed: () => _copyClassReminder(
+                                                className: row.className,
+                                                alerts: classAlerts,
+                                              ),
+                                              icon: const Icon(Icons.content_copy, size: 16),
+                                              label: const Text('Relance'),
+                                            ),
+                                    ),
+                                  ],
+                                );
+                              }).toList(growable: false),
                             ),
-                            const SizedBox(height: 8),
-                            Form(
-                              key: _formKey,
-                              child: Column(
+                          ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Top 10 eleves les plus en retard',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 6),
+                        if (topLateStudents.isEmpty)
+                          const Text('Aucun eleve en retard sur le seuil sélectionné.')
+                        else
+                          SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: DataTable(
+                              columns: const [
+                                DataColumn(label: Text('Eleve')),
+                                DataColumn(label: Text('Classe')),
+                                DataColumn(label: Text('Matricule')),
+                                DataColumn(label: Text('Frais en retard')),
+                                DataColumn(label: Text('Retard max')),
+                                DataColumn(label: Text('Solde total')),
+                              ],
+                              rows: topLateStudents.take(10).map((row) {
+                                return DataRow(
+                                  cells: [
+                                    DataCell(Text(row.studentFullName)),
+                                    DataCell(Text(row.className)),
+                                    DataCell(Text(row.studentMatricule.isEmpty ? '-' : row.studentMatricule)),
+                                    DataCell(Text('${row.lateFeesCount}')),
+                                    DataCell(Text('${row.maxDaysLate} j')),
+                                    DataCell(Text(_formatMoney(row.totalBalance))),
+                                  ],
+                                );
+                              }).toList(growable: false),
+                            ),
+                          ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Top alertes retard',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 6),
+                        if (filteredLateFeeAlerts.isEmpty)
+                          const Text('Aucun retard de paiement détecté.')
+                        else
+                          ...filteredLateFeeAlerts.take(8).map((alert) {
+                            final dueDate = _parseDateOnly(alert.dueDateRaw);
+                            final dueLabel = dueDate == null
+                                ? (alert.dueDateRaw.isEmpty ? '-' : alert.dueDateRaw)
+                                : '${dueDate.day.toString().padLeft(2, '0')}/${dueDate.month.toString().padLeft(2, '0')}/${dueDate.year}';
+                            final severityColor = alert.daysLate >= 30
+                                ? const Color(0xFFB42318)
+                                : alert.daysLate >= 15
+                                ? const Color(0xFFB54708)
+                                : const Color(0xFF2D6FD6);
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: severityColor.withValues(alpha: 0.5)),
+                                color: severityColor.withValues(alpha: 0.08),
+                              ),
+                              child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Wrap(
-                                    spacing: 10,
-                                    runSpacing: 10,
-                                    children: [
-                                      SizedBox(
-                                        width: 360,
-                                        child: DropdownButtonFormField<int>(
-                                          initialValue: _selectedFeeId,
-                                          decoration: const InputDecoration(
-                                            labelText: 'Frais eleve',
-                                          ),
-                                          items: fees
-                                              .map(
-                                                (fee) => DropdownMenuItem<int>(
-                                                  value: fee.id,
-                                                  child: Text(_feeLabel(fee)),
-                                                ),
-                                              )
-                                              .toList(),
-                                          onChanged: (value) => setState(
-                                            () => _selectedFeeId = value,
-                                          ),
-                                        ),
-                                      ),
-                                      SizedBox(
-                                        width: 150,
-                                        child: TextFormField(
-                                          controller: _amountController,
-                                          keyboardType:
-                                              const TextInputType.numberWithOptions(
-                                                decimal: true,
-                                              ),
-                                          decoration: const InputDecoration(
-                                            labelText: 'Montant',
-                                          ),
-                                          validator: (value) {
-                                            final parsed = double.tryParse(
-                                              value ?? '',
-                                            );
-                                            if (parsed == null || parsed <= 0) {
-                                              return 'Montant invalide';
-                                            }
-                                            return null;
-                                          },
-                                        ),
-                                      ),
-                                      SizedBox(
-                                        width: 170,
-                                        child: TextFormField(
-                                          controller: _methodController,
-                                          decoration: const InputDecoration(
-                                            labelText: 'Methode',
-                                          ),
-                                          validator: (value) =>
-                                              (value == null ||
-                                                  value.trim().isEmpty)
-                                              ? 'Champ requis'
-                                              : null,
-                                        ),
-                                      ),
-                                      SizedBox(
-                                        width: 190,
-                                        child: TextFormField(
-                                          controller: _referenceController,
-                                          decoration: const InputDecoration(
-                                            labelText: 'Reference',
-                                          ),
-                                        ),
-                                      ),
-                                    ],
+                                  Icon(Icons.warning_amber_rounded, color: severityColor, size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      '${alert.studentFullName} (${alert.studentMatricule.isEmpty ? '-' : alert.studentMatricule}) • ${alert.className}\n'
+                                      '${alert.feeType} • Echéance: $dueLabel • Retard: ${alert.daysLate} j • Solde: ${_formatMoney(alert.balance)}',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
                                   ),
-                                  const SizedBox(height: 12),
-                                  FilledButton.icon(
-                                    onPressed: isMutating
-                                        ? null
-                                        : _createPayment,
-                                    icon: isMutating
-                                        ? const SizedBox(
-                                            width: 18,
-                                            height: 18,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                            ),
-                                          )
-                                        : const Icon(Icons.add_card_outlined),
-                                    label: const Text('Enregistrer paiement'),
+                                  TextButton(
+                                    onPressed: () => _selectLateAlertFee(
+                                      alert: alert,
+                                      outstandingFees: outstandingFees,
+                                    ),
+                                    child: const Text('Selectionner'),
                                   ),
                                 ],
                               ),
-                            ),
-                          ],
-                        ),
-                      );
-
-                      if (isWide) {
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(flex: 6, child: historyPanel),
-                            const SizedBox(width: 12),
-                            Expanded(flex: 5, child: detailsPanel),
-                          ],
-                        );
-                      }
-
-                      return Column(
-                        children: [
-                          historyPanel,
-                          const SizedBox(height: 12),
-                          detailsPanel,
-                        ],
-                      );
-                    },
+                            );
+                          }),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Container(
@@ -1346,49 +3869,544 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Frais en attente',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 8),
-                        if (outstandingFees.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Text('Aucun solde restant.'),
-                          )
-                        else
-                          SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: DataTable(
-                              columns: const [
-                                DataColumn(label: Text('Eleve')),
-                                DataColumn(label: Text('Matricule')),
-                                DataColumn(label: Text('Type frais')),
-                                DataColumn(label: Text('Montant du')),
-                                DataColumn(label: Text('Solde')),
-                              ],
-                              rows: outstandingFees
-                                  .map(
-                                    (fee) => DataRow(
-                                      cells: [
-                                        DataCell(Text(fee.studentFullName)),
-                                        DataCell(Text(fee.studentMatricule)),
-                                        DataCell(Text(fee.feeType)),
-                                        DataCell(
-                                          Text(_formatMoney(fee.amountDue)),
+                        ExpansionTile(
+                          initiallyExpanded: _outstandingExpanded,
+                          onExpansionChanged: (expanded) {
+                            setState(() => _outstandingExpanded = expanded);
+                          },
+                          tilePadding: EdgeInsets.zero,
+                          title: Text(
+                            'Frais en attente • ${outstandingFees.length}',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          childrenPadding: const EdgeInsets.only(bottom: 4),
+                          children: [
+                            if (outstandingFees.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 8),
+                                child: Text('Aucun solde restant.'),
+                              )
+                            else ...[
+                              Text(
+                                'Affichage ${outstandingStart + 1}-$outstandingEnd sur ${outstandingFees.length} frais en attente',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  FilledButton.tonalIcon(
+                                    onPressed: (_financeBusy || _selectedOutstandingFeeIds.isEmpty)
+                                        ? null
+                                        : () => _collectSelectedFeesInBulk(outstandingFees),
+                                    icon: const Icon(Icons.point_of_sale_outlined),
+                                    label: Text(
+                                      'Encaisser sélection (${_selectedOutstandingFeeIds.length})',
+                                    ),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: _selectedOutstandingFeeIds.isEmpty
+                                        ? null
+                                        : () {
+                                            setState(() => _selectedOutstandingFeeIds.clear());
+                                          },
+                                    icon: const Icon(Icons.clear_all),
+                                    label: const Text('Vider la sélection'),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              ..._groupOutstandingByClass(visibleOutstandingFees).entries.map((entry) {
+                                final className = entry.key;
+                                final classRows = entry.value;
+                                final expanded = _expandedOutstandingClasses.contains(className);
+                                final classFeeIds = classRows.map((row) => row.id).toList(growable: false);
+                                final allClassSelected = classFeeIds.isNotEmpty &&
+                                    classFeeIds.every(_selectedOutstandingFeeIds.contains);
+                                final someClassSelected = classFeeIds.any(_selectedOutstandingFeeIds.contains);
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+                                    ),
+                                  ),
+                                  child: ExpansionTile(
+                                    initiallyExpanded: expanded,
+                                    onExpansionChanged: (value) {
+                                      setState(() {
+                                        if (value) {
+                                          _expandedOutstandingClasses.add(className);
+                                        } else {
+                                          _expandedOutstandingClasses.remove(className);
+                                        }
+                                      });
+                                    },
+                                    title: Row(
+                                      children: [
+                                        Checkbox(
+                                          tristate: true,
+                                          value: allClassSelected
+                                              ? true
+                                              : someClassSelected
+                                              ? null
+                                              : false,
+                                          onChanged: (value) {
+                                            setState(() {
+                                              if (value == true) {
+                                                _selectedOutstandingFeeIds.addAll(classFeeIds);
+                                              } else {
+                                                _selectedOutstandingFeeIds.removeAll(classFeeIds);
+                                              }
+                                            });
+                                          },
                                         ),
-                                        DataCell(
-                                          Text(_formatMoney(fee.balance)),
+                                        Expanded(
+                                          child: Text('Classe $className • ${classRows.length}'),
                                         ),
                                       ],
                                     ),
-                                  )
-                                  .toList(),
-                            ),
-                          ),
+                                    children: [
+                                      SingleChildScrollView(
+                                        scrollDirection: Axis.horizontal,
+                                        child: DataTable(
+                                          columns: const [
+                                            DataColumn(label: Text('Sel.')),
+                                            DataColumn(label: Text('Eleve')),
+                                            DataColumn(label: Text('Matricule')),
+                                            DataColumn(label: Text('Type frais')),
+                                            DataColumn(label: Text('Montant du')),
+                                            DataColumn(label: Text('Solde')),
+                                          ],
+                                          rows: classRows
+                                              .map(
+                                                (fee) => DataRow(
+                                                  cells: [
+                                                    DataCell(
+                                                      Checkbox(
+                                                        value: _selectedOutstandingFeeIds.contains(fee.id),
+                                                        onChanged: (value) {
+                                                          setState(() {
+                                                            if (value == true) {
+                                                              _selectedOutstandingFeeIds.add(fee.id);
+                                                            } else {
+                                                              _selectedOutstandingFeeIds.remove(fee.id);
+                                                            }
+                                                          });
+                                                        },
+                                                      ),
+                                                    ),
+                                                    DataCell(Text(fee.studentFullName)),
+                                                    DataCell(Text(fee.studentMatricule)),
+                                                    DataCell(Text(fee.feeType)),
+                                                    DataCell(Text(_formatMoney(fee.amountDue))),
+                                                    DataCell(Text(_formatMoney(fee.balance))),
+                                                  ],
+                                                ),
+                                              )
+                                              .toList(growable: false),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                              Wrap(
+                                alignment: WrapAlignment.spaceBetween,
+                                runSpacing: 8,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  Wrap(
+                                    spacing: 6,
+                                    runSpacing: 6,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
+                                    children: [
+                                      const Text('Lignes/page:'),
+                                      DropdownButton<int>(
+                                        value: _outstandingPageSize,
+                                        items: _outstandingPageSizeOptions
+                                            .map(
+                                              (rows) => DropdownMenuItem<int>(
+                                                value: rows,
+                                                child: Text('$rows'),
+                                              ),
+                                            )
+                                            .toList(growable: false),
+                                        onChanged: (value) {
+                                          if (value == null || value == _outstandingPageSize) {
+                                            return;
+                                          }
+                                          setState(() {
+                                            _outstandingPageSize = value;
+                                            _outstandingPage = 1;
+                                          });
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                  Wrap(
+                                    spacing: 6,
+                                    children: [
+                                      IconButton(
+                                        tooltip: 'Page précédente',
+                                        onPressed: safeOutstandingPage > 1
+                                            ? () => setState(() => _outstandingPage -= 1)
+                                            : null,
+                                        icon: const Icon(Icons.chevron_left),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Page suivante',
+                                        onPressed: safeOutstandingPage < outstandingPages
+                                            ? () => setState(() => _outstandingPage += 1)
+                                            : null,
+                                        icon: const Icon(Icons.chevron_right),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
                       ],
                     ),
                   ),
+                  if (isTeacherFinanceVisible) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Paie horaire enseignants',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            isTeacherFinanceReadOnly
+                                ? 'Mode lecture seule (Comptable): consultation et validation niveau 2.'
+                                : 'Generation de la paie mensuelle et validation du workflow N1/N2.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              SizedBox(
+                                width: 180,
+                                child: TextField(
+                                  controller: _payrollMonthController,
+                                  decoration: const InputDecoration(labelText: 'Mois paie (YYYY-MM)'),
+                                ),
+                              ),
+                              FilledButton.tonalIcon(
+                                onPressed: (isTeacherFinanceReadOnly || _financeBusy)
+                                    ? null
+                                    : _generateTeacherPayroll,
+                                icon: const Icon(Icons.calculate_outlined),
+                                label: const Text('Generer paie horaire'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: _loadTeacherFinanceSection,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Actualiser'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Synthese paie horaire (${_financePayrolls.length})',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          if (_financePayrolls.isEmpty)
+                            const Text('Aucune paie horaire generee pour ce mois.')
+                          else
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: DataTable(
+                                columns: const [
+                                  DataColumn(label: Text('Enseignant')),
+                                  DataColumn(label: Text('Mois')),
+                                  DataColumn(label: Text('H. attribuees')),
+                                  DataColumn(label: Text('H. travaillees')),
+                                  DataColumn(label: Text('Taux horaire')),
+                                  DataColumn(label: Text('Montant')),
+                                  DataColumn(label: Text('Validation')),
+                                  DataColumn(label: Text('Actions')),
+                                ],
+                                rows: _financePayrolls.map((row) {
+                                  final payrollId = (row['id'] as num?)?.toInt();
+                                  final teacherName = row['teacher_full_name']?.toString() ?? 'Enseignant';
+                                  final month = row['month']?.toString() ?? '-';
+                                  final attributed = row['hours_attributed']?.toString() ?? '0';
+                                  final worked = row['hours_worked']?.toString() ?? '0';
+                                  final rate = double.tryParse(row['hourly_rate']?.toString() ?? '0') ?? 0;
+                                  final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
+                                  final stage = (row['validation_stage'] ?? '').toString();
+                                    final canL1 = (authUser?.role == 'censor' || authUser?.role == 'super_admin') &&
+                                      stage != 'level_two' &&
+                                      payrollId != null;
+                                  final canL2 = (authUser?.role == 'accountant' || authUser?.role == 'super_admin') &&
+                                      stage == 'level_one' &&
+                                      payrollId != null;
+                                  final canReset = authUser?.role == 'super_admin' && payrollId != null;
+
+                                  return DataRow(
+                                    cells: [
+                                      DataCell(Text(teacherName)),
+                                      DataCell(Text(month)),
+                                      DataCell(Text(attributed)),
+                                      DataCell(Text(worked)),
+                                      DataCell(Text('${_formatMoney(rate)}/h')),
+                                      DataCell(Text(_formatMoney(amount))),
+                                      DataCell(Text(_payrollStageLabel(row))),
+                                      DataCell(
+                                        Wrap(
+                                          spacing: 6,
+                                          runSpacing: 6,
+                                          children: [
+                                            if (canL1)
+                                              OutlinedButton(
+                                                onPressed: _financeBusy
+                                                    ? null
+                                                    : () => _validatePayrollLevelOne(payrollId),
+                                                child: const Text('Valider N1'),
+                                              ),
+                                            if (canL2)
+                                              FilledButton.tonal(
+                                                onPressed: _financeBusy
+                                                    ? null
+                                                    : () => _validatePayrollLevelTwo(payrollId),
+                                                child: const Text('Valider N2'),
+                                              ),
+                                            if (canReset)
+                                              TextButton(
+                                                onPressed: _financeBusy
+                                                    ? null
+                                                    : () => _resetPayrollValidation(payrollId),
+                                                child: const Text('Reset'),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }).toList(growable: false),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surfaceContainerLowest,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Dépenses & sorties d\'argent',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Workflow de validation N1/N2 pour toutes les charges avant paiement final.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 8),
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final compact = constraints.maxWidth < 940;
+                              final periodField = SizedBox(
+                                width: compact ? double.infinity : 170,
+                                child: DropdownButtonFormField<_FinancePeriod>(
+                                  initialValue: _financePeriod,
+                                  decoration: const InputDecoration(labelText: 'Periode'),
+                                  items: _FinancePeriod.values
+                                      .map(
+                                        (item) => DropdownMenuItem<_FinancePeriod>(
+                                          value: item,
+                                          child: Text(_financePeriodLabel(item)),
+                                        ),
+                                      )
+                                      .toList(growable: false),
+                                  onChanged: (value) {
+                                    if (value == null) return;
+                                    setState(() => _financePeriod = value);
+                                  },
+                                ),
+                              );
+                              final actions = Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  FilledButton.tonalIcon(
+                                    onPressed: _financeBusy ? null : () => _openExpenseDialog(),
+                                    icon: const Icon(Icons.add_card_outlined),
+                                    label: const Text('Nouvelle depense'),
+                                  ),
+                                  FilledButton.icon(
+                                    onPressed: _financeBusy ? null : () => _exportExpensesCsv(periodExpenses),
+                                    icon: const Icon(Icons.download_outlined),
+                                    label: const Text('Exporter CSV'),
+                                  ),
+                                  FilledButton.tonalIcon(
+                                    onPressed: _financeBusy ? null : () => _exportExpensesPdf(periodExpenses),
+                                    icon: const Icon(Icons.picture_as_pdf_outlined),
+                                    label: const Text('Exporter PDF'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: _financeBusy ? null : _loadTeacherFinanceSection,
+                                    icon: const Icon(Icons.refresh),
+                                    label: const Text('Actualiser depenses'),
+                                  ),
+                                ],
+                              );
+
+                              if (compact) {
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    periodField,
+                                    const SizedBox(height: 8),
+                                    actions,
+                                  ],
+                                );
+                              }
+
+                              return Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [periodField, actions],
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              _metricChip('Periode', _financePeriodLabel(_financePeriod)),
+                              _metricChip('Dépenses', '${periodExpenses.length}'),
+                              _metricChip('Brouillons', '$expenseDraftCount'),
+                              _metricChip('En attente N2', '$expensePendingLevelTwoCount'),
+                              _metricChip('Validées', '$expenseValidatedCount'),
+                              _metricChip('Montant total', _formatMoney(totalExpensesAmount)),
+                              _metricChip('Encaissements', _formatMoney(periodIncomeAmount)),
+                              _metricChip(
+                                'Depenses validees',
+                                _formatMoney(periodValidatedExpensesAmount),
+                              ),
+                              _metricChip('Tresorerie nette', _formatMoney(periodNetTreasury)),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          if (periodExpenses.isEmpty)
+                            const Text('Aucune dépense enregistrée.')
+                          else
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: DataTable(
+                                columns: const [
+                                  DataColumn(label: Text('Libellé')),
+                                  DataColumn(label: Text('Date')),
+                                  DataColumn(label: Text('Catégorie')),
+                                  DataColumn(label: Text('Montant')),
+                                  DataColumn(label: Text('Validation')),
+                                  DataColumn(label: Text('Paiement')),
+                                  DataColumn(label: Text('Actions')),
+                                ],
+                                rows: periodExpenses.map((row) {
+                                  final expenseId = (row['id'] as num?)?.toInt();
+                                  final stage = (row['validation_stage'] ?? '').toString();
+                                    final canL1 = (authUser?.role == 'censor' || authUser?.role == 'super_admin') &&
+                                      stage != 'level_two' &&
+                                      expenseId != null;
+                                  final canL2 = (authUser?.role == 'accountant' || authUser?.role == 'super_admin') &&
+                                      stage == 'level_one' &&
+                                      expenseId != null;
+                                  final canReset = authUser?.role == 'super_admin' && expenseId != null;
+                                  final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
+                                  final paidOn = row['paid_on']?.toString();
+
+                                  return DataRow(
+                                    cells: [
+                                      DataCell(Text((row['label'] ?? '-').toString())),
+                                      DataCell(Text((row['date'] ?? '-').toString())),
+                                      DataCell(Text((row['category'] ?? '-').toString())),
+                                      DataCell(Text(_formatMoney(amount))),
+                                      DataCell(Text(_expenseStageLabel(row))),
+                                      DataCell(Text((paidOn == null || paidOn.isEmpty) ? '-' : paidOn)),
+                                      DataCell(
+                                        Wrap(
+                                          spacing: 6,
+                                          runSpacing: 6,
+                                          children: [
+                                            if (expenseId != null)
+                                              OutlinedButton(
+                                                onPressed: _financeBusy || stage == 'level_two'
+                                                    ? null
+                                                    : () => _openExpenseDialog(expense: row),
+                                                child: const Text('Modifier'),
+                                              ),
+                                            if (expenseId != null)
+                                              TextButton(
+                                                onPressed: _financeBusy || stage == 'level_two'
+                                                    ? null
+                                                    : () => _deleteExpense(row),
+                                                child: const Text('Supprimer'),
+                                              ),
+                                            if (canL1)
+                                              OutlinedButton(
+                                                onPressed: _financeBusy
+                                                    ? null
+                                                    : () => _validateExpenseLevelOne(expenseId),
+                                                child: const Text('Valider N1'),
+                                              ),
+                                            if (canL2)
+                                              FilledButton.tonal(
+                                                onPressed: _financeBusy
+                                                    ? null
+                                                    : () => _validateExpenseLevelTwo(expenseId),
+                                                child: const Text('Valider N2'),
+                                              ),
+                                            if (canReset)
+                                              TextButton(
+                                                onPressed: _financeBusy
+                                                    ? null
+                                                    : () => _resetExpenseValidation(expenseId),
+                                                child: const Text('Reset'),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }).toList(growable: false),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
                   if (selectedPayment != null) ...[
                     const SizedBox(height: 12),
                     Container(
@@ -1435,8 +4453,11 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                       ),
                     ),
                   ],
-                ],
-              ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             );
           },
         );

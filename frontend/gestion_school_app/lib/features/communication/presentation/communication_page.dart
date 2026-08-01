@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/permissions/module_permissions.dart';
 
 class CommunicationPage extends ConsumerStatefulWidget {
   const CommunicationPage({super.key});
@@ -36,6 +37,18 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
   List<Map<String, dynamic>> _notifications = [];
   List<Map<String, dynamic>> _smsProviders = [];
 
+  /// Lecture seule d'apres la matrice du backend, plus d'apres une liste de
+  /// roles recopiee ici.
+  bool _isCommunicationReadOnlyRole() {
+    return !ref.read(currentPermissionsProvider).canWrite('communication');
+  }
+
+  /// La passerelle SMS est un module distinct: sa configuration porte le
+  /// jeton d'API en clair et n'est pas ouverte a qui redige une annonce.
+  bool _canConfigureSms() {
+    return ref.read(currentPermissionsProvider).canWrite('sms_config');
+  }
+
   @override
   void initState() {
     super.initState();
@@ -62,11 +75,16 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
 
     try {
       final dio = ref.read(dioProvider);
+      // La passerelle SMS est un module a part: ne pas l'appeler quand le
+      // profil n'y a pas droit, sinon un 403 ferait echouer tout l'ecran.
+      final canReadSms = ref.read(currentPermissionsProvider).canRead(
+        'sms_config',
+      );
       final results = await Future.wait([
-        dio.get('/auth/users/'),
+        dio.get('/auth/users/directory/'),
         dio.get('/announcements/'),
         dio.get('/notifications/'),
-        dio.get('/sms-providers/'),
+        if (canReadSms) dio.get('/sms-providers/'),
       ]);
 
       if (!mounted) return;
@@ -75,7 +93,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
         _users = _extractRows(results[0].data);
         _announcements = _extractRows(results[1].data);
         _notifications = _extractRows(results[2].data);
-        _smsProviders = _extractRows(results[3].data);
+        _smsProviders = canReadSms ? _extractRows(results[3].data) : [];
 
         if (_selectedRecipient != null &&
             !_users.any((row) => _asInt(row['id']) == _selectedRecipient)) {
@@ -97,14 +115,6 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
 
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-<<<<<<< HEAD
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
-      ),
-    );
-=======
 
     final messenger = ScaffoldMessenger.of(context);
     messenger
@@ -118,7 +128,6 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
           backgroundColor: isSuccess ? const Color(0xFF197A43) : null,
         ),
       );
->>>>>>> main
   }
 
   Future<bool> _post(
@@ -126,6 +135,11 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
     Map<String, dynamic> data,
     String success,
   ) async {
+    if (_isCommunicationReadOnlyRole()) {
+      _showMessage('Mode lecture seule: operation non autorisee.');
+      return false;
+    }
+
     setState(() => _saving = true);
     try {
       await ref.read(dioProvider).post(endpoint, data: data);
@@ -144,6 +158,11 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
   }
 
   Future<bool> _delete(String endpoint, String success) async {
+    if (_isCommunicationReadOnlyRole()) {
+      _showMessage('Mode lecture seule: suppression non autorisee.');
+      return false;
+    }
+
     setState(() => _saving = true);
     try {
       await ref.read(dioProvider).delete(endpoint);
@@ -211,6 +230,11 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
   }
 
   Future<void> _createSmsProvider() async {
+    if (!_canConfigureSms()) {
+      _showMessage('Configuration SMS reservee a l\'administration.');
+      return;
+    }
+
     final provider = _smsProviderController.text.trim();
     final apiUrl = _smsUrlController.text.trim();
     final apiToken = _smsTokenController.text.trim();
@@ -405,6 +429,11 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
       );
     }
 
+    final permissions = ref.watch(currentPermissionsProvider);
+    final isReadOnlyMode = !permissions.canWrite('communication');
+    final canConfigureSms = permissions.canWrite('sms_config');
+    final canReadSms = permissions.canRead('sms_config');
+
     final colorScheme = Theme.of(context).colorScheme;
 
     final filteredAnnouncements = _filteredRows(
@@ -465,7 +494,9 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
               ),
               const SizedBox(height: 10),
               FilledButton(
-                onPressed: _saving ? null : _createAnnouncement,
+                onPressed: (_saving || isReadOnlyMode)
+                    ? null
+                    : _createAnnouncement,
                 child: const Text('Publier annonce'),
               ),
             ],
@@ -524,13 +555,18 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
               ),
               const SizedBox(height: 10),
               FilledButton.tonal(
-                onPressed: _saving ? null : _createNotification,
+                onPressed: (_saving || isReadOnlyMode)
+                    ? null
+                    : _createNotification,
                 child: const Text('Creer notification'),
               ),
             ],
           ),
         ),
         const SizedBox(height: 12),
+        // Le jeton d'API du fournisseur circule ici en clair: la section
+        // n'apparait qu'aux profils qui ont le module « Passerelle SMS ».
+        if (canConfigureSms)
         _sectionCard(
           title: 'Configuration SMS',
           child: Column(
@@ -564,7 +600,9 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                 },
               ),
               FilledButton.tonal(
-                onPressed: _saving ? null : _createSmsProvider,
+                onPressed: (_saving || !canConfigureSms)
+                    ? null
+                    : _createSmsProvider,
                 child: const Text('Enregistrer config SMS'),
               ),
             ],
@@ -633,6 +671,10 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                               return;
                             }
                             if (value == 'delete') {
+                              if (isReadOnlyMode) {
+                                _showMessage('Mode lecture seule: suppression non autorisee.');
+                                return;
+                              }
                               await _confirmDelete(
                                 title: 'Supprimer annonce',
                                 message: 'Supprimer cette annonce ?',
@@ -704,6 +746,10 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                               return;
                             }
                             if (value == 'delete') {
+                              if (isReadOnlyMode) {
+                                _showMessage('Mode lecture seule: suppression non autorisee.');
+                                return;
+                              }
                               await _confirmDelete(
                                 title: 'Supprimer notification',
                                 message: 'Supprimer cette notification ?',
@@ -730,6 +776,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                   )
                   .toList(),
             ),
+          if (canReadSms) ...[
           const SizedBox(height: 12),
           Text(
             'Providers SMS (${filteredSmsProviders.length})',
@@ -777,6 +824,10 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                               return;
                             }
                             if (value == 'delete') {
+                              if (isReadOnlyMode) {
+                                _showMessage('Mode lecture seule: suppression non autorisee.');
+                                return;
+                              }
                               await _confirmDelete(
                                 title: 'Supprimer provider SMS',
                                 message: 'Supprimer cette configuration SMS ?',
@@ -803,6 +854,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                   )
                   .toList(),
             ),
+          ],
         ],
       ),
     );
@@ -828,6 +880,13 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                       'Annonces, notifications et configuration de diffusion SMS.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
+                    if (isReadOnlyMode) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Mode lecture seule: consultation uniquement pour ce profil.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -860,7 +919,8 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                 _metricChip('Annonces', '${_announcements.length}'),
                 _metricChip('Notifications', '${_notifications.length}'),
                 _metricChip('Notifications envoyees', '$sentNotifications'),
-                _metricChip('Providers SMS actifs', '$activeSmsProviders'),
+                if (canReadSms)
+                  _metricChip('Providers SMS actifs', '$activeSmsProviders'),
               ],
             ),
           ),

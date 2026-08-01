@@ -2,10 +2,14 @@ from django.contrib.auth import get_user_model
 from rest_framework import generics, permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from apps.school.models import Etablissement
-from .permissions import IsAdminOrDirector
+from apps.school.models import Etablissement, ParentProfile
+from .access import role_payload
+from .access_routes import module_paths
+from .permissions import HasModuleAccess
 from .serializers import RegisterSerializer, UserSerializer
+from .models import UserRole
 from apps.common.pagination import StandardResultsSetPagination
 
 User = get_user_model()
@@ -15,9 +19,28 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     pass
 
 
+class ModulePermissionsView(APIView):
+    """Droits du profil connecte, tels que le backend les applique.
+
+    Le frontend consomme cette reponse au lieu de redupliquer la carte des
+    roles: les deux couches ne peuvent plus diverger sans que ce soit visible.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        payload = role_payload(getattr(request.user, "role", ""))
+        # Les chemins accompagnent la matrice: le client peut ainsi refuser
+        # une ecriture sur un module en lecture seule sans connaitre le
+        # routage, et sans qu'on recopie ce routage dans le frontend.
+        payload["paths"] = module_paths()
+        return Response(payload)
+
+
 class RegisterView(generics.CreateAPIView):
+    access_module = "users"
     serializer_class = RegisterSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrDirector]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -66,6 +89,7 @@ class RegisterView(generics.CreateAPIView):
 
 
 class UserViewSet(viewsets.ModelViewSet):
+    access_module = "users"
     queryset = User.objects.all().order_by("-id")
     serializer_class = UserSerializer
     pagination_class = StandardResultsSetPagination
@@ -137,19 +161,68 @@ class UserViewSet(viewsets.ModelViewSet):
         return qs.filter(etablissement=getattr(user, "etablissement", None))
 
     def perform_create(self, serializer):
-        serializer.save(etablissement=self._resolve_target_etablissement())
+        user = serializer.save(etablissement=self._resolve_target_etablissement())
+        self._sync_parent_profile(user)
 
     def perform_update(self, serializer):
         target_etablissement = self._resolve_target_etablissement()
         if getattr(self.request.user, "role", None) == "super_admin":
-            serializer.save()
+            user = serializer.save()
+            self._sync_parent_profile(user)
             return
-        serializer.save(etablissement=target_etablissement)
+        user = serializer.save(etablissement=target_etablissement)
+        self._sync_parent_profile(user)
+
+    def _sync_parent_profile(self, user):
+        if not user:
+            return
+        if getattr(user, "role", None) != UserRole.PARENT:
+            return
+
+        parent_profile, _ = ParentProfile.objects.get_or_create(
+            user=user,
+            defaults={"etablissement": user.etablissement},
+        )
+        if parent_profile.etablissement_id != user.etablissement_id:
+            parent_profile.etablissement = user.etablissement
+            parent_profile.save(update_fields=["etablissement", "updated_at"])
 
     def get_permissions(self):
-        if self.action in ["me"]:
+        # "me" et "directory" ne sont pas de l'administration d'utilisateurs:
+        # l'un renvoie son propre profil, l'autre l'annuaire minimal dont les
+        # autres modules ont besoin (choisir un destinataire, un enseignant,
+        # un surveillant). Les soumettre au module "users" fermerait ces
+        # ecrans a tous les profils sauf la direction.
+        if self.action in ["me", "directory"]:
             return [permissions.IsAuthenticated()]
-        return [permissions.IsAuthenticated(), IsAdminOrDirector()]
+        return [permissions.IsAuthenticated(), HasModuleAccess()]
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[permissions.IsAuthenticated],
+        url_path="directory",
+    )
+    def directory(self, request):
+        """Annuaire en lecture: identite et role, rien de plus.
+
+        Volontairement pauvre en champs: aucun element de compte n'y
+        transite, contrairement au serializer d'administration.
+        """
+        queryset = self.filter_queryset(self.get_queryset())
+        rows = [
+            {
+                "id": item.id,
+                "username": item.username,
+                "first_name": item.first_name,
+                "last_name": item.last_name,
+                "full_name": item.get_full_name() or item.username,
+                "role": item.role,
+                "etablissement": item.etablissement_id,
+            }
+            for item in queryset
+        ]
+        return Response(rows)
 
     @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
     def me(self, request):

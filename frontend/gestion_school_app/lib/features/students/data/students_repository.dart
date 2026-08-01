@@ -1,6 +1,5 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'dart:typed_data';
 import '../../../core/models/paginated_result.dart';
 import '../domain/student.dart';
 
@@ -83,6 +82,7 @@ class StudentsRepository {
     required String firstName,
     required String lastName,
     required String password,
+    required String gender,
     String email = '',
     String phone = '',
     required int classroomId,
@@ -114,6 +114,7 @@ class StudentsRepository {
 
       final payload = <String, dynamic>{
         'user': createdUserId,
+        'gender': gender,
         'classroom': classroomId,
         'parent': ?parentId,
         if (birthDate != null) 'birth_date': _apiDate(birthDate),
@@ -187,6 +188,7 @@ class StudentsRepository {
     int? classroomId,
     int? parentId,
     DateTime? birthDate,
+    String? gender,
   }) async {
     await dio.patch(
       '/auth/users/$userId/',
@@ -204,6 +206,7 @@ class StudentsRepository {
         'classroom': classroomId,
         'parent': parentId,
         'birth_date': birthDate == null ? null : _apiDate(birthDate),
+        if (gender != null && gender.isNotEmpty) 'gender': gender,
       },
     );
     return _toStudent(Map<String, dynamic>.from(response.data as Map));
@@ -478,6 +481,7 @@ class StudentsRepository {
       email: map['user_email']?.toString() ?? '',
       phone: map['user_phone']?.toString() ?? '',
       matricule: map['matricule'] as String? ?? '',
+      gender: map['gender']?.toString() ?? '',
       fullName: (fullName != null && fullName.isNotEmpty)
           ? fullName
           : 'Inconnu',

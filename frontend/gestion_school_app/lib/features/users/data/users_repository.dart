@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+
 import '../../../core/models/paginated_result.dart';
 import '../domain/user_account.dart';
 
@@ -25,6 +26,8 @@ class UsersRepository {
         'detail',
         'message',
         'non_field_errors',
+        'classroom',
+        'students',
         'username',
         'email',
         'password',
@@ -134,6 +137,8 @@ class UsersRepository {
     required String role,
     required String phone,
     int? etablissementId,
+    int? classroomId,
+    List<int>? studentIds,
   }) async {
     try {
       await dio.post(
@@ -146,9 +151,9 @@ class UsersRepository {
           'password': password,
           'role': role,
           'phone': phone,
-          ...?(etablissementId == null
-              ? null
-              : {'etablissement': etablissementId}),
+          ...?(etablissementId == null ? null : {'etablissement': etablissementId}),
+          ...?(classroomId == null ? null : {'classroom': classroomId}),
+          ...?((studentIds == null || studentIds.isEmpty) ? null : {'students': studentIds}),
         },
       );
     } on DioException catch (error) {
@@ -176,9 +181,7 @@ class UsersRepository {
           'email': email,
           'role': role,
           'phone': phone,
-          ...?(etablissementId == null
-              ? null
-              : {'etablissement': etablissementId}),
+          ...?(etablissementId == null ? null : {'etablissement': etablissementId}),
         },
       );
     } on DioException catch (error) {
@@ -192,31 +195,5 @@ class UsersRepository {
     } on DioException catch (error) {
       throw Exception(_extractApiErrorMessage(error));
     }
-  }
-
-  Future<void> updateUser({
-    required int userId,
-    required String username,
-    required String firstName,
-    required String lastName,
-    required String email,
-    required String role,
-    required String phone,
-  }) async {
-    await dio.patch(
-      '/auth/users/$userId/',
-      data: {
-        'username': username,
-        'first_name': firstName,
-        'last_name': lastName,
-        'email': email,
-        'role': role,
-        'phone': phone,
-      },
-    );
-  }
-
-  Future<void> deleteUser(int userId) async {
-    await dio.delete('/auth/users/$userId/');
   }
 }

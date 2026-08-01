@@ -8,8 +8,6 @@ from apps.accounts.models import User, UserRole
 from apps.school.models import (
     AcademicYear,
     ClassRoom,
-    Level,
-    Section,
     Subject,
     Teacher,
     TeacherAssignment,
@@ -27,6 +25,20 @@ class TeacherScheduleSlotApiTests(APITestCase):
             first_name="Admin",
             last_name="Timetable",
         )
+        self.censor_user = User.objects.create_user(
+            username="censor_timetable",
+            password="censor12345",
+            role=UserRole.CENSOR,
+            first_name="Censor",
+            last_name="Timetable",
+        )
+        self.supervisor_user = User.objects.create_user(
+            username="supervisor_timetable",
+            password="supervisor12345",
+            role=UserRole.SUPERVISOR,
+            first_name="Supervisor",
+            last_name="Timetable",
+        )
         self.client.force_authenticate(self.admin_user)
 
         self.year = AcademicYear.objects.create(
@@ -35,19 +47,12 @@ class TeacherScheduleSlotApiTests(APITestCase):
             end_date=date(2026, 6, 30),
             is_active=True,
         )
-        self.level = Level.objects.create(name="6eme")
-        self.section = Section.objects.create(name="A")
-
         self.class_a = ClassRoom.objects.create(
             name="6A",
-            level=self.level,
-            section=self.section,
             academic_year=self.year,
         )
         self.class_b = ClassRoom.objects.create(
             name="6B",
-            level=self.level,
-            section=self.section,
             academic_year=self.year,
         )
 
@@ -130,6 +135,40 @@ class TeacherScheduleSlotApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         errors = " ".join(response.data.get("non_field_errors", []))
         self.assertIn("Conflit enseignant", errors)
+
+    def test_censor_can_create_slot(self):
+        self.client.force_authenticate(self.censor_user)
+
+        response = self.client.post(
+            "/api/teacher-schedule-slots/",
+            {
+                "assignment": self.assignment_a_math.id,
+                "day_of_week": "MON",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "room": "A1",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_supervisor_cannot_create_slot(self):
+        self.client.force_authenticate(self.supervisor_user)
+
+        response = self.client.post(
+            "/api/teacher-schedule-slots/",
+            {
+                "assignment": self.assignment_a_math.id,
+                "day_of_week": "MON",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "room": "A1",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_locked_classroom_blocks_create_and_delete(self):
         TimetablePublication.objects.create(

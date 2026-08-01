@@ -4,7 +4,9 @@ from django.db import models
 
 class UserRole(models.TextChoices):
     SUPER_ADMIN = "super_admin", "Super Admin"
-    DIRECTOR = "director", "Directeur"
+    DIRECTOR = "director", "Directeur/Proviseur"
+    PROMOTER = "promoter", "Promoteur"
+    CENSOR = "censor", "Censeur"
     ACCOUNTANT = "accountant", "Comptable"
     TEACHER = "teacher", "Enseignant"
     SUPERVISOR = "supervisor", "Surveillant"
