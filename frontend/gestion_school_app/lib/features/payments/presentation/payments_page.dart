@@ -13,6 +13,7 @@ import 'package:printing/printing.dart';
 
 import '../../../core/network/api_client.dart';
 import '../../../core/providers/navigation_intents.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/payment.dart';
 import '../domain/student_fee.dart';
@@ -308,16 +309,14 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     }
   }
 
+  /// Paie enseignants: module distinct des finances courantes, avec sa
+  /// double validation. Les droits viennent de la matrice du backend.
   bool _isTeacherFinanceVisible(String? role) {
-    return role == 'super_admin' ||
-        role == 'director' ||
-        role == 'promoter' ||
-        role == 'censor' ||
-        role == 'accountant';
+    return ref.read(currentPermissionsProvider).canRead('payroll');
   }
 
   bool _isTeacherFinanceReadOnly(String? role) {
-    return role == 'accountant' || role == 'director' || role == 'promoter';
+    return !ref.read(currentPermissionsProvider).canWrite('payroll');
   }
 
   String _toApiDate(DateTime value) {
@@ -3506,7 +3505,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                                       _recordReminderHistory(
                                         action: 'Export historique relances',
                                         scope:
-                                            'Filtre ${_reminderHistoryActionFilter} / ${_reminderPeriodLabel(_reminderHistoryPeriodFilter)} / tri ${_reminderHistorySort}',
+                                            'Filtre $_reminderHistoryActionFilter / ${_reminderPeriodLabel(_reminderHistoryPeriodFilter)} / tri $_reminderHistorySort',
                                         itemCount: filteredReminderHistory.length,
                                         totalAmount: totalAmount,
                                       );
@@ -3889,7 +3888,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
                               )
                             else ...[
                               Text(
-                                'Affichage ${outstandingStart + 1}-${outstandingEnd} sur ${outstandingFees.length} frais en attente',
+                                'Affichage ${outstandingStart + 1}-$outstandingEnd sur ${outstandingFees.length} frais en attente',
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                               const SizedBox(height: 8),

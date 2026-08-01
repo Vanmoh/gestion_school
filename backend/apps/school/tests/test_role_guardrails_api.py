@@ -153,7 +153,13 @@ class RoleGuardrailsApiTests(APITestCase):
         )
         self.assertEqual(announcement_create.status_code, status.HTTP_201_CREATED)
 
-    def test_promoter_matches_direction_for_finance_writes(self):
+    def test_promoter_controls_finance_in_read_only(self):
+        """Le promoteur controle, la direction opere.
+
+        La matrice de droits distingue desormais les deux profils, qui
+        etaient jusque-la interchangeables: le promoteur voit toute la
+        finance de son etablissement mais n'y ecrit plus.
+        """
         self.client.force_authenticate(self.director)
         director_expense = self.client.post(
             "/api/expenses/",
@@ -164,13 +170,20 @@ class RoleGuardrailsApiTests(APITestCase):
         self.assertEqual(director_expense.status_code, status.HTTP_201_CREATED)
 
         self.client.force_authenticate(self.promoter)
+        promoter_read = self.client.get(
+            "/api/expenses/",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
+        )
+        self.assertEqual(promoter_read.status_code, status.HTTP_200_OK)
+
         promoter_expense = self.client.post(
             "/api/expenses/",
             self._expense_payload(),
             format="json",
             HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
         )
-        self.assertEqual(promoter_expense.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(promoter_expense.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("lecture seule", str(promoter_expense.data.get("detail", "")).lower())
 
     def test_promoter_cannot_validate_level_one_expense(self):
         self.client.force_authenticate(self.super_admin)

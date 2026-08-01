@@ -24,7 +24,6 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
 
   bool _loading = true;
   bool _saving = false;
-  String _profileFilter = 'all';
 
   List<Map<String, dynamic>> _teacherUsers = [];
   List<Map<String, dynamic>> _teachers = [];
@@ -52,7 +51,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
 
     try {
       final results = await Future.wait([
-        dio.get('/auth/users/', queryParameters: {'role': 'teacher'}),
+        dio.get('/auth/users/directory/', queryParameters: {'role': 'teacher'}),
         dio.get('/teachers/'),
         dio.get('/subjects/'),
         dio.get('/classrooms/'),

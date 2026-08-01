@@ -17,6 +17,8 @@ from openpyxl.utils import get_column_letter
 from PIL import Image
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
+
+from apps.accounts.permissions import HasModuleAccess
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from apps.accounts.models import UserRole
@@ -1351,7 +1353,8 @@ def _format_coef_value(value: float | None) -> str:
 
 
 class ReportsContextView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
         _ensure_reports_module_access(request)
@@ -1374,7 +1377,8 @@ class ReportsContextView(APIView):
 
 
 class BulletinPdfView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request, student_id: int, academic_year_id: int, term: str):
         normalized_term = normalize_term(term)
@@ -1824,7 +1828,8 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
 
 
 class ClassBulletinsPdfView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request, classroom_id: int, academic_year_id: int, term: str):
         _ensure_sensitive_export_access(request)
@@ -2190,7 +2195,8 @@ def _build_receipts_pdf(payments: list[Payment]) -> FPDF:
 
 
 class PaymentReceiptPdfView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request, payment_id: int):
         payment = Payment.objects.select_related(
@@ -2210,7 +2216,12 @@ class PaymentReceiptPdfView(APIView):
 
 
 class BatchPaymentReceiptsPdfView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    # Export en lot: POST par commodite (liste d'identifiants dans le corps),
+    # mais l'operation ne fait que lire. Exiger le niveau ecriture priverait
+    # le comptable de ses recus.
+    access_read_only = True
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def post(self, request):
         raw_ids = request.data.get("payment_ids") if isinstance(request.data, dict) else None
@@ -2262,7 +2273,8 @@ class BatchPaymentReceiptsPdfView(APIView):
 
 
 class PaymentExcelExportView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
         _ensure_sensitive_export_access(request)
@@ -2435,7 +2447,8 @@ class PaymentExcelExportView(APIView):
 
 
 class PaymentJournalPageView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
         _ensure_sensitive_export_access(request)
@@ -2474,7 +2487,8 @@ class PaymentJournalPageView(APIView):
 
 
 class ExpenseJournalPageView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
         _ensure_sensitive_export_access(request)
@@ -2562,7 +2576,8 @@ def _build_journal_pdf(*, title: str, subtitle: str, headers: list[str], rows: l
 
 
 class PaymentJournalExportView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
         _ensure_sensitive_export_access(request)
@@ -2616,7 +2631,8 @@ class PaymentJournalExportView(APIView):
 
 
 class ExpenseJournalExportView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
         _ensure_sensitive_export_access(request)
@@ -2668,7 +2684,8 @@ class ExpenseJournalExportView(APIView):
 
 
 class StudentCardPdfView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request, student_id: int):
         student = get_object_or_404(
@@ -2687,7 +2704,8 @@ class StudentCardPdfView(APIView):
 
 
 class ClassStudentCardsPdfView(APIView):
-    permission_classes = [IsAuthenticated]
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request, classroom_id: int):
         _ensure_sensitive_export_access(request)

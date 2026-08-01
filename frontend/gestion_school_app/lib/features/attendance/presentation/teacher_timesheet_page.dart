@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:excel/excel.dart' as xl;
@@ -15,6 +14,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../../core/permissions/module_permissions.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../core/providers/navigation_intents.dart';
 import '../../payments/presentation/payments_controller.dart';
@@ -71,15 +71,13 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
   }
 
   bool _canAccess(String? role) {
-    return role == 'super_admin' ||
-        role == 'censor' ||
-        role == 'director' ||
-        role == 'promoter' ||
-        role == 'teacher';
+    return ref.read(currentPermissionsProvider).canRead('teacher_timesheet');
   }
 
+  /// La direction consulte l'emargement mais ne le saisit pas: separation des
+  /// taches deja portee par le backend, lue ici depuis la meme matrice.
   bool _isReadOnlyRole(String? role) {
-    return role == 'director' || role == 'promoter';
+    return !ref.read(currentPermissionsProvider).canWrite('teacher_timesheet');
   }
 
   bool _isTeacherRole(String? role) {
@@ -231,8 +229,8 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
 
       if (!mounted) return;
 
-      var teachers = results[0] as List<Map<String, dynamic>>;
-      var timeEntries = results[1] as List<Map<String, dynamic>>;
+      var teachers = results[0];
+      var timeEntries = results[1];
 
       if (_isTeacherRole(authUser?.role)) {
         teachers = teachers

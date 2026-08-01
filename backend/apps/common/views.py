@@ -25,7 +25,7 @@ from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
-from apps.accounts.permissions import IsAdminOrDirector
+from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import AuditLogPagination
 from .models import ActivityLog, BackupArchive
 from .serializers import ActivityLogSerializer, BackupArchiveSerializer
@@ -48,10 +48,11 @@ def _school_logo_path() -> str | None:
 
 
 class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
+    access_module = "activity_logs"
     queryset = ActivityLog.objects.select_related("user").all()
     serializer_class = ActivityLogSerializer
     pagination_class = AuditLogPagination
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrDirector]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     filterset_fields = ["user", "etablissement", "role", "action", "method", "module", "success", "status_code"]
     search_fields = [
         "action",
@@ -416,9 +417,10 @@ class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class BackupArchiveViewSet(viewsets.ModelViewSet):
+    access_module = "backup_restore"
     queryset = BackupArchive.objects.select_related("created_by", "restored_by", "etablissement").all()
     serializer_class = BackupArchiveSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrDirector]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     http_method_names = ["get", "post"]
     filterset_fields = ["scope", "status", "etablissement", "created_by", "restored_by"]

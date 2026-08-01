@@ -4,12 +4,14 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/permissions/module_permissions.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
+import '../../../core/widgets/frozen_column_table.dart';
 import '../../../models/etablissement.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../imports/presentation/academic_imports_window.dart';
@@ -52,8 +54,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   bool _isTimetableReadOnlyRole() {
-    final role = ref.read(authControllerProvider).value?.role;
-    return role == 'teacher';
+    return !ref.read(currentPermissionsProvider).canWrite('timetable');
   }
 
   static const List<String> _dayOrder = [
@@ -1627,176 +1628,46 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                                 constraints: BoxConstraints(
                                   maxHeight: dialogHeight - 290,
                                 ),
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .outlineVariant,
-                                  ),
-                                ),
                                 child: SingleChildScrollView(
-                                  child: SingleChildScrollView(
-                                    scrollDirection: Axis.horizontal,
-                                    child: DataTable(
-                                      columnSpacing: 8,
-                                      horizontalMargin: 12,
-                                      dataRowMinHeight: 64,
-                                      dataRowMaxHeight: 96,
-                                      headingRowColor: WidgetStatePropertyAll(
-                                        Theme.of(context)
-                                            .colorScheme
-                                            .surfaceContainer,
-                                      ),
-                                      columns: [
-                                        const DataColumn(label: Text('Horaire')),
-                                        ..._dayOrder.map(
-                                          (dayCode) => DataColumn(
-                                            label: Text(_dayLabel(dayCode)),
+                                  child: FrozenColumnTable(
+                                    frozenColumnWidth: 92,
+                                    columnWidth: 132,
+                                    minRowHeight: 64,
+                                    cellPadding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 6,
+                                    ),
+                                    frozenHeader: const Text('Horaire'),
+                                    headers: [
+                                      for (final dayCode in _dayOrder)
+                                        Text(_dayLabel(dayCode)),
+                                    ],
+                                    frozenCells: [
+                                      for (final range in presetRanges)
+                                        Text(
+                                          range,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
                                           ),
                                         ),
-                                      ],
-                                      rows: presetRanges.map((range) {
-                                        final dayMap = matrix[range] ??
-                                            const <String, List<Map<String, dynamic>>>{};
-                                        return DataRow(
-                                          cells: [
-                                            DataCell(
-                                              SizedBox(
-                                                width: 88,
-                                                child: Text(range),
-                                              ),
+                                    ],
+                                    rows: [
+                                      for (final range in presetRanges)
+                                        [
+                                          for (final dayCode in _dayOrder)
+                                            _buildSlotPickerCell(
+                                              range: range,
+                                              dayCode: dayCode,
+                                              slots:
+                                                  (matrix[range] ??
+                                                      const <String, List<Map<String, dynamic>>>{})[dayCode] ??
+                                                  const <Map<String, dynamic>>[],
+                                              selectedCells: selectedCells,
+                                              isLocked: isLocked,
+                                              setDialogState: setDialogState,
                                             ),
-                                            ..._dayOrder.map((dayCode) {
-                                              final cellKey = '$dayCode|$range';
-                                              final cellSlots = dayMap[dayCode] ??
-                                                  const <Map<String, dynamic>>[];
-                                              final occupied = cellSlots.isNotEmpty;
-                                              final selected = selectedCells
-                                                  .contains(cellKey);
-                                              final cardColor = occupied
-                                                  ? Theme.of(context)
-                                                      .colorScheme
-                                                      .surfaceContainerHighest
-                                                  : selected
-                                                  ? Theme.of(context)
-                                                      .colorScheme
-                                                      .primaryContainer
-                                                  : Theme.of(context)
-                                                      .colorScheme
-                                                      .surfaceContainerLowest;
-                                              final borderColor = selected
-                                                  ? Theme.of(context)
-                                                      .colorScheme
-                                                      .primary
-                                                  : Theme.of(context)
-                                                      .colorScheme
-                                                      .outlineVariant;
-
-                                              return DataCell(
-                                                InkWell(
-                                                  onTap: (occupied || isLocked)
-                                                      ? null
-                                                      : () {
-                                                          setDialogState(() {
-                                                            if (selected) {
-                                                              selectedCells.remove(cellKey);
-                                                            } else {
-                                                              selectedCells.add(cellKey);
-                                                            }
-                                                          });
-                                                        },
-                                                  child: Container(
-                                                    width: 116,
-                                                    padding: const EdgeInsets.all(8),
-                                                    decoration: BoxDecoration(
-                                                      color: cardColor,
-                                                      borderRadius:
-                                                          BorderRadius.circular(10),
-                                                      border: Border.all(
-                                                        color: borderColor,
-                                                      ),
-                                                    ),
-                                                    child: occupied
-                                                        ? Column(
-                                                            crossAxisAlignment:
-                                                                CrossAxisAlignment.start,
-                                                            mainAxisAlignment:
-                                                                MainAxisAlignment.center,
-                                                            children: [
-                                                              Text(
-                                                                '${cellSlots.first['subjectCode'] ?? ''} - ${cellSlots.first['subjectName'] ?? ''}',
-                                                                maxLines: 2,
-                                                                overflow: TextOverflow.ellipsis,
-                                                                style: Theme.of(context)
-                                                                    .textTheme
-                                                                    .bodySmall
-                                                                    ?.copyWith(
-                                                                      fontWeight: FontWeight.w700,
-                                                                    ),
-                                                              ),
-                                                              const SizedBox(height: 4),
-                                                              Text(
-                                                                'Occupé',
-                                                                style: Theme.of(context)
-                                                                    .textTheme
-                                                                    .bodySmall,
-                                                              ),
-                                                            ],
-                                                          )
-                                                        : Column(
-                                                            crossAxisAlignment:
-                                                                CrossAxisAlignment.start,
-                                                            mainAxisAlignment:
-                                                                MainAxisAlignment.center,
-                                                            children: [
-                                                              Row(
-                                                                children: [
-                                                                  Icon(
-                                                                    selected
-                                                                        ? Icons.check_circle
-                                                                        : Icons.add_circle_outline,
-                                                                    size: 17,
-                                                                  ),
-                                                                  const SizedBox(width: 6),
-                                                                  Expanded(
-                                                                    child: Text(
-                                                                      selected
-                                                                          ? 'Sélectionné'
-                                                                          : 'Disponible',
-                                                                      maxLines: 1,
-                                                                      overflow: TextOverflow.ellipsis,
-                                                                      style: Theme.of(context)
-                                                                          .textTheme
-                                                                          .bodySmall
-                                                                          ?.copyWith(
-                                                                            fontWeight: FontWeight.w700,
-                                                                          ),
-                                                                    ),
-                                                                  ),
-                                                                ],
-                                                              ),
-                                                              const SizedBox(height: 4),
-                                                              Text(
-                                                                selected
-                                                                    ? 'Cliquer pour retirer'
-                                                                    : 'Cliquer pour ajouter',
-                                                                maxLines: 2,
-                                                                overflow: TextOverflow.ellipsis,
-                                                                style: Theme.of(context)
-                                                                    .textTheme
-                                                                    .bodySmall,
-                                                              ),
-                                                            ],
-                                                          ),
-                                                  ),
-                                                ),
-                                              );
-                                            }),
-                                          ],
-                                        );
-                                      }).toList(),
-                                    ),
+                                        ],
+                                    ],
                                   ),
                                 ),
                               ),
@@ -2538,73 +2409,35 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               padding: EdgeInsets.symmetric(vertical: 18),
               child: Text('Aucune charge disponible pour le filtre courant.'),
             )
-          : SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                columnSpacing: 16,
-                headingRowColor: WidgetStatePropertyAll(
-                  Theme.of(context).colorScheme.surfaceContainer,
-                ),
-                columns: const [
-                  DataColumn(label: Text('Enseignant')),
-                  DataColumn(label: Text('Horaires')),
-                  DataColumn(label: Text('Classes')),
-                  DataColumn(label: Text('Lundi')),
-                  DataColumn(label: Text('Mardi')),
-                  DataColumn(label: Text('Mercredi')),
-                  DataColumn(label: Text('Jeudi')),
-                  DataColumn(label: Text('Vendredi')),
-                  DataColumn(label: Text('Samedi')),
-                  DataColumn(label: Text('Total h/sem.')),
-                  DataColumn(label: Text('Niveau')),
-                ],
-                rows: teacherWorkloads.map((row) {
-                  final levelColor = row.level == 'Surcharge'
-                      ? Colors.red
-                      : (row.level == 'A surveiller'
-                            ? Colors.orange
-                            : Colors.green);
-                  final perDay = row.perDayMinutes;
-
-                  String hours(String day) {
-                    final minutes = perDay[day] ?? 0;
-                    return (minutes / 60).toStringAsFixed(2);
-                  }
-
-                  return DataRow(
-                    cells: [
-                      DataCell(
-                        Text(
-                          _teacherDisplayLabel(
-                            row.teacherName,
-                            row.teacherCode,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      DataCell(Text('${row.slotCount}')),
-                      DataCell(Text('${row.classCount}')),
-                      DataCell(Text(hours('MON'))),
-                      DataCell(Text(hours('TUE'))),
-                      DataCell(Text(hours('WED'))),
-                      DataCell(Text(hours('THU'))),
-                      DataCell(Text(hours('FRI'))),
-                      DataCell(Text(hours('SAT'))),
-                      DataCell(Text(row.totalHours.toStringAsFixed(2))),
-                      DataCell(
-                        Text(
-                          row.level,
-                          style: TextStyle(
-                            color: levelColor,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                }).toList(),
-              ),
+          : FrozenColumnTable(
+              frozenColumnWidth: 180,
+              columnWidth: 104,
+              frozenHeader: const Text('Enseignant'),
+              headers: const [
+                Text('Horaires'),
+                Text('Classes'),
+                Text('Lundi'),
+                Text('Mardi'),
+                Text('Mercredi'),
+                Text('Jeudi'),
+                Text('Vendredi'),
+                Text('Samedi'),
+                Text('Total h/sem.'),
+                Text('Niveau'),
+              ],
+              frozenCells: [
+                for (final row in teacherWorkloads)
+                  Text(
+                    _teacherDisplayLabel(row.teacherName, row.teacherCode),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+              ],
+              rows: [
+                for (final row in teacherWorkloads)
+                  _teacherWorkloadCells(row),
+              ],
             ),
     );
 
@@ -3058,37 +2891,31 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         ? _dayOrder
         : _dayOrder.where((day) => day == dayFilter).toList();
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        columnSpacing: 18,
-        dataRowMinHeight: 72,
-        dataRowMaxHeight: 220,
-        headingRowColor: WidgetStatePropertyAll(
-          Theme.of(context).colorScheme.surfaceContainer,
-        ),
-        columns: [
-          const DataColumn(label: Text('Horaire')),
-          ...visibleDays.map(
-            (dayCode) => DataColumn(label: Text(_dayLabel(dayCode))),
-          ),
-        ],
-        rows: ranges.map((range) {
-          final dayMap =
-              matrix[range] ?? const <String, List<Map<String, dynamic>>>{};
-          return DataRow(
-            cells: [
-              DataCell(Text(range)),
-              ...visibleDays.map((dayCode) {
-                final slots = dayMap[dayCode] ?? const <Map<String, dynamic>>[];
-                return DataCell(
-                  _buildMatrixCell(classId: classId, slots: slots),
-                );
-              }),
-            ],
-          );
-        }).toList(),
-      ),
+    return FrozenColumnTable(
+      frozenColumnWidth: 108,
+      columnWidth: 200,
+      minRowHeight: 72,
+      frozenHeader: const Text('Horaire'),
+      headers: [
+        for (final dayCode in visibleDays) Text(_dayLabel(dayCode)),
+      ],
+      frozenCells: [
+        for (final range in ranges)
+          Text(range, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ],
+      rows: [
+        for (final range in ranges)
+          [
+            for (final dayCode in visibleDays)
+              _buildMatrixCell(
+                classId: classId,
+                slots:
+                    (matrix[range] ??
+                            const <String, List<Map<String, dynamic>>>{})[dayCode] ??
+                        const <Map<String, dynamic>>[],
+              ),
+          ],
+      ],
     );
   }
 
@@ -3257,13 +3084,138 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
+  /// Case de la grille de selection des creneaux du dialogue d'ajout:
+  /// occupee (non cliquable), selectionnee, ou libre.
+  Widget _buildSlotPickerCell({
+    required String range,
+    required String dayCode,
+    required List<Map<String, dynamic>> slots,
+    required Set<String> selectedCells,
+    required bool isLocked,
+    required StateSetter setDialogState,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final cellKey = '$dayCode|$range';
+    final occupied = slots.isNotEmpty;
+    final selected = selectedCells.contains(cellKey);
+
+    final cardColor = occupied
+        ? colorScheme.surfaceContainerHighest
+        : selected
+        ? colorScheme.primaryContainer
+        : colorScheme.surfaceContainerLowest;
+    final borderColor = selected
+        ? colorScheme.primary
+        : colorScheme.outlineVariant;
+
+    return InkWell(
+      onTap: (occupied || isLocked)
+          ? null
+          : () {
+              setDialogState(() {
+                if (selected) {
+                  selectedCells.remove(cellKey);
+                } else {
+                  selectedCells.add(cellKey);
+                }
+              });
+            },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: cardColor,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: borderColor),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: occupied
+              ? [
+                  Text(
+                    '${slots.first['subjectCode'] ?? ''} - ${slots.first['subjectName'] ?? ''}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text('Occupé', style: textTheme.bodySmall),
+                ]
+              : [
+                  Row(
+                    children: [
+                      Icon(
+                        selected
+                            ? Icons.check_circle
+                            : Icons.add_circle_outline,
+                        size: 17,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          selected ? 'Sélectionné' : 'Disponible',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.bodySmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    selected ? 'Cliquer pour retirer' : 'Cliquer pour ajouter',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.bodySmall,
+                  ),
+                ],
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _teacherWorkloadCells(TeacherWorkloadRow row) {
+    final levelColor = row.level == 'Surcharge'
+        ? Colors.red
+        : (row.level == 'A surveiller' ? Colors.orange : Colors.green);
+
+    String hours(String day) {
+      final minutes = row.perDayMinutes[day] ?? 0;
+      return (minutes / 60).toStringAsFixed(2);
+    }
+
+    return [
+      Text('${row.slotCount}'),
+      Text('${row.classCount}'),
+      Text(hours('MON')),
+      Text(hours('TUE')),
+      Text(hours('WED')),
+      Text(hours('THU')),
+      Text(hours('FRI')),
+      Text(hours('SAT')),
+      Text(row.totalHours.toStringAsFixed(2)),
+      Text(
+        row.level,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(color: levelColor, fontWeight: FontWeight.w700),
+      ),
+    ];
+  }
+
   Widget _buildMatrixCell({
     required int classId,
     required List<Map<String, dynamic>> slots,
   }) {
     if (slots.isEmpty) {
       return const SizedBox(
-        width: 180,
+        width: double.infinity,
         child: Text('-', textAlign: TextAlign.center),
       );
     }
@@ -3271,7 +3223,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final colorScheme = Theme.of(context).colorScheme;
     final classLocked = _isClassLockedById(classId);
     return SizedBox(
-      width: 180,
+      width: double.infinity,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

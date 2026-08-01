@@ -150,7 +150,9 @@ class ExamsRepository {
 
   Future<List<OptionItem>> fetchSupervisors() async {
     final response = await dio.get(
-      '/auth/users/',
+      // Annuaire en lecture: l'administration des comptes est un autre
+      // module, ferme aux profils qui planifient les surveillances.
+      '/auth/users/directory/',
       queryParameters: {'role': 'censor'},
     );
     final rows = _extractRows(response.data);

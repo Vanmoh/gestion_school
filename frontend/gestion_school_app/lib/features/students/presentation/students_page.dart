@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/models/paginated_result.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../../../features/auth/presentation/auth_controller.dart';
@@ -16,6 +17,7 @@ import '../../payments/presentation/payment_entry_dialog.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../../../models/etablissement.dart';
 import '../domain/student.dart';
+import '../domain/students_sort.dart';
 import 'students_controller.dart';
 
 class StudentsPage extends ConsumerStatefulWidget {
@@ -102,6 +104,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   int? _registrationClassroomId;
   int? _registrationParentId;
+  String? _registrationGender;
   DateTime? _birthDate;
   int? _historyYearId;
   int? _historyClassroomId;
@@ -123,6 +126,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   int? _selectedClassroomUpdateId;
   int? _selectedParentUpdateId;
   DateTime? _updateBirthDate;
+  String? _updateGender;
 
   List<Map<String, dynamic>> _history = [];
   List<Map<String, dynamic>> _incidents = [];
@@ -131,8 +135,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   List<Map<String, dynamic>> _payments = [];
 
   bool _isStudentsReadOnlyRole() {
-    final role = ref.read(authControllerProvider).value?.role;
-    return role == 'censor';
+    return !ref.read(currentPermissionsProvider).canWrite('students');
   }
 
   @override
@@ -314,21 +317,26 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     setState(() {
       _classFilterId = null;
       _statusFilter = 'all';
-      _sortBy = 'name';
+      _sortBy = defaultStudentSortKey;
       _sortAscending = true;
     });
     _reloadStudentsTable(page: 1);
   }
 
-  String _studentsOrdering() {
-    final field = switch (_sortBy) {
-      'matricule' => 'matricule',
-      'classroom' => 'classroom__name',
-      'status' => 'is_archived',
-      _ => 'user__last_name',
-    };
-    return _sortAscending ? field : '-$field';
+  int? get _sortColumnIndex => studentSortColumnIndex(_sortBy);
+
+  void _onStudentColumnSort(int columnIndex, bool ascending) {
+    final sortKey = studentSortKeyForColumn(columnIndex);
+    if (sortKey == null) return;
+    setState(() {
+      _sortBy = sortKey;
+      _sortAscending = ascending;
+    });
+    _reloadStudentsTable(page: 1);
   }
+
+  String _studentsOrdering() =>
+      studentsOrdering(sortKey: _sortBy, ascending: _sortAscending);
 
   Future<void> _pickProfilePhoto({required bool forRegistration}) async {
     try {
@@ -418,6 +426,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     _selectedClassroomUpdateId = student.classroomId;
     _selectedParentUpdateId = student.parentId;
     _updateBirthDate = student.birthDate;
+    _updateGender = student.gender.isEmpty ? null : student.gender;
     _clearUpdateProfilePhotoSelection();
     _updateFirstNameController.text = student.firstName;
     _updateLastNameController.text = student.lastName;
@@ -469,14 +478,16 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final lastName = _lastNameController.text.trim();
     final password = _passwordController.text;
     final classroomId = _registrationClassroomId;
+    final gender = _registrationGender;
 
     if (username.isEmpty ||
         firstName.isEmpty ||
         lastName.isEmpty ||
         password.length < 8 ||
-        classroomId == null) {
+        classroomId == null ||
+        gender == null) {
       await _showRegistrationFailure(
-        'Complète username, prénom, nom, mot de passe (8+) et classe.',
+        'Complète username, prénom, nom, mot de passe (8+), classe et genre.',
       );
       return false;
     }
@@ -490,6 +501,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             firstName: firstName,
             lastName: lastName,
             password: password,
+            gender: gender,
             email: _emailController.text.trim(),
             phone: _phoneController.text.trim(),
             classroomId: classroomId,
@@ -510,6 +522,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       _clearRegistrationPhotoSelection();
       _birthDate = null;
       _registrationParentId = null;
+      _registrationGender = null;
       setState(() {
         _searchController.clear();
         _classFilterId = null;
@@ -619,6 +632,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final hasParentChanges = _selectedParentUpdateId != student.parentId;
     final hasBirthDateChanges =
         _apiDateOrEmpty(_updateBirthDate) != _apiDateOrEmpty(student.birthDate);
+    final hasGenderChanges = (_updateGender ?? '') != student.gender.trim();
     final hasPhotoChanges =
         (_updatePhotoPath ?? '').trim().isNotEmpty ||
         (_updatePhotoBytes != null && _updatePhotoBytes!.isNotEmpty);
@@ -627,6 +641,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         !hasClassroomChanges &&
         !hasParentChanges &&
         !hasBirthDateChanges &&
+        !hasGenderChanges &&
         !hasPhotoChanges) {
       _showMessage('Aucune modification détectée.');
       return false;
@@ -640,7 +655,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       if (hasUserChanges ||
           hasClassroomChanges ||
           hasParentChanges ||
-          hasBirthDateChanges) {
+          hasBirthDateChanges ||
+          hasGenderChanges) {
         final updated = await repository.updateStudentProfile(
           studentId: student.id,
           userId: student.userId,
@@ -651,6 +667,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           classroomId: _selectedClassroomUpdateId,
           parentId: _selectedParentUpdateId,
           birthDate: _updateBirthDate,
+          gender: _updateGender,
         );
         selectedId = updated.id;
       }
@@ -1668,6 +1685,27 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               ),
             ),
             SizedBox(
+              width: 200,
+              child: DropdownButtonFormField<String>(
+                initialValue: _registrationGender,
+                decoration: const InputDecoration(labelText: 'Genre *'),
+                items: const [
+                  DropdownMenuItem<String>(
+                    value: 'M',
+                    child: Text('Masculin'),
+                  ),
+                  DropdownMenuItem<String>(
+                    value: 'F',
+                    child: Text('Féminin'),
+                  ),
+                ],
+                onChanged: (value) {
+                  _registrationGender = value;
+                  refreshPanel();
+                },
+              ),
+            ),
+            SizedBox(
               width: 260,
               child: DropdownButtonFormField<int>(
                 initialValue: _registrationClassroomId,
@@ -1900,6 +1938,27 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 _updateBirthDate == null
                     ? 'Date naissance'
                     : _apiDate(_updateBirthDate!),
+              ),
+            ),
+            SizedBox(
+              width: 200,
+              child: DropdownButtonFormField<String>(
+                initialValue: _updateGender,
+                decoration: const InputDecoration(labelText: 'Genre'),
+                items: const [
+                  DropdownMenuItem<String>(
+                    value: 'M',
+                    child: Text('Masculin'),
+                  ),
+                  DropdownMenuItem<String>(
+                    value: 'F',
+                    child: Text('Féminin'),
+                  ),
+                ],
+                onChanged: (value) {
+                  _updateGender = value;
+                  refreshPanel();
+                },
               ),
             ),
             SizedBox(
@@ -2759,12 +2818,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         ? 0
         : ((archived / pageCount) * 100).round();
     final activeShare = pageCount == 0 ? 0.0 : active / pageCount;
+    // Le tri n'est plus compte ici: il se lit directement dans l'en-tete du
+    // tableau, l'inclure dans le compteur de filtres induisait en erreur.
     final appliedFilters =
         (_searchController.text.trim().isNotEmpty ? 1 : 0) +
         (_classFilterId != null ? 1 : 0) +
-        (_statusFilter != 'active' ? 1 : 0) +
-        (_sortBy != 'name' ? 1 : 0) +
-        (!_sortAscending ? 1 : 0);
+        (_statusFilter != 'active' ? 1 : 0);
     final selectedClassLabel = _classFilterId == null
         ? 'Toutes classes'
         : _classroomName(_classFilterId!);
@@ -4048,7 +4107,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          'Affichage type tableau: applique les filtres puis sélectionne une ligne pour ouvrir le dossier.',
+                          'Affichage type tableau: applique les filtres, trie en cliquant sur un en-tête de colonne, puis sélectionne une ligne pour ouvrir le dossier.',
                           style: textTheme.bodySmall,
                         ),
                       ],
@@ -4157,39 +4216,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       _reloadStudentsTable(page: 1);
                     },
                   ),
-                ),
-                SizedBox(
-                  width: 200,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _sortBy,
-                    decoration: const InputDecoration(labelText: 'Trier par'),
-                    items: const [
-                      DropdownMenuItem(value: 'name', child: Text('Nom')),
-                      DropdownMenuItem(
-                        value: 'matricule',
-                        child: Text('Matricule'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'classroom',
-                        child: Text('Classe'),
-                      ),
-                      DropdownMenuItem(value: 'status', child: Text('Statut')),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _sortBy = value ?? 'name');
-                      _reloadStudentsTable(page: 1);
-                    },
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() => _sortAscending = !_sortAscending);
-                    _reloadStudentsTable(page: 1);
-                  },
-                  icon: Icon(
-                    _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
-                  ),
-                  label: Text(_sortAscending ? 'Ascendant' : 'Descendant'),
                 ),
                 FilledButton.icon(
                   onPressed: _saving
@@ -4358,15 +4384,34 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       headingRowHeight: 48,
                       dataRowMinHeight: 52,
                       dataRowMaxHeight: 62,
-                      columns: const [
-                        DataColumn(label: Text('N°')),
-                        DataColumn(label: Text('Matricule')),
-                        DataColumn(label: Text('Nom complet')),
-                        DataColumn(label: Text('Classe')),
-                        DataColumn(label: Text('Date naissance')),
-                        DataColumn(label: Text('Téléphone')),
-                        DataColumn(label: Text('Statut')),
-                        DataColumn(label: Text('Accès')),
+                      sortColumnIndex: _sortColumnIndex,
+                      sortAscending: _sortAscending,
+                      columns: [
+                        const DataColumn(label: Text('N°')),
+                        DataColumn(
+                          label: const Text('Matricule'),
+                          tooltip: 'Trier par matricule',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        DataColumn(
+                          label: const Text('Nom complet'),
+                          tooltip: 'Trier par nom',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        const DataColumn(label: Text('Genre')),
+                        DataColumn(
+                          label: const Text('Classe'),
+                          tooltip: 'Trier par classe',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        const DataColumn(label: Text('Date naissance')),
+                        const DataColumn(label: Text('Téléphone')),
+                        DataColumn(
+                          label: const Text('Statut'),
+                          tooltip: 'Trier par statut',
+                          onSort: _onStudentColumnSort,
+                        ),
+                        const DataColumn(label: Text('Accès')),
                       ],
                       rows: visibleStudents.asMap().entries.map((entry) {
                         final rowIndex = entry.key;
@@ -4410,6 +4455,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
+                            DataCell(Text(_genderLabel(student.gender))),
                             DataCell(
                               Text(
                                 student.classroomName.isEmpty
@@ -5081,6 +5127,17 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       visualDensity: VisualDensity.compact,
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
+  }
+
+  String _genderLabel(String gender) {
+    switch (gender.trim().toUpperCase()) {
+      case 'M':
+        return 'Masculin';
+      case 'F':
+        return 'Féminin';
+      default:
+        return '-';
+    }
   }
 
   String _parentLabel(Map<String, dynamic> row) {

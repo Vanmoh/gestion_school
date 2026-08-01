@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/api_constants.dart';
+import '../permissions/module_permissions.dart';
 import 'token_storage.dart';
 
 final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
@@ -57,6 +58,27 @@ final dioProvider = Provider<Dio>((ref) {
   dio.interceptors.add(
     InterceptorsWrapper(
       onRequest: (options, handler) async {
+        // Refus local des ecritures que la matrice interdit: un bouton oublie
+        // quelque part dans l'interface ne peut plus lancer un appel voue au
+        // 403. Seules les routes CRUD certaines sont concernees, le backend
+        // reste l'autorite sur le reste.
+        final refusal = ModulePermissionsRegistry.refusalFor(
+          options.method,
+          options.path,
+        );
+        if (refusal != null) {
+          handler.reject(
+            DioException(
+              requestOptions: options,
+              type: DioExceptionType.cancel,
+              error: refusal,
+              message: refusal,
+            ),
+            true,
+          );
+          return;
+        }
+
         if (options.data is FormData) {
           options.contentType = Headers.multipartFormDataContentType;
         }
@@ -65,7 +87,6 @@ final dioProvider = Provider<Dio>((ref) {
           tokenStorage.apiBaseUrl(),
           tokenStorage.accessToken(),
           tokenStorage.selectedEtablissement(),
-          tokenStorage.cachedUser(),
         ]);
 
         final storedBaseUrl = values[0];
@@ -84,21 +105,6 @@ final dioProvider = Provider<Dio>((ref) {
         }
 
         final selectedEtablissementRaw = values[2];
-        final cachedUserRaw = values[3];
-
-        String? role;
-        int? userEtablissementId;
-        String? userEtablissementName;
-        if (cachedUserRaw != null && cachedUserRaw.isNotEmpty) {
-          try {
-            final decoded = jsonDecode(cachedUserRaw) as Map<String, dynamic>;
-            role = decoded['role']?.toString();
-            userEtablissementId = (decoded['etablissementId'] as num?)?.toInt();
-            userEtablissementName = decoded['etablissementName']?.toString();
-          } catch (_) {
-            // Ignore malformed cached user payload.
-          }
-        }
 
         if (selectedEtablissementRaw != null &&
           selectedEtablissementRaw.isNotEmpty) {

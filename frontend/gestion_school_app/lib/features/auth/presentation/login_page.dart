@@ -65,7 +65,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           if (user != null && mounted) {
             final selectedEtablissementId = selectedEtablissement?.id;
             final userEtablissementId = user.etablissementId;
-            final wrongScopedLogin = user.role != 'super_admin' &&
+            final wrongScopedLogin =
+                user.role != 'super_admin' &&
                 selectedEtablissementId != null &&
                 userEtablissementId != null &&
                 selectedEtablissementId != userEtablissementId;
@@ -207,6 +208,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final wide = constraints.maxWidth >= 980;
+                // Sur une fenetre courte le bloc de gauche (logo + textes +
+                // pastilles) depassait la hauteur disponible. On reduit
+                // d'abord le logo, le defilement prend le relais ensuite.
+                final short = constraints.maxHeight < 760;
+                final logoHeight = short ? 120.0 : 190.0;
 
                 return Padding(
                   padding: const EdgeInsets.all(24),
@@ -216,140 +222,152 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.only(right: 32),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.bolt_rounded,
-                                      color: scheme.primary,
-                                      size: 32,
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Text(
-                                      'Connexion ${selectedEtablissement.name}',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .headlineSmall
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w800,
-                                            letterSpacing: 1.5,
-                                          ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    IconButton(
-                                      tooltip: 'Choisir un autre établissement',
-                                      onPressed: () {
-                                        Navigator.of(
-                                          context,
-                                        ).pushNamedAndRemoveUntil(
-                                          '/',
-                                          (route) => false,
-                                        );
-                                      },
-                                      icon: const Icon(
-                                        Icons.swap_horiz_rounded,
+                            child: _centeredScrollable(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.bolt_rounded,
+                                        color: scheme.primary,
+                                        size: 32,
                                       ),
-                                    ),
-                                    IconButton(
-                                      tooltip: 'Configurer URL API',
-                                      onPressed: _openApiSettingsDialog,
-                                      icon: const Icon(
-                                        Icons.wifi_tethering_rounded,
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Text(
+                                          'Connexion ${selectedEtablissement.name}',
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .headlineSmall
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w800,
+                                                letterSpacing: 1.5,
+                                              ),
+                                        ),
                                       ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 18),
-                                if (selectedEtablissement.logoUrlForDisplay !=
-                                        null &&
-                                    selectedEtablissement
-                                        .logoUrlForDisplay!
-                                        .isNotEmpty)
-                                  Image.network(
-                                    selectedEtablissement.logoUrlForDisplay!,
-                                    height: 190,
-                                    fit: BoxFit.contain,
-                                    alignment: Alignment.centerLeft,
-                                    errorBuilder: (context, error, stackTrace) {
-                                      return Image.asset(
-                                        SchoolBranding.logoAsset,
-                                        height: 190,
-                                        fit: BoxFit.contain,
-                                        alignment: Alignment.centerLeft,
-                                      );
-                                    },
-                                  )
-                                else
-                                  Image.asset(
-                                    SchoolBranding.logoAsset,
-                                    height: 190,
-                                    fit: BoxFit.contain,
-                                    alignment: Alignment.centerLeft,
-                                    cacheWidth: 640,
-                                    filterQuality: FilterQuality.medium,
+                                      const SizedBox(width: 8),
+                                      IconButton(
+                                        tooltip:
+                                            'Choisir un autre établissement',
+                                        onPressed: () {
+                                          Navigator.of(
+                                            context,
+                                          ).pushNamedAndRemoveUntil(
+                                            '/',
+                                            (route) => false,
+                                          );
+                                        },
+                                        icon: const Icon(
+                                          Icons.swap_horiz_rounded,
+                                        ),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Configurer URL API',
+                                        onPressed: _openApiSettingsDialog,
+                                        icon: const Icon(
+                                          Icons.wifi_tethering_rounded,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                const SizedBox(height: 20),
-                                Text(
-                                  headerName,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .headlineMedium
-                                      ?.copyWith(fontWeight: FontWeight.w700),
-                                ),
-                                const SizedBox(height: 10),
-                                Text(
-                                  headerSecondary,
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.titleMedium,
-                                ),
-                                const SizedBox(height: 18),
-                                Wrap(
-                                  spacing: 10,
-                                  runSpacing: 10,
-                                  children: [
-                                    _featurePill(
-                                      context,
-                                      icon: Icons.verified_user_outlined,
-                                      label: 'Connexion sécurisée',
+                                  const SizedBox(height: 18),
+                                  if (selectedEtablissement.logoUrlForDisplay !=
+                                          null &&
+                                      selectedEtablissement
+                                          .logoUrlForDisplay!
+                                          .isNotEmpty)
+                                    Image.network(
+                                      selectedEtablissement.logoUrlForDisplay!,
+                                      height: logoHeight,
+                                      fit: BoxFit.contain,
+                                      alignment: Alignment.centerLeft,
+                                      errorBuilder:
+                                          (context, error, stackTrace) {
+                                            return Image.asset(
+                                              SchoolBranding.logoAsset,
+                                              height: logoHeight,
+                                              fit: BoxFit.contain,
+                                              alignment: Alignment.centerLeft,
+                                            );
+                                          },
+                                    )
+                                  else
+                                    Image.asset(
+                                      SchoolBranding.logoAsset,
+                                      height: logoHeight,
+                                      fit: BoxFit.contain,
+                                      alignment: Alignment.centerLeft,
+                                      cacheWidth: 640,
+                                      filterQuality: FilterQuality.medium,
                                     ),
-                                    _featurePill(
+                                  const SizedBox(height: 20),
+                                  Text(
+                                    headerName,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .headlineMedium
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    headerSecondary,
+                                    style: Theme.of(
                                       context,
-                                      icon: Icons.sync_alt,
-                                      label: 'Multi-plateforme',
-                                    ),
-                                    _featurePill(
+                                    ).textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 18),
+                                  Wrap(
+                                    spacing: 10,
+                                    runSpacing: 10,
+                                    children: [
+                                      _featurePill(
+                                        context,
+                                        icon: Icons.verified_user_outlined,
+                                        label: 'Connexion sécurisée',
+                                      ),
+                                      _featurePill(
+                                        context,
+                                        icon: Icons.sync_alt,
+                                        label: 'Multi-plateforme',
+                                      ),
+                                      _featurePill(
+                                        context,
+                                        icon: Icons.analytics_outlined,
+                                        label: 'Pilotage en temps réel',
+                                      ),
+                                      _featurePill(
+                                        context,
+                                        icon: Icons.call_outlined,
+                                        label: contactLabel,
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 14),
+                                  Text(
+                                    'STI: ${SchoolBranding.streamsSti.join(' • ')}',
+                                    style: Theme.of(
                                       context,
-                                      icon: Icons.analytics_outlined,
-                                      label: 'Pilotage en temps réel',
-                                    ),
-                                    _featurePill(
+                                    ).textTheme.bodyMedium,
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'STG: ${SchoolBranding.streamsStg.join(' • ')}',
+                                    style: Theme.of(
                                       context,
-                                      icon: Icons.call_outlined,
-                                      label: contactLabel,
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 14),
-                                Text(
-                                  'STI: ${SchoolBranding.streamsSti.join(' • ')}',
-                                  style: Theme.of(context).textTheme.bodyMedium,
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  'STG: ${SchoolBranding.streamsStg.join(' • ')}',
-                                  style: Theme.of(context).textTheme.bodyMedium,
-                                ),
-                              ],
+                                    ).textTheme.bodyMedium,
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       Expanded(
-                        child: Align(
-                          alignment: Alignment.center,
+                        child: _centeredScrollable(
                           child: ConstrainedBox(
                             constraints: const BoxConstraints(maxWidth: 460),
                             child: TweenAnimationBuilder<double>(
@@ -605,6 +623,35 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     );
   }
 
+  /// Centre [child] verticalement tant que la hauteur le permet, puis le rend
+  /// defilant des qu'il depasse.
+  ///
+  /// Les deux colonnes de la page de connexion vivaient dans un Row sans
+  /// defilement: sur une fenetre courte, le bloc de gauche debordait de
+  /// quelques pixels au lieu de pouvoir etre parcouru.
+  /// [crossAxisAlignment] doit refleter l'alignement horizontal attendu:
+  /// `stretch` pour un bloc qui occupe toute la largeur, `center` pour un
+  /// contenu de largeur bornee que l'on veut garder centre.
+  Widget _centeredScrollable({
+    required Widget child,
+    CrossAxisAlignment crossAxisAlignment = CrossAxisAlignment.center,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: crossAxisAlignment,
+              children: [child],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   String _userEtablissementLabel(AuthUser user) {
     final name = user.etablissementName.trim();
     if (name.isNotEmpty) {
@@ -670,7 +717,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       barrierDismissible: true,
       builder: (dialogContext) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
           titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
           contentPadding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
           actionsPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
@@ -693,9 +742,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               Expanded(
                 child: Text(
                   'Etablissement incorrect',
-                  style: Theme.of(dialogContext).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: Theme.of(
+                    dialogContext,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
                 ),
               ),
             ],
@@ -711,7 +760,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               const SizedBox(height: 10),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: scheme.primary.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(10),
@@ -721,10 +773,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 ),
                 child: Text(
                   targetLabel,
-                  style: Theme.of(dialogContext).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: scheme.primary,
-                  ),
+                  style: Theme.of(dialogContext).textTheme.titleMedium
+                      ?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: scheme.primary,
+                      ),
                 ),
               ),
               const SizedBox(height: 10),
@@ -743,7 +796,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               onPressed: () {
                 Navigator.of(dialogContext).pop();
                 if (mounted) {
-                  Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+                  Navigator.of(
+                    context,
+                  ).pushNamedAndRemoveUntil('/', (route) => false);
                 }
               },
               icon: const Icon(Icons.swap_horiz_rounded),
@@ -953,7 +1008,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         children: [
           Icon(icon, size: 16, color: scheme.primary),
           const SizedBox(width: 6),
-          Text(label, style: Theme.of(context).textTheme.labelLarge),
+          // Flexible: un label long (le numero de telephone) depassait la
+          // largeur offerte par le Wrap parent.
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+          ),
         ],
       ),
     );
@@ -986,7 +1050,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           return 'Certificat serveur invalide.';
         case DioExceptionType.badResponse:
           return 'Réponse invalide du serveur.';
-        case DioExceptionType.unknown:
+        default:
           return 'Erreur réseau inconnue. Vérifiez votre connexion puis réessayez.';
       }
     }

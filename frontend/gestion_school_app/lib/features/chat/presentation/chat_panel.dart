@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -81,7 +80,6 @@ class _ChatPanelState extends State<ChatPanel> {
   Timer? _presenceRefreshTimer;
   CancelToken? _activeUploadCancelToken;
   String? _activeUploadClientMessageId;
-  int? _activeUploadConversationId;
   bool _wsConnected = false;
   bool _awaitingPong = false;
   int _wsReconnectAttempt = 0;
@@ -512,7 +510,7 @@ class _ChatPanelState extends State<ChatPanel> {
         '/chat/conversations/$conversationId/messages/',
         queryParameters: <String, dynamic>{
           'page_size': _pageSize,
-          if (beforeId != null) 'before_id': beforeId,
+          'before_id': ?beforeId,
         },
       );
       final rows = _rows(resp.data);
@@ -769,13 +767,10 @@ class _ChatPanelState extends State<ChatPanel> {
 
   Future<void> _markRead(int conversationId) async {
     try {
-      final response = await widget.dio.post(
+      await widget.dio.post(
         '/chat/conversations/$conversationId/mark-read/',
         data: <String, dynamic>{},
       );
-      final map = response.data is Map
-          ? Map<String, dynamic>.from(response.data as Map)
-          : const <String, dynamic>{};
       _channel?.sink.add(jsonEncode(<String, dynamic>{
         'action': 'mark_read',
         'conversation_id': conversationId,
@@ -1455,7 +1450,7 @@ class _ChatPanelState extends State<ChatPanel> {
           imageChild = Image.network(
             attachmentUrl,
             fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => const Center(
+            errorBuilder: (_, _, _) => const Center(
               child: Icon(Icons.broken_image_outlined, size: 48),
             ),
           );
@@ -1979,7 +1974,7 @@ class _ChatPanelState extends State<ChatPanel> {
                               imageChild = Image.network(
                                 attachmentUrl,
                                 fit: BoxFit.contain,
-                                errorBuilder: (_, __, ___) => const Center(
+                                errorBuilder: (_, _, _) => const Center(
                                   child: Icon(Icons.broken_image_outlined, size: 48),
                                 ),
                               );
@@ -2070,7 +2065,6 @@ class _ChatPanelState extends State<ChatPanel> {
       _sendError = null;
       _activeUploadCancelToken = cancelToken;
       _activeUploadClientMessageId = clientMessageId;
-      _activeUploadConversationId = conversationId;
       if (reuseExistingPendingMessage) {
         _messages = _messages.map((row) {
           if (_asString(row['client_message_id']) != clientMessageId) {
@@ -2180,7 +2174,6 @@ class _ChatPanelState extends State<ChatPanel> {
           if (identical(_activeUploadCancelToken, cancelToken)) {
             _activeUploadCancelToken = null;
             _activeUploadClientMessageId = null;
-            _activeUploadConversationId = null;
           }
         });
       }
@@ -2626,6 +2619,11 @@ class _ChatPanelState extends State<ChatPanel> {
                     if (title.isEmpty || selectedUserIds.isEmpty) {
                       return;
                     }
+                    // Capture avant l'await: `context` est celui du
+                    // StatefulBuilder du dialogue, que `mounted` (celui du
+                    // State) ne couvre pas.
+                    final navigator = Navigator.of(context);
+                    final messenger = ScaffoldMessenger.of(context);
                     try {
                       final resp = await widget.dio.post(
                         '/chat/conversations/group/',
@@ -2648,11 +2646,11 @@ class _ChatPanelState extends State<ChatPanel> {
                         }
                         _selectedConversationId = cid;
                       });
-                      Navigator.of(context).pop();
+                      navigator.pop();
                       await _loadMessages(cid, reset: true);
                     } catch (_) {
                       if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      messenger.showSnackBar(
                         const SnackBar(content: Text('Impossible de creer le groupe.')),
                       );
                     }
@@ -2694,13 +2692,16 @@ class _ChatPanelState extends State<ChatPanel> {
               if (nextTitle.isEmpty) {
                 return;
               }
+              // `ctx` est le contexte du dialogue: on capture le Navigator
+              // avant l'await plutot que de le resoudre apres coup.
+              final navigator = Navigator.of(ctx);
               try {
                 await widget.dio.patch(
                   '/chat/conversations/$conversationId/group/',
                   data: <String, dynamic>{'title': nextTitle},
                 );
                 if (!mounted) return;
-                Navigator.of(ctx).pop();
+                navigator.pop();
                 await _reloadConversationsOnly();
               } catch (_) {
                 if (!mounted) return;
@@ -2757,13 +2758,14 @@ class _ChatPanelState extends State<ChatPanel> {
               onPressed: selectedUserId == null
                   ? null
                   : () async {
+                      final navigator = Navigator.of(ctx);
                       try {
                         await widget.dio.post(
                           '/chat/conversations/$conversationId/group/add-member/',
                           data: <String, dynamic>{'user_id': selectedUserId},
                         );
                         if (!mounted) return;
-                        Navigator.of(ctx).pop();
+                        navigator.pop();
                         await _reloadConversationsOnly();
                       } catch (_) {
                         if (!mounted) return;
@@ -2813,6 +2815,7 @@ class _ChatPanelState extends State<ChatPanel> {
                       onPressed: isAdmin
                           ? null
                           : () async {
+                              final navigator = Navigator.of(ctx);
                               try {
                                 await widget.dio.post(
                                   '/chat/conversations/$conversationId/group/promote-admin/',
@@ -2820,7 +2823,7 @@ class _ChatPanelState extends State<ChatPanel> {
                                 );
                                 if (!mounted) return;
                                 await _reloadConversationsOnly();
-                                Navigator.of(ctx).pop();
+                                navigator.pop();
                               } catch (_) {
                                 if (!mounted) return;
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -2834,6 +2837,7 @@ class _ChatPanelState extends State<ChatPanel> {
                       onPressed: !isAdmin || adminCount <= 1
                           ? null
                           : () async {
+                              final navigator = Navigator.of(ctx);
                               try {
                                 await widget.dio.post(
                                   '/chat/conversations/$conversationId/group/demote-admin/',
@@ -2841,7 +2845,7 @@ class _ChatPanelState extends State<ChatPanel> {
                                 );
                                 if (!mounted) return;
                                 await _reloadConversationsOnly();
-                                Navigator.of(ctx).pop();
+                                navigator.pop();
                               } catch (_) {
                                 if (!mounted) return;
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -2855,6 +2859,7 @@ class _ChatPanelState extends State<ChatPanel> {
                       onPressed: !isAdmin
                           ? null
                           : () async {
+                              final navigator = Navigator.of(ctx);
                               try {
                                 await widget.dio.post(
                                   '/chat/conversations/$conversationId/group/transfer-admin/',
@@ -2862,7 +2867,7 @@ class _ChatPanelState extends State<ChatPanel> {
                                 );
                                 if (!mounted) return;
                                 await _reloadConversationsOnly();
-                                Navigator.of(ctx).pop();
+                                navigator.pop();
                               } catch (_) {
                                 if (!mounted) return;
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -2874,6 +2879,7 @@ class _ChatPanelState extends State<ChatPanel> {
                     ),
                     OutlinedButton(
                       onPressed: () async {
+                        final navigator = Navigator.of(ctx);
                         try {
                           await widget.dio.post(
                             '/chat/conversations/$conversationId/group/remove-member/',
@@ -2881,7 +2887,7 @@ class _ChatPanelState extends State<ChatPanel> {
                           );
                           if (!mounted) return;
                           await _reloadConversationsOnly();
-                          Navigator.of(ctx).pop();
+                          navigator.pop();
                         } catch (_) {
                           if (!mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -2935,59 +2941,57 @@ class _ChatPanelState extends State<ChatPanel> {
                 ? 'Ecrit...'
                 : (online ? 'En ligne' : 'Hors ligne'),
           ),
-          trailing: Container(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (!isGroup)
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: online ? const Color(0xFF12B76A) : Colors.grey,
-                      shape: BoxShape.circle,
-                    ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!isGroup)
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: online ? const Color(0xFF12B76A) : Colors.grey,
+                    shape: BoxShape.circle,
                   ),
-                if (isGroup && isGroupAdmin)
-                  PopupMenuButton<String>(
-                    onSelected: (value) async {
-                      if (value == 'rename') {
-                        await _renameGroupConversation(conversation);
-                      } else if (value == 'add') {
-                        await _groupAddMember(conversation);
-                      } else if (value == 'members') {
-                        await _groupRemoveOrPromoteMember(conversation);
-                      } else if (value == 'delete') {
-                        await _deleteGroupConversation(conversation);
-                      } else if (value == 'leave') {
-                        await _leaveGroupConversation(conversation);
-                      } else if (value == 'close') {
-                        await _closeConversation(conversation);
-                      }
-                    },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'rename', child: Text('Renommer groupe')),
-                      PopupMenuItem(value: 'add', child: Text('Ajouter membre')),
-                      PopupMenuItem(value: 'members', child: Text('Gerer membres')),
-                      PopupMenuItem(value: 'close', child: Text('Fermer groupe')),
-                      PopupMenuItem(value: 'leave', child: Text('Quitter groupe')),
-                      PopupMenuItem(value: 'delete', child: Text('Supprimer groupe')),
-                    ],
-                  ),
-                if (isGroup && !isGroupAdmin)
-                  IconButton(
-                    tooltip: 'Quitter groupe',
-                    onPressed: () => _leaveGroupConversation(conversation),
-                    icon: const Icon(Icons.logout_outlined),
-                  ),
-                if (!isGroup)
-                  IconButton(
-                    tooltip: 'Fermer conversation directe',
-                    onPressed: () => _closeConversation(conversation),
-                    icon: const Icon(Icons.close),
-                  ),
-              ],
-            ),
+                ),
+              if (isGroup && isGroupAdmin)
+                PopupMenuButton<String>(
+                  onSelected: (value) async {
+                    if (value == 'rename') {
+                      await _renameGroupConversation(conversation);
+                    } else if (value == 'add') {
+                      await _groupAddMember(conversation);
+                    } else if (value == 'members') {
+                      await _groupRemoveOrPromoteMember(conversation);
+                    } else if (value == 'delete') {
+                      await _deleteGroupConversation(conversation);
+                    } else if (value == 'leave') {
+                      await _leaveGroupConversation(conversation);
+                    } else if (value == 'close') {
+                      await _closeConversation(conversation);
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'rename', child: Text('Renommer groupe')),
+                    PopupMenuItem(value: 'add', child: Text('Ajouter membre')),
+                    PopupMenuItem(value: 'members', child: Text('Gerer membres')),
+                    PopupMenuItem(value: 'close', child: Text('Fermer groupe')),
+                    PopupMenuItem(value: 'leave', child: Text('Quitter groupe')),
+                    PopupMenuItem(value: 'delete', child: Text('Supprimer groupe')),
+                  ],
+                ),
+              if (isGroup && !isGroupAdmin)
+                IconButton(
+                  tooltip: 'Quitter groupe',
+                  onPressed: () => _leaveGroupConversation(conversation),
+                  icon: const Icon(Icons.logout_outlined),
+                ),
+              if (!isGroup)
+                IconButton(
+                  tooltip: 'Fermer conversation directe',
+                  onPressed: () => _closeConversation(conversation),
+                  icon: const Icon(Icons.close),
+                ),
+            ],
           ),
         ),
         const Divider(height: 1),
@@ -3120,7 +3124,7 @@ class _ChatPanelState extends State<ChatPanel> {
                                       fit: BoxFit.cover,
                                       width: 220,
                                       height: 180,
-                                      errorBuilder: (_, __, ___) => Container(
+                                      errorBuilder: (_, _, _) => Container(
                                         width: 220,
                                         height: 180,
                                         color: Theme.of(context).colorScheme.surface,

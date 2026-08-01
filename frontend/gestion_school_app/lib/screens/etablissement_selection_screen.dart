@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/constants/etablissement_api.dart';
 import '../core/network/api_client.dart';
 import '../models/etablissement.dart';
-import '../widgets/etablissement_selector.dart';
+import '../widgets/etablissement_identity.dart';
+import 'etablissement_details_screen.dart';
 
 class PublicEtablissementEntryPage extends ConsumerStatefulWidget {
   const PublicEtablissementEntryPage({super.key});
@@ -181,6 +184,107 @@ class _RequireEtablissementSelectionState
   }
 }
 
+/// Surface interactive: se souleve au survol, s'enfonce a l'appui.
+///
+/// Le builder recoit l'etat de survol pour que le contenu puisse suivre le
+/// mouvement (le chevron glisse vers la droite, par exemple).
+class _HoverLift extends StatefulWidget {
+  final BorderRadius borderRadius;
+  final Color surfaceColor;
+  final Color borderColor;
+  final Color hoverBorderColor;
+  final Color glowColor;
+  final VoidCallback onTap;
+  /// Chemin de secours vers les details au doigt: le bouton dedie n'apparait
+  /// qu'au survol, geste dont un ecran tactile ne dispose pas.
+  final VoidCallback? onLongPress;
+  final Widget Function(BuildContext context, bool hovered) builder;
+
+  const _HoverLift({
+    required this.borderRadius,
+    required this.surfaceColor,
+    required this.borderColor,
+    required this.hoverBorderColor,
+    required this.glowColor,
+    required this.onTap,
+    this.onLongPress,
+    required this.builder,
+  });
+
+  @override
+  State<_HoverLift> createState() => _HoverLiftState();
+}
+
+class _HoverLiftState extends State<_HoverLift> {
+  bool _hovered = false;
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final still = etabReduceMotion(context);
+    final duration = still ? Duration.zero : const Duration(milliseconds: 170);
+
+    final scale = still
+        ? 1.0
+        : _pressed
+        ? 0.985
+        : _hovered
+        ? 1.012
+        : 1.0;
+
+    return AnimatedScale(
+      scale: scale,
+      duration: duration,
+      curve: Curves.easeOut,
+      child: AnimatedContainer(
+        duration: duration,
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          borderRadius: widget.borderRadius,
+          boxShadow: [
+            BoxShadow(
+              color: widget.glowColor.withValues(alpha: _hovered ? 0.20 : 0.06),
+              blurRadius: _hovered ? 22 : 9,
+              offset: Offset(0, _hovered ? 9 : 3),
+            ),
+          ],
+        ),
+        child: Material(
+          color: widget.surfaceColor,
+          borderRadius: widget.borderRadius,
+          child: InkWell(
+            borderRadius: widget.borderRadius,
+            onTap: widget.onTap,
+            onLongPress: widget.onLongPress,
+            onHover: (value) => setState(() => _hovered = value),
+            onTapDown: (_) => setState(() => _pressed = true),
+            onTapUp: (_) => setState(() => _pressed = false),
+            onTapCancel: () => setState(() => _pressed = false),
+            child: AnimatedContainer(
+              duration: duration,
+              curve: Curves.easeOut,
+              decoration: BoxDecoration(
+                borderRadius: widget.borderRadius,
+                border: Border.all(
+                  color: _hovered
+                      ? widget.hoverBorderColor
+                      : widget.borderColor,
+                  width: _hovered ? 1.4 : 1,
+                ),
+              ),
+              child: widget.builder(context, _hovered),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Portail de selection: la page a une seule mission, amener l'utilisateur
+/// dans son etablissement en un geste. Toutes les couleurs viennent du
+/// ColorScheme actif, pour rester coherent avec la connexion et le tableau
+/// de bord.
 class EtablissementSelectionScreen extends ConsumerStatefulWidget {
   final FutureOr<void> Function(Etablissement) onSelected;
 
@@ -192,444 +296,266 @@ class EtablissementSelectionScreen extends ConsumerStatefulWidget {
 }
 
 class _EtablissementSelectionScreenState
-    extends ConsumerState<EtablissementSelectionScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ambientController;
+    extends ConsumerState<EtablissementSelectionScreen> {
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   String _searchQuery = '';
-  EtablissementLayoutMode _layoutMode = EtablissementLayoutMode.grid;
-  Offset _spotlight = const Offset(0.52, 0.36);
-
-  @override
-  void initState() {
-    super.initState();
-    _ambientController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 9),
-    )..repeat(reverse: true);
-  }
 
   @override
   void dispose() {
-    _ambientController.dispose();
     _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  bool _matches(Etablissement etab, String query) {
+    if (query.isEmpty) {
+      return true;
+    }
+    final needle = query.toLowerCase();
+    return etab.name.toLowerCase().contains(needle) ||
+        (etab.address ?? '').toLowerCase().contains(needle) ||
+        (etab.email ?? '').toLowerCase().contains(needle);
+  }
+
+  Future<void> _select(Etablissement etab) async {
+    await widget.onSelected(etab);
+  }
+
+  void _openDetails(Etablissement etab) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => EtablissementDetailsScreen(
+          etablissement: etab,
+          onSelect: _select,
+        ),
+      ),
+    );
+  }
+
+  /// Demande d'acces: aucune API ne couvre l'inscription a un etablissement,
+  /// la carte explique donc la marche a suivre plutot que de promettre une
+  /// action qui n'existe pas.
+  void _requestAccess(List<Etablissement> known) {
+    // Un etablissement deja visible sert de point de contact: c'est la seule
+    // coordonnee que le portail connaisse avant l'authentification.
+    Etablissement? contact;
+    for (final etab in known) {
+      if ((etab.phone ?? '').trim().isNotEmpty ||
+          (etab.email ?? '').trim().isNotEmpty) {
+        contact = etab;
+        break;
+      }
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        final scheme = Theme.of(dialogContext).colorScheme;
+        final textTheme = Theme.of(dialogContext).textTheme;
+
+        return AlertDialog(
+          icon: Icon(Icons.person_add_alt_1_outlined, color: scheme.primary),
+          title: const Text('Demander un accès'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'La liste ci-dessus ne contient que les établissements ouverts '
+                'à votre compte. Pour en rejoindre un autre, contactez son '
+                'administrateur : lui seul peut créer votre accès.',
+                style: textTheme.bodyMedium,
+              ),
+              if (contact != null) ...[
+                const SizedBox(height: 14),
+                Text(
+                  'Contact disponible',
+                  style: textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                _ContactLine(
+                  icon: Icons.apartment_rounded,
+                  value: etabDisplayName(contact),
+                ),
+                if ((contact.phone ?? '').trim().isNotEmpty)
+                  _ContactLine(
+                    icon: Icons.call_outlined,
+                    value: contact.phone!.trim(),
+                  ),
+                if ((contact.email ?? '').trim().isNotEmpty)
+                  _ContactLine(
+                    icon: Icons.mail_outline_rounded,
+                    value: contact.email!.trim(),
+                  ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
-    final screenHeight = MediaQuery.sizeOf(context).height;
-    final screenWidth = MediaQuery.sizeOf(context).width;
-    final compact = screenHeight < 820;
-    final veryCompact = screenHeight < 780;
-    final rawEtabCount = ref.watch(etablissementProvider).etablissements.length;
-    final etabCount = rawEtabCount <= 0
-        ? 4
-        : (rawEtabCount > 4 ? 4 : rawEtabCount);
+    final scheme = Theme.of(context).colorScheme;
+    final provider = ref.watch(etablissementProvider);
+    final all = provider.etablissements;
+    final resume = provider.selected;
+
+    // La maquette presente les etablissements par ordre alphabetique: sans
+    // tri, l'ordre depend de l'API et deux chargements ne donnent pas la meme
+    // grille.
+    //
+    // Le tri se fait sur le nom sans accents: compare tel quel, "Établissement"
+    // (E accentue) passe apres "Lycee", parce que la comparaison porte sur les
+    // codes UTF-16 et non sur l'alphabet.
+    final sorted = [...all]
+      ..sort(
+        (a, b) => etabFoldAccents(
+          etabDisplayName(a),
+        ).compareTo(etabFoldAccents(etabDisplayName(b))),
+      );
+
+    final filtered = sorted
+        .where((etab) => _matches(etab, _searchQuery))
+        .toList(growable: false);
+    // Le bloc "Reprendre" ne doit pas dupliquer une carte de la grille.
+    final others = filtered
+        .where((etab) => resume == null || etab.id != resume.id)
+        .toList(growable: false);
+    final showResume =
+        resume != null &&
+        _searchQuery.isEmpty &&
+        all.any((e) => e.id == resume.id);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFEFF4FB),
-      appBar: PreferredSize(
-        preferredSize: Size.fromHeight(veryCompact ? 48 : (compact ? 56 : 64)),
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF0F355D), Color(0xFF114C77), Color(0xFF156A8D)],
-            ),
-          ),
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 18),
-              child: Row(
-                children: [
-                  Container(
-                    width: veryCompact ? 30 : 34,
-                    height: veryCompact ? 30 : 34,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.18),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.30),
+      backgroundColor: scheme.surface,
+      body: CallbackShortcuts(
+        // "/" met le curseur dans la recherche, comme l'indique la touche
+        // affichee dans le champ.
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.slash): () =>
+              _searchFocusNode.requestFocus(),
+        },
+        child: Focus(
+          autofocus: true,
+          child: Stack(
+            children: [
+              const Positioned.fill(child: EtabAmbientBackdrop()),
+              SafeArea(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    EtabContentBand(
+                      child: _PortalHeader(
+                        total: all.length,
+                        searchController: _searchController,
+                        searchFocusNode: _searchFocusNode,
+                        searchQuery: _searchQuery,
+                        onSearchChanged: (value) =>
+                            setState(() => _searchQuery = value.trim()),
+                        onClearSearch: () {
+                          _searchController.clear();
+                          setState(() => _searchQuery = '');
+                        },
                       ),
                     ),
-                    child: const Icon(
-                      Icons.school,
-                      color: Colors.white,
-                      size: 20,
+                    Expanded(
+                      child: filtered.isEmpty
+                          ? _EmptyResults(query: _searchQuery)
+                          : EtabContentBand(
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final wide = constraints.maxWidth >= 720;
+                                  final horizontal = wide ? 28.0 : 16.0;
+
+                                  return ListView(
+                                    padding: EdgeInsets.fromLTRB(
+                                      horizontal,
+                                      4,
+                                      horizontal,
+                                      24,
+                                    ),
+                                    children: [
+                                      if (showResume) ...[
+                                        const EtabSectionLabel('Reprendre'),
+                                        EtabStaggeredReveal(
+                                          key: ValueKey('resume-${resume.id}'),
+                                          index: 0,
+                                          child: _ResumeCard(
+                                            etab: resume,
+                                            onTap: () => _select(resume),
+                                            onDetails: () =>
+                                                _openDetails(resume),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                      ],
+                                      EtabSectionLabel(
+                                        showResume
+                                            ? 'Autres établissements'
+                                            : 'Tous les établissements',
+                                      ),
+                                      _EtablissementGrid(
+                                        etablissements: others,
+                                        maxWidth:
+                                            constraints.maxWidth -
+                                            horizontal * 2,
+                                        onSelected: _select,
+                                        onDetails: _openDetails,
+                                        onRequestAccess: () =>
+                                            _requestAccess(all),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Gestion Scolaire',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: veryCompact ? 18 : (compact ? 21 : 24),
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                  const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.30),
-                      ),
-                    ),
-                    child: Text(
-                      'Plateforme officielle',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: veryCompact ? 10 : 11,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.2,
-                      ),
-                    ),
-                  ),
-                ],
+                    const EtabSecureFooter(),
+                  ],
+                ),
               ),
-            ),
+            ],
           ),
         ),
       ),
-      body: Stack(
+    );
+  }
+}
+
+/// Une coordonnee dans la boite "Demander un acces".
+class _ContactLine extends StatelessWidget {
+  final IconData icon;
+  final String value;
+
+  const _ContactLine({required this.icon, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
         children: [
-          IgnorePointer(
-            child: CustomPaint(
-              size: Size.infinite,
-              painter: _LuxuryBackdropPainter(),
-            ),
-          ),
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOut,
-            left: (size.width * _spotlight.dx) - (size.width * 0.22),
-            top: (size.height * _spotlight.dy) - (size.width * 0.22),
-            child: IgnorePointer(
-              child: Container(
-                width: size.width * 0.44,
-                height: size.width * 0.44,
-                decoration: BoxDecoration(
-                  gradient: const RadialGradient(
-                    colors: [Color(0x44FFFFFF), Color(0x00FFFFFF)],
-                  ),
-                  borderRadius: BorderRadius.circular(1000),
-                ),
-              ),
-            ),
-          ),
-          AnimatedBuilder(
-            animation: _ambientController,
-            builder: (context, _) {
-              final pulse = _ambientController.value;
-              return Stack(
-                children: [
-                  Positioned(
-                    left: -130 + (22 * pulse),
-                    bottom: -95 + (16 * pulse),
-                    child: Container(
-                      width: screenWidth * 0.48,
-                      height: screenWidth * 0.40,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0x66BFD8F6), Color(0x00BFD8F6)],
-                        ),
-                        borderRadius: BorderRadius.circular(280),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    right: -70 + (18 * pulse),
-                    top: 66 - (12 * pulse),
-                    child: Container(
-                      width: size.width * 0.36,
-                      height: size.width * 0.29,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Color(0x66D7F0EE), Color(0x00D7F0EE)],
-                        ),
-                        borderRadius: BorderRadius.circular(240),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: size.width * 0.30,
-                    top: -80 + (15 * pulse),
-                    child: Container(
-                      width: size.width * 0.22,
-                      height: size.width * 0.18,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0x44FFE1C8), Color(0x00FFE1C8)],
-                        ),
-                        borderRadius: BorderRadius.circular(200),
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-          MouseRegion(
-            onHover: (event) {
-              final nx = (event.localPosition.dx / size.width).clamp(0.0, 1.0);
-              final ny = (event.localPosition.dy / size.height).clamp(0.0, 1.0);
-              setState(() => _spotlight = Offset(nx, ny));
-            },
-            child: SafeArea(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 1060),
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: veryCompact ? 10 : 14,
-                      vertical: veryCompact ? 4 : 8,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _AnimatedReveal(
-                          delay: const Duration(milliseconds: 80),
-                          child: Container(
-                          padding: EdgeInsets.fromLTRB(
-                            veryCompact ? 12 : 18,
-                            veryCompact ? 11 : 16,
-                            veryCompact ? 12 : 18,
-                            veryCompact ? 11 : 14,
-                          ),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(20),
-                            gradient: const LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [Color(0xFDFEFFFE), Color(0xF0F7FEFF)],
-                            ),
-                            border: Border.all(color: const Color(0xFFD3E2F2)),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color(0x12324F73),
-                                blurRadius: 20,
-                                offset: Offset(0, 10),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFE6F1FC),
-                                  borderRadius: BorderRadius.circular(999),
-                                  border: Border.all(color: const Color(0xFFC6DBF2)),
-                                ),
-                                child: const Text(
-                                  'ENTREE OFFICIELLE',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 1.1,
-                                    color: Color(0xFF24557F),
-                                  ),
-                                ),
-                              ),
-                              SizedBox(height: veryCompact ? 6 : 8),
-                              Text(
-                                'Bienvenue sur la plateforme de Gestion Scolaire OUMAR BAH',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: veryCompact ? 16 : (compact ? 21 : 27),
-                                  fontWeight: FontWeight.w900,
-                                  color: const Color(0xFF163E63),
-                                  letterSpacing: 0.2,
-                                  height: 1.15,
-                                ),
-                              ),
-                              SizedBox(height: veryCompact ? 4 : 6),
-                              Text(
-                                'Sélectionnez un établissement pour accéder à la gestion.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: veryCompact ? 11 : (compact ? 13 : 14),
-                                  fontWeight: FontWeight.w500,
-                                  color: const Color(0xFF476584),
-                                ),
-                              ),
-                              SizedBox(height: veryCompact ? 9 : 11),
-                              Wrap(
-                                alignment: WrapAlignment.center,
-                                spacing: 8,
-                                runSpacing: 6,
-                                children: [
-                                  _StatChip(
-                                    icon: Icons.domain,
-                                    label: '$etabCount etablissements disponibles',
-                                  ),
-                                  const _StatChip(
-                                    icon: Icons.verified_user,
-                                    label: 'Acces securise',
-                                  ),
-                                  const _StatChip(
-                                    icon: Icons.bolt,
-                                    label: 'Acces rapide',
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: veryCompact ? 9 : 12),
-                              ConstrainedBox(
-                                constraints: const BoxConstraints(maxWidth: 760),
-                                child: LayoutBuilder(
-                                  builder: (context, constraints) {
-                                    final compactSearchRow = constraints.maxWidth < 660;
-                                    final searchField = TextField(
-                                      controller: _searchController,
-                                      onChanged: (value) {
-                                        setState(() => _searchQuery = value.trim());
-                                      },
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        color: Color(0xFF1C466E),
-                                      ),
-                                      decoration: InputDecoration(
-                                        hintText: 'Rechercher un etablissement...',
-                                        hintStyle: const TextStyle(
-                                          color: Color(0xFF6A84A1),
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                        filled: true,
-                                        fillColor: const Color(0xFFF3F9FF),
-                                        prefixIcon: const Icon(
-                                          Icons.search_rounded,
-                                          color: Color(0xFF2A5F8D),
-                                        ),
-                                        suffixIcon: _searchQuery.isEmpty
-                                            ? null
-                                            : IconButton(
-                                                tooltip: 'Effacer',
-                                                onPressed: () {
-                                                  _searchController.clear();
-                                                  setState(() => _searchQuery = '');
-                                                },
-                                                icon: const Icon(Icons.close_rounded),
-                                              ),
-                                        contentPadding: const EdgeInsets.symmetric(
-                                          horizontal: 14,
-                                          vertical: 12,
-                                        ),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(14),
-                                          borderSide: const BorderSide(
-                                            color: Color(0xFFC5DCF2),
-                                          ),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(14),
-                                          borderSide: const BorderSide(
-                                            color: Color(0xFF4E83B3),
-                                            width: 1.5,
-                                          ),
-                                        ),
-                                      ),
-                                    );
-
-                                    final layoutToggle = SegmentedButton<EtablissementLayoutMode>(
-                                      segments: const [
-                                        ButtonSegment<EtablissementLayoutMode>(
-                                          value: EtablissementLayoutMode.grid,
-                                          icon: Icon(Icons.grid_view_rounded, size: 16),
-                                          label: Text('Grille'),
-                                        ),
-                                        ButtonSegment<EtablissementLayoutMode>(
-                                          value: EtablissementLayoutMode.list,
-                                          icon: Icon(Icons.view_agenda_rounded, size: 16),
-                                          label: Text('Liste'),
-                                        ),
-                                      ],
-                                      selected: <EtablissementLayoutMode>{_layoutMode},
-                                      showSelectedIcon: false,
-                                      onSelectionChanged: (selection) {
-                                        if (selection.isEmpty) {
-                                          return;
-                                        }
-                                        setState(() => _layoutMode = selection.first);
-                                      },
-                                      style: ButtonStyle(
-                                        foregroundColor: WidgetStateProperty.resolveWith<Color>((states) {
-                                          if (states.contains(WidgetState.selected)) {
-                                            return Colors.white;
-                                          }
-                                          return const Color(0xFF2B5F8E);
-                                        }),
-                                        backgroundColor: WidgetStateProperty.resolveWith<Color>((states) {
-                                          if (states.contains(WidgetState.selected)) {
-                                            return const Color(0xFF2A5F99);
-                                          }
-                                          return const Color(0xFFEAF3FD);
-                                        }),
-                                        side: const WidgetStatePropertyAll(
-                                          BorderSide(color: Color(0xFFC5D9EF)),
-                                        ),
-                                      ),
-                                    );
-
-                                    if (compactSearchRow) {
-                                      return Column(
-                                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                                        children: [
-                                          searchField,
-                                          const SizedBox(height: 8),
-                                          Align(
-                                            alignment: Alignment.centerLeft,
-                                            child: layoutToggle,
-                                          ),
-                                        ],
-                                      );
-                                    }
-
-                                    return Row(
-                                      children: [
-                                        Expanded(child: searchField),
-                                        const SizedBox(width: 10),
-                                        layoutToggle,
-                                      ],
-                                    );
-                                  },
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        ),
-                        SizedBox(height: veryCompact ? 6 : 10),
-                        Expanded(
-                          child: _AnimatedReveal(
-                            delay: const Duration(milliseconds: 180),
-                            child: EtablissementSelector(
-                              searchQuery: _searchQuery,
-                              layoutMode: _layoutMode,
-                              onSelected: (etab) async {
-                                await widget.onSelected(etab);
-                              },
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+          Icon(icon, size: 15, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
         ],
@@ -638,31 +564,237 @@ class _EtablissementSelectionScreenState
   }
 }
 
-class _StatChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
+/// En-tete: enonce la tache, puis donne l'outil pour l'accomplir.
+class _PortalHeader extends StatelessWidget {
+  final int total;
+  final TextEditingController searchController;
+  final FocusNode searchFocusNode;
+  final String searchQuery;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onClearSearch;
 
-  const _StatChip({required this.icon, required this.label});
+  const _PortalHeader({
+    required this.total,
+    required this.searchController,
+    required this.searchFocusNode,
+    required this.searchQuery,
+    required this.onSearchChanged,
+    required this.onClearSearch,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 720;
+        final horizontal = wide ? 28.0 : 16.0;
+
+        return Padding(
+          padding: EdgeInsets.fromLTRB(horizontal, 14, horizontal, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(10),
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [scheme.primary, scheme.secondary],
+                      ),
+                    ),
+                    child: const Text(
+                      'GS',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Gestion Scolaire',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            height: 1.15,
+                          ),
+                        ),
+                        Text(
+                          'Espace multi-établissements',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.labelSmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                            fontSize: 10.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _SecureBadge(scheme: scheme, textTheme: textTheme),
+                ],
+              ),
+              const SizedBox(height: 18),
+              // Seul "votre établissement" porte le degrade: le contraste entre
+              // la partie neutre et la partie accentuee fait lire le titre en
+              // deux temps, comme dans la maquette.
+              _PortalTitle(fontSize: wide ? 32 : 23),
+              const SizedBox(height: 6),
+              Text(
+                total <= 1
+                    ? '$total établissement accessible avec ce compte — '
+                          'sélectionnez-le pour continuer.'
+                    : '$total établissements accessibles avec ce compte — '
+                          'sélectionnez-en un pour continuer.',
+                style: textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: searchController,
+                focusNode: searchFocusNode,
+                onChanged: onSearchChanged,
+                style: textTheme.bodyMedium,
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: 'Rechercher un établissement...',
+                  hintStyle: textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  filled: true,
+                  fillColor: scheme.surfaceContainer,
+                  prefixIcon: Icon(
+                    Icons.search_rounded,
+                    size: 19,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  prefixIconConstraints: const BoxConstraints(
+                    minWidth: 40,
+                    minHeight: 40,
+                  ),
+                  suffixIcon: searchQuery.isEmpty
+                      ? _SlashHint(scheme: scheme, textTheme: textTheme)
+                      : IconButton(
+                          tooltip: 'Effacer',
+                          onPressed: onClearSearch,
+                          icon: const Icon(Icons.close_rounded, size: 17),
+                        ),
+                  suffixIconConstraints: const BoxConstraints(
+                    minWidth: 40,
+                    minHeight: 40,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 13,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: scheme.outlineVariant),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: scheme.primary, width: 1.5),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Badge "Sécurisé" de l'en-tete, avec un point qui respire lentement.
+class _SecureBadge extends StatefulWidget {
+  final ColorScheme scheme;
+  final TextTheme textTheme;
+
+  const _SecureBadge({required this.scheme, required this.textTheme});
+
+  @override
+  State<_SecureBadge> createState() => _SecureBadgeState();
+}
+
+class _SecureBadgeState extends State<_SecureBadge>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2200),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = widget.scheme;
+    final still = etabReduceMotion(context);
+    const live = Color(0xFF22C55E);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFFEAF3FD),
+        color: scheme.surfaceContainer,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFFC9DDF3)),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: const Color(0xFF1F5788)),
+          AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) {
+              final t = still ? 1.0 : 0.45 + _controller.value * 0.55;
+              return Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: live.withValues(alpha: t),
+                  boxShadow: [
+                    BoxShadow(
+                      color: live.withValues(alpha: t * 0.6),
+                      blurRadius: 5,
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
           const SizedBox(width: 6),
           Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF2C517A),
-              fontSize: 11,
+            'Connexion sécurisée',
+            style: widget.textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -672,44 +804,294 @@ class _StatChip extends StatelessWidget {
   }
 }
 
-class _AnimatedReveal extends StatefulWidget {
-  final Widget child;
-  final Duration delay;
+/// Titre en deux temps: une partie neutre, une partie degradee.
+///
+/// Le degrade ne couvre que le second fragment, donc un ShaderMask sur tout le
+/// texte ne suffit pas: les deux fragments sont peints separement et remis
+/// bout a bout, avec un retour a la ligne propre en largeur mobile.
+class _PortalTitle extends StatelessWidget {
+  final double fontSize;
 
-  const _AnimatedReveal({required this.child, required this.delay});
-
-  @override
-  State<_AnimatedReveal> createState() => _AnimatedRevealState();
-}
-
-class _AnimatedRevealState extends State<_AnimatedReveal> {
-  bool _visible = false;
-
-  @override
-  void initState() {
-    super.initState();
-    Timer(widget.delay, () {
-      if (mounted) {
-        setState(() => _visible = true);
-      }
-    });
-  }
+  const _PortalTitle({required this.fontSize});
 
   @override
   Widget build(BuildContext context) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0, end: _visible ? 1 : 0),
-      duration: const Duration(milliseconds: 620),
-      curve: Curves.easeOutCubic,
-      child: widget.child,
-      builder: (context, value, child) {
-        final t = value.clamp(0.0, 1.0).toDouble();
-        return AnimatedOpacity(
-          opacity: t,
-          duration: const Duration(milliseconds: 220),
-          child: Transform.translate(
-            offset: Offset(0, (1 - t) * 24),
-            child: child,
+    final scheme = Theme.of(context).colorScheme;
+    final style = Theme.of(context).textTheme.headlineSmall?.copyWith(
+      fontSize: fontSize,
+      fontWeight: FontWeight.w800,
+      letterSpacing: -0.7,
+      height: 1.12,
+    );
+
+    return Semantics(
+      header: true,
+      label: 'Choisissez votre établissement',
+      child: ExcludeSemantics(
+        child: Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text('Choisissez ', style: style?.copyWith(color: scheme.onSurface)),
+            ShaderMask(
+              blendMode: BlendMode.srcIn,
+              shaderCallback: (bounds) => LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [scheme.primary, scheme.tertiary],
+              ).createShader(bounds),
+              child: Text('votre établissement', style: style),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Touche "/" affichee dans le champ de recherche.
+class _SlashHint extends StatelessWidget {
+  final ColorScheme scheme;
+  final TextTheme textTheme;
+
+  const _SlashHint({required this.scheme, required this.textTheme});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 10),
+      child: Tooltip(
+        message: 'Appuyez sur / pour rechercher',
+        child: Container(
+          width: 20,
+          height: 20,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: scheme.outlineVariant),
+          ),
+          child: Text(
+            '/',
+            style: textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontWeight: FontWeight.w700,
+              fontSize: 11,
+              height: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Carte "Reprendre": meme langage visuel que les tuiles, mais sur toute la
+/// largeur de la bande, parce qu'elle designe un choix unique et non un
+/// element parmi d'autres.
+class _ResumeCard extends StatelessWidget {
+  final Etablissement etab;
+  final VoidCallback onTap;
+  final VoidCallback onDetails;
+
+  const _ResumeCard({
+    required this.etab,
+    required this.onTap,
+    required this.onDetails,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final still = etabReduceMotion(context);
+    final radius = BorderRadius.circular(16);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 9),
+      child: _HoverLift(
+        borderRadius: radius,
+        onTap: onTap,
+        onLongPress: onDetails,
+        surfaceColor: Color.alphaBlend(
+          scheme.primary.withValues(alpha: 0.12),
+          scheme.surfaceContainerLow,
+        ),
+        borderColor: scheme.primary.withValues(alpha: 0.55),
+        hoverBorderColor: scheme.primary,
+        glowColor: scheme.primary,
+        builder: (context, hovered) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+            child: Row(
+              children: [
+                Hero(
+                  tag: etabIdentityHeroTag(etab),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: EtabIdentityBadge(etab: etab, size: 46),
+                  ),
+                ),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              etabDisplayName(etab),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _ResumePill(scheme: scheme, textTheme: textTheme),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Dernier établissement utilisé',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.labelSmall?.copyWith(
+                          color: scheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Détails de ${etabDisplayName(etab)}',
+                  onPressed: onDetails,
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 18,
+                  color: scheme.onSurfaceVariant,
+                  icon: const Icon(Icons.info_outline_rounded),
+                ),
+                // Le chevron avance au survol: la carte annonce ou elle mene.
+                AnimatedSlide(
+                  offset: Offset(hovered && !still ? 0.28 : 0, 0),
+                  duration: still
+                      ? Duration.zero
+                      : const Duration(milliseconds: 170),
+                  curve: Curves.easeOut,
+                  child: Icon(
+                    Icons.chevron_right_rounded,
+                    color: hovered ? scheme.primary : scheme.onSurfaceVariant,
+                    size: 21,
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Pastille "Reprendre" sur la ligne du dernier etablissement utilise.
+class _ResumePill extends StatelessWidget {
+  final ColorScheme scheme;
+  final TextTheme textTheme;
+
+  const _ResumePill({required this.scheme, required this.textTheme});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: scheme.primary.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: scheme.primary.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.history_rounded, size: 11, color: scheme.primary),
+          const SizedBox(width: 4),
+          Text(
+            'Reprendre',
+            style: textTheme.labelSmall?.copyWith(
+              color: scheme.primary,
+              fontWeight: FontWeight.w800,
+              fontSize: 10,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EtablissementGrid extends StatelessWidget {
+  final List<Etablissement> etablissements;
+  final double maxWidth;
+  final ValueChanged<Etablissement> onSelected;
+  final ValueChanged<Etablissement> onDetails;
+  final VoidCallback onRequestAccess;
+
+  const _EtablissementGrid({
+    required this.etablissements,
+    required this.maxWidth,
+    required this.onSelected,
+    required this.onDetails,
+    required this.onRequestAccess,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final columns = maxWidth >= 1080
+        ? 4
+        : maxWidth >= 760
+        ? 3
+        : maxWidth >= 520
+        ? 2
+        : 1;
+    final scale = MediaQuery.textScalerOf(context).scale(1);
+    // Hauteur de tuile: chrome constant + bloc de texte qui suit le reglage
+    // de police du systeme.
+    final extent = 126.0 + 58.0 * scale;
+
+    // La carte de demande d'acces ferme la grille: elle occupe la case qui
+    // suit le dernier etablissement.
+    final itemCount = etablissements.length + 1;
+
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      itemCount: itemCount,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: columns,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+        mainAxisExtent: extent,
+      ),
+      itemBuilder: (context, index) {
+        if (index == etablissements.length) {
+          return EtabStaggeredReveal(
+            key: const ValueKey('tile-request-access'),
+            index: index,
+            child: _RequestAccessTile(onTap: onRequestAccess),
+          );
+        }
+
+        final etab = etablissements[index];
+        return EtabStaggeredReveal(
+          key: ValueKey('tile-${etab.id}'),
+          index: index,
+          child: _EtablissementTile(
+            etab: etab,
+            onTap: () => onSelected(etab),
+            onDetails: () => onDetails(etab),
           ),
         );
       },
@@ -717,28 +1099,359 @@ class _AnimatedRevealState extends State<_AnimatedReveal> {
   }
 }
 
-class _LuxuryBackdropPainter extends CustomPainter {
+/// Derniere case: la demande d'acces, en pointilles pour se lire comme une
+/// case a remplir et non comme un etablissement de plus.
+class _RequestAccessTile extends StatefulWidget {
+  final VoidCallback onTap;
+
+  const _RequestAccessTile({required this.onTap});
+
+  @override
+  State<_RequestAccessTile> createState() => _RequestAccessTileState();
+}
+
+class _RequestAccessTileState extends State<_RequestAccessTile> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final still = etabReduceMotion(context);
+    final radius = BorderRadius.circular(16);
+    final duration = still ? Duration.zero : const Duration(milliseconds: 170);
+
+    return Material(
+      color: scheme.surfaceContainerLow.withValues(alpha: 0.35),
+      borderRadius: radius,
+      child: InkWell(
+        borderRadius: radius,
+        onTap: widget.onTap,
+        onHover: (value) => setState(() => _hovered = value),
+        child: CustomPaint(
+          painter: _DashedBorderPainter(
+            color: _hovered
+                ? scheme.primary.withValues(alpha: 0.7)
+                : scheme.outlineVariant,
+            radius: 16,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                AnimatedContainer(
+                  duration: duration,
+                  curve: Curves.easeOut,
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _hovered
+                        ? scheme.primary.withValues(alpha: 0.18)
+                        : scheme.surfaceContainerHighest.withValues(
+                            alpha: 0.55,
+                          ),
+                    border: Border.all(
+                      color: _hovered
+                          ? scheme.primary.withValues(alpha: 0.6)
+                          : scheme.outlineVariant,
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.add_rounded,
+                    size: 19,
+                    color: _hovered ? scheme.primary : scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  "Demander l'accès à un autre établissement",
+                  textAlign: TextAlign.center,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.labelSmall?.copyWith(
+                    color: _hovered ? scheme.primary : scheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Contour en pointilles suivant un rectangle arrondi.
+class _DashedBorderPainter extends CustomPainter {
+  final Color color;
+  final double radius;
+
+  const _DashedBorderPainter({required this.color, required this.radius});
+
   @override
   void paint(Canvas canvas, Size size) {
-    final gridPaint = Paint()
-      ..color = const Color(0x163B6B92)
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
-    const spacing = 28.0;
-    for (double x = 0; x <= size.width; x += spacing) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-    }
-    for (double y = 0; y <= size.height; y += spacing) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
 
-    final dotPaint = Paint()..color = const Color(0x1A6E9FC7);
-    for (double y = 18; y < size.height; y += 56) {
-      for (double x = 18; x < size.width; x += 56) {
-        canvas.drawCircle(Offset(x, y), 1.2, dotPaint);
+    final path = Path()
+      ..addRRect(
+        RRect.fromRectAndRadius(
+          Offset.zero & size,
+          Radius.circular(radius),
+        ),
+      );
+
+    const dash = 5.0;
+    const gap = 4.0;
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        final next = math.min(distance + dash, metric.length);
+        canvas.drawPath(metric.extractPath(distance, next), paint);
+        distance = next + gap;
       }
     }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(_DashedBorderPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.radius != radius;
 }
+
+class _EtablissementTile extends StatelessWidget {
+  final Etablissement etab;
+  final VoidCallback onTap;
+  final VoidCallback onDetails;
+
+  const _EtablissementTile({
+    required this.etab,
+    required this.onTap,
+    required this.onDetails,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    final radius = BorderRadius.circular(16);
+    final ramp = etabRamp(etab);
+    final still = etabReduceMotion(context);
+    final duration = still ? Duration.zero : const Duration(milliseconds: 180);
+
+    return _HoverLift(
+      borderRadius: radius,
+      onTap: onTap,
+      // Au doigt, le survol n'existe pas: l'appui long remplace le bouton de
+      // details qui n'apparait qu'a la souris.
+      onLongPress: onDetails,
+      surfaceColor: scheme.surfaceContainerLow,
+      borderColor: scheme.outlineVariant,
+      hoverBorderColor: ramp.first.withValues(alpha: 0.75),
+      // Le halo reprend la teinte d'identite de l'etablissement: chaque tuile
+      // se souleve avec sa propre couleur.
+      glowColor: ramp.first,
+      builder: (context, hovered) {
+        return ClipRRect(
+          borderRadius: radius,
+          child: Stack(
+            children: [
+              // Nappe de couleur derriere la pastille: elle rattache la tuile
+              // a l'identite de l'etablissement sans colorer tout le fond.
+              Positioned(
+                left: -60,
+                top: -70,
+                child: IgnorePointer(
+                  child: AnimatedContainer(
+                    duration: duration,
+                    curve: Curves.easeOut,
+                    width: 180,
+                    height: 180,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [
+                          ramp.first.withValues(alpha: hovered ? 0.30 : 0.18),
+                          ramp.first.withValues(alpha: 0),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(15),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // La pastille vole jusqu'a l'en-tete de la fiche:
+                        // l'utilisateur garde des yeux l'etablissement ouvert.
+                        Hero(
+                          tag: etabIdentityHeroTag(etab),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: EtabIdentityBadge(etab: etab, size: 40),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.topRight,
+                            child: EtabTypeTag(label: etabTag(etab), ramp: ramp),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 13),
+                    Text(
+                      etabDisplayName(etab),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        height: 1.22,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      etabSubtitle(etab),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const Spacer(),
+                    Row(
+                      children: [
+                        // Les details restent joignables sans encombrer l'etat
+                        // au repos, que la maquette laisse vide a gauche.
+                        AnimatedOpacity(
+                          opacity: hovered ? 1 : 0,
+                          duration: duration,
+                          child: IgnorePointer(
+                            ignoring: !hovered,
+                            child: Tooltip(
+                              message: 'Détails de ${etabDisplayName(etab)}',
+                              child: InkResponse(
+                                onTap: onDetails,
+                                radius: 18,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(3),
+                                  child: Icon(
+                                    Icons.info_outline_rounded,
+                                    size: 16,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          'Accéder',
+                          style: textTheme.labelMedium?.copyWith(
+                            color: hovered ? ramp.first : scheme.onSurface,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        AnimatedSlide(
+                          offset: Offset(hovered && !still ? 0.3 : 0, 0),
+                          duration: duration,
+                          curve: Curves.easeOut,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 5),
+                            child: Icon(
+                              Icons.arrow_forward_rounded,
+                              size: 14,
+                              color: hovered ? ramp.first : scheme.onSurface,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _EmptyResults extends StatelessWidget {
+  final String query;
+
+  const _EmptyResults({required this.query});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Center(
+      child: EtabStaggeredReveal(
+        index: 0,
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      scheme.primary.withValues(alpha: 0.18),
+                      scheme.primary.withValues(alpha: 0),
+                    ],
+                  ),
+                ),
+                child: Icon(
+                  Icons.travel_explore_outlined,
+                  size: 34,
+                  color: scheme.primary,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                query.isEmpty
+                    ? 'Aucun établissement disponible'
+                    : 'Aucun résultat pour "$query"',
+                textAlign: TextAlign.center,
+                style: textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                query.isEmpty
+                    ? 'Vérifiez la connexion au serveur, puis réessayez.'
+                    : 'Essayez un autre nom, une ville ou une adresse e-mail.',
+                textAlign: TextAlign.center,
+                style: textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+

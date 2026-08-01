@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
-import '../../auth/presentation/auth_controller.dart';
+import '../../../core/permissions/module_permissions.dart';
 
 class CommunicationPage extends ConsumerStatefulWidget {
   const CommunicationPage({super.key});
@@ -37,12 +37,16 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
   List<Map<String, dynamic>> _notifications = [];
   List<Map<String, dynamic>> _smsProviders = [];
 
+  /// Lecture seule d'apres la matrice du backend, plus d'apres une liste de
+  /// roles recopiee ici.
   bool _isCommunicationReadOnlyRole() {
-    final role = ref.read(authControllerProvider).value?.role;
-    return role != 'super_admin' &&
-        role != 'director' &&
-        role != 'promoter' &&
-        role != 'censor';
+    return !ref.read(currentPermissionsProvider).canWrite('communication');
+  }
+
+  /// La passerelle SMS est un module distinct: sa configuration porte le
+  /// jeton d'API en clair et n'est pas ouverte a qui redige une annonce.
+  bool _canConfigureSms() {
+    return ref.read(currentPermissionsProvider).canWrite('sms_config');
   }
 
   @override
@@ -71,11 +75,16 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
 
     try {
       final dio = ref.read(dioProvider);
+      // La passerelle SMS est un module a part: ne pas l'appeler quand le
+      // profil n'y a pas droit, sinon un 403 ferait echouer tout l'ecran.
+      final canReadSms = ref.read(currentPermissionsProvider).canRead(
+        'sms_config',
+      );
       final results = await Future.wait([
-        dio.get('/auth/users/'),
+        dio.get('/auth/users/directory/'),
         dio.get('/announcements/'),
         dio.get('/notifications/'),
-        dio.get('/sms-providers/'),
+        if (canReadSms) dio.get('/sms-providers/'),
       ]);
 
       if (!mounted) return;
@@ -84,7 +93,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
         _users = _extractRows(results[0].data);
         _announcements = _extractRows(results[1].data);
         _notifications = _extractRows(results[2].data);
-        _smsProviders = _extractRows(results[3].data);
+        _smsProviders = canReadSms ? _extractRows(results[3].data) : [];
 
         if (_selectedRecipient != null &&
             !_users.any((row) => _asInt(row['id']) == _selectedRecipient)) {
@@ -221,6 +230,11 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
   }
 
   Future<void> _createSmsProvider() async {
+    if (!_canConfigureSms()) {
+      _showMessage('Configuration SMS reservee a l\'administration.');
+      return;
+    }
+
     final provider = _smsProviderController.text.trim();
     final apiUrl = _smsUrlController.text.trim();
     final apiToken = _smsTokenController.text.trim();
@@ -415,12 +429,10 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
       );
     }
 
-    final authUser = ref.watch(authControllerProvider).value;
-    final isReadOnlyMode =
-      authUser?.role != 'super_admin' &&
-      authUser?.role != 'director' &&
-      authUser?.role != 'promoter' &&
-      authUser?.role != 'censor';
+    final permissions = ref.watch(currentPermissionsProvider);
+    final isReadOnlyMode = !permissions.canWrite('communication');
+    final canConfigureSms = permissions.canWrite('sms_config');
+    final canReadSms = permissions.canRead('sms_config');
 
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -552,6 +564,9 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
           ),
         ),
         const SizedBox(height: 12),
+        // Le jeton d'API du fournisseur circule ici en clair: la section
+        // n'apparait qu'aux profils qui ont le module « Passerelle SMS ».
+        if (canConfigureSms)
         _sectionCard(
           title: 'Configuration SMS',
           child: Column(
@@ -585,7 +600,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                 },
               ),
               FilledButton.tonal(
-                onPressed: (_saving || isReadOnlyMode)
+                onPressed: (_saving || !canConfigureSms)
                     ? null
                     : _createSmsProvider,
                 child: const Text('Enregistrer config SMS'),
@@ -761,6 +776,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                   )
                   .toList(),
             ),
+          if (canReadSms) ...[
           const SizedBox(height: 12),
           Text(
             'Providers SMS (${filteredSmsProviders.length})',
@@ -838,6 +854,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                   )
                   .toList(),
             ),
+          ],
         ],
       ),
     );
@@ -902,7 +919,8 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                 _metricChip('Annonces', '${_announcements.length}'),
                 _metricChip('Notifications', '${_notifications.length}'),
                 _metricChip('Notifications envoyees', '$sentNotifications'),
-                _metricChip('Providers SMS actifs', '$activeSmsProviders'),
+                if (canReadSms)
+                  _metricChip('Providers SMS actifs', '$activeSmsProviders'),
               ],
             ),
           ),

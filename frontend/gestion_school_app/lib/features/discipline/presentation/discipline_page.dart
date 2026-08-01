@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../auth/presentation/auth_controller.dart';
 
 class DisciplinePage extends ConsumerStatefulWidget {
@@ -28,14 +29,11 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
   String _status = 'open';
   bool _parentNotified = false;
 
+  /// Lecture seule d'apres la matrice servie par le backend, et non d'apres
+  /// une liste de roles recopiee ici: les deux finissaient toujours par
+  /// diverger, et c'est l'API qui tranchait au moment du clic.
   bool _isDisciplineReadOnlyRole() {
-    final role = ref.read(authControllerProvider).value?.role;
-    return role != 'super_admin' &&
-        role != 'director' &&
-        role != 'promoter' &&
-        role != 'censor' &&
-        role != 'supervisor' &&
-        role != 'teacher';
+    return !ref.read(currentPermissionsProvider).canWrite('discipline');
   }
 
   @override

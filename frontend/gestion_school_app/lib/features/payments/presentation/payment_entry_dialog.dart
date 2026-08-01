@@ -552,16 +552,6 @@ class _GuidedPaymentEntryDialogState
     );
   }
 
-  String _selectedFeeStateLabel(_FeeOption? fee) {
-    if (fee == null) {
-      return 'Creation auto du frais';
-    }
-    if (fee.balance > 0) {
-      return 'Frais existant avec solde';
-    }
-    return 'Frais solde';
-  }
-
   Color _methodAccentColor(String method, ColorScheme colorScheme) {
     switch (method) {
       case 'Especes':

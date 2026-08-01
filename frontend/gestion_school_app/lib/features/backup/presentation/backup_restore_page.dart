@@ -1,15 +1,14 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/permissions/module_permissions.dart';
 
 import '../../../core/network/api_client.dart';
 import '../../../models/etablissement.dart';
-import '../../auth/presentation/auth_controller.dart';
 
 class BackupRestorePage extends ConsumerStatefulWidget {
   const BackupRestorePage({super.key});
@@ -397,8 +396,11 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
   @override
   Widget build(BuildContext context) {
     final selectedEtab = ref.watch(etablissementProvider).selected;
-    final user = ref.watch(authControllerProvider).value;
-    final isSuperAdmin = user?.role == 'super_admin';
+    // Restaurer ecrase la base: la matrice reserve l'ecriture au super
+    // admin, la direction reste en lecture.
+    final isSuperAdmin = ref
+        .watch(currentPermissionsProvider)
+        .canWrite('backup_restore');
 
     if (_loading) {
       return RefreshIndicator(
@@ -446,7 +448,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                   ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
-                    value: _createScope,
+                    initialValue: _createScope,
                     decoration: const InputDecoration(labelText: 'Type'),
                     items: [
                       if (isSuperAdmin)
@@ -507,7 +509,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                   ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
-                    value: _restoreScope,
+                    initialValue: _restoreScope,
                     decoration: const InputDecoration(labelText: 'Mode restauration'),
                     items: [
                       if (isSuperAdmin)

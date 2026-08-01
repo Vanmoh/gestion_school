@@ -8,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/providers/navigation_intents.dart';
 import '../../auth/presentation/auth_controller.dart';
-import '../../payments/presentation/payments_controller.dart';
 import 'dashboard_shared_ui.dart';
 
 List<Map<String, dynamic>> _rows(dynamic data) {
@@ -91,7 +90,6 @@ enum _RoleQuickAction {
   attendance,
   discipline,
   students,
-  teacherAttendance,
   teacherTimesheet,
   timetable,
   reports,
@@ -123,11 +121,6 @@ _RoleQuickActionMeta _roleQuickActionMeta(_RoleQuickAction action) {
       return const _RoleQuickActionMeta(
         label: 'Élèves',
         icon: Icons.groups_rounded,
-      );
-    case _RoleQuickAction.teacherAttendance:
-      return const _RoleQuickActionMeta(
-        label: 'Absences enseignants',
-        icon: Icons.assignment_ind_outlined,
       );
     case _RoleQuickAction.teacherTimesheet:
       return const _RoleQuickActionMeta(
@@ -176,9 +169,6 @@ void _handleRoleQuickAction(WidgetRef ref, _RoleQuickAction action) {
       return;
     case _RoleQuickAction.students:
       _navigateToRoleShellItem(ref, 'students');
-      return;
-    case _RoleQuickAction.teacherAttendance:
-      _navigateToRoleShellItem(ref, 'teacher_attendance');
       return;
     case _RoleQuickAction.teacherTimesheet:
       _navigateToRoleShellItem(ref, 'teacher_timesheet');
@@ -676,7 +666,7 @@ class _RoleTrendPanel extends StatelessWidget {
                     color: const Color(0xFF5B8CFF),
                     dotData: FlDotData(
                       show: true,
-                      getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
+                      getDotPainter: (_, _, _, _) => FlDotCirclePainter(
                         radius: 3,
                         color: const Color(0xFF7CD7FF),
                         strokeColor: Colors.white,
@@ -934,7 +924,6 @@ class _CensorDashboardPageState extends ConsumerState<CensorDashboardPage> {
       ],
       quickActions: const [
         _RoleQuickAction.students,
-        _RoleQuickAction.teacherAttendance,
         _RoleQuickAction.teacherTimesheet,
         _RoleQuickAction.timetable,
         _RoleQuickAction.discipline,
@@ -1261,6 +1250,7 @@ class _ParentDashboardPageState extends ConsumerState<ParentDashboardPage> {
         'Lire les rapports disponibles',
       ],
       quickActions: const [
+        _RoleQuickAction.discipline,
         _RoleQuickAction.reports,
       ],
       onQuickActionSelected: (action) => _handleRoleQuickAction(ref, action),
@@ -1343,6 +1333,7 @@ class _StudentDashboardPageState extends ConsumerState<StudentDashboardPage> {
         'Voir vos incidents disciplinaires',
       ],
       quickActions: const [
+        _RoleQuickAction.discipline,
         _RoleQuickAction.reports,
       ],
       onQuickActionSelected: (action) => _handleRoleQuickAction(ref, action),

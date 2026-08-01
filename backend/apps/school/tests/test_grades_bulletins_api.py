@@ -373,7 +373,10 @@ class GradesAndBulletinsApiTests(APITestCase):
                 "subject": self.subject_math.id,
                 "classroom": self.class_b.id,
                 "academic_year": self.year.id,
-                "term": "T1",
+                # T2 et non T1: grade_3 occupe deja (student_3, math, class_b,
+                # annee, T1) et le validateur d'unicite repondait avant le
+                # controle de perimetre, masquant ce que ce test verifie.
+                "term": "T2",
                 "value": 13,
             },
             format="json",
@@ -435,7 +438,9 @@ class GradesAndBulletinsApiTests(APITestCase):
         self.assertEqual(patch_response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_create_grade_normalizes_term_and_rejects_out_of_range_value(self):
-        self.client.force_authenticate(self.supervisor_user)
+        # Le surveillant n'ecrit plus les notes (matrice de droits): ce test
+        # porte sur la normalisation du trimestre, pas sur le profil.
+        self.client.force_authenticate(self.admin_user)
 
         valid_response = self.client.post(
             "/api/grades/",

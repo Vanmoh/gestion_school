@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/academic_imports_ui_reference.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../../core/widgets/foreground_notice.dart';
-import '../../auth/presentation/auth_controller.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../domain/exam_models.dart';
 import 'exams_controller.dart';
@@ -95,9 +95,9 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final authUser = ref.watch(authControllerProvider).value;
-    final isReadOnlyMode =
-      authUser?.role == 'censor' || authUser?.role == 'accountant';
+    final isReadOnlyMode = !ref
+        .watch(currentPermissionsProvider)
+        .canWrite('exams');
     final sessionsAsync = ref.watch(examSessionsProvider);
     final planningsAsync = ref.watch(examPlanningsProvider);
     final resultsAsync = ref.watch(examResultsProvider);
