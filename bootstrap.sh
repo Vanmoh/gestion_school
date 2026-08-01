@@ -3,6 +3,32 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="$ROOT_DIR/infra"
+FORCE_REBUILD=0
+
+usage() {
+  cat <<'EOF'
+Usage: ./bootstrap.sh [--rebuild]
+
+Démarre la stack backend (MySQL, Redis, Django, Celery), applique les
+migrations et injecte les données de démonstration.
+
+Options:
+  --rebuild   Force la reconstruction des images backend/worker/beat.
+              Par défaut la reconstruction n'a lieu que si l'image est
+              absente ou si Dockerfile/requirements.txt ont changé depuis
+              sa construction. Le code source est monté en volume
+              (../backend:/app), il est donc toujours à jour sans rebuild.
+  -h, --help  Affiche cette aide.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rebuild) FORCE_REBUILD=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Option inconnue: $1"; usage; exit 1 ;;
+  esac
+done
 
 log() {
   printf "\n[%s] %s\n" "$(date +"%H:%M:%S")" "$1"
@@ -39,10 +65,54 @@ docker_compose() {
   "${DOCKER_CMD[@]}" compose "$@"
 }
 
+# Le code backend est monté en volume (../backend:/app dans docker-compose.yml),
+# il est donc déjà à jour sans reconstruction. Un rebuild n'apporte quelque
+# chose que si la recette de l'image ou ses dépendances changent: on compare la
+# date de l'image aux mtimes de ces fichiers. En cas de doute (image absente,
+# date illisible) on reconstruit, ne jamais reconstruire serait pire.
+needs_rebuild() {
+  if [[ "$FORCE_REBUILD" -eq 1 ]]; then
+    return 0
+  fi
+
+  local image_id image_created_iso image_created_epoch source source_mtime
+
+  image_id="$(docker_compose images -q backend 2>/dev/null | head -1)"
+  if [[ -z "$image_id" ]]; then
+    log "Image backend absente: construction initiale."
+    return 0
+  fi
+
+  image_created_iso="$("${DOCKER_CMD[@]}" image inspect "$image_id" \
+    --format '{{.Created}}' 2>/dev/null || true)"
+  if [[ -z "$image_created_iso" ]]; then
+    return 0
+  fi
+
+  image_created_epoch="$(date -d "$image_created_iso" +%s 2>/dev/null || true)"
+  if [[ -z "$image_created_epoch" ]]; then
+    return 0
+  fi
+
+  for source in Dockerfile requirements.txt .dockerignore; do
+    if [[ ! -f "$ROOT_DIR/backend/$source" ]]; then
+      continue
+    fi
+    source_mtime="$(stat -c %Y "$ROOT_DIR/backend/$source" 2>/dev/null || echo 0)"
+    if [[ "$source_mtime" -gt "$image_created_epoch" ]]; then
+      log "backend/$source modifié depuis la dernière image: reconstruction."
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 compose_up_with_retries() {
   local max_attempts=3
   local attempt=1
   local up_log
+  local up_args=(up -d)
   local python_image_candidates=(
     "${PYTHON_BASE_IMAGE:-python:3.12-slim}"
     "mirror.gcr.io/library/python:3.12-slim"
@@ -51,10 +121,16 @@ compose_up_with_retries() {
   local current_image_index=0
   local python_base_image="${python_image_candidates[$current_image_index]}"
 
+  if needs_rebuild; then
+    up_args+=(--build)
+  else
+    log "Images à jour: démarrage sans reconstruction (--rebuild pour forcer)."
+  fi
+
   while [[ "$attempt" -le "$max_attempts" ]]; do
     up_log="$(mktemp)"
     set +e
-    PYTHON_BASE_IMAGE="$python_base_image" docker_compose up -d --build 2>&1 | tee "$up_log"
+    PYTHON_BASE_IMAGE="$python_base_image" docker_compose "${up_args[@]}" 2>&1 | tee "$up_log"
     local up_rc=${PIPESTATUS[0]}
     set -e
 
@@ -66,12 +142,15 @@ compose_up_with_retries() {
     if grep -qiE "failed to resolve source metadata|lookup registry-1\.docker\.io|i/o timeout|temporary failure in name resolution|dial tcp|Name or service not known|network is unreachable" "$up_log"; then
       rm -f "$up_log"
       if [[ "$current_image_index" -lt $((${#python_image_candidates[@]} - 1)) ]]; then
-        ((current_image_index++))
+        # Affectation arithmetique explicite: `((i++))` renvoie l'ancienne
+        # valeur, donc un statut 1 quand i vaut 0, et `set -e` tuait le script
+        # avant meme la premiere bascule vers le mirror.
+        current_image_index=$((current_image_index + 1))
         python_base_image="${python_image_candidates[$current_image_index]}"
         log "Bascule automatique de l'image Python vers le mirror: $python_base_image"
         log "Echec reseau Docker Hub detecte (tentative ${attempt}/${max_attempts}). Nouvelle tentative dans 8s..."
         sleep 8
-        ((attempt++))
+        attempt=$((attempt + 1))
         continue
       fi
 

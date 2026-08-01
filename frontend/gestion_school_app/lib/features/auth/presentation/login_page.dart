@@ -1050,7 +1050,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           return 'Certificat serveur invalide.';
         case DioExceptionType.badResponse:
           return 'Réponse invalide du serveur.';
-        case DioExceptionType.unknown:
+        default:
           return 'Erreur réseau inconnue. Vérifiez votre connexion puis réessayez.';
       }
     }

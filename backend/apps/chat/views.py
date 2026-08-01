@@ -12,6 +12,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.permissions import HasModuleAccess
 from apps.school.models import Etablissement
 
 from .models import ChatMessage, ChatPresence, Conversation, ConversationParticipant
@@ -216,7 +217,8 @@ def _presence_online_from_values(connection_count, last_seen_at):
 
 
 class ChatUsersView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
         q = str(request.query_params.get("q", "")).strip()
@@ -232,7 +234,8 @@ class ChatUsersView(APIView):
 
 
 class ConversationListView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
         _touch_presence(request.user)
@@ -242,7 +245,8 @@ class ConversationListView(APIView):
 
 
 class DirectConversationCreateView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @transaction.atomic
     def post(self, request):
@@ -276,7 +280,8 @@ class DirectConversationCreateView(APIView):
 
 
 class ConversationMessagesView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get(self, request, conversation_id):
         conversation = _get_conversation_for_user(request, conversation_id)
@@ -304,7 +309,8 @@ class ConversationMessagesView(APIView):
 
 
 class ConversationPresenceView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get(self, request, conversation_id):
         conversation = _get_conversation_for_user(request, conversation_id)
@@ -340,7 +346,8 @@ class ConversationPresenceView(APIView):
 
 
 class GroupConversationCreateView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @transaction.atomic
     def post(self, request):
@@ -370,7 +377,8 @@ class GroupConversationCreateView(APIView):
 
 
 class GroupConversationManageView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _conversation_or_403(self, request, conversation_id):
         conversation = _get_conversation_for_user(request, conversation_id, is_group=True)
@@ -415,7 +423,8 @@ class GroupConversationManageView(APIView):
 
 
 class GroupConversationLeaveView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _close_for_user(self, conversation, user):
         participant = ConversationParticipant.objects.select_for_update().filter(
@@ -458,7 +467,8 @@ class GroupConversationLeaveView(APIView):
 
 
 class ConversationCloseView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @transaction.atomic
     def post(self, request, conversation_id):
@@ -474,7 +484,8 @@ class ConversationCloseView(APIView):
 
 
 class GroupConversationAddMemberView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @transaction.atomic
     def post(self, request, conversation_id):
@@ -505,7 +516,8 @@ class GroupConversationAddMemberView(APIView):
 
 
 class GroupConversationRemoveMemberView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @transaction.atomic
     def post(self, request, conversation_id):
@@ -540,7 +552,8 @@ class GroupConversationRemoveMemberView(APIView):
 
 
 class GroupConversationPromoteAdminView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @transaction.atomic
     def post(self, request, conversation_id):
@@ -566,7 +579,8 @@ class GroupConversationPromoteAdminView(APIView):
 
 
 class GroupConversationDemoteAdminView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @transaction.atomic
     def post(self, request, conversation_id):
@@ -598,7 +612,8 @@ class GroupConversationDemoteAdminView(APIView):
 
 
 class GroupConversationTransferAdminView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @transaction.atomic
     def post(self, request, conversation_id):
@@ -636,7 +651,8 @@ class GroupConversationTransferAdminView(APIView):
 
 
 class ConversationMarkReadView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @transaction.atomic
     def post(self, request, conversation_id):
@@ -668,7 +684,8 @@ class ConversationMarkReadView(APIView):
 
 
 class ConversationSendMessageView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @transaction.atomic
     def post(self, request, conversation_id):
@@ -732,7 +749,8 @@ class ConversationSendMessageView(APIView):
 
 
 class ConversationSendFileView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     parser_classes = [MultiPartParser, FormParser]
 
     @transaction.atomic
@@ -816,7 +834,8 @@ class ConversationSendFileView(APIView):
 
 
 class ChatMessageDownloadView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get(self, request, message_id):
         message = ChatMessage.objects.select_related("conversation").filter(id=message_id).first()

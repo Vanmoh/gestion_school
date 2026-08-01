@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/permissions/module_permissions.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/constants/api_constants.dart';
@@ -53,8 +54,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }
 
   bool _isTimetableReadOnlyRole() {
-    final role = ref.read(authControllerProvider).value?.role;
-    return role == 'teacher';
+    return !ref.read(currentPermissionsProvider).canWrite('timetable');
   }
 
   static const List<String> _dayOrder = [

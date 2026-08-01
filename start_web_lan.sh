@@ -7,6 +7,7 @@ APP_DIR="$ROOT_DIR/frontend/gestion_school_app"
 WEB_PORT="8080"
 API_PORT="8000"
 HOST_IP=""
+GUARD_ETAB_ID="11"
 
 usage() {
   cat <<'EOF'
@@ -98,6 +99,32 @@ run_flutter_pub_get() {
   echo "Action conseillée: relancer ./start_web_lan.sh quand le réseau se stabilise."
   echo "Astuce: si ton cache est chaud, réessaie avec: flutter pub get --offline"
   return 1
+}
+
+guard_etab_exists() {
+  python3 - "$GUARD_ETAB_ID" <<'PY' >/dev/null 2>&1
+import sys
+
+import pymysql
+
+etab_id = int(sys.argv[1])
+conn = pymysql.connect(
+    host="127.0.0.1",
+    port=3306,
+    user="gestion_user",
+    password="gestion_password",
+    database="gestion_school",
+    charset="utf8mb4",
+)
+try:
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM school_etablissement WHERE id=%s", (etab_id,))
+        found = cur.fetchone() is not None
+finally:
+    conn.close()
+
+raise SystemExit(0 if found else 1)
+PY
 }
 
 free_web_port() {
@@ -197,10 +224,12 @@ if ! curl -fsS --max-time 8 "$API_DOCS_URL" >/dev/null 2>&1; then
 fi
 
 echo "[1.1/3] Vérification cohérence données runtime (MySQL) ..."
-if ! python3 "$ROOT_DIR/tools/runtime_data_guard.py" --etab-id=11; then
+if ! guard_etab_exists; then
+  echo "Etablissement ${GUARD_ETAB_ID} absent de la base: guard ignoré (base fraîche ou jeu de données démo)."
+elif ! python3 "$ROOT_DIR/tools/runtime_data_guard.py" --etab-id="$GUARD_ETAB_ID"; then
   echo "Guard KO: tentative de réparation idempotente..."
   python3 "$ROOT_DIR/tools/repair_runtime_etab11.py"
-  python3 "$ROOT_DIR/tools/runtime_data_guard.py" --etab-id=11
+  python3 "$ROOT_DIR/tools/runtime_data_guard.py" --etab-id="$GUARD_ETAB_ID"
 fi
 
 echo "[2/3] Préparation Flutter web..."

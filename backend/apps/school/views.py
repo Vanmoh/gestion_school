@@ -28,23 +28,7 @@ except Exception:  # pragma: no cover - optional dependency in some environments
     XLImage = None
 from openpyxl.styles import Alignment, Font, PatternFill
 from apps.accounts.models import UserRole
-from apps.accounts.permissions import (
-    IsAttendanceModuleScopedAccess,
-    IsAdminOrDirector,
-    IsCommunicationModuleScopedAccess,
-    IsDisciplineModuleScopedAccess,
-    IsExamsModuleScopedAccess,
-    IsFinanceModuleScopedAccess,
-    IsReadOnlyForParentStudent,
-    IsStudentModuleScopedAccess,
-    IsSuperAdmin,
-    IsSuperAdminSupervisorOrAccountantReadOnly,
-    IsTeacherAttendanceModuleScopedAccess,
-    IsTeacherModuleScopedAccess,
-    IsTeacherTimesheetModuleScopedAccess,
-    IsTeacherAvailabilityModuleScopedAccess,
-    IsTimetableModuleScopedAccess,
-)
+from apps.accounts.permissions import HasModuleAccess, IsSuperAdmin
 from apps.common.pagination import StandardResultsSetPagination
 from apps.common.models import ActivityLog
 from .term_utils import normalize_term
@@ -137,9 +121,32 @@ from .serializers import (
 
 
 class BaseModelViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated, IsReadOnlyForParentStudent]
+    # Sans access_module declare, HasModuleAccess refuse: le defaut precedent
+    # (IsReadOnlyForParentStudent) ouvrait au contraire l'ecriture a tout le
+    # personnel sur chaque ressource qu'on oubliait de proteger.
+    access_module = None
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     CREATE_ETAB_EXEMPT_MODELS = {"Etablissement", "AcademicYear"}
+
+    def _teacher_profile(self):
+        return Teacher.objects.select_related("etablissement").filter(user=self.request.user).first()
+
+    def _teacher_allowed_classroom_ids(self):
+        """Classes affectees a l'enseignant connecte.
+
+        Definie ici et non recopiee dans chaque vue: la copie manquait a
+        DisciplineIncidentViewSet, qui l'appelle pourtant dans son
+        get_queryset — un enseignant listant les incidents obtenait un 500.
+        """
+        teacher_profile = self._teacher_profile()
+        if not teacher_profile:
+            return set()
+        return set(
+            TeacherAssignment.objects.filter(teacher=teacher_profile)
+            .values_list("classroom_id", flat=True)
+            .distinct()
+        )
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
@@ -450,7 +457,8 @@ def _build_import_template_download_response(import_type_raw, format_raw):
 
 
 class ClassRoomImportTemplateDownloadView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "academic_imports"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
         return _build_import_template_download_response(
@@ -622,9 +630,6 @@ class EtablissementScopedModelViewSet(BaseModelViewSet):
 
         return getattr(user, "etablissement", None)
 
-    def _teacher_profile(self):
-        return Teacher.objects.select_related("etablissement").filter(user=self.request.user).first()
-
     def _teacher_assignment_pairs(self):
         teacher_profile = self._teacher_profile()
         if not teacher_profile:
@@ -667,22 +672,27 @@ class GradePagination(PageNumberPagination):
 
 
 class AcademicYearViewSet(BaseModelViewSet):
+    access_module = "academics"
     queryset = AcademicYear.objects.all().order_by("-id")
     serializer_class = AcademicYearSerializer
 
 
 class EtablissementViewSet(viewsets.ModelViewSet):
+    access_module = "etablissements"
     queryset = Etablissement.objects.all().order_by('name')
     serializer_class = EtablissementSerializer
     parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_permissions(self):
+        # Le portail de selection liste les etablissements avant connexion:
+        # la lecture reste ouverte, l'ecriture passe par la matrice.
         if self.action in ["list", "retrieve"]:
             return [permissions.AllowAny()]
-        return [permissions.IsAuthenticated(), IsSuperAdmin()]
+        return [permissions.IsAuthenticated(), HasModuleAccess()]
 
 
 class ClassRoomViewSet(BaseModelViewSet):
+    access_module = "academics"
     queryset = ClassRoom.objects.all()
     serializer_class = ClassRoomSerializer
 
@@ -808,6 +818,7 @@ class ClassRoomViewSet(BaseModelViewSet):
 
 
 class SubjectViewSet(BaseModelViewSet):
+    access_module = "academics"
     queryset = Subject.objects.all().order_by("name")
     serializer_class = SubjectSerializer
 
@@ -954,9 +965,10 @@ class SubjectViewSet(BaseModelViewSet):
 
 
 class TeacherViewSet(BaseModelViewSet):
+    access_module = "teachers"
     queryset = Teacher.objects.all()
     serializer_class = TeacherSerializer
-    permission_classes = [permissions.IsAuthenticated, IsTeacherModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _backfill_missing_teacher_etablissements(self):
         missing_teachers = list(
@@ -1076,6 +1088,7 @@ class TeacherViewSet(BaseModelViewSet):
 
 
 class TeacherAssignmentViewSet(BaseModelViewSet):
+    access_module = "teachers"
     queryset = TeacherAssignment.objects.select_related("teacher", "subject", "classroom").all()
     serializer_class = TeacherAssignmentSerializer
 
@@ -1176,6 +1189,7 @@ class TeacherAssignmentViewSet(BaseModelViewSet):
 
 
 class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
+    access_module = "teacher_availability"
     DAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT"]
     DAY_LABELS = {
         "MON": "Lundi",
@@ -1193,7 +1207,7 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
     ).all()
     serializer_class = TeacherAvailabilitySlotSerializer
     filterset_fields = ["teacher", "day_of_week"]
-    permission_classes = [permissions.IsAuthenticated, IsTeacherAvailabilityModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -1387,6 +1401,7 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
 
 
 class TeacherScheduleSlotViewSet(BaseModelViewSet):
+    access_module = "timetable"
     DAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT"]
     DAY_LABELS = {
         "MON": "Lundi",
@@ -1405,7 +1420,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
     ).all()
     serializer_class = TeacherScheduleSlotSerializer
     filterset_fields = ["assignment", "day_of_week"]
-    permission_classes = [permissions.IsAuthenticated, IsTimetableModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -1986,7 +2001,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         classroom = self._get_scoped_classroom_or_404(classroom_id)
         return Response(self._publication_response(classroom))
 
-    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def publish_class(self, request):
         classroom_id = self._parse_classroom_id(request)
         if not classroom_id:
@@ -2013,7 +2028,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
 
         return Response(self._publication_response(classroom))
 
-    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def unpublish_class(self, request):
         classroom_id = self._parse_classroom_id(request)
         if not classroom_id:
@@ -2030,7 +2045,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
 
         return Response(self._publication_response(classroom))
 
-    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def lock_class(self, request):
         classroom_id = self._parse_classroom_id(request)
         if not classroom_id:
@@ -2049,7 +2064,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         publication.save(update_fields=["is_locked", "updated_at"])
         return Response(self._publication_response(classroom))
 
-    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def unlock_class(self, request):
         classroom_id = self._parse_classroom_id(request)
         if not classroom_id:
@@ -2079,7 +2094,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         }
         return Response(payload)
 
-    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def duplicate_schedule(self, request):
         source_classroom_id = request.data.get("source_classroom")
         target_classroom_id = request.data.get("target_classroom")
@@ -2534,9 +2549,10 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
 
 
 class TimetablePublicationViewSet(viewsets.ReadOnlyModelViewSet):
+    access_module = "timetable"
     queryset = TimetablePublication.objects.select_related("classroom", "published_by").all().order_by("classroom__name")
     serializer_class = TimetablePublicationSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     filterset_fields = ["classroom", "is_published", "is_locked"]
 
     def _requested_etablissement_id(self):
@@ -2600,6 +2616,7 @@ class TimetablePublicationViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ParentProfileViewSet(BaseModelViewSet):
+    access_module = "students"
     queryset = ParentProfile.objects.all()
     serializer_class = ParentProfileSerializer
 
@@ -2726,9 +2743,10 @@ class ParentProfileViewSet(BaseModelViewSet):
 
 
 class StudentViewSet(BaseModelViewSet):
+    access_module = "students"
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsStudentModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     parser_classes = (MultiPartParser, FormParser, JSONParser)
     pagination_class = StandardResultsSetPagination
     filterset_fields = [
@@ -3122,6 +3140,7 @@ class StudentViewSet(BaseModelViewSet):
 
 
 class StudentAcademicHistoryViewSet(BaseModelViewSet):
+    access_module = "students"
     queryset = StudentAcademicHistory.objects.select_related("student", "academic_year", "classroom").all().order_by("-academic_year_id", "rank")
     serializer_class = StudentAcademicHistorySerializer
     filterset_fields = ["student", "academic_year", "classroom"]
@@ -3196,13 +3215,11 @@ class StudentAcademicHistoryViewSet(BaseModelViewSet):
 
 
 class GradeViewSet(BaseModelViewSet):
+    access_module = "grades"
     queryset = Grade.objects.select_related("student", "subject", "classroom", "academic_year").all().order_by("-id")
     serializer_class = GradeSerializer
     pagination_class = GradePagination
     filterset_fields = ["classroom", "academic_year", "term", "subject", "student"]
-
-    def _teacher_profile(self):
-        return Teacher.objects.select_related("etablissement").filter(user=self.request.user).first()
 
     def _teacher_assignment_pairs(self):
         teacher_profile = self._teacher_profile()
@@ -3496,7 +3513,7 @@ class GradeViewSet(BaseModelViewSet):
             return Response({"detail": self._locked_term_message(prefix="Suppression")}, status=400)
         return super().destroy(request, *args, **kwargs)
 
-    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def recalculate_ranking(self, request):
         classroom_id = self._parse_positive_int(request.data.get("classroom"))
         academic_year_id = self._parse_positive_int(request.data.get("academic_year"))
@@ -3517,7 +3534,7 @@ class GradeViewSet(BaseModelViewSet):
         recalculate_term_ranking(classroom, academic_year, term)
         return Response({"detail": "Classement recalculé avec succès."})
 
-    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def validate_term(self, request):
         classroom_id = self._parse_positive_int(request.data.get("classroom"))
         academic_year_id = self._parse_positive_int(request.data.get("academic_year"))
@@ -3546,7 +3563,7 @@ class GradeViewSet(BaseModelViewSet):
         )
         return Response(payload)
 
-    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def close_term(self, request):
         classroom_id = self._parse_positive_int(request.data.get("classroom"))
         academic_year_id = self._parse_positive_int(request.data.get("academic_year"))
@@ -3576,7 +3593,7 @@ class GradeViewSet(BaseModelViewSet):
         )
         return Response(payload)
 
-    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsAdminOrDirector])
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def unvalidate_term(self, request):
         classroom_id = self._parse_positive_int(request.data.get("classroom"))
         academic_year_id = self._parse_positive_int(request.data.get("academic_year"))
@@ -3781,10 +3798,11 @@ class GradeViewSet(BaseModelViewSet):
 
 
 class AttendanceViewSet(BaseModelViewSet):
+    access_module = "attendance"
     queryset = Attendance.objects.select_related("student", "student__user").all().order_by("-date", "-id")
     serializer_class = AttendanceSerializer
     filterset_fields = ["date", "student", "is_absent", "is_late"]
-    permission_classes = [permissions.IsAuthenticated, IsAttendanceModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     ATTENDANCE_SHEET_READ_ROLES = {
         UserRole.SUPER_ADMIN,
@@ -3862,19 +3880,6 @@ class AttendanceViewSet(BaseModelViewSet):
             return requested_etablissement
 
         return getattr(user, "etablissement", None)
-
-    def _teacher_profile(self):
-        return Teacher.objects.select_related("etablissement").filter(user=self.request.user).first()
-
-    def _teacher_allowed_classroom_ids(self):
-        teacher_profile = self._teacher_profile()
-        if not teacher_profile:
-            return set()
-        return set(
-            TeacherAssignment.objects.filter(teacher=teacher_profile)
-            .values_list("classroom_id", flat=True)
-            .distinct()
-        )
 
     def _parse_sheet_date(self, raw_value):
         if raw_value in (None, ""):
@@ -4327,10 +4332,11 @@ class AttendanceViewSet(BaseModelViewSet):
 
 
 class TeacherAttendanceViewSet(BaseModelViewSet):
+    access_module = "teacher_timesheet"
     queryset = TeacherAttendance.objects.select_related("teacher", "teacher__user").all().order_by("-date", "-id")
     serializer_class = TeacherAttendanceSerializer
     filterset_fields = ["date", "teacher", "is_absent", "is_late"]
-    permission_classes = [permissions.IsAuthenticated, IsTeacherAttendanceModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -4383,19 +4389,6 @@ class TeacherAttendanceViewSet(BaseModelViewSet):
             return requested_etablissement
 
         return getattr(user, "etablissement", None)
-
-    def _teacher_profile(self):
-        return Teacher.objects.select_related("etablissement").filter(user=self.request.user).first()
-
-    def _teacher_allowed_classroom_ids(self):
-        teacher_profile = self._teacher_profile()
-        if not teacher_profile:
-            return set()
-        return set(
-            TeacherAssignment.objects.filter(teacher=teacher_profile)
-            .values_list("classroom_id", flat=True)
-            .distinct()
-        )
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -4483,10 +4476,11 @@ class TeacherAttendanceViewSet(BaseModelViewSet):
 
 
 class TeacherTimeEntryViewSet(BaseModelViewSet):
+    access_module = "teacher_timesheet"
     queryset = TeacherTimeEntry.objects.select_related("teacher", "teacher__user", "recorded_by").all().order_by("-entry_date", "-id")
     serializer_class = TeacherTimeEntrySerializer
     filterset_fields = ["teacher", "entry_date", "etablissement"]
-    permission_classes = [permissions.IsAuthenticated, IsTeacherTimesheetModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -4617,10 +4611,11 @@ class TeacherTimeEntryViewSet(BaseModelViewSet):
 
 
 class DisciplineIncidentViewSet(BaseModelViewSet):
+    access_module = "discipline"
     queryset = DisciplineIncident.objects.select_related("student", "student__user", "reported_by").all().order_by("-incident_date", "-id")
     serializer_class = DisciplineIncidentSerializer
     filterset_fields = ["student", "severity", "status", "incident_date", "parent_notified"]
-    permission_classes = [permissions.IsAuthenticated, IsDisciplineModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -4752,9 +4747,10 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
 
 
 class StudentFeeViewSet(BaseModelViewSet):
+    access_module = "finance"
     queryset = StudentFee.objects.select_related("student", "student__user", "academic_year").all().order_by("-due_date", "-id")
     serializer_class = StudentFeeSerializer
-    permission_classes = [permissions.IsAuthenticated, IsFinanceModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     pagination_class = StandardResultsSetPagination
     filterset_fields = ["student", "academic_year", "fee_type"]
 
@@ -4872,9 +4868,10 @@ class StudentFeeViewSet(BaseModelViewSet):
 
 
 class PaymentViewSet(BaseModelViewSet):
+    access_module = "finance"
     queryset = Payment.objects.filter(is_cancelled=False)
     serializer_class = PaymentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsFinanceModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     pagination_class = StandardResultsSetPagination
     filterset_fields = ["fee", "fee__student", "method", "received_by"]
     search_fields = [
@@ -5022,13 +5019,14 @@ class PaymentViewSet(BaseModelViewSet):
 
 
 class ExpenseViewSet(BaseModelViewSet):
+    access_module = "finance"
     queryset = Expense.objects.select_related(
         "paid_by",
         "level_one_validated_by",
         "level_two_validated_by",
     ).all().order_by("-date", "-id")
     serializer_class = ExpenseSerializer
-    permission_classes = [permissions.IsAuthenticated, IsFinanceModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get_permissions(self):
         if self.action in {"validate_level_one", "validate_level_two", "reset_validation"}:
@@ -5136,7 +5134,7 @@ class ExpenseViewSet(BaseModelViewSet):
     @action(
         detail=True,
         methods=["post"],
-        permission_classes=[permissions.IsAuthenticated, IsFinanceModuleScopedAccess],
+        permission_classes=[permissions.IsAuthenticated, HasModuleAccess],
     )
     def validate_level_one(self, request, pk=None):
         role = getattr(request.user, "role", "")
@@ -5162,7 +5160,7 @@ class ExpenseViewSet(BaseModelViewSet):
     @action(
         detail=True,
         methods=["post"],
-        permission_classes=[permissions.IsAuthenticated, IsFinanceModuleScopedAccess],
+        permission_classes=[permissions.IsAuthenticated, HasModuleAccess],
     )
     def validate_level_two(self, request, pk=None):
         role = getattr(request.user, "role", "")
@@ -5198,7 +5196,7 @@ class ExpenseViewSet(BaseModelViewSet):
     @action(
         detail=True,
         methods=["post"],
-        permission_classes=[permissions.IsAuthenticated, IsFinanceModuleScopedAccess],
+        permission_classes=[permissions.IsAuthenticated, HasModuleAccess],
     )
     def reset_validation(self, request, pk=None):
         if getattr(request.user, "role", "") != UserRole.SUPER_ADMIN:
@@ -5233,6 +5231,7 @@ class ExpenseViewSet(BaseModelViewSet):
 
 
 class TeacherPayrollViewSet(BaseModelViewSet):
+    access_module = "payroll"
     queryset = TeacherPayroll.objects.select_related(
         "teacher",
         "teacher__user",
@@ -5241,7 +5240,7 @@ class TeacherPayrollViewSet(BaseModelViewSet):
         "level_two_validated_by",
     ).all().order_by("-paid_on", "-id")
     serializer_class = TeacherPayrollSerializer
-    permission_classes = [permissions.IsAuthenticated, IsSuperAdminSupervisorOrAccountantReadOnly]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     filterset_fields = ["teacher", "month"]
 
     def _requested_etablissement_id(self):
@@ -5430,7 +5429,7 @@ class TeacherPayrollViewSet(BaseModelViewSet):
     def _can_validate_level_two(role):
         return role in {UserRole.ACCOUNTANT, UserRole.SUPER_ADMIN}
 
-    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, IsSuperAdminSupervisorOrAccountantReadOnly])
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def generate_monthly(self, request):
         month_start, month_end = self._month_range(request.data.get("month"))
         teacher_id = request.data.get("teacher")
@@ -5610,9 +5609,10 @@ class TeacherPayrollViewSet(BaseModelViewSet):
 
 
 class AnnouncementViewSet(EtablissementScopedModelViewSet):
+    access_module = "communication"
     queryset = Announcement.objects.select_related("author", "etablissement").all().order_by("-created_at")
     serializer_class = AnnouncementSerializer
-    permission_classes = [permissions.IsAuthenticated, IsCommunicationModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get_queryset(self):
         return self._filter_by_scope(super().get_queryset(), field_name="etablissement")
@@ -5631,9 +5631,10 @@ class AnnouncementViewSet(EtablissementScopedModelViewSet):
 
 
 class NotificationViewSet(EtablissementScopedModelViewSet):
+    access_module = "communication"
     queryset = Notification.objects.select_related("recipient", "etablissement").all().order_by("-created_at")
     serializer_class = NotificationSerializer
-    permission_classes = [permissions.IsAuthenticated, IsCommunicationModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get_queryset(self):
         return self._filter_by_scope(super().get_queryset(), field_name="etablissement")
@@ -5662,9 +5663,10 @@ class NotificationViewSet(EtablissementScopedModelViewSet):
 
 
 class SmsProviderConfigViewSet(EtablissementScopedModelViewSet):
+    access_module = "sms_config"
     queryset = SmsProviderConfig.objects.select_related("etablissement").all().order_by("-id")
     serializer_class = SmsProviderConfigSerializer
-    permission_classes = [permissions.IsAuthenticated, IsCommunicationModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get_queryset(self):
         return self._filter_by_scope(super().get_queryset(), field_name="etablissement")
@@ -5683,6 +5685,7 @@ class SmsProviderConfigViewSet(EtablissementScopedModelViewSet):
 
 
 class BookViewSet(BaseModelViewSet):
+    access_module = "library"
     queryset = Book.objects.all()
     serializer_class = BookSerializer
 
@@ -5763,6 +5766,7 @@ class BookViewSet(BaseModelViewSet):
 
 
 class BorrowViewSet(BaseModelViewSet):
+    access_module = "library"
     queryset = Borrow.objects.select_related("student", "book").all()
     serializer_class = BorrowSerializer
 
@@ -5858,6 +5862,7 @@ class BorrowViewSet(BaseModelViewSet):
 
 
 class CanteenMenuViewSet(BaseModelViewSet):
+    access_module = "canteen"
     queryset = CanteenMenu.objects.all()
     serializer_class = CanteenMenuSerializer
     filterset_fields = ["menu_date", "is_active"]
@@ -5939,6 +5944,7 @@ class CanteenMenuViewSet(BaseModelViewSet):
 
 
 class CanteenSubscriptionViewSet(BaseModelViewSet):
+    access_module = "canteen"
     queryset = CanteenSubscription.objects.select_related("student", "student__user", "academic_year").all().order_by("-created_at")
     serializer_class = CanteenSubscriptionSerializer
     filterset_fields = ["student", "academic_year", "status"]
@@ -6032,6 +6038,7 @@ class CanteenSubscriptionViewSet(BaseModelViewSet):
 
 
 class CanteenServiceViewSet(BaseModelViewSet):
+    access_module = "canteen"
     queryset = CanteenService.objects.select_related("student", "student__user", "menu").all().order_by("-served_on", "-id")
     serializer_class = CanteenServiceSerializer
     filterset_fields = ["student", "menu", "served_on", "is_paid"]
@@ -6128,15 +6135,17 @@ class CanteenServiceViewSet(BaseModelViewSet):
 
 
 class ExamSessionViewSet(BaseModelViewSet):
+    access_module = "exams"
     queryset = ExamSession.objects.select_related("academic_year").all()
     serializer_class = ExamSessionSerializer
-    permission_classes = [permissions.IsAuthenticated, IsExamsModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
 
 class ExamPlanningViewSet(BaseModelViewSet):
+    access_module = "exams"
     queryset = ExamPlanning.objects.select_related("session", "classroom", "subject").all()
     serializer_class = ExamPlanningSerializer
-    permission_classes = [permissions.IsAuthenticated, IsExamsModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -6226,10 +6235,11 @@ class ExamPlanningViewSet(BaseModelViewSet):
 
 
 class ExamInvigilationViewSet(BaseModelViewSet):
+    access_module = "exams"
     queryset = ExamInvigilation.objects.select_related("planning", "planning__session", "planning__classroom", "planning__subject", "supervisor").all().order_by("-created_at")
     serializer_class = ExamInvigilationSerializer
     filterset_fields = ["planning", "supervisor", "planning__session"]
-    permission_classes = [permissions.IsAuthenticated, IsExamsModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get_queryset(self):
         user = self.request.user
@@ -6271,9 +6281,10 @@ class ExamInvigilationViewSet(BaseModelViewSet):
 
 
 class ExamResultViewSet(BaseModelViewSet):
+    access_module = "exams"
     queryset = ExamResult.objects.select_related("session", "student", "subject").all()
     serializer_class = ExamResultSerializer
-    permission_classes = [permissions.IsAuthenticated, IsExamsModuleScopedAccess]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get_queryset(self):
         user = self.request.user
@@ -6459,6 +6470,7 @@ class ExamResultViewSet(BaseModelViewSet):
 
 
 class SupplierViewSet(EtablissementScopedModelViewSet):
+    access_module = "stock"
     queryset = Supplier.objects.select_related("etablissement").all()
     serializer_class = SupplierSerializer
 
@@ -6479,6 +6491,7 @@ class SupplierViewSet(EtablissementScopedModelViewSet):
 
 
 class StockItemViewSet(EtablissementScopedModelViewSet):
+    access_module = "stock"
     queryset = StockItem.objects.select_related("supplier", "etablissement").all()
     serializer_class = StockItemSerializer
 
@@ -6515,6 +6528,7 @@ class StockItemViewSet(EtablissementScopedModelViewSet):
 
 
 class StockMovementViewSet(BaseModelViewSet):
+    access_module = "stock"
     queryset = StockMovement.objects.select_related("item", "item__etablissement").all().order_by("-created_at")
     serializer_class = StockMovementSerializer
 
@@ -6609,6 +6623,7 @@ class StockMovementViewSet(BaseModelViewSet):
 
 
 class PromotionRunViewSet(EtablissementScopedModelViewSet):
+    access_module = "promotion"
     queryset = (
         PromotionRun.objects.select_related(
             "etablissement",
@@ -6626,7 +6641,7 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
         .order_by("-created_at")
     )
     serializer_class = PromotionRunSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrDirector]
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     filterset_fields = [
         "status",
         "source_academic_year",
@@ -6982,7 +6997,8 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
 
 
 class DashboardViewSet(viewsets.ViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    access_module = "dashboard"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     @staticmethod
     def _requested_etablissement_id(request):

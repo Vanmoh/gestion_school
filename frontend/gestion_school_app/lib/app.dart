@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'core/constants/branding.dart';
 import 'core/network/api_client.dart';
+import 'core/permissions/module_permissions.dart';
 import 'core/providers/navigation_intents.dart';
 import 'core/theme/app_theme.dart';
 import 'features/attendance/presentation/attendance_controller.dart';
@@ -431,90 +432,19 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     ),
   ];
 
-  bool _isItemVisibleForRole(String key, String? role) {
-    if (role == 'parent' || role == 'student') {
-      const parentStudentKeys = {
-        'dashboard',
-        'discipline',
-        'reports',
-      };
-      return parentStudentKeys.contains(key);
-    }
+  /// Droits servis par le backend. Deux cartes des roles etaient codees ici
+  /// en dur et divergeaient de l'API: un module pouvait s'afficher alors que
+  /// l'API le refusait, ou porter la mention « lecture seule » tout en
+  /// acceptant les ecritures. La matrice est desormais unique.
+  ModulePermissions get _permissions => ref.read(currentPermissionsProvider);
 
-    if (role == 'teacher') {
-      const teacherKeys = {
-        'dashboard',
-        'teacher_timesheet',
-        'grades',
-        'timetable',
-        'discipline',
-      };
-      return teacherKeys.contains(key);
-    }
+  bool _isItemVisible(String key) => _permissions.canRead(key);
 
-    if (role == 'accountant') {
-      const accountantKeys = {
-        'dashboard',
-        'finance',
-        'reports',
-      };
-      return accountantKeys.contains(key);
-    }
+  bool _isItemReadOnly(String key) => _permissions.isReadOnly(key);
 
-    if (role == 'supervisor') {
-      const supervisorKeys = {
-        'dashboard',
-        'attendance',
-        'discipline',
-      };
-      return supervisorKeys.contains(key);
-    }
-
-    if (role == 'censor') {
-      const censorKeys = {
-        'dashboard',
-        'students',
-        'attendance',
-        'teacher_timesheet',
-        'discipline',
-        'timetable',
-      };
-      return censorKeys.contains(key);
-    }
-
-    if (key == 'etablissements') {
-      return role == 'super_admin';
-    }
-    return true;
-  }
-
-  bool _isItemReadOnlyForRole(String key, String? role) {
-    if (role == 'parent' || role == 'student') {
-      return true;
-    }
-
-    if (role == 'teacher') {
-      return key == 'timetable';
-    }
-
-    if (role == 'accountant') {
-      return key == 'dashboard' || key == 'reports';
-    }
-
-    if (role == 'supervisor') {
-      return key == 'dashboard';
-    }
-
-    if (role == 'censor') {
-      return key == 'dashboard' || key == 'students' || key == 'timetable';
-    }
-
-    return false;
-  }
-
-  String _firstVisibleKeyForRole(String? role) {
+  String _firstVisibleKey() {
     for (final item in _items) {
-      if (_isItemVisibleForRole(item.keyName, role)) {
+      if (_isItemVisible(item.keyName)) {
         return item.keyName;
       }
     }
@@ -530,10 +460,10 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   String _resolveMenuKey(String key) => _retiredMenuKeys[key] ?? key;
 
-  _AdminMenuItem _selectedItemForRole(String? role) {
+  _AdminMenuItem _selectedItem() {
     final currentKey = _resolveMenuKey(_selectedKey);
-    final isVisible = _isItemVisibleForRole(currentKey, role);
-    final targetKey = isVisible ? currentKey : _firstVisibleKeyForRole(role);
+    final isVisible = _isItemVisible(currentKey);
+    final targetKey = isVisible ? currentKey : _firstVisibleKey();
     return _items.firstWhere(
       (item) => item.keyName == targetKey,
       orElse: () => _items.first,
@@ -541,6 +471,33 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   }
 
   Widget _buildRoleSpecificView(_AdminMenuItem item, String? role) {
+    return _withReadOnlyRibbon(item, _roleSpecificView(item, role));
+  }
+
+  /// Bandeau au-dessus d'un module consultable mais non modifiable.
+  ///
+  /// Le menu portait deja la mention « (Lecture seule) », mais elle etait
+  /// facile a manquer une fois la page ouverte, et rien n'empechait de
+  /// remplir un formulaire pour se voir refuser a l'envoi.
+  Widget _withReadOnlyRibbon(_AdminMenuItem item, Widget view) {
+    // Tableau de bord et rapports ne se saisissent pas: le bandeau n'y
+    // apprendrait rien.
+    const noWriteByNature = {'dashboard', 'reports'};
+    if (noWriteByNature.contains(item.keyName) ||
+        !_isItemReadOnly(item.keyName)) {
+      return view;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _ReadOnlyRibbon(label: item.label),
+        Expanded(child: view),
+      ],
+    );
+  }
+
+  Widget _roleSpecificView(_AdminMenuItem item, String? role) {
     // Parents et eleves consultent une vue discipline dediee, en lecture
     // seule: la page d'administration exposerait un formulaire de saisie
     // desactive, ce qui n'a pas de sens pour eux.
@@ -844,18 +801,20 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   Future<void> _warmUpAdminData() async {
     try {
-      final role = ref.read(authControllerProvider).value?.role;
+      // Le prechargement suit les droits: sans attendre la matrice, tous les
+      // modules paraitraient interdits et rien ne serait prechauffe.
+      await ref.read(modulePermissionsProvider.future);
       final warmups = <Future<void>>[
         ref.read(dashboardStatsProvider.future).then((_) {}),
       ];
 
-      if (_isItemVisibleForRole('students', role)) {
+      if (_isItemVisible('students')) {
         warmups.add(ref.read(studentsProvider.future).then((_) {}));
       }
-      if (_isItemVisibleForRole('users', role)) {
+      if (_isItemVisible('users')) {
         warmups.add(ref.read(usersProvider.future).then((_) {}));
       }
-      if (_isItemVisibleForRole('finance', role)) {
+      if (_isItemVisible('finance')) {
         warmups.add(ref.read(paymentsProvider.future).then((_) {}));
       }
 
@@ -938,7 +897,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (!mounted) {
       return;
     }
-    if (_isItemVisibleForRole(key, ref.read(authControllerProvider).value?.role)) {
+    if (_isItemVisible(key)) {
       _selectItem(key);
       ref.read(adminShellNavigationKeyProvider.notifier).state = key;
     }
@@ -961,7 +920,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                 title: const Text('Centre de notifications'),
                 subtitle: Text(_welcomeConnectedUser(user)),
               ),
-              if (_isItemVisibleForRole('activity_logs', user.role))
+              if (_isItemVisible('activity_logs'))
                 ListTile(
                   leading: const Icon(Icons.history_rounded),
                   title: const Text('Journal d\'activité'),
@@ -970,7 +929,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                     _navigateToShellItem('activity_logs');
                   },
                 ),
-              if (_isItemVisibleForRole('communication', user.role))
+              if (_isItemVisible('communication'))
                 ListTile(
                   leading: const Icon(Icons.campaign_outlined),
                   title: const Text('Communication'),
@@ -979,7 +938,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                     _navigateToShellItem('communication');
                   },
                 ),
-              if (_isItemVisibleForRole('reports', user.role))
+              if (_isItemVisible('reports'))
                 ListTile(
                   leading: const Icon(Icons.summarize_outlined),
                   title: const Text('Rapports'),
@@ -1012,7 +971,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                 title: Text('Insights & raccourcis'),
                 subtitle: Text('Accès rapide aux modules d\'analyse utiles.'),
               ),
-              if (_isItemVisibleForRole('reports', user.role))
+              if (_isItemVisible('reports'))
                 ListTile(
                   leading: const Icon(Icons.analytics_outlined),
                   title: const Text('Rapports analytiques'),
@@ -1021,7 +980,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                     _navigateToShellItem('reports');
                   },
                 ),
-              if (_isItemVisibleForRole('finance', user.role))
+              if (_isItemVisible('finance'))
                 ListTile(
                   leading: const Icon(Icons.account_balance_wallet_outlined),
                   title: const Text('Vue finances'),
@@ -1030,7 +989,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                     _navigateToShellItem('finance');
                   },
                 ),
-              if (_isItemVisibleForRole('finance', user.role))
+              if (_isItemVisible('finance'))
                 ListTile(
                   leading: const Icon(Icons.point_of_sale_rounded),
                   title: const Text('Encaisser maintenant'),
@@ -1041,7 +1000,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                     _navigateToShellItem('finance');
                   },
                 ),
-              if (_isItemVisibleForRole('timetable', user.role))
+              if (_isItemVisible('timetable'))
                 ListTile(
                   leading: const Icon(Icons.calendar_month_rounded),
                   title: const Text('Emploi du temps'),
@@ -1050,7 +1009,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                     _navigateToShellItem('timetable');
                   },
                 ),
-              if (_isItemVisibleForRole('grades', user.role))
+              if (_isItemVisible('grades'))
                 ListTile(
                   leading: const Icon(Icons.auto_stories_outlined),
                   title: const Text('Notes & bulletins'),
@@ -1070,14 +1029,13 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     BuildContext context,
     ColorScheme scheme, {
     required bool closeDrawerOnItemTap,
-    required String? role,
   }) {
     final widgets = <Widget>[];
     final compact = !closeDrawerOnItemTap && _sidebarCollapsed;
 
     for (final group in _groups) {
       final visibleKeys = group.itemKeys
-          .where((key) => _isItemVisibleForRole(key, role))
+          .where((key) => _isItemVisible(key))
           .toList();
       if (visibleKeys.isEmpty) {
         continue;
@@ -1136,7 +1094,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
             final selected = _selectedKey == item.keyName;
             return _SidebarItem(
               icon: item.icon,
-              label: _isItemReadOnlyForRole(item.keyName, role)
+              label: _isItemReadOnly(item.keyName)
                   ? '${item.label} (Lecture seule)'
                   : item.label,
               compact: compact,
@@ -1170,31 +1128,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     final pendingShellNavigationKey = ref.watch(adminShellNavigationKeyProvider);
     final etabProvider = ref.watch(etablissementProvider);
     final selectedEtablissement = etabProvider.selected;
-
-    if (pendingShellNavigationKey != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) {
-          return;
-        }
-        final resolvedKey = _resolveMenuKey(pendingShellNavigationKey);
-        if (_isItemVisibleForRole(resolvedKey, user?.role)) {
-          _selectItem(resolvedKey);
-        }
-        ref.read(adminShellNavigationKeyProvider.notifier).state = null;
-      });
-    }
-
-    if (!_isItemVisibleForRole(_selectedKey, user?.role)) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) {
-          return;
-        }
-        setState(() => _selectedKey = _firstVisibleKeyForRole(user?.role));
-      });
-    }
-
-    final screenWidth = MediaQuery.sizeOf(context).width;
-    final isMobile = screenWidth < 900;
+    final permissions = ref.watch(modulePermissionsProvider);
 
     if (user == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1207,6 +1141,42 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       });
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+
+    // La matrice de droits conditionne tout le menu: construire la coquille
+    // avant de la connaitre afficherait un menu vide, puis le ferait sauter.
+    if (permissions.isLoading || !permissions.hasValue) {
+      if (permissions.hasError) {
+        return _PermissionsUnavailable(
+          onRetry: () => ref.invalidate(modulePermissionsProvider),
+        );
+      }
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    if (pendingShellNavigationKey != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        final resolvedKey = _resolveMenuKey(pendingShellNavigationKey);
+        if (_isItemVisible(resolvedKey)) {
+          _selectItem(resolvedKey);
+        }
+        ref.read(adminShellNavigationKeyProvider.notifier).state = null;
+      });
+    }
+
+    if (!_isItemVisible(_selectedKey)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        setState(() => _selectedKey = _firstVisibleKey());
+      });
+    }
+
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isMobile = screenWidth < 900;
 
     if (user.role != 'super_admin') {
       final userEtabId = user.etablissementId;
@@ -1232,7 +1202,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       }
     }
 
-    final selectedItem = _selectedItemForRole(user.role);
+    final selectedItem = _selectedItem();
     final selectedView = _buildRoleSpecificView(selectedItem, user.role);
 
     if (isMobile) {
@@ -1298,7 +1268,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                       context,
                       scheme,
                       closeDrawerOnItemTap: true,
-                      role: user.role,
                     ),
                   ),
                 ),
@@ -1408,7 +1377,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                         context,
                         scheme,
                         closeDrawerOnItemTap: false,
-                        role: user.role,
                       ),
                     ),
                   ),
@@ -1976,3 +1944,96 @@ class _SidebarItem extends StatelessWidget {
   }
 }
 
+
+/// Ecran d'attente quand la matrice de droits n'a pas pu etre chargee.
+///
+/// Sans elle on ne sait pas quels modules afficher: mieux vaut le dire et
+/// proposer un nouvel essai que de deviner un menu.
+class _PermissionsUnavailable extends StatelessWidget {
+  final VoidCallback onRetry;
+
+  const _PermissionsUnavailable({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Scaffold(
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 380),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.lock_outline_rounded, size: 40, color: scheme.error),
+                const SizedBox(height: 12),
+                Text(
+                  'Droits indisponibles',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Impossible de recuperer vos autorisations. '
+                  'Verifiez votre connexion puis reessayez.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Reessayer'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Bandeau de module en lecture seule.
+class _ReadOnlyRibbon extends StatelessWidget {
+  final String label;
+
+  const _ReadOnlyRibbon({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Material(
+      color: scheme.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          children: [
+            Icon(
+              Icons.visibility_outlined,
+              size: 16,
+              color: scheme.onSecondaryContainer,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '$label : consultation seule. Votre profil ne peut pas '
+                'modifier ce module.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.onSecondaryContainer,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

@@ -1,4 +1,13 @@
-from rest_framework.permissions import SAFE_METHODS, BasePermission
+from rest_framework.permissions import BasePermission
+
+from .access import (
+    ADMIN,
+    MODULES,
+    READ,
+    ROLE_LABELS,
+    access_level,
+    required_level,
+)
 
 
 class IsRole(BasePermission):
@@ -8,330 +17,52 @@ class IsRole(BasePermission):
         return request.user and request.user.is_authenticated and request.user.role in self.allowed_roles
 
 
-class IsAdminOrDirector(IsRole):
-    allowed_roles = ["super_admin", "director", "promoter"]
-
-
 class IsSuperAdmin(IsRole):
     allowed_roles = ["super_admin"]
 
 
-class IsReadOnlyForParentStudent(BasePermission):
-    message = "Les profils parent/élève sont en lecture seule sur cette ressource."
+class HasModuleAccess(BasePermission):
+    """Autorise selon la matrice de access.py, pas selon une liste locale.
+
+    La vue declare `access_module = "grades"`; la methode HTTP donne le niveau
+    exige (lecture / ecriture / suppression). Une vue sans `access_module`
+    est refusee: le defaut precedent laissait passer tout le personnel sur
+    tout module non explicitement protege, c'est exactement ce qu'on corrige.
+    """
+
+    message = "Acces refuse par la matrice de droits."
+
+    def _module(self, view):
+        return getattr(view, "access_module", None)
 
     def has_permission(self, request, view):
         user = request.user
         if not user or not user.is_authenticated:
             return False
 
-        if request.method in SAFE_METHODS:
+        module = self._module(view)
+        if not module or module not in MODULES:
+            self.message = "Ressource non rattachee a un module de droits."
+            return False
+
+        role = getattr(user, "role", "")
+        # Certains exports lisent la base via POST (recus en lot): ils ne
+        # doivent pas exiger le niveau ecriture du module.
+        needed = READ if getattr(view, "access_read_only", False) else required_level(request.method)
+        if access_level(role, module) >= needed:
             return True
 
-        return user.role not in {"parent", "student"}
+        # DRF instancie la permission par requete: renseigner self.message ici
+        # rend le refus lisible cote client au lieu d'un 403 muet.
+        label = MODULES[module]["label"]
+        role_label = ROLE_LABELS.get(role, role or "inconnu")
+        granted = access_level(role, module)
+        if granted <= 0:
+            self.message = f"Module « {label} » non accessible au profil {role_label}."
+        elif required_level(request.method) == ADMIN:
+            self.message = f"Suppression sur « {label} » reservee a l'administration."
+        else:
+            self.message = f"Module « {label} » en lecture seule pour le profil {role_label}."
+        return False
 
 
-class IsSuperAdminSupervisorOrAccountantReadOnly(BasePermission):
-    message = (
-        "Acces reserve au super admin et au censeur. "
-        "Le comptable est autorise en lecture seule."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {"super_admin", "censor", "accountant"}
-
-        return user.role in {"super_admin", "censor"}
-
-
-class IsStudentModuleScopedAccess(BasePermission):
-    message = (
-        "Acces eleves reserve. Ecriture: super admin/directeur/promoteur. "
-        "Lecture: super admin, directeur, promoteur, censeur, enseignant, comptable."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {
-                "super_admin",
-                "director",
-                "promoter",
-                "censor",
-                "teacher",
-                "accountant",
-            }
-
-        return user.role in {"super_admin", "director", "promoter"}
-
-
-class IsAttendanceModuleScopedAccess(BasePermission):
-    message = (
-        "Acces absences reserve. Ecriture: super admin/directeur/promoteur/censeur/surveillant. "
-        "Lecture: super admin, directeur, promoteur, censeur, surveillant, comptable, parent, eleve."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {
-                "super_admin",
-                "director",
-                "promoter",
-                "censor",
-                "supervisor",
-                "accountant",
-                "parent",
-                "student",
-            }
-
-        return user.role in {
-            "super_admin",
-            "director",
-            "promoter",
-            "censor",
-            "supervisor",
-        }
-
-
-class IsTeacherAttendanceModuleScopedAccess(BasePermission):
-    message = (
-        "Acces absences enseignants reserve. Ecriture: super admin/directeur/promoteur/censeur/enseignant. "
-        "Lecture: super admin, directeur, promoteur, censeur, enseignant."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {
-                "super_admin",
-                "director",
-                "promoter",
-                "censor",
-                "teacher",
-            }
-
-        return user.role in {
-            "super_admin",
-            "director",
-            "promoter",
-            "censor",
-            "teacher",
-        }
-
-
-class IsTeacherTimesheetModuleScopedAccess(BasePermission):
-    message = (
-        "Acces emargement enseignants reserve. Ecriture: super admin/censeur, "
-        "et enseignant sur son propre pointage. Lecture: super admin, censeur, "
-        "directeur, promoteur, comptable et enseignant. Le directeur et le promoteur sont en lecture seule sur ce module."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {
-                "super_admin",
-                "censor",
-                "director",
-                "promoter",
-                "accountant",
-                "teacher",
-            }
-
-        return user.role in {"super_admin", "censor", "teacher"}
-
-
-class IsDisciplineModuleScopedAccess(BasePermission):
-    message = (
-        "Acces discipline reserve. Ecriture: super admin/directeur/promoteur/censeur/surveillant/enseignant. "
-        "Lecture: super admin, directeur, promoteur, censeur, surveillant, enseignant, comptable."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {
-                "super_admin",
-                "director",
-                "promoter",
-                "censor",
-                "supervisor",
-                "teacher",
-                "accountant",
-            }
-
-        return user.role in {
-            "super_admin",
-            "director",
-            "promoter",
-            "censor",
-            "supervisor",
-            "teacher",
-        }
-
-
-class IsExamsModuleScopedAccess(BasePermission):
-    message = (
-        "Acces examens reserve. Ecriture: super admin/directeur/promoteur/enseignant. "
-        "Lecture: super admin, directeur, promoteur, censeur, comptable, enseignant."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {
-                "super_admin",
-                "director",
-                "promoter",
-                "censor",
-                "accountant",
-                "teacher",
-            }
-
-        return user.role in {"super_admin", "director", "promoter", "teacher"}
-
-
-class IsTimetableModuleScopedAccess(BasePermission):
-    message = (
-        "Acces emploi du temps reserve. Ecriture: super admin/directeur/promoteur/censeur. "
-        "Lecture: super admin, directeur, promoteur, censeur, enseignant, comptable, parent, eleve."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {
-                "super_admin",
-                "director",
-                "promoter",
-                "censor",
-                "teacher",
-                "accountant",
-                "parent",
-                "student",
-            }
-
-        return user.role in {
-            "super_admin",
-            "director",
-            "promoter",
-            "censor",
-        }
-
-
-class IsTeacherAvailabilityModuleScopedAccess(BasePermission):
-    message = (
-        "Acces disponibilites reserve. Ecriture: super admin/directeur/promoteur/enseignant. "
-        "Lecture: super admin, directeur, promoteur, censeur, enseignant."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {
-                "super_admin",
-                "director",
-                "promoter",
-                "censor",
-                "teacher",
-            }
-
-        return user.role in {"super_admin", "director", "promoter", "teacher"}
-
-
-class IsCommunicationModuleScopedAccess(BasePermission):
-    message = (
-        "Acces communication reserve. Ecriture: super admin/directeur/promoteur/censeur. "
-        "Lecture: super admin, directeur, promoteur, censeur, enseignant, comptable."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {
-                "super_admin",
-                "director",
-                "promoter",
-                "censor",
-                "teacher",
-                "accountant",
-            }
-
-        return user.role in {
-            "super_admin",
-            "director",
-            "promoter",
-            "censor",
-        }
-
-
-class IsTeacherModuleScopedAccess(BasePermission):
-    message = (
-        "Acces enseignants reserve. Ecriture: super admin/directeur/promoteur. "
-        "Lecture: super admin, directeur, promoteur, censeur."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {"super_admin", "director", "promoter", "censor"}
-
-        return user.role in {"super_admin", "director", "promoter"}
-
-
-class IsFinanceModuleScopedAccess(BasePermission):
-    message = (
-        "Acces finance reserve. Ecriture: super admin/directeur/promoteur/comptable. "
-        "Lecture: super admin, directeur, promoteur, comptable, parent, eleve."
-    )
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        if request.method in SAFE_METHODS:
-            return user.role in {
-                "super_admin",
-                "director",
-                "promoter",
-                "accountant",
-                "parent",
-                "student",
-            }
-
-        return user.role in {"super_admin", "director", "promoter", "accountant"}

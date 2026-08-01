@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/models/paginated_result.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../../../features/auth/presentation/auth_controller.dart';
@@ -134,8 +135,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   List<Map<String, dynamic>> _payments = [];
 
   bool _isStudentsReadOnlyRole() {
-    final role = ref.read(authControllerProvider).value?.role;
-    return role == 'censor';
+    return !ref.read(currentPermissionsProvider).canWrite('students');
   }
 
   @override

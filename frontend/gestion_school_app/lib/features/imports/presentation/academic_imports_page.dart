@@ -6,10 +6,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/permissions/module_permissions.dart';
 
 import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
-import '../../auth/presentation/auth_controller.dart';
 import '../../students/presentation/students_controller.dart';
 import '../../exams/presentation/exams_controller.dart';
 import 'academic_imports_controller.dart';
@@ -47,12 +47,7 @@ class _AcademicImportsPageState extends ConsumerState<AcademicImportsPage> {
   Map<String, dynamic>? _lastPreview;
 
   bool get _isReadOnly {
-    final role = ref.read(authControllerProvider).value?.role;
-    return role == 'teacher' ||
-        role == 'supervisor' ||
-        role == 'accountant' ||
-        role == 'parent' ||
-        role == 'student';
+    return !ref.read(currentPermissionsProvider).canWrite('academic_imports');
   }
 
   @override

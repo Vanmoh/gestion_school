@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../../models/etablissement.dart';
 import '../../auth/presentation/auth_controller.dart';
 
@@ -278,9 +279,8 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
   }
 
   Future<void> _save() async {
-    final role = ref.read(authControllerProvider).value?.role;
-    if (role != 'super_admin') {
-      _showMessage('Acces reserve au super admin.');
+    if (!ref.read(currentPermissionsProvider).canWrite('etablissements')) {
+      _showMessage('Modification des etablissements reservee au super admin.');
       return;
     }
 

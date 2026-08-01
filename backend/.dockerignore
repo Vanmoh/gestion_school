@@ -1,0 +1,44 @@
+# Contexte de build Docker.
+#
+# Sans ce fichier le contexte pese ~164 Mo (dont 124 Mo de .venv_supabase) et
+# la couche `COPY . .` est invalidee des qu'un log bouge, ce qui rebuild pour
+# rien. On calque les exclusions sur .gitignore: rien d'ignore par git n'a de
+# raison d'entrer dans l'image.
+
+# Environnements virtuels (l'image a ses propres dependances via pip)
+.venv_supabase/
+.venv/
+venv/
+
+# Secrets: les variables viennent de compose (env_file) ou de Render.
+# .env.example est conserve, c'est un gabarit suivi par git.
+.env
+.env.render.local
+.env.supabase.local
+.env.supabase.runtime
+
+# Etat runtime: monte en volume en dev, regenere en prod.
+# staticfiles est reconstruit par collectstatic dans entrypoint.sh,
+# logs/ est recree par start_render.sh.
+staticfiles/
+media/
+logs/
+backups/
+celerybeat-schedule
+db.sqlite3
+
+# Artefacts Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Divers
+.git/
+.gitignore
+*.swp
+.DS_Store

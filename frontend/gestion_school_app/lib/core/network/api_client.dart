@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/api_constants.dart';
+import '../permissions/module_permissions.dart';
 import 'token_storage.dart';
 
 final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
@@ -57,6 +58,27 @@ final dioProvider = Provider<Dio>((ref) {
   dio.interceptors.add(
     InterceptorsWrapper(
       onRequest: (options, handler) async {
+        // Refus local des ecritures que la matrice interdit: un bouton oublie
+        // quelque part dans l'interface ne peut plus lancer un appel voue au
+        // 403. Seules les routes CRUD certaines sont concernees, le backend
+        // reste l'autorite sur le reste.
+        final refusal = ModulePermissionsRegistry.refusalFor(
+          options.method,
+          options.path,
+        );
+        if (refusal != null) {
+          handler.reject(
+            DioException(
+              requestOptions: options,
+              type: DioExceptionType.cancel,
+              error: refusal,
+              message: refusal,
+            ),
+            true,
+          );
+          return;
+        }
+
         if (options.data is FormData) {
           options.contentType = Headers.multipartFormDataContentType;
         }
