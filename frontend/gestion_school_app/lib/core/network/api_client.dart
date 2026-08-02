@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/api_constants.dart';
 import '../permissions/module_permissions.dart';
+import 'paged_response.dart';
 import 'token_storage.dart';
 
 final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
@@ -129,6 +130,9 @@ final dioProvider = Provider<Dio>((ref) {
         // Cached storage can be stale across account switches; backend enforces
         // effective establishment from the authenticated user on every request.
         handler.next(options);
+      },
+      onResponse: (response, handler) async {
+        handler.next(await followRemainingPages(dio, response));
       },
       onError: (error, handler) async {
         final request = error.requestOptions;

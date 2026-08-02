@@ -9,6 +9,8 @@ mysqlclient==2.2.7
 python-decouple==3.8
 drf-spectacular==0.28.0
 gunicorn==23.0.0
+whitenoise==6.8.2
+uvicorn[standard]==0.34.0
 celery==5.4.0
 redis==5.2.1
 django-celery-beat==2.7.0
@@ -16,5 +18,7 @@ django-celery-results==2.5.1
 fpdf2==2.8.2
 openpyxl==3.1.5
 Pillow==11.1.0
+django-storages[s3]==1.14.4
 channels==4.1.0
 channels-redis==4.2.0
+sentry-sdk[django]==2.20.0

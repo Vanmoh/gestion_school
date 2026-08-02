@@ -1,5 +1,7 @@
 from datetime import timedelta
 from pathlib import Path
+
+from celery.schedules import crontab
 from decouple import config
 import dj_database_url
 from corsheaders.defaults import default_headers
@@ -49,6 +51,10 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
+    # Requis par BLACKLIST_AFTER_ROTATION: sans cette app SimpleJWT ignore
+    # silencieusement la revocation et un refresh token vole reste valide
+    # jusqu'a son expiration naturelle.
+    "rest_framework_simplejwt.token_blacklist",
     "django_filters",
     "drf_spectacular",
     "apps.common",
@@ -60,6 +66,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Doit suivre SecurityMiddleware et preceder tout le reste: gunicorn ne
+    # sert pas /static/, l'admin Django et DRF n'auraient donc aucun style.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -136,6 +145,41 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        # Noms de fichiers empreintes + compression: le cache navigateur peut
+        # etre agressif sans risquer de servir un asset perime.
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
+
+# Fichiers televerses (photos d'eleves, logos, tampons, signatures,
+# justificatifs d'absence, pieces jointes du chat).
+#
+# Sur un hebergement a disque ephemere comme Render, le systeme de fichiers du
+# conteneur repart de zero a chaque deploiement: stockes en local, ces fichiers
+# disparaissent. Des qu'un bucket est renseigne, tout passe en stockage objet.
+AWS_STORAGE_BUCKET_NAME = config("AWS_STORAGE_BUCKET_NAME", default="").strip()
+USE_OBJECT_STORAGE = bool(AWS_STORAGE_BUCKET_NAME)
+
+if USE_OBJECT_STORAGE:
+    AWS_ACCESS_KEY_ID = config("AWS_ACCESS_KEY_ID", default="")
+    AWS_SECRET_ACCESS_KEY = config("AWS_SECRET_ACCESS_KEY", default="")
+    AWS_S3_REGION_NAME = config("AWS_S3_REGION_NAME", default="")
+    # Renseigne pour tout fournisseur compatible S3 non-AWS
+    # (Supabase Storage: https://<projet>.supabase.co/storage/v1/s3).
+    AWS_S3_ENDPOINT_URL = config("AWS_S3_ENDPOINT_URL", default="").strip() or None
+    AWS_S3_CUSTOM_DOMAIN = config("AWS_S3_CUSTOM_DOMAIN", default="").strip() or None
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = None
+    # URLs signees a duree limitee, et non un bucket public: ces fichiers sont
+    # des donnees personnelles d'eleves mineurs. Une URL publique reste
+    # accessible a quiconque l'a vue passer, indefiniment.
+    AWS_QUERYSTRING_AUTH = config("AWS_QUERYSTRING_AUTH", cast=bool, default=True)
+    AWS_QUERYSTRING_EXPIRE = config("AWS_QUERYSTRING_EXPIRE", cast=int, default=3600)
+    STORAGES["default"] = {"BACKEND": "storages.backends.s3.S3Storage"}
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOW_ALL_ORIGINS = config(
@@ -160,9 +204,34 @@ CSRF_TRUSTED_ORIGINS = _csv_setting("CSRF_TRUSTED_ORIGINS")
 USE_X_FORWARDED_HOST = config("USE_X_FORWARDED_HOST", cast=bool, default=True)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
+# Le preload HSTS est un engagement difficilement reversible: il faut garantir
+# durablement le HTTPS sur le domaine et tous ses sous-domaines, et la sortie
+# de la liste prend des mois. Choix assume, tu par un controle qui doit rester
+# exploitable comme porte de CI.
+SILENCED_SYSTEM_CHECKS = ["security.W021"]
+
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
+
 if not DEBUG:
     SESSION_COOKIE_SECURE = config("SESSION_COOKIE_SECURE", cast=bool, default=True)
     CSRF_COOKIE_SECURE = config("CSRF_COOKIE_SECURE", cast=bool, default=True)
+    SESSION_COOKIE_HTTPONLY = True
+    # Le proxy termine TLS et annonce le schema via X-Forwarded-Proto
+    # (SECURE_PROXY_SSL_HEADER ci-dessus): la redirection est donc sure.
+    SECURE_SSL_REDIRECT = config("SECURE_SSL_REDIRECT", cast=bool, default=True)
+    # La sonde de sante peut etre appelee en HTTP depuis le reseau interne de
+    # l'hebergeur. Redirigee en 301, elle serait lue comme un echec et le
+    # service serait declare mort alors qu'il fonctionne.
+    SECURE_REDIRECT_EXEMPT = [r"^api/healthz/$"]
+    # 1 an. Passer preload a True suppose d'assumer que tous les
+    # sous-domaines servent en HTTPS, de facon durable.
+    SECURE_HSTS_SECONDS = config("SECURE_HSTS_SECONDS", cast=int, default=31536000)
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = config(
+        "SECURE_HSTS_INCLUDE_SUBDOMAINS", cast=bool, default=True
+    )
+    SECURE_HSTS_PRELOAD = config("SECURE_HSTS_PRELOAD", cast=bool, default=False)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
@@ -177,12 +246,38 @@ REST_FRAMEWORK = {
         "rest_framework.filters.OrderingFilter",
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Sans pagination par defaut, /students/, /grades/ ou /payments/ serialisent
+    # la table entiere a chaque appel: la charge cote serveur n'est bornee par
+    # rien, et le cahier des charges vise 1000+ eleves.
+    "DEFAULT_PAGINATION_CLASS": "apps.common.pagination.StandardResultsSetPagination",
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.ScopedRateThrottle",
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        # Le login est la seule route ou un anonyme peut deviner un secret:
+        # elle est limitee bien plus bas que le reste du trafic anonyme.
+        "login": config("THROTTLE_LOGIN", default="10/min"),
+        "anon": config("THROTTLE_ANON", default="60/min"),
+        # Large: une page de saisie de notes enchaine beaucoup d'appels
+        # legitimes. Le but est de couper l'abus, pas l'usage normal.
+        "user": config("THROTTLE_USER", default="2000/hour"),
+    },
 }
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "GESTION SCHOOL API",
     "DESCRIPTION": "API de gestion scolaire multi-module",
     "VERSION": "1.0.0",
+    # drf-spectacular sert le schema en AllowAny par defaut: la cartographie
+    # complete de l'API, parametres compris, etait donc publique en production.
+    # Ouvert en developpement, reserve au staff ensuite.
+    "SERVE_PERMISSIONS": (
+        ["rest_framework.permissions.AllowAny"]
+        if DEBUG
+        else ["rest_framework.permissions.IsAdminUser"]
+    ),
 }
 
 SCHOOL_NAME = config("SCHOOL_NAME", default="LYCÉE TECHNIQUE OUMAR BAH")
@@ -211,6 +306,21 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 
+# Le service beat tournait sans aucune tache planifiee: la sauvegarde
+# automatique exigee par le cahier des charges n'a jamais eu lieu.
+# L'heure est locale (TIME_ZONE), choisie hors des heures de saisie.
+CELERY_BEAT_BACKUP_HOUR = config("BACKUP_HOUR", cast=int, default=2)
+CELERY_BEAT_BACKUP_MINUTE = config("BACKUP_MINUTE", cast=int, default=30)
+CELERY_BEAT_SCHEDULE = {
+    "sauvegarde-quotidienne-base": {
+        "task": "apps.common.tasks.scheduled_database_backup",
+        "schedule": crontab(
+            hour=CELERY_BEAT_BACKUP_HOUR,
+            minute=CELERY_BEAT_BACKUP_MINUTE,
+        ),
+    },
+}
+
 CHANNEL_REDIS_URL = config(
     "CHANNEL_REDIS_URL",
     default=config("REDIS_URL", default="redis://redis:6379/2"),
@@ -223,6 +333,27 @@ CHANNEL_LAYERS = {
         },
     },
 }
+
+# Les quotas de debit se comptent dans le cache. Avec le cache local par
+# defaut, chaque worker gunicorn tient son propre compteur et la limite reelle
+# est multipliee par le nombre de workers: en production le cache doit etre
+# partage. On ne bascule sur Redis que s'il est explicitement fourni, pour que
+# les tests et le dev restent autonomes.
+CACHE_URL = config("CACHE_URL", default="").strip()
+if CACHE_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": CACHE_URL,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "gestion-school-local",
+        }
+    }
 
 ENABLE_FILE_LOGGING = config("ENABLE_FILE_LOGGING", cast=bool, default=True)
 ENABLE_PROFILING_HEADERS = config(
@@ -259,6 +390,22 @@ if _file_logging_enabled:
     }
     _django_logger_handlers.append("file")
     _apps_logger_handlers.append("file")
+
+# Supervision des erreurs. Sans DSN, rien n'est initialise: le projet doit
+# rester utilisable sans compte Sentry, et les tests ne doivent rien emettre.
+SENTRY_DSN = config("SENTRY_DSN", default="").strip()
+if SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=config("SENTRY_ENVIRONMENT", default="production"),
+        release=config("SENTRY_RELEASE", default="") or None,
+        # Jamais True ici: l'application manipule des donnees d'eleves mineurs,
+        # qui n'ont rien a faire dans un service de supervision tiers.
+        send_default_pii=False,
+        traces_sample_rate=config("SENTRY_TRACES_SAMPLE_RATE", cast=float, default=0.0),
+    )
 
 LOGGING = {
     "version": 1,

@@ -209,6 +209,32 @@ final modulePermissionsProvider = FutureProvider<ModulePermissions>((ref) async 
   return permissions;
 });
 
+/// Ce que la coquille doit afficher en attendant, ou a la place, du menu.
+enum PermissionsGate { loading, unavailable, noModule, ready }
+
+/// Traduit l'etat du provider en decision d'affichage.
+///
+/// Extrait de la coquille parce que l'ordre des tests est tout le sujet: le
+/// provider rend d'abord une matrice vide (personne n'est connecte au premier
+/// build), et Riverpod conserve cette valeur quand la requete suivante echoue.
+/// Un `hasValue` teste avant `hasError` laissait donc passer l'echec, et la
+/// barre laterale s'affichait sans un seul module ni le moindre message.
+PermissionsGate permissionsGate(
+  AsyncValue<ModulePermissions> state, {
+  required bool hasVisibleModule,
+}) {
+  if (state.hasError) {
+    return PermissionsGate.unavailable;
+  }
+  if (state.isLoading || !state.hasValue) {
+    return PermissionsGate.loading;
+  }
+  if (!hasVisibleModule) {
+    return PermissionsGate.noModule;
+  }
+  return PermissionsGate.ready;
+}
+
 /// Vue synchrone pour les widgets de rendu: tant que la matrice n'est pas
 /// chargee, aucun droit n'est accorde.
 final currentPermissionsProvider = Provider<ModulePermissions>((ref) {

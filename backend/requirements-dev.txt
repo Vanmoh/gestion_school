@@ -1,0 +1,7 @@
+# Dependances de developpement et de CI uniquement: elles ne doivent jamais
+# etre installees sur les services de production.
+-r requirements.txt
+
+# channels.testing (WebsocketCommunicator) importe daphne au chargement du
+# module, meme quand le test ne lance aucun serveur live.
+daphne==4.1.2
