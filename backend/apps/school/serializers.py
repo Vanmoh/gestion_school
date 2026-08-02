@@ -540,6 +540,15 @@ class ParentProfileSerializer(serializers.ModelSerializer):
 
 class StudentSerializer(serializers.ModelSerializer):
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    # Le modele tolere desormais une classe vide (une classe supprimee laisse
+    # ses eleves sans affectation); l'API, elle, continue de l'exiger a
+    # l'inscription. Declare explicitement pour que blank=True cote modele ne
+    # rende pas le champ optionnel ici.
+    classroom = serializers.PrimaryKeyRelatedField(
+        queryset=ClassRoom.objects.all(),
+        required=True,
+        allow_null=True,
+    )
     user_full_name = serializers.SerializerMethodField(read_only=True)
     user_username = serializers.SerializerMethodField(read_only=True)
     user_first_name = serializers.SerializerMethodField(read_only=True)

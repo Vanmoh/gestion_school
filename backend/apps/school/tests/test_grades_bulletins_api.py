@@ -385,6 +385,33 @@ class GradesAndBulletinsApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("subject", response.data)
 
+    def test_out_of_perimeter_refusal_comes_before_the_unique_check(self):
+        """Le refus de perimetre ne doit rien apprendre sur les donnees.
+
+        grade_3 occupe deja (student_3, math, class_b, annee, T1). Si le
+        validateur d'unicite passe en premier, l'enseignant apprend qu'une
+        note existe pour une classe qu'il n'enseigne pas.
+        """
+        self.client.force_authenticate(self.teacher_user)
+
+        response = self.client.post(
+            "/api/grades/",
+            {
+                "student": self.student_3.id,
+                "subject": self.subject_math.id,
+                "classroom": self.class_b.id,
+                "academic_year": self.year.id,
+                "term": "T1",
+                "value": 13,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("subject", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+        self.assertNotIn("unique", str(response.data).lower())
+
     def test_teacher_discipline_is_scoped_and_reporting_only(self):
         incident_a = DisciplineIncident.objects.create(
             student=self.student_1,

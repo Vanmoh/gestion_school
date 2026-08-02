@@ -3298,6 +3298,40 @@ class GradeViewSet(BaseModelViewSet):
     def _get_scoped_classroom_or_404(self, classroom_id):
         return get_object_or_404(self._scoped_classroom_queryset(), id=classroom_id)
 
+    UNASSIGNED_PAIR_MESSAGE = (
+        "Acces refuse: vous ne pouvez saisir que les notes des matières "
+        "et classes qui vous sont affectées."
+    )
+
+    def _reject_out_of_teacher_perimeter(self, data, instance=None):
+        """Refus de perimetre avant toute autre validation.
+
+        Sans ce controle prealable, le validateur d'unicite du serializer
+        repondait en premier: un enseignant hors de ses classes apprenait
+        qu'une note existait deja pour une classe qu'il n'enseigne pas, au
+        lieu d'un simple refus d'acces.
+        """
+        if getattr(self.request.user, "role", "") != UserRole.TEACHER:
+            return
+
+        def resolve(field):
+            raw = data.get(field)
+            if raw in (None, ""):
+                return getattr(instance, f"{field}_id", None) if instance else None
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return None
+
+        classroom_id = resolve("classroom")
+        subject_id = resolve("subject")
+        # Champs absents ou illisibles: c'est au serializer de le dire.
+        if classroom_id is None or subject_id is None:
+            return
+
+        if (classroom_id, subject_id) not in self._teacher_assignment_pairs():
+            raise ValidationError({"subject": self.UNASSIGNED_PAIR_MESSAGE})
+
     def _validate_grade_scope(self, serializer, instance=None):
         student = serializer.validated_data.get("student") or (instance.student if instance else None)
         classroom = serializer.validated_data.get("classroom") or (instance.classroom if instance else None)
@@ -3316,14 +3350,7 @@ class GradeViewSet(BaseModelViewSet):
             allowed_pairs = self._teacher_assignment_pairs()
             pair = (classroom.id if classroom else None, subject.id if subject else None)
             if pair not in allowed_pairs:
-                raise ValidationError(
-                    {
-                        "subject": (
-                            "Acces refuse: vous ne pouvez saisir que les notes des matières "
-                            "et classes qui vous sont affectées."
-                        )
-                    }
-                )
+                raise ValidationError({"subject": self.UNASSIGNED_PAIR_MESSAGE})
 
         target_etablissement = self._resolve_target_etablissement()
         if target_etablissement is None:
@@ -3448,6 +3475,7 @@ class GradeViewSet(BaseModelViewSet):
         return validation, history_count
 
     def create(self, request, *args, **kwargs):
+        self._reject_out_of_teacher_perimeter(request.data)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self._validate_grade_scope(serializer)
@@ -3463,6 +3491,8 @@ class GradeViewSet(BaseModelViewSet):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
+
+        self._reject_out_of_teacher_perimeter(request.data, instance=instance)
 
         if self._is_term_validated(instance.classroom_id, instance.academic_year_id, instance.term):
             return Response({"detail": self._locked_term_message()}, status=400)
