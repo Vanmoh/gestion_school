@@ -226,7 +226,19 @@ class Student(TimeStampedModel):
     matricule = models.CharField(max_length=30, unique=True, blank=True)
     gender = models.CharField(max_length=1, choices=Gender.choices, null=True, blank=True)
     birth_date = models.DateField(null=True, blank=True)
-    classroom = models.ForeignKey(ClassRoom, on_delete=models.SET_NULL, null=True, related_name="students")
+    # blank=True et pas seulement null=True: SET_NULL fait que l'application
+    # produit elle-meme des eleves sans classe quand une classe disparait, et
+    # save() appelle full_clean(). Sans blank=True, un tel eleve devenait
+    # impossible a re-enregistrer, y compris lors d'une restauration de
+    # sauvegarde. Le caractere obligatoire a l'inscription est porte par le
+    # serializer, pas par le modele.
+    classroom = models.ForeignKey(
+        ClassRoom,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="students",
+    )
     parent = models.ForeignKey(ParentProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name="children")
     photo = models.ImageField(upload_to="students/", null=True, blank=True)
     enrollment_date = models.DateField(auto_now_add=True)

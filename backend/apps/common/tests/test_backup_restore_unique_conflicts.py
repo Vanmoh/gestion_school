@@ -40,8 +40,8 @@ class BackupRestoreUniqueConflictTests(TestCase):
             title="Livre deja present",
             author="Auteur",
             isbn="ISBN-001",
-            total_copies=1,
-            available_copies=1,
+            quantity_total=1,
+            quantity_available=1,
             etablissement=self.etablissement,
         )
         payload = [
@@ -52,8 +52,8 @@ class BackupRestoreUniqueConflictTests(TestCase):
                     "title": "Livre restaure",
                     "author": "Auteur restaure",
                     "isbn": "ISBN-001",
-                    "total_copies": 1,
-                    "available_copies": 1,
+                    "quantity_total": 1,
+                    "quantity_available": 1,
                     "etablissement": self.etablissement.id,
                 },
             }
