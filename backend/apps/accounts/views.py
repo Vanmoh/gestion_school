@@ -1,8 +1,10 @@
 from django.contrib.auth import get_user_model
-from rest_framework import generics, permissions, viewsets
+from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apps.school.models import Etablissement, ParentProfile
 from .access import role_payload
@@ -16,7 +18,14 @@ User = get_user_model()
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
-    pass
+    # Seule route ou un anonyme peut tester un secret: elle porte le quota
+    # etroit "login" plutot que le quota anonyme general.
+    throttle_scope = "login"
+
+
+class CustomTokenRefreshView(TokenRefreshView):
+    # Un refresh token vole se rejoue ici: meme quota que la connexion.
+    throttle_scope = "login"
 
 
 class ModulePermissionsView(APIView):
@@ -266,4 +275,33 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(data)
 
 
-token_refresh_view = TokenRefreshView.as_view()
+class LogoutView(APIView):
+    """Revoque le refresh token presente, sans jamais faire echouer la sortie.
+
+    Le client efface son stockage local des qu'il appelle cette route: renvoyer
+    une erreur sur un token deja expire ou deja revoque le laisserait croire
+    qu'il est encore connecte. On repond donc 205 dans tous les cas ou la
+    demande est bien formee.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        raw_token = (request.data.get("refresh") or "").strip()
+        if not raw_token:
+            return Response(
+                {"refresh": "Ce champ est obligatoire."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            RefreshToken(raw_token).blacklist()
+        except TokenError:
+            # Token expire, malforme ou deja revoque: la session est close
+            # dans tous les cas, il n'y a rien de plus a revoquer.
+            pass
+
+        return Response(status=status.HTTP_205_RESET_CONTENT)
+
+
+token_refresh_view = CustomTokenRefreshView.as_view()

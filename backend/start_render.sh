@@ -30,7 +30,10 @@ touch logs/app.log || true
 python manage.py migrate --noinput
 python manage.py collectstatic --noinput
 
-exec gunicorn config.wsgi:application \
+# ASGI: la route websocket du chat (config/asgi.py) n'est servie que par un
+# worker ASGI. En WSGI, l'API repond normalement mais le temps reel est mort.
+exec gunicorn config.asgi:application \
+  -k uvicorn.workers.UvicornWorker \
   --bind 0.0.0.0:${PORT:-8000} \
   --workers ${WEB_CONCURRENCY:-3} \
   --timeout 120

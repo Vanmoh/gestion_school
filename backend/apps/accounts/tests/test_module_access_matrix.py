@@ -58,6 +58,9 @@ class RoutedViewsCoverageTests(APITestCase):
         "APIRootView",  # index DRF
         "CustomTokenObtainPairView",  # connexion
         "TokenRefreshView",
+        "CustomTokenRefreshView",
+        "LogoutView",  # ferme sa propre session, ne touche aucune ressource
+        "HealthCheckView",  # sonde d'infrastructure, n'expose aucune donnee
         "ModulePermissionsView",  # sert la matrice elle-meme
         "SpectacularAPIView",
         "SpectacularSwaggerView",

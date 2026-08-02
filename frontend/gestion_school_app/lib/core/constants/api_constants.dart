@@ -7,6 +7,7 @@ class ApiConstants {
   static const String authBase = '/auth';
   static const String login = '$authBase/login/';
   static const String refresh = '$authBase/refresh/';
+  static const String logout = '$authBase/logout/';
   static const String me = '$authBase/users/me/';
   static const String permissions = '$authBase/permissions/';
 }

@@ -81,5 +81,22 @@ class AuthRepository {
     }
   }
 
-  Future<void> logout() => tokenStorage.clear();
+  /// Revoque la session cote serveur, puis efface le stockage local.
+  ///
+  /// Vider le stockage local ne suffit pas: le refresh token resterait
+  /// utilisable pendant sa duree de vie par qui le recupererait. L'appel
+  /// reseau ne peut pas pour autant empecher la deconnexion (hors ligne,
+  /// serveur injoignable), d'ou l'effacement local dans tous les cas.
+  Future<void> logout() async {
+    try {
+      final refresh = await tokenStorage.refreshToken();
+      if (refresh != null && refresh.isNotEmpty) {
+        await dio.post(ApiConstants.logout, data: {'refresh': refresh});
+      }
+    } catch (_) {
+      // La session locale se ferme quoi qu'il arrive.
+    } finally {
+      await tokenStorage.clear();
+    }
+  }
 }

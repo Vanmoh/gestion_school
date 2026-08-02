@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from .views import (
     CustomTokenObtainPairView,
+    LogoutView,
     ModulePermissionsView,
     RegisterView,
     UserViewSet,
@@ -14,6 +15,7 @@ router.register(r"users", UserViewSet, basename="users")
 urlpatterns = [
     path("login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("refresh/", token_refresh_view, name="token_refresh"),
+    path("logout/", LogoutView.as_view(), name="logout"),
     path("register/", RegisterView.as_view(), name="register"),
     path("permissions/", ModulePermissionsView.as_view(), name="module-permissions"),
     path("", include(router.urls)),
