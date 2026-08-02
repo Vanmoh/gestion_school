@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'models/etablissement.dart';
 import 'screens/etablissement_selection_screen.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -441,6 +442,14 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   bool _isItemVisible(String key) => _permissions.canRead(key);
 
   bool _isItemReadOnly(String key) => _permissions.isReadOnly(key);
+
+  /// Vrai quand la matrice n'ouvre aucun module.
+  ///
+  /// `_firstVisibleKey` retombe sur "dashboard" pour ne jamais rendre une
+  /// selection nulle: il ne permet donc pas de distinguer "aucun droit" de
+  /// "le tableau de bord seulement".
+  bool get _hasVisibleItem =>
+      _items.any((item) => _isItemVisible(item.keyName));
 
   String _firstVisibleKey() {
     for (final item in _items) {
@@ -1144,13 +1153,20 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
     // La matrice de droits conditionne tout le menu: construire la coquille
     // avant de la connaitre afficherait un menu vide, puis le ferait sauter.
-    if (permissions.isLoading || !permissions.hasValue) {
-      if (permissions.hasError) {
+    switch (permissionsGate(permissions, hasVisibleModule: _hasVisibleItem)) {
+      case PermissionsGate.unavailable:
         return _PermissionsUnavailable(
+          error: permissions.error,
           onRetry: () => ref.invalidate(modulePermissionsProvider),
         );
-      }
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      case PermissionsGate.loading:
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      case PermissionsGate.noModule:
+        // Matrice servie mais vide: compte sans role exploitable. Le dire vaut
+        // mieux qu'un menu vide qu'on prendrait pour un bug d'affichage.
+        return _NoAccessibleModule(role: user.role);
+      case PermissionsGate.ready:
+        break;
     }
 
     if (pendingShellNavigationKey != null) {
@@ -1951,8 +1967,17 @@ class _SidebarItem extends StatelessWidget {
 /// proposer un nouvel essai que de deviner un menu.
 class _PermissionsUnavailable extends StatelessWidget {
   final VoidCallback onRetry;
+  final Object? error;
 
-  const _PermissionsUnavailable({required this.onRetry});
+  const _PermissionsUnavailable({required this.onRetry, this.error});
+
+  /// Un 404 sur la matrice ne vient jamais du reseau: la route existe depuis
+  /// que le frontend la consomme. Il signale une API plus ancienne que le
+  /// client, cas ou "verifiez votre connexion" envoie chercher au mauvais
+  /// endroit pendant des heures.
+  bool get _serverTooOld =>
+      error is DioException &&
+      (error as DioException).response?.statusCode == 404;
 
   @override
   Widget build(BuildContext context) {
@@ -1970,15 +1995,21 @@ class _PermissionsUnavailable extends StatelessWidget {
                 Icon(Icons.lock_outline_rounded, size: 40, color: scheme.error),
                 const SizedBox(height: 12),
                 Text(
-                  'Droits indisponibles',
+                  _serverTooOld
+                      ? 'Serveur non a jour'
+                      : 'Droits indisponibles',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Impossible de recuperer vos autorisations. '
-                  'Verifiez votre connexion puis reessayez.',
+                  _serverTooOld
+                      ? "Cette version de l'API ne fournit pas la matrice de "
+                            'droits (404). Deployez le backend a jour, puis '
+                            'reessayez.'
+                      : 'Impossible de recuperer vos autorisations. '
+                            'Verifiez votre connexion puis reessayez.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: scheme.onSurfaceVariant,
@@ -1989,6 +2020,63 @@ class _PermissionsUnavailable extends StatelessWidget {
                   onPressed: onRetry,
                   icon: const Icon(Icons.refresh_rounded, size: 18),
                   label: const Text('Reessayer'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Ecran affiche quand le serveur repond, mais n'ouvre aucun module.
+///
+/// Distinct de [_PermissionsUnavailable]: ici la matrice est arrivee, elle est
+/// simplement vide. C'est un probleme de compte (role absent ou sans droits),
+/// pas de chargement, et il se regle cote administration.
+class _NoAccessibleModule extends StatelessWidget {
+  final String? role;
+
+  const _NoAccessibleModule({required this.role});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final named = (role ?? '').trim();
+
+    return Scaffold(
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 380),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.do_not_disturb_on_outlined,
+                  size: 40,
+                  color: scheme.onSurfaceVariant,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Aucun module accessible',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  named.isEmpty
+                      ? "Votre compte n'a aucun role attribue. Demandez a un "
+                            'administrateur de vous en attribuer un.'
+                      : 'Le profil « $named » n\'ouvre aucun module sur cet '
+                            'etablissement. Contactez un administrateur.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),

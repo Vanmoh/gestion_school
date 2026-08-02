@@ -1,3 +1,4 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gestion_school_app/core/permissions/module_permissions.dart';
 
@@ -42,6 +43,8 @@ Map<String, dynamic> _censorPayload() => {
 };
 
 void main() {
+  group('porte d_entree de la coquille', _gateTests);
+
   group('lecture de la matrice', () {
     final permissions = ModulePermissions.fromJson(_censorPayload());
 
@@ -133,5 +136,56 @@ void main() {
       ModulePermissionsRegistry.current = ModulePermissions.empty;
       expect(ModulePermissionsRegistry.refusalFor('POST', '/grades/'), isNull);
     });
+  });
+}
+
+void _gateTests() {
+  const empty = ModulePermissions.empty;
+  final matrix = ModulePermissions.fromJson(_censorPayload());
+
+  test('un echec l_emporte sur une matrice vide gardee en cache', () {
+    // Regression: le provider rend d'abord `empty` (personne n'est connecte),
+    // Riverpod garde cette valeur quand la requete suivante echoue. La coquille
+    // s'affichait alors avec zero module et aucun message.
+    final stale = const AsyncValue<ModulePermissions>.data(
+      empty,
+    ).copyWithPrevious(const AsyncValue.data(empty));
+    final failed = AsyncValue<ModulePermissions>.error(
+      Exception('404'),
+      StackTrace.empty,
+    ).copyWithPrevious(stale);
+
+    expect(failed.hasValue, isTrue, reason: 'la valeur perimee reste presente');
+    expect(
+      permissionsGate(failed, hasVisibleModule: false),
+      PermissionsGate.unavailable,
+    );
+  });
+
+  test('matrice servie mais sans module: etat dedie, pas un menu vide', () {
+    expect(
+      permissionsGate(
+        const AsyncValue.data(empty),
+        hasVisibleModule: false,
+      ),
+      PermissionsGate.noModule,
+    );
+  });
+
+  test('matrice servie avec des modules: la coquille se construit', () {
+    expect(
+      permissionsGate(AsyncValue.data(matrix), hasVisibleModule: true),
+      PermissionsGate.ready,
+    );
+  });
+
+  test('chargement initial: ni erreur ni menu', () {
+    expect(
+      permissionsGate(
+        const AsyncValue<ModulePermissions>.loading(),
+        hasVisibleModule: false,
+      ),
+      PermissionsGate.loading,
+    );
   });
 }
