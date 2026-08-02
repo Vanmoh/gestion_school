@@ -11,14 +11,19 @@ services:
     rootDir: backend
     dockerfilePath: ./Dockerfile
     autoDeploy: true
-    healthCheckPath: /api/docs/
+    # Verifie base et cache, et non une page statique: un service dont la base
+    # est injoignable doit sortir de la rotation au lieu d'etre declare sain.
+    healthCheckPath: /api/healthz/
     envVars:
       - key: DEBUG
         value: "False"
       - key: SECRET_KEY
         generateValue: true
+      # Jamais "*": avec un joker, un Host falsifie est accepte et se
+      # retrouve dans les URL absolues (liens de reinitialisation, medias).
+      # A completer si le service change de nom ou passe sur un domaine propre.
       - key: ALLOWED_HOSTS
-        value: "*"
+        value: "gestion-school-jkzf.onrender.com,gestion-school-api.onrender.com"
       - key: CORS_ALLOW_ALL_ORIGINS
         value: "False"
       - key: CORS_ALLOWED_ORIGINS
@@ -29,8 +34,12 @@ services:
         sync: false
       - key: DB_SSL_REQUIRE
         value: "True"
+      # 0 et non 600: sous ASGI, Django cree un thread par requete et le
+      # detruit ensuite. Une connexion "persistante" n'y est jamais reutilisee,
+      # et elle reste ouverte apres la mort du thread. Pour du pooling, passer
+      # par le pooler Supabase (port 6543) plutot que par ce reglage.
       - key: DB_CONN_MAX_AGE
-        value: "600"
+        value: "0"
       - key: USE_X_FORWARDED_HOST
         value: "True"
       - key: SESSION_COOKIE_SECURE
@@ -47,6 +56,31 @@ services:
           type: redis
           name: gestion-school-redis
           property: connectionString
+      # Compteurs de quotas partages entre les workers gunicorn: sans cache
+      # commun, la limite reelle est multipliee par le nombre de workers.
+      - key: CACHE_URL
+        fromService:
+          type: redis
+          name: gestion-school-redis
+          property: connectionString
+      # Stockage objet des fichiers televerses. Le disque du conteneur Render
+      # est ephemere: sans bucket, photos et justificatifs disparaissent a
+      # chaque deploiement. `manage.py check --deploy` le signale (W001).
+      - key: AWS_STORAGE_BUCKET_NAME
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_S3_ENDPOINT_URL
+        sync: false
+      - key: AWS_S3_REGION_NAME
+        sync: false
+      # Supervision des erreurs. Vide = desactive.
+      - key: SENTRY_DSN
+        sync: false
+      - key: SENTRY_ENVIRONMENT
+        value: production
 
   - type: web
     name: gestion-school-web
@@ -79,6 +113,11 @@ services:
         value: "False"
       - key: SECRET_KEY
         sync: false
+      # Inutile pour un worker, qui ne sert aucune requete HTTP, mais les
+      # settings l'exigent des que DEBUG=False. Sans cette variable le
+      # processus s'arrete sur ImproperlyConfigured avant meme de demarrer.
+      - key: ALLOWED_HOSTS
+        value: "gestion-school-jkzf.onrender.com"
       - key: DATABASE_URL
         sync: false
       - key: DB_SSL_REQUIRE
@@ -95,6 +134,22 @@ services:
           type: redis
           name: gestion-school-redis
           property: connectionString
+      # Le worker execute la sauvegarde planifiee: sans ces cles, le dump
+      # atterrit sur le disque du conteneur et disparait avec lui.
+      - key: AWS_STORAGE_BUCKET_NAME
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_S3_ENDPOINT_URL
+        sync: false
+      - key: AWS_S3_REGION_NAME
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: SENTRY_ENVIRONMENT
+        value: production
 
   - type: worker
     name: gestion-school-beat
@@ -109,6 +164,10 @@ services:
         value: "False"
       - key: SECRET_KEY
         sync: false
+      # Voir le worker: exigee par les settings des que DEBUG=False, sans quoi
+      # le planificateur ne demarre pas et aucune tache n'est jamais declenchee.
+      - key: ALLOWED_HOSTS
+        value: "gestion-school-jkzf.onrender.com"
       - key: DATABASE_URL
         sync: false
       - key: DB_SSL_REQUIRE

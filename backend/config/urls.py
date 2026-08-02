@@ -4,8 +4,13 @@ from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
+from apps.common.health import HealthCheckView
+
 urlpatterns = [
     path("admin/", admin.site.urls),
+    # Declaree ici et non dans apps.common.urls, qui est inclus sous deux
+    # prefixes: la sonde doit avoir une adresse et une seule.
+    path("api/healthz/", HealthCheckView.as_view(), name="healthz"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/auth/", include("apps.accounts.urls")),

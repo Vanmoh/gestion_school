@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/constants/etablissement_api.dart';
 import '../core/network/api_client.dart';
+import '../core/network/paged_response.dart';
 import '../models/etablissement.dart';
 import '../widgets/etablissement_identity.dart';
 import 'etablissement_details_screen.dart';
@@ -38,9 +39,9 @@ class _PublicEtablissementEntryPageState
       final response = await ref
           .read(dioProvider)
           .get(EtablissementApi.etablissements);
-      final etablissements = (response.data as List<dynamic>)
-          .map((row) => Etablissement.fromJson(row as Map<String, dynamic>))
-          .toList();
+      final etablissements = rowsOf(
+        response.data,
+      ).map(Etablissement.fromJson).toList();
       provider.setEtablissements(etablissements);
     } catch (_) {
       // Keep the screen usable; an empty state will be shown if the API is down.
@@ -115,9 +116,7 @@ class _RequireEtablissementSelectionState
       final response = await ref
           .read(dioProvider)
           .get(EtablissementApi.etablissements);
-      final data = (response.data as List<dynamic>)
-          .map((e) => Etablissement.fromJson(e as Map<String, dynamic>))
-          .toList();
+      final data = rowsOf(response.data).map(Etablissement.fromJson).toList();
       etabProvider.setEtablissements(data);
     } catch (_) {
       // Keep navigation usable even if API is temporarily unavailable.

@@ -693,7 +693,7 @@ class EtablissementViewSet(viewsets.ModelViewSet):
 
 class ClassRoomViewSet(BaseModelViewSet):
     access_module = "academics"
-    queryset = ClassRoom.objects.all()
+    queryset = ClassRoom.objects.all().order_by("name", "id")
     serializer_class = ClassRoomSerializer
 
     def _requested_etablissement_id(self):
@@ -966,7 +966,7 @@ class SubjectViewSet(BaseModelViewSet):
 
 class TeacherViewSet(BaseModelViewSet):
     access_module = "teachers"
-    queryset = Teacher.objects.all()
+    queryset = Teacher.objects.all().order_by("id")
     serializer_class = TeacherSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
@@ -1089,7 +1089,7 @@ class TeacherViewSet(BaseModelViewSet):
 
 class TeacherAssignmentViewSet(BaseModelViewSet):
     access_module = "teachers"
-    queryset = TeacherAssignment.objects.select_related("teacher", "subject", "classroom").all()
+    queryset = TeacherAssignment.objects.select_related("teacher", "subject", "classroom").all().order_by("id")
     serializer_class = TeacherAssignmentSerializer
 
     def _requested_etablissement_id(self):
@@ -2617,7 +2617,7 @@ class TimetablePublicationViewSet(viewsets.ReadOnlyModelViewSet):
 
 class ParentProfileViewSet(BaseModelViewSet):
     access_module = "students"
-    queryset = ParentProfile.objects.all()
+    queryset = ParentProfile.objects.all().order_by("id")
     serializer_class = ParentProfileSerializer
 
     def _requested_etablissement_id(self):
@@ -2775,7 +2775,10 @@ class StudentViewSet(BaseModelViewSet):
         "user__first_name",
         "classroom__name",
     ]
-    ordering = ["-created_at"]
+    # "-id" en second: sur des lignes creees dans la meme seconde,
+    # "-created_at" seul laisse l_ordre indefini et une meme ligne peut
+    # apparaitre sur deux pages, ou sur aucune.
+    ordering = ["-created_at", "-id"]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -4913,7 +4916,10 @@ class PaymentViewSet(BaseModelViewSet):
         "fee__student__user__last_name",
     ]
     ordering_fields = ["created_at", "amount", "method"]
-    ordering = ["-created_at"]
+    # "-id" en second: sur des lignes creees dans la meme seconde,
+    # "-created_at" seul laisse l_ordre indefini et une meme ligne peut
+    # apparaitre sur deux pages, ou sur aucune.
+    ordering = ["-created_at", "-id"]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -5716,7 +5722,7 @@ class SmsProviderConfigViewSet(EtablissementScopedModelViewSet):
 
 class BookViewSet(BaseModelViewSet):
     access_module = "library"
-    queryset = Book.objects.all()
+    queryset = Book.objects.all().order_by("title", "id")
     serializer_class = BookSerializer
 
     def _requested_etablissement_id(self):
@@ -5797,7 +5803,7 @@ class BookViewSet(BaseModelViewSet):
 
 class BorrowViewSet(BaseModelViewSet):
     access_module = "library"
-    queryset = Borrow.objects.select_related("student", "book").all()
+    queryset = Borrow.objects.select_related("student", "book").all().order_by("-borrowed_at", "-id")
     serializer_class = BorrowSerializer
 
     def _requested_etablissement_id(self):
@@ -5893,7 +5899,7 @@ class BorrowViewSet(BaseModelViewSet):
 
 class CanteenMenuViewSet(BaseModelViewSet):
     access_module = "canteen"
-    queryset = CanteenMenu.objects.all()
+    queryset = CanteenMenu.objects.all().order_by("-menu_date", "-id")
     serializer_class = CanteenMenuSerializer
     filterset_fields = ["menu_date", "is_active"]
 
@@ -6166,14 +6172,14 @@ class CanteenServiceViewSet(BaseModelViewSet):
 
 class ExamSessionViewSet(BaseModelViewSet):
     access_module = "exams"
-    queryset = ExamSession.objects.select_related("academic_year").all()
+    queryset = ExamSession.objects.select_related("academic_year").all().order_by("-id")
     serializer_class = ExamSessionSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
 
 class ExamPlanningViewSet(BaseModelViewSet):
     access_module = "exams"
-    queryset = ExamPlanning.objects.select_related("session", "classroom", "subject").all()
+    queryset = ExamPlanning.objects.select_related("session", "classroom", "subject").all().order_by("-id")
     serializer_class = ExamPlanningSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
@@ -6312,7 +6318,7 @@ class ExamInvigilationViewSet(BaseModelViewSet):
 
 class ExamResultViewSet(BaseModelViewSet):
     access_module = "exams"
-    queryset = ExamResult.objects.select_related("session", "student", "subject").all()
+    queryset = ExamResult.objects.select_related("session", "student", "subject").all().order_by("-id")
     serializer_class = ExamResultSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
@@ -6501,7 +6507,7 @@ class ExamResultViewSet(BaseModelViewSet):
 
 class SupplierViewSet(EtablissementScopedModelViewSet):
     access_module = "stock"
-    queryset = Supplier.objects.select_related("etablissement").all()
+    queryset = Supplier.objects.select_related("etablissement").all().order_by("name", "id")
     serializer_class = SupplierSerializer
 
     def get_queryset(self):
@@ -6522,7 +6528,7 @@ class SupplierViewSet(EtablissementScopedModelViewSet):
 
 class StockItemViewSet(EtablissementScopedModelViewSet):
     access_module = "stock"
-    queryset = StockItem.objects.select_related("supplier", "etablissement").all()
+    queryset = StockItem.objects.select_related("supplier", "etablissement").all().order_by("name", "id")
     serializer_class = StockItemSerializer
 
     def get_queryset(self):

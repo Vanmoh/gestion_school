@@ -65,7 +65,10 @@ class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
         "etablissement__name",
     ]
     ordering_fields = ["created_at", "action", "status_code", "success", "method", "module"]
-    ordering = ["-created_at"]
+    # "-id" en second: sur des lignes creees dans la meme seconde,
+    # "-created_at" seul laisse l_ordre indefini et une meme ligne peut
+    # apparaitre sur deux pages, ou sur aucune.
+    ordering = ["-created_at", "-id"]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -426,7 +429,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
     filterset_fields = ["scope", "status", "etablissement", "created_by", "restored_by"]
     search_fields = ["filename", "notes", "etablissement__name", "created_by__username"]
     ordering_fields = ["created_at", "status", "scope", "file_size_bytes"]
-    ordering = ["-created_at"]
+    # "-id" en second: sur des lignes creees dans la meme seconde,
+    # "-created_at" seul laisse l_ordre indefini et une meme ligne peut
+    # apparaitre sur deux pages, ou sur aucune.
+    ordering = ["-created_at", "-id"]
 
     def _is_super_admin(self):
         return getattr(self.request.user, "role", "") == "super_admin"

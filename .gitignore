@@ -14,9 +14,12 @@ venv/
 backend/staticfiles/
 backend/media/
 backend/logs/*.log
-backend/backups/*.sql
-backend/backups/archives/
 backend/celerybeat-schedule
+
+# Sauvegardes: contiennent des donnees reelles (comptes, eleves).
+# Aucun dump ne doit etre versionne, quel que soit son format.
+backend/backups/
+frontend/gestion_school_app/backend/
 
 # Flutter
 **/.dart_tool/
