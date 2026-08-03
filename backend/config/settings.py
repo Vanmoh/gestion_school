@@ -35,7 +35,12 @@ if not DEBUG and not ALLOWED_HOSTS:
     )
 
 DATABASE_URL = config("DATABASE_URL", default="").strip()
-DB_CONN_MAX_AGE = config("DB_CONN_MAX_AGE", cast=int, default=600)
+# 0 par defaut: le service HTTP tourne en ASGI, ou Django cree un thread par
+# requete et le detruit ensuite. Une connexion "persistante" n'y est jamais
+# reutilisee et reste ouverte cote serveur apres la mort du thread, jusqu'a
+# saturer le pooler. Seuls les processus synchrones (workers Celery) gagnent
+# a relever cette valeur.
+DB_CONN_MAX_AGE = config("DB_CONN_MAX_AGE", cast=int, default=0)
 DB_SSL_REQUIRE = config("DB_SSL_REQUIRE", cast=bool, default=False)
 
 INSTALLED_APPS = [
@@ -106,6 +111,22 @@ if DATABASE_URL:
             ssl_require=DB_SSL_REQUIRE,
         ),
     }
+
+    # Un pooler en mode transaction rend la connexion a chaque fin de
+    # transaction: elle peut alors servir une autre requete, ce que le mode
+    # session ne permet pas (une connexion reste captive de son client, d'ou
+    # une saturation rapide). En contrepartie, plus rien de lie a la session
+    # ne survit d'une transaction a l'autre: les instructions preparees et les
+    # curseurs serveur cassent, il faut donc les desactiver.
+    # 6543 est le port du pooler transactionnel chez Supabase.
+    _db_port = str(DATABASES["default"].get("PORT") or "")
+    DB_TRANSACTION_POOLER = config(
+        "DB_TRANSACTION_POOLER", cast=bool, default=_db_port == "6543"
+    )
+    if DB_TRANSACTION_POOLER:
+        DATABASES["default"].setdefault("OPTIONS", {})
+        DATABASES["default"]["OPTIONS"]["prepare_threshold"] = None
+        DATABASES["default"]["DISABLE_SERVER_SIDE_CURSORS"] = True
 else:
     if not DEBUG:
         raise ImproperlyConfigured(
