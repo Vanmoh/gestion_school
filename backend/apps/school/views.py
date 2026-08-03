@@ -2757,6 +2757,7 @@ class StudentViewSet(BaseModelViewSet):
         "etablissement",
         "enrollment_date",
         "created_at",
+        "gender",
     ]
     search_fields = [
         "matricule",
@@ -2766,6 +2767,10 @@ class StudentViewSet(BaseModelViewSet):
         "classroom__name",
         "parent__user__first_name",
         "parent__user__last_name",
+        # Un parent qui appelle donne son numero, pas le matricule de
+        # son enfant. Le sien comme celui de l'eleve.
+        "user__phone",
+        "parent__user__phone",
     ]
     ordering_fields = [
         "created_at",
@@ -2774,11 +2779,133 @@ class StudentViewSet(BaseModelViewSet):
         "user__last_name",
         "user__first_name",
         "classroom__name",
+        "birth_date",
+        "gender",
     ]
     # "-id" en second: sur des lignes creees dans la meme seconde,
     # "-created_at" seul laisse l_ordre indefini et une meme ligne peut
     # apparaitre sur deux pages, ou sur aucune.
     ordering = ["-created_at", "-id"]
+
+    @action(detail=False, methods=["get"])
+    def stats(self, request):
+        """Effectifs de l'etablissement, independants de la pagination.
+
+        Le client comptait sur la page recue: a 15 lignes par page, "3 actifs"
+        decrivait la page et non l'ecole. Les filtres de liste ne sont pas
+        appliques non plus, volontairement: l'en-tete decrit l'etablissement,
+        le tableau decrit ce qu'on regarde. Melanger les deux etait la source
+        de la confusion.
+        """
+        queryset = self.get_queryset()
+
+        active_year = AcademicYear.objects.filter(is_active=True).first()
+        if active_year is not None:
+            enrolled_this_year = Q(
+                enrollment_date__gte=active_year.start_date,
+                enrollment_date__lte=active_year.end_date,
+            )
+        else:
+            # Sans annee active declaree, "nouveau" n'a pas de sens: mieux
+            # vaut 0 qu'un chiffre calcule sur une periode inventee.
+            enrolled_this_year = Q(pk__in=[])
+
+        totals = queryset.aggregate(
+            total=Count("id"),
+            active=Count("id", filter=Q(is_archived=False)),
+            archived=Count("id", filter=Q(is_archived=True)),
+            new_this_year=Count("id", filter=Q(is_archived=False) & enrolled_this_year),
+            # Le champ tolere NULL et chaine vide: ne compter que l'un des deux
+            # sous-estimerait silencieusement les fiches a completer.
+            gender_missing=Count(
+                "id",
+                filter=Q(is_archived=False) & (Q(gender__isnull=True) | Q(gender="")),
+            ),
+        )
+        totals["academic_year"] = active_year.name if active_year else ""
+        return Response(totals)
+
+    @action(detail=False, methods=["post"], url_path="bulk-update")
+    @transaction.atomic
+    def bulk_update(self, request):
+        """Applique une meme modification a plusieurs eleves.
+
+        Une secretaire archive une promotion sortante ou deplace une classe
+        entiere: en appels unitaires, c'est autant d'allers-retours reseau, et
+        une coupure au milieu laisse la moitie du travail faite.
+
+        Les identifiants hors du perimetre de l'utilisateur ne sont pas
+        silencieusement ignores: la demande entiere est refusee. Un rapport
+        partiel laisserait croire au succes d'une operation incomplete.
+        """
+        raw_ids = request.data.get("ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return Response(
+                {"ids": "Fournissez au moins un identifiant d'eleve."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            ids = {int(value) for value in raw_ids}
+        except (TypeError, ValueError):
+            return Response(
+                {"ids": "Identifiants invalides."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        scoped = self.get_queryset().filter(id__in=ids)
+        autorises = set(scoped.values_list("id", flat=True))
+        refuses = ids - autorises
+        if refuses:
+            return Response(
+                {
+                    "ids": (
+                        f"{len(refuses)} eleve(s) hors de votre perimetre. "
+                        "Aucune modification n'a ete appliquee."
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        changements = {}
+
+        if "is_archived" in request.data:
+            changements["is_archived"] = bool(request.data.get("is_archived"))
+
+        if "classroom" in request.data:
+            classroom_id = request.data.get("classroom")
+            if classroom_id in (None, ""):
+                changements["classroom"] = None
+            else:
+                try:
+                    classroom = ClassRoom.objects.get(pk=int(classroom_id))
+                except (TypeError, ValueError, ClassRoom.DoesNotExist):
+                    return Response(
+                        {"classroom": "Classe introuvable."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                # Sans ce controle, un identifiant de classe devine permettrait
+                # de deplacer un eleve dans un autre etablissement.
+                etablissements = {
+                    value
+                    for value in scoped.values_list("etablissement_id", flat=True)
+                    if value is not None
+                }
+                if etablissements and classroom.etablissement_id not in etablissements:
+                    return Response(
+                        {"classroom": "Cette classe appartient a un autre etablissement."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                changements["classroom"] = classroom
+
+        if not changements:
+            return Response(
+                {"detail": "Aucune modification demandee."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        modifies = scoped.update(**changements)
+        return Response({"updated": modifies, "ids": sorted(autorises)})
 
     def _requested_etablissement_id(self):
         raw_value = (

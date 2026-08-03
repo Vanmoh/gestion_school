@@ -4,14 +4,17 @@ import 'package:gestion_school_app/features/students/domain/students_sort.dart';
 void main() {
   group('studentSortKeyForColumn', () {
     test('maps sortable columns to their sort key', () {
-      expect(studentSortKeyForColumn(1), 'matricule');
-      expect(studentSortKeyForColumn(2), 'name');
-      expect(studentSortKeyForColumn(4), 'classroom');
-      expect(studentSortKeyForColumn(7), 'status');
+      expect(studentSortKeyForColumn(2), 'matricule');
+      expect(studentSortKeyForColumn(3), 'name');
+      expect(studentSortKeyForColumn(4), 'gender');
+      expect(studentSortKeyForColumn(5), 'classroom');
+      expect(studentSortKeyForColumn(6), 'birth');
+      expect(studentSortKeyForColumn(8), 'status');
     });
 
     test('returns null for columns without a server ordering', () {
-      for (final index in [0, 3, 5, 6, 8]) {
+      // 0 = cases a cocher, 1 = numero de ligne, 7 = telephone, 9 = acces.
+      for (final index in [0, 1, 7, 9]) {
         expect(
           studentSortKeyForColumn(index),
           isNull,
@@ -29,7 +32,7 @@ void main() {
     });
 
     test('points at the full-name column for the default sort key', () {
-      expect(studentSortColumnIndex(defaultStudentSortKey), 2);
+      expect(studentSortColumnIndex(defaultStudentSortKey), 3);
     });
 
     test('returns null for an unknown sort key', () {
@@ -52,6 +55,8 @@ void main() {
         studentsOrdering(sortKey: 'name', ascending: true),
         'user__last_name',
       );
+      expect(studentsOrdering(sortKey: 'gender', ascending: true), 'gender');
+      expect(studentsOrdering(sortKey: 'birth', ascending: true), 'birth_date');
     });
 
     test('falls back to the name ordering for an unknown key', () {
