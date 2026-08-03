@@ -45,3 +45,23 @@ class MediaStorageCheckTests(SimpleTestCase):
     @override_settings(DEBUG=True, USE_OBJECT_STORAGE=False)
     def test_local_development_is_not_concerned(self):
         self.assertEqual(checks.uploaded_files_survive_a_deployment(None), [])
+
+
+class SignedUrlRegionCheckTests(SimpleTestCase):
+    """Regression: region vide -> signature v2 -> 403 sur toutes les photos."""
+
+    @override_settings(USE_OBJECT_STORAGE=True, AWS_S3_REGION_NAME="")
+    def test_it_warns_when_the_region_is_missing(self):
+        found = checks.signed_media_urls_need_a_region(None)
+
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].id, checks.W003_S3_REGION)
+        self.assertIn("AWS_S3_REGION_NAME", found[0].msg)
+
+    @override_settings(USE_OBJECT_STORAGE=True, AWS_S3_REGION_NAME="eu-west-3")
+    def test_it_stays_silent_once_the_region_is_set(self):
+        self.assertEqual(checks.signed_media_urls_need_a_region(None), [])
+
+    @override_settings(USE_OBJECT_STORAGE=False)
+    def test_local_storage_needs_no_region(self):
+        self.assertEqual(checks.signed_media_urls_need_a_region(None), [])
