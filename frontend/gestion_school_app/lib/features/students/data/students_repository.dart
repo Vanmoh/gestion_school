@@ -84,6 +84,34 @@ class StudentsRepository {
     );
   }
 
+  /// Applique une meme modification a plusieurs eleves, en un appel.
+  ///
+  /// En appels unitaires, deplacer une classe de 30 eleves fait 30 allers-
+  /// retours; une coupure au milieu laisse la moitie du travail faite. Le
+  /// serveur refuse la demande entiere si un seul identifiant sort du
+  /// perimetre, plutot que d'en appliquer une partie.
+  Future<int> bulkUpdate({
+    required List<int> ids,
+    bool? isArchived,
+    int? classroomId,
+    bool clearClassroom = false,
+  }) async {
+    final payload = <String, dynamic>{'ids': ids};
+    if (isArchived != null) payload['is_archived'] = isArchived;
+    if (clearClassroom) {
+      payload['classroom'] = null;
+    } else if (classroomId != null) {
+      payload['classroom'] = classroomId;
+    }
+
+    final response = await dio.post('/students/bulk-update/', data: payload);
+    final data = response.data;
+    if (data is Map && data['updated'] is num) {
+      return (data['updated'] as num).toInt();
+    }
+    return ids.length;
+  }
+
   Future<List<Map<String, dynamic>>> fetchClassrooms() async {
     final response = await dio.get('/classrooms/');
     return _extractRows(response.data);

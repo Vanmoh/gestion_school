@@ -43,6 +43,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   int _tablePage = 1;
   int _serverTotalStudents = 0;
   StudentsStats _stats = const StudentsStats.empty();
+  // Selection multiple, distincte de _selectedStudent qui pilote le
+  // dossier ouvert: cocher des lignes ne doit pas changer la fiche.
+  final Set<int> _checkedStudentIds = <int>{};
   bool _serverHasNext = false;
   bool _serverHasPrevious = false;
   int? _lastScopeEtablissementId;
@@ -223,6 +226,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         _parents = results[2] as List<Map<String, dynamic>>;
         _years = results[3] as List<Map<String, dynamic>>;
         _stats = results[4] as StudentsStats;
+        _checkedStudentIds.removeWhere(
+          (id) => !studentsPage.results.any((s) => s.id == id),
+        );
         _lastStudentsRefreshAt = DateTime.now();
         _registrationClassroomId ??= _classrooms.isNotEmpty
             ? _asInt(_classrooms.first['id'])
@@ -3789,6 +3795,208 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
+
+  /// Age en annees revolues, ou "-" si la date manque.
+  ///
+  /// Pour un etablissement, l'age est ce qui sert -- redoublement,
+  /// orientation, eligibilite a un examen -- la date brute demande un calcul
+  /// mental a chaque ligne lue.
+  String _ageLabel(DateTime? birthDate) {
+    if (birthDate == null) return '-';
+    final today = DateTime.now();
+    var age = today.year - birthDate.year;
+    final aEuSonAnniversaire =
+        today.month > birthDate.month ||
+        (today.month == birthDate.month && today.day >= birthDate.day);
+    if (!aEuSonAnniversaire) age -= 1;
+    if (age < 0 || age > 120) return '-';
+    return '$age ans';
+  }
+
+  void _toggleChecked(int studentId) {
+    setState(() {
+      if (!_checkedStudentIds.remove(studentId)) {
+        _checkedStudentIds.add(studentId);
+      }
+    });
+  }
+
+  void _toggleAllVisible(List<Student> visibles) {
+    setState(() {
+      final tousCoches = visibles.every(
+        (s) => _checkedStudentIds.contains(s.id),
+      );
+      if (tousCoches) {
+        _checkedStudentIds.removeAll(visibles.map((s) => s.id));
+      } else {
+        _checkedStudentIds.addAll(visibles.map((s) => s.id));
+      }
+    });
+  }
+
+  /// Barre d'actions groupees, visible seulement quand des lignes sont cochees.
+  ///
+  /// Une rentree se gere par lots: archiver une promotion sortante, deplacer
+  /// une classe entiere. Ligne a ligne, c'est autant d'allers-retours et
+  /// autant d'occasions d'en oublier un.
+  Widget _buildBulkActionBar() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final nombre = _checkedStudentIds.length;
+    final lectureSeule =
+        ref.read(authControllerProvider).value?.role == 'censor';
+
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: colorScheme.primaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            '$nombre élève${nombre > 1 ? 's' : ''} sélectionné${nombre > 1 ? 's' : ''}',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          if (!lectureSeule) ...[
+            OutlinedButton.icon(
+              onPressed: _saving ? null : () => _bulkArchive(true),
+              icon: const Icon(Icons.archive_outlined, size: 18),
+              label: const Text('Archiver'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : () => _bulkArchive(false),
+              icon: const Icon(Icons.unarchive_outlined, size: 18),
+              label: const Text('Désarchiver'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _bulkChangeClassroom,
+              icon: const Icon(Icons.swap_horiz, size: 18),
+              label: const Text('Changer de classe'),
+            ),
+          ],
+          TextButton(
+            onPressed: () => setState(_checkedStudentIds.clear),
+            child: const Text('Tout décocher'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _bulkArchive(bool archiver) async {
+    final ids = _checkedStudentIds.toList();
+    final verbe = archiver ? 'Archiver' : 'Désarchiver';
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('$verbe ${ids.length} élève${ids.length > 1 ? 's' : ''} ?'),
+        content: Text(
+          archiver
+              ? 'Les élèves archivés sortent des listes actives. '
+                    'L\'opération est réversible.'
+              : 'Les élèves redeviendront actifs dans toutes les listes.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(verbe),
+          ),
+        ],
+      ),
+    );
+    if (confirme != true) return;
+
+    await _runBulk(
+      () => ref
+          .read(studentsRepositoryProvider)
+          .bulkUpdate(ids: ids, isArchived: archiver),
+      succes: '${ids.length} élève(s) ${archiver ? 'archivé(s)' : 'réactivé(s)'}.',
+    );
+  }
+
+  Future<void> _bulkChangeClassroom() async {
+    if (_classrooms.isEmpty) {
+      _showMessage('Aucune classe disponible.');
+      return;
+    }
+
+    int? cible = _asInt(_classrooms.first['id']);
+    final choisie = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(
+            'Déplacer ${_checkedStudentIds.length} élève(s)',
+          ),
+          content: DropdownButtonFormField<int>(
+            initialValue: cible,
+            decoration: const InputDecoration(labelText: 'Classe de destination'),
+            items: _classrooms
+                .map(
+                  (row) => DropdownMenuItem<int>(
+                    value: _asInt(row['id']),
+                    child: Text((row['name'] ?? '').toString()),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) => setDialogState(() => cible = value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, cible),
+              child: const Text('Déplacer'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choisie == null) return;
+
+    final ids = _checkedStudentIds.toList();
+    await _runBulk(
+      () => ref
+          .read(studentsRepositoryProvider)
+          .bulkUpdate(ids: ids, classroomId: choisie),
+      succes: '${ids.length} élève(s) déplacé(s).',
+    );
+  }
+
+  /// Le serveur refuse la demande entiere plutot que d'en appliquer une
+  /// partie: en cas d'erreur, rien n'a bouge et la selection est conservee
+  /// pour permettre une nouvelle tentative.
+  Future<void> _runBulk(
+    Future<int> Function() operation, {
+    required String succes,
+  }) async {
+    setState(() => _saving = true);
+    try {
+      await operation();
+      if (!mounted) return;
+      setState(_checkedStudentIds.clear);
+      _showMessage(succes);
+      _reloadStudentsTable(page: _tablePage);
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Action groupée impossible: $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   Widget _buildStudentsDashboardCard({
     required TextTheme textTheme,
     required ColorScheme colorScheme,
@@ -4296,7 +4504,36 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       dataRowMaxHeight: 62,
                       sortColumnIndex: _sortColumnIndex,
                       sortAscending: _sortAscending,
+                      // La case integree de DataTable se declenche au clic
+                      // sur la ligne, qui ouvre le dossier: deux gestes pour
+                      // un seul controle. On gere donc la notre.
+                      showCheckboxColumn: false,
                       columns: [
+                        DataColumn(
+                          label: Tooltip(
+                            message: visibleStudents.every(
+                              (s) => _checkedStudentIds.contains(s.id),
+                            )
+                                ? 'Tout décocher'
+                                : 'Tout sélectionner sur cette page',
+                            child: Checkbox(
+                              value: visibleStudents.isNotEmpty &&
+                                      visibleStudents.every(
+                                        (s) => _checkedStudentIds.contains(s.id),
+                                      )
+                                  ? true
+                                  : (visibleStudents.any(
+                                          (s) => _checkedStudentIds.contains(s.id),
+                                        )
+                                        ? null
+                                        : false),
+                              tristate: true,
+                              onChanged: visibleStudents.isEmpty
+                                  ? null
+                                  : (_) => _toggleAllVisible(visibleStudents),
+                            ),
+                          ),
+                        ),
                         const DataColumn(label: Text('N°')),
                         DataColumn(
                           label: const Text('Matricule'),
@@ -4308,13 +4545,21 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           tooltip: 'Trier par nom',
                           onSort: _onStudentColumnSort,
                         ),
-                        const DataColumn(label: Text('Genre')),
+                        DataColumn(
+                          label: const Text('Genre'),
+                          tooltip: 'Trier par genre',
+                          onSort: _onStudentColumnSort,
+                        ),
                         DataColumn(
                           label: const Text('Classe'),
                           tooltip: 'Trier par classe',
                           onSort: _onStudentColumnSort,
                         ),
-                        const DataColumn(label: Text('Date naissance')),
+                        DataColumn(
+                          label: const Text('Âge'),
+                          tooltip: 'Trier par date de naissance',
+                          onSort: _onStudentColumnSort,
+                        ),
                         const DataColumn(label: Text('Téléphone')),
                         DataColumn(
                           label: const Text('Statut'),
@@ -4356,6 +4601,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           }),
                           onSelectChanged: (_) => _activateStudent(student),
                           cells: [
+                            DataCell(
+                              Checkbox(
+                                value: _checkedStudentIds.contains(student.id),
+                                onChanged: (_) => _toggleChecked(student.id),
+                              ),
+                            ),
                             DataCell(Text('${startIndex + rowIndex + 1}')),
                             DataCell(Text(student.matricule)),
                             DataCell(
@@ -4374,10 +4625,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                               ),
                             ),
                             DataCell(
-                              Text(
-                                student.birthDate == null
-                                    ? '-'
-                                    : _apiDate(student.birthDate!),
+                              Tooltip(
+                                message: student.birthDate == null
+                                    ? 'Date de naissance non renseignée'
+                                    : 'Né(e) le ${_apiDate(student.birthDate!)}',
+                                child: Text(_ageLabel(student.birthDate)),
                               ),
                             ),
                             DataCell(
@@ -4421,6 +4673,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   ),
                 ),
               ),
+              if (_checkedStudentIds.isNotEmpty) _buildBulkActionBar(),
               const SizedBox(height: 8),
               Wrap(
                 alignment: WrapAlignment.spaceBetween,
