@@ -187,10 +187,27 @@ USE_OBJECT_STORAGE = bool(AWS_STORAGE_BUCKET_NAME)
 if USE_OBJECT_STORAGE:
     AWS_ACCESS_KEY_ID = config("AWS_ACCESS_KEY_ID", default="")
     AWS_SECRET_ACCESS_KEY = config("AWS_SECRET_ACCESS_KEY", default="")
-    AWS_S3_REGION_NAME = config("AWS_S3_REGION_NAME", default="")
+    AWS_S3_REGION_NAME = config("AWS_S3_REGION_NAME", default="").strip()
     # Renseigne pour tout fournisseur compatible S3 non-AWS
     # (Supabase Storage: https://<projet>.supabase.co/storage/v1/s3).
     AWS_S3_ENDPOINT_URL = config("AWS_S3_ENDPOINT_URL", default="").strip() or None
+
+    # Signature v4 imposee, jamais laissee a la decouverte automatique. Selon
+    # la version de botocore et la facon dont le client est construit, une
+    # configuration incomplete produit une URL signee en v2
+    # (AWSAccessKeyId/Signature/Expires); Supabase la rejette alors sans meme
+    # la lire: "403 AccessDenied - Missing signature", ce qu'a renvoye l'URL
+    # de production. La v2 est refusee par Supabase, R2, MinIO et les regions
+    # AWS ouvertes apres 2014: rien ne justifie de la laisser possible.
+    AWS_S3_SIGNATURE_VERSION = config("AWS_S3_SIGNATURE_VERSION", default="s3v4")
+
+    # La region entre dans le perimetre de la signature v4
+    # (X-Amz-Credential=<cle>/<date>/<region>/s3/aws4_request) et doit
+    # correspondre a celle du fournisseur. Laissee vide, elle ne provoque
+    # aucune erreur: le perimetre est simplement produit avec un champ vide
+    # ("/<date>//s3/aws4_request") et toute lecture repond 403. C'est le
+    # controle W003 qui le signale, plutot qu'une exception qui empecherait
+    # tout le backend de demarrer pour une panne limitee aux televersements.
     AWS_S3_CUSTOM_DOMAIN = config("AWS_S3_CUSTOM_DOMAIN", default="").strip() or None
     AWS_S3_FILE_OVERWRITE = False
     AWS_DEFAULT_ACL = None

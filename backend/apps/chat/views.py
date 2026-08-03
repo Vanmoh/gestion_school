@@ -162,14 +162,29 @@ def _scoped_conversation_queryset(request):
     return _conversation_queryset_for_user(request)
 
 
+def _locked_conversation_queryset(pk):
+    """Requete de verrouillage, volontairement reduite a une cle primaire.
+
+    PostgreSQL refuse `FOR UPDATE` sur un `SELECT DISTINCT`, et la requete de
+    portee est distincte par construction (jointure sur les participants).
+    Le verrou porte donc sur une seconde requete, triviale.
+    """
+    return Conversation.objects.select_for_update().filter(pk=pk)
+
+
 def _get_conversation_for_user(request, conversation_id, *, is_group=None, for_update=False):
     query = _scoped_conversation_queryset(request)
-    if for_update:
-        query = query.select_for_update()
     query = query.filter(id=conversation_id)
     if is_group is not None:
         query = query.filter(is_group=is_group)
-    return query.first()
+    conversation = query.first()
+
+    if conversation is None or not for_update:
+        return conversation
+
+    # L'autorisation vient d'etre etablie ci-dessus; il ne reste qu'a prendre
+    # le verrou sur la ligne, dans la transaction en cours.
+    return _locked_conversation_queryset(conversation.pk).first()
 
 
 def _ensure_participant(request, conversation_id):
