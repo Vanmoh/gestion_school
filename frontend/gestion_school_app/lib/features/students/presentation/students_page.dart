@@ -17,6 +17,7 @@ import '../../payments/presentation/payment_entry_dialog.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../../../models/etablissement.dart';
 import '../domain/student.dart';
+import '../domain/students_stats.dart';
 import '../domain/students_sort.dart';
 import 'students_controller.dart';
 
@@ -41,6 +42,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   int _tableRowsPerPage = 15;
   int _tablePage = 1;
   int _serverTotalStudents = 0;
+  StudentsStats _stats = const StudentsStats.empty();
   bool _serverHasNext = false;
   bool _serverHasPrevious = false;
   int? _lastScopeEtablissementId;
@@ -205,6 +207,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         repository.fetchClassrooms(),
         repository.fetchParents(),
         repository.fetchAcademicYears(),
+        repository.fetchStats(),
       ]);
 
       final studentsPage = results[0] as PaginatedResult<Student>;
@@ -219,6 +222,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         _classrooms = results[1] as List<Map<String, dynamic>>;
         _parents = results[2] as List<Map<String, dynamic>>;
         _years = results[3] as List<Map<String, dynamic>>;
+        _stats = results[4] as StudentsStats;
         _lastStudentsRefreshAt = DateTime.now();
         _registrationClassroomId ??= _classrooms.isNotEmpty
             ? _asInt(_classrooms.first['id'])
@@ -2794,10 +2798,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final total = _serverTotalStudents;
-    final active = _filteredStudents.where((s) => !s.isArchived).length;
-    final archived = _filteredStudents.where((s) => s.isArchived).length;
-    final newEnrolled = _newlyEnrolledCount();
     final activeYearLabel = _activeAcademicYearLabel();
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
@@ -2810,14 +2810,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         : ((authUser?.etablissementName.isNotEmpty ?? false)
               ? authUser!.etablissementName
               : (selectedEtablissement?.name ?? 'Établissement utilisateur'));
-    final pageCount = _filteredStudents.length;
-    final activeRate = pageCount == 0
-        ? 0
-        : ((active / pageCount) * 100).round();
-    final archivedRate = pageCount == 0
-        ? 0
-        : ((archived / pageCount) * 100).round();
-    final activeShare = pageCount == 0 ? 0.0 : active / pageCount;
     // Le tri n'est plus compte ici: il se lit directement dans l'en-tete du
     // tableau, l'inclure dans le compteur de filtres induisait en erreur.
     final appliedFilters =
@@ -2863,16 +2855,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           isCompactLayout: isCompactLayout,
           activeYearLabel: activeYearLabel,
           classCount: classCount,
-          total: total,
-          active: active,
-          archived: archived,
-          newEnrolled: newEnrolled,
           totalFiltered: totalFiltered,
           scopeLabel: scopeLabel,
           refreshLabel: refreshLabel,
-          activeShare: activeShare,
-          activeRate: activeRate,
-          archivedRate: archivedRate,
           appliedFilters: appliedFilters,
           selectedClassLabel: selectedClassLabel,
         ),
@@ -2890,8 +2875,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           textTheme: textTheme,
           colorScheme: colorScheme,
           totalFiltered: totalFiltered,
-          active: active,
-          archived: archived,
           visibleStudents: visibleStudents,
           startIndex: startIndex,
           endIndex: endIndex,
@@ -3745,30 +3728,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     }
   }
 
-  int _newlyEnrolledCount() {
-    DateTime? start;
-    DateTime? end;
-
-    for (final row in _years) {
-      if (row['is_active'] == true) {
-        start = _parseDate(row['start_date']);
-        end = _parseDate(row['end_date']);
-        break;
-      }
-    }
-
-    if (start == null || end == null) {
-      final now = DateTime.now();
-      start = DateTime(now.year, 1, 1);
-      end = DateTime(now.year, 12, 31, 23, 59, 59);
-    }
-
-    return _students.where((student) {
-      final enrolledAt = student.enrollmentDate;
-      if (enrolledAt == null) return false;
-      return !enrolledAt.isBefore(start!) && !enrolledAt.isAfter(end!);
-    }).length;
-  }
 
   String _activeAcademicYearLabel() {
     Map<String, dynamic>? activeYear;
@@ -3806,9 +3765,28 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     return 'Année ${row['id'] ?? ''}'.trim();
   }
 
-  DateTime? _parseDate(dynamic value) {
-    if (value == null) return null;
-    return DateTime.tryParse(value.toString());
+
+  /// Action qui porte sur un eleve precis.
+  ///
+  /// Grisee sans selection, avec l'infobulle qui dit pourquoi: un bouton
+  /// inerte et muet se lit comme un dysfonctionnement.
+  Widget _studentContextAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    final bool sansSelection = _selectedStudent == null;
+    return Tooltip(
+      message: sansSelection
+          ? 'Sélectionnez un élève dans le tableau'
+          : '$label — ${_selectedStudent!.fullName}',
+      child: FilledButton.tonalIcon(
+        style: _compactUnifiedActionButtonStyle(),
+        onPressed: (_saving || sansSelection) ? null : onPressed,
+        icon: Icon(icon),
+        label: Text(label),
+      ),
+    );
   }
 
   Widget _buildStudentsDashboardCard({
@@ -3817,16 +3795,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required bool isCompactLayout,
     required String activeYearLabel,
     required int classCount,
-    required int total,
-    required int active,
-    required int archived,
-    required int newEnrolled,
     required int totalFiltered,
     required String scopeLabel,
     required String refreshLabel,
-    required double activeShare,
-    required int activeRate,
-    required int archivedRate,
     required int appliedFilters,
     required String selectedClassLabel,
   }) {
@@ -3870,7 +3841,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Tableau de board élèves',
+                                'Tableau de bord élèves',
                                 style: textTheme.headlineSmall?.copyWith(
                                   fontWeight: FontWeight.w700,
                                 ),
@@ -3896,7 +3867,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           children: [
                             Expanded(
                               child: Text(
-                                'Tableau de board élèves',
+                                'Tableau de bord élèves',
                                 style: textTheme.headlineSmall?.copyWith(
                                   fontWeight: FontWeight.w700,
                                 ),
@@ -3915,11 +3886,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         );
                       },
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Inscription, attribution classe, matricule automatique, archivage, historique académique et dossier disciplinaire.',
-                      style: textTheme.bodyMedium,
-                    ),
                     const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
@@ -3934,14 +3900,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           label: '$classCount classes',
                         ),
                         _dashboardInfoChip(
-                          icon: Icons.groups_2_outlined,
-                          label: '$totalFiltered élèves visibles',
-                        ),
-                        _dashboardInfoChip(
                           icon: Icons.analytics_outlined,
-                          label:
-                              'Total: $total • Actifs: $active • Archivés: $archived • Nouveaux: $newEnrolled',
-                          maxWidth: 520,
+                          label: _stats.isEmpty
+                              ? 'Effectifs indisponibles'
+                              : '${_stats.active} actifs · ${_stats.archived} archivés · ${_stats.newThisYear} nouveaux',
+                          maxWidth: 420,
                         ),
                         _dashboardInfoChip(
                           icon: Icons.apartment_outlined,
@@ -3952,31 +3915,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           icon: Icons.schedule_outlined,
                           label: refreshLabel,
                         ),
-                        if (_selectedStudent != null)
-                          _dashboardInfoChip(
-                            icon: Icons.person_outline,
-                            label: _selectedStudent!.fullName,
-                            maxWidth: 260,
-                          ),
                       ],
-                    ),
-                    const SizedBox(height: 12),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(999),
-                      child: LinearProgressIndicator(
-                        value: activeShare,
-                        minHeight: 9,
-                        backgroundColor: colorScheme.surfaceContainerHighest
-                            .withValues(alpha: 0.55),
-                        color: colorScheme.primary,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '$activeRate% actifs • $archivedRate% archivés',
-                      style: textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
                     ),
                   ],
                 ),
@@ -3990,63 +3929,64 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   children: [
                     _horizontalActionStrip(
                       children: [
-                        FilledButton.tonalIcon(
+                        // Seule action pleine de la page: c'est celle qu'on
+                        // vient chercher. Les suivantes portent sur un eleve
+                        // deja selectionne, ou changent de vue.
+                        FilledButton.icon(
                           style: _compactUnifiedActionButtonStyle(),
                           onPressed: _saving ? null : _openRegistrationForm,
                           icon: const Icon(Icons.person_add_alt_1),
                           label: const Text('Ajouter élève'),
                         ),
-                        FilledButton.tonalIcon(
-                          style: _compactUnifiedActionButtonStyle(),
-                          onPressed: (_saving || _selectedStudent == null)
-                              ? null
-                              : _openHistoryForm,
-                          icon: const Icon(Icons.history_edu_outlined),
-                          label: const Text('Historique'),
+                        _studentContextAction(
+                          icon: Icons.history_edu_outlined,
+                          label: 'Historique',
+                          onPressed: _openHistoryForm,
                         ),
-                        FilledButton.tonalIcon(
-                          style: _compactUnifiedActionButtonStyle(),
-                          onPressed: (_saving || _selectedStudent == null)
-                              ? null
-                              : _openIncidentForm,
-                          icon: const Icon(Icons.gavel_outlined),
-                          label: const Text('Incident'),
+                        _studentContextAction(
+                          icon: Icons.gavel_outlined,
+                          label: 'Incident',
+                          onPressed: _openIncidentForm,
                         ),
-                        FilledButton.tonalIcon(
-                          style: _compactUnifiedActionButtonStyle(),
-                          onPressed: (_saving || _selectedStudent == null)
-                              ? null
-                              : _openAttendanceForm,
-                          icon: const Icon(Icons.fact_check_outlined),
-                          label: const Text('Absence'),
+                        _studentContextAction(
+                          icon: Icons.fact_check_outlined,
+                          label: 'Absence',
+                          onPressed: _openAttendanceForm,
                         ),
-                        FilledButton.tonalIcon(
-                          style: _compactUnifiedActionButtonStyle(),
-                          onPressed: (_saving || _selectedStudent == null)
-                              ? null
-                              : _openFeeForm,
-                          icon: const Icon(Icons.add_card_outlined),
-                          label: const Text('Frais'),
+                        _studentContextAction(
+                          icon: Icons.add_card_outlined,
+                          label: 'Frais',
+                          onPressed: _openFeeForm,
                         ),
-                        FilledButton.tonalIcon(
-                          style: _compactUnifiedActionButtonStyle(),
-                          onPressed: (_saving || _selectedStudent == null)
-                              ? null
-                              : _openPaymentForm,
-                          icon: const Icon(Icons.payments_outlined),
-                          label: const Text('Paiement'),
+                        _studentContextAction(
+                          icon: Icons.payments_outlined,
+                          label: 'Paiement',
+                          onPressed: _openPaymentForm,
                         ),
-                        FilledButton.tonalIcon(
-                          style: _compactUnifiedActionButtonStyle(),
-                          onPressed: _saving ? null : _openStudentsByClassPanel,
-                          icon: const Icon(Icons.groups_2_outlined),
-                          label: const Text('Vue par classe'),
-                        ),
-                        FilledButton.tonalIcon(
-                          style: _compactUnifiedActionButtonStyle(),
-                          onPressed: _saving ? null : _openClassCardsPanel,
-                          icon: const Icon(Icons.badge_outlined),
-                          label: const Text('Cartes'),
+                        MenuAnchor(
+                          builder: (context, controller, _) => IconButton(
+                            tooltip: 'Autres vues',
+                            onPressed: _saving
+                                ? null
+                                : () => controller.isOpen
+                                      ? controller.close()
+                                      : controller.open(),
+                            icon: const Icon(Icons.more_horiz),
+                          ),
+                          menuChildren: [
+                            MenuItemButton(
+                              onPressed: _saving
+                                  ? null
+                                  : _openStudentsByClassPanel,
+                              leadingIcon: const Icon(Icons.groups_2_outlined),
+                              child: const Text('Vue par classe'),
+                            ),
+                            MenuItemButton(
+                              onPressed: _saving ? null : _openClassCardsPanel,
+                              leadingIcon: const Icon(Icons.badge_outlined),
+                              child: const Text('Cartes'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -4105,11 +4045,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           'Recherche et filtres',
                           style: textTheme.titleMedium,
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          'Affichage type tableau: applique les filtres, trie en cliquant sur un en-tête de colonne, puis sélectionne une ligne pour ouvrir le dossier.',
-                          style: textTheme.bodySmall,
-                        ),
                       ],
                     ),
                   ),
@@ -4126,23 +4061,13 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           ),
                           label: Text('Mise à jour liste...'),
                         ),
-                      Chip(
-                        avatar: const Icon(
-                          Icons.query_stats_outlined,
-                          size: 16,
+                      if (appliedFilters > 0)
+                        Chip(
+                          avatar: const Icon(Icons.filter_alt_outlined, size: 16),
+                          label: Text(
+                            '$appliedFilters filtre${appliedFilters > 1 ? 's' : ''} actif${appliedFilters > 1 ? 's' : ''}',
+                          ),
                         ),
-                        label: Text(
-                          '$totalFiltered résultat${totalFiltered > 1 ? 's' : ''}',
-                        ),
-                      ),
-                      Chip(
-                        avatar: const Icon(Icons.filter_alt_outlined, size: 16),
-                        label: Text(
-                          appliedFilters == 0
-                              ? 'Aucun filtre avancé'
-                              : '$appliedFilters filtre${appliedFilters > 1 ? 's' : ''} actif${appliedFilters > 1 ? 's' : ''}',
-                        ),
-                      ),
                     ],
                   ),
                 ],
@@ -4270,8 +4195,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required TextTheme textTheme,
     required ColorScheme colorScheme,
     required int totalFiltered,
-    required int active,
-    required int archived,
     required List<Student> visibleStudents,
     required int startIndex,
     required int endIndex,
@@ -4307,11 +4230,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           'Registre des élèves ($totalFiltered)',
                           style: textTheme.titleMedium,
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          'Nouveau flux: ouvre une fiche, puis traite toutes les modifications dans Actions dossier.',
-                          style: textTheme.bodySmall,
-                        ),
                       ],
                     ),
                   ),
@@ -4319,14 +4237,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     spacing: 6,
                     runSpacing: 6,
                     children: [
-                      Chip(
-                        avatar: const Icon(Icons.verified_outlined, size: 16),
-                        label: Text('$active actifs (page)'),
-                      ),
-                      Chip(
-                        avatar: const Icon(Icons.archive_outlined, size: 16),
-                        label: Text('$archived archivés (page)'),
-                      ),
                       if (_selectedStudent != null)
                         Chip(
                           avatar: const Icon(Icons.person_outline, size: 16),

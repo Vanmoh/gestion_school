@@ -2780,6 +2780,44 @@ class StudentViewSet(BaseModelViewSet):
     # apparaitre sur deux pages, ou sur aucune.
     ordering = ["-created_at", "-id"]
 
+    @action(detail=False, methods=["get"])
+    def stats(self, request):
+        """Effectifs de l'etablissement, independants de la pagination.
+
+        Le client comptait sur la page recue: a 15 lignes par page, "3 actifs"
+        decrivait la page et non l'ecole. Les filtres de liste ne sont pas
+        appliques non plus, volontairement: l'en-tete decrit l'etablissement,
+        le tableau decrit ce qu'on regarde. Melanger les deux etait la source
+        de la confusion.
+        """
+        queryset = self.get_queryset()
+
+        active_year = AcademicYear.objects.filter(is_active=True).first()
+        if active_year is not None:
+            enrolled_this_year = Q(
+                enrollment_date__gte=active_year.start_date,
+                enrollment_date__lte=active_year.end_date,
+            )
+        else:
+            # Sans annee active declaree, "nouveau" n'a pas de sens: mieux
+            # vaut 0 qu'un chiffre calcule sur une periode inventee.
+            enrolled_this_year = Q(pk__in=[])
+
+        totals = queryset.aggregate(
+            total=Count("id"),
+            active=Count("id", filter=Q(is_archived=False)),
+            archived=Count("id", filter=Q(is_archived=True)),
+            new_this_year=Count("id", filter=Q(is_archived=False) & enrolled_this_year),
+            # Le champ tolere NULL et chaine vide: ne compter que l'un des deux
+            # sous-estimerait silencieusement les fiches a completer.
+            gender_missing=Count(
+                "id",
+                filter=Q(is_archived=False) & (Q(gender__isnull=True) | Q(gender="")),
+            ),
+        )
+        totals["academic_year"] = active_year.name if active_year else ""
+        return Response(totals)
+
     def _requested_etablissement_id(self):
         raw_value = (
             self.request.headers.get("X-Etablissement-Id")

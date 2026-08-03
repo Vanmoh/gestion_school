@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../../../core/models/paginated_result.dart';
 import '../domain/student.dart';
+import '../domain/students_stats.dart';
 
 class StudentsRepository {
   final Dio dio;
@@ -59,6 +60,27 @@ class StudentsRepository {
       next: null,
       previous: null,
       results: mapped,
+    );
+  }
+
+  /// Effectifs de l'etablissement, comptes par le serveur.
+  ///
+  /// Ils ne dependent ni de la pagination ni des filtres du tableau: l'en-tete
+  /// decrit l'ecole, le tableau decrit ce qu'on regarde. Les compter sur la
+  /// page recue faisait afficher « 15 actifs » a une ecole de 800 eleves.
+  Future<StudentsStats> fetchStats() async {
+    final response = await dio.get('/students/stats/');
+    final data = response.data;
+    if (data is! Map) return const StudentsStats.empty();
+
+    int lire(String cle) => (data[cle] as num?)?.toInt() ?? 0;
+    return StudentsStats(
+      total: lire('total'),
+      active: lire('active'),
+      archived: lire('archived'),
+      newThisYear: lire('new_this_year'),
+      genderMissing: lire('gender_missing'),
+      academicYear: data['academic_year']?.toString() ?? '',
     );
   }
 
