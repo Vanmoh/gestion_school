@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../../../core/models/paginated_result.dart';
 import '../domain/student.dart';
+import '../domain/students_stats.dart';
 
 class StudentsRepository {
   final Dio dio;
@@ -60,6 +61,55 @@ class StudentsRepository {
       previous: null,
       results: mapped,
     );
+  }
+
+  /// Effectifs de l'etablissement, comptes par le serveur.
+  ///
+  /// Ils ne dependent ni de la pagination ni des filtres du tableau: l'en-tete
+  /// decrit l'ecole, le tableau decrit ce qu'on regarde. Les compter sur la
+  /// page recue faisait afficher « 15 actifs » a une ecole de 800 eleves.
+  Future<StudentsStats> fetchStats() async {
+    final response = await dio.get('/students/stats/');
+    final data = response.data;
+    if (data is! Map) return const StudentsStats.empty();
+
+    int lire(String cle) => (data[cle] as num?)?.toInt() ?? 0;
+    return StudentsStats(
+      total: lire('total'),
+      active: lire('active'),
+      archived: lire('archived'),
+      newThisYear: lire('new_this_year'),
+      genderMissing: lire('gender_missing'),
+      academicYear: data['academic_year']?.toString() ?? '',
+    );
+  }
+
+  /// Applique une meme modification a plusieurs eleves, en un appel.
+  ///
+  /// En appels unitaires, deplacer une classe de 30 eleves fait 30 allers-
+  /// retours; une coupure au milieu laisse la moitie du travail faite. Le
+  /// serveur refuse la demande entiere si un seul identifiant sort du
+  /// perimetre, plutot que d'en appliquer une partie.
+  Future<int> bulkUpdate({
+    required List<int> ids,
+    bool? isArchived,
+    int? classroomId,
+    bool clearClassroom = false,
+  }) async {
+    final payload = <String, dynamic>{'ids': ids};
+    if (isArchived != null) payload['is_archived'] = isArchived;
+    if (clearClassroom) {
+      payload['classroom'] = null;
+    } else if (classroomId != null) {
+      payload['classroom'] = classroomId;
+    }
+
+    final response = await dio.post('/students/bulk-update/', data: payload);
+    final data = response.data;
+    if (data is Map && data['updated'] is num) {
+      return (data['updated'] as num).toInt();
+    }
+    return ids.length;
   }
 
   Future<List<Map<String, dynamic>>> fetchClassrooms() async {

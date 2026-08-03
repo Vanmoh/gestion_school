@@ -4,13 +4,16 @@
 
 /// Colonnes triables du registre, indexees comme dans le DataTable.
 ///
-/// Les colonnes absentes (N°, Genre, Date de naissance, Telephone, Acces)
-/// n'ont pas d'ordre serveur correspondant et restent non triables.
+/// L'index 0 est la colonne de cases a cocher, 1 le numero de ligne: ni l'une
+/// ni l'autre ne correspond a un ordre serveur. Les colonnes absentes de cette
+/// table (Telephone, Acces) restent non triables faute d'ordre equivalent.
 const studentSortKeyByColumnIndex = <int, String>{
-  1: 'matricule',
-  2: 'name',
-  4: 'classroom',
-  7: 'status',
+  2: 'matricule',
+  3: 'name',
+  4: 'gender',
+  5: 'classroom',
+  6: 'birth',
+  8: 'status',
 };
 
 /// Cle de tri par defaut, appliquee au chargement et apres reinitialisation.
@@ -35,6 +38,8 @@ String studentsOrdering({required String sortKey, required bool ascending}) {
     'matricule' => 'matricule',
     'classroom' => 'classroom__name',
     'status' => 'is_archived',
+    'gender' => 'gender',
+    'birth' => 'birth_date',
     _ => 'user__last_name',
   };
   return ascending ? field : '-$field';
