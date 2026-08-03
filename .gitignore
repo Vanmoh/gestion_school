@@ -21,6 +21,12 @@ backend/celerybeat-schedule
 backend/backups/
 frontend/gestion_school_app/backend/
 
+# Core dumps: l'image memoire d'un processus contient la SECRET_KEY, les
+# identifiants de base et les donnees en cours de traitement.
+core
+core.*
+*.core
+
 # Flutter
 **/.dart_tool/
 **/build/
