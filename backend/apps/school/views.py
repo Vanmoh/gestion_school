@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count, DecimalField, ExpressionWrapper, F, Q, Sum, Value
+from django.db.models import Avg, Count, DecimalField, ExpressionWrapper, F, Q, Sum, Value
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.utils import timezone
@@ -27,6 +27,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency in some environments
     XLImage = None
 from openpyxl.styles import Alignment, Font, PatternFill
+from apps.accounts.access import can_read
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import HasModuleAccess, IsSuperAdmin
 from apps.common.pagination import StandardResultsSetPagination
@@ -100,6 +101,7 @@ from .serializers import (
     NotificationSerializer,
     ParentProfileSerializer,
     PaymentSerializer,
+    PromotionDecisionSerializer,
     PromotionRunSerializer,
     StockItemSerializer,
     StockMovementSerializer,
@@ -2824,6 +2826,278 @@ class StudentViewSet(BaseModelViewSet):
         )
         totals["academic_year"] = active_year.name if active_year else ""
         return Response(totals)
+
+    # Un eleve de terminale porte des centaines de notes et d'absences: on
+    # renvoie le total exact mais seulement les elements recents. L'ecran de
+    # consultation ne remplace pas les modules specialises.
+    DOSSIER_ITEM_LIMIT = 50
+
+    def _dossier_section(
+        self,
+        *,
+        key,
+        label,
+        module,
+        role,
+        queryset,
+        serializer_class,
+        aggregates=None,
+        count_queryset=None,
+        labeller=None,
+    ):
+        """Une section du dossier, ou son refus motive.
+
+        Une section interdite est renvoyee vide plutot qu'omise: sans elle,
+        un directeur sans acces discipline lirait "aucun incident" la ou il
+        faut lire "vous n'avez pas le droit de savoir".
+
+        `labeller` ajoute a chaque element un dictionnaire "labels". Plusieurs
+        serializers partages exposent des cles etrangeres brutes (`subject: 7`)
+        et l'ecran afficherait "Matiere 7". Les libelles sont lus sur les
+        objets deja charges par select_related, donc sans requete de plus, et
+        localement plutot qu'en modifiant des serializers dont dependent tous
+        les autres ecrans.
+        """
+        if not can_read(role, module):
+            return {
+                "key": key,
+                "label": label,
+                "module": module,
+                "granted": False,
+            }
+
+        # count_queryset existe pour les sections annotees par une jointure:
+        # agreger sur la meme requete multiplierait les montants par le nombre
+        # de lignes jointes.
+        stats = (count_queryset if count_queryset is not None else queryset).aggregate(
+            count=Count("id"), **(aggregates or {})
+        )
+        total = stats.pop("count", 0) or 0
+        items = list(queryset[: self.DOSSIER_ITEM_LIMIT])
+        rows = serializer_class(items, many=True).data
+
+        if labeller is not None:
+            for row, instance in zip(rows, items):
+                row["labels"] = labeller(instance)
+
+        return {
+            "key": key,
+            "label": label,
+            "module": module,
+            "granted": True,
+            "count": total,
+            "summary": stats,
+            "items": rows,
+            "has_more": total > len(items),
+        }
+
+    @staticmethod
+    def _name_of(obj, attribut, champ="name"):
+        """Libelle d'une relation, chaine vide si elle est absente."""
+        related = getattr(obj, attribut, None)
+        return getattr(related, champ, "") if related is not None else ""
+
+    @action(detail=True, methods=["get"], url_path="dossier")
+    def dossier(self, request, pk=None):
+        """Tout ce que l'etablissement sait d'un eleve, en un appel.
+
+        L'ecran "Recherche eleve" affichait sinon onze listes obtenues par
+        onze requetes HTTP. Le cloisonnement par etablissement et par role est
+        celui de get_object(): un parent qui devine l'identifiant d'un autre
+        eleve recoit un 404, sans controle supplementaire ici.
+        """
+        student = self.get_object()
+        role = getattr(request.user, "role", "")
+
+        fees = StudentFeeViewSet._with_financial_annotations(
+            StudentFee.objects.filter(student=student)
+            .select_related("academic_year", "student", "student__user", "student__classroom")
+            .order_by("-due_date", "-id")
+        )
+
+        sections = [
+            self._dossier_section(
+                key="history",
+                label="Historique académique",
+                module="students",
+                role=role,
+                queryset=StudentAcademicHistory.objects.filter(student=student)
+                .select_related("academic_year", "classroom")
+                .order_by("-academic_year__start_date", "-id"),
+                serializer_class=StudentAcademicHistorySerializer,
+                aggregates={"moyenne": Avg("average")},
+                labeller=lambda obj: {
+                    "annee": self._name_of(obj, "academic_year"),
+                    "classe": self._name_of(obj, "classroom"),
+                },
+            ),
+            self._dossier_section(
+                key="promotion",
+                label="Décisions de passage",
+                module="promotion",
+                role=role,
+                queryset=PromotionDecision.objects.filter(student=student)
+                .select_related(
+                    "run",
+                    "run__source_academic_year",
+                    "source_classroom",
+                    "target_classroom",
+                )
+                .order_by("-created_at", "-id"),
+                serializer_class=PromotionDecisionSerializer,
+                labeller=lambda obj: {
+                    "decision": obj.get_decision_display(),
+                    "annee": self._name_of(
+                        obj.run, "source_academic_year"
+                    )
+                    if obj.run
+                    else "",
+                },
+            ),
+            self._dossier_section(
+                key="grades",
+                label="Notes",
+                module="grades",
+                role=role,
+                queryset=Grade.objects.filter(student=student)
+                .select_related("subject", "classroom", "academic_year")
+                .order_by("-academic_year__start_date", "-term", "-id"),
+                serializer_class=GradeSerializer,
+                aggregates={"moyenne": Avg("value")},
+                labeller=lambda obj: {
+                    "matiere": self._name_of(obj, "subject"),
+                    "classe": self._name_of(obj, "classroom"),
+                    "annee": self._name_of(obj, "academic_year"),
+                },
+            ),
+            self._dossier_section(
+                key="attendance",
+                label="Absences & retards",
+                module="attendance",
+                role=role,
+                queryset=Attendance.objects.filter(student=student).order_by("-date", "-id"),
+                serializer_class=AttendanceSerializer,
+                aggregates={
+                    "absences": Count("id", filter=Q(is_absent=True)),
+                    "retards": Count("id", filter=Q(is_late=True)),
+                },
+            ),
+            self._dossier_section(
+                key="discipline",
+                label="Discipline",
+                module="discipline",
+                role=role,
+                queryset=DisciplineIncident.objects.filter(student=student)
+                .select_related("reported_by")
+                .order_by("-incident_date", "-id"),
+                serializer_class=DisciplineIncidentSerializer,
+                aggregates={
+                    "ouverts": Count("id", filter=Q(status=DisciplineStatus.OPEN)),
+                },
+            ),
+            self._dossier_section(
+                key="fees",
+                label="Frais",
+                module="finance",
+                role=role,
+                queryset=fees,
+                serializer_class=StudentFeeSerializer,
+                # Agrege sur une requete sans la jointure paiements, sinon
+                # amount_due est compte une fois par paiement.
+                count_queryset=StudentFee.objects.filter(student=student),
+                aggregates={"total_du": Sum("amount_due")},
+                labeller=lambda obj: {
+                    "annee": self._name_of(obj, "academic_year"),
+                    "type": obj.get_fee_type_display(),
+                },
+            ),
+            self._dossier_section(
+                key="payments",
+                label="Paiements",
+                module="finance",
+                role=role,
+                queryset=Payment.objects.filter(fee__student=student)
+                .select_related(
+                    "fee",
+                    "fee__student",
+                    "fee__student__user",
+                    # PaymentSerializer.get_classroom_name descend jusqu'a la
+                    # classe: sans elle, c'est une requete par paiement.
+                    "fee__student__classroom",
+                    "received_by",
+                )
+                .order_by("-created_at", "-id"),
+                serializer_class=PaymentSerializer,
+                aggregates={
+                    "total_encaisse": Sum("amount", filter=Q(is_cancelled=False)),
+                },
+            ),
+            self._dossier_section(
+                key="exams",
+                label="Résultats d'examens",
+                module="exams",
+                role=role,
+                queryset=ExamResult.objects.filter(student=student)
+                .select_related("session", "subject")
+                .order_by("-session__start_date", "-id"),
+                serializer_class=ExamResultSerializer,
+                aggregates={"moyenne": Avg("score")},
+                labeller=lambda obj: {
+                    "matiere": self._name_of(obj, "subject"),
+                    "session": self._name_of(obj, "session", champ="title"),
+                },
+            ),
+            self._dossier_section(
+                key="library",
+                label="Bibliothèque",
+                module="library",
+                role=role,
+                queryset=Borrow.objects.filter(student=student)
+                .select_related("book")
+                .order_by("-borrowed_at", "-id"),
+                serializer_class=BorrowSerializer,
+                aggregates={
+                    "en_cours": Count("id", filter=Q(returned_at__isnull=True)),
+                },
+                labeller=lambda obj: {
+                    "livre": self._name_of(obj, "book", champ="title"),
+                    "auteur": self._name_of(obj, "book", champ="author"),
+                },
+            ),
+            self._dossier_section(
+                key="canteen_subscriptions",
+                label="Cantine - abonnements",
+                module="canteen",
+                role=role,
+                queryset=CanteenSubscription.objects.filter(student=student)
+                .select_related("academic_year")
+                .order_by("-start_date", "-id"),
+                serializer_class=CanteenSubscriptionSerializer,
+                labeller=lambda obj: {
+                    "annee": self._name_of(obj, "academic_year"),
+                    "statut": obj.get_status_display(),
+                },
+            ),
+            self._dossier_section(
+                key="canteen_services",
+                label="Cantine - repas servis",
+                module="canteen",
+                role=role,
+                queryset=CanteenService.objects.filter(student=student)
+                .select_related("menu")
+                .order_by("-served_on", "-id"),
+                serializer_class=CanteenServiceSerializer,
+                aggregates={"impayes": Count("id", filter=Q(is_paid=False))},
+                labeller=lambda obj: {"menu": self._name_of(obj, "menu")},
+            ),
+        ]
+
+        return Response(
+            {
+                "student": StudentSerializer(student, context={"request": request}).data,
+                "sections": sections,
+            }
+        )
 
     @action(detail=False, methods=["post"], url_path="bulk-update")
     @transaction.atomic

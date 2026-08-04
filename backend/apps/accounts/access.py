@@ -123,6 +123,15 @@ MODULES = {
         "group": "pedagogie",
         "access": _row("A", "L", "A", "L", "L", "L", "L*", "-", "-"),
     },
+    # Ecran de consultation seule: on reprend exactement les colonnes de
+    # "students" en retirant l'ecriture (A -> L). Personne n'y gagne un acces
+    # qu'il n'avait pas, et le dossier reste cloisonne par
+    # StudentViewSet.get_queryset() de toute facon.
+    "student_lookup": {
+        "label": "Recherche eleve",
+        "group": "pedagogie",
+        "access": _row("L", "L", "L", "L", "L", "L", "L*", "-", "-"),
+    },
     "teachers": {
         "label": "Enseignants",
         "group": "pedagogie",
