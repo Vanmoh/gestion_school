@@ -230,6 +230,36 @@ void main() {
     expect(find.text(DossierIdentityCard.nonRenseigne), findsWidgets);
   });
 
+  testWidgets('sans photo, l_emplacement reste identifiable', (tester) async {
+    final repository = _FakeRepository(
+      results: [Student.fromJson(_studentJson(id: 1, nom: 'DIARRA Sery'))],
+    );
+    await _pump(tester, repository);
+    await _typeAndSettle(tester, 'M001');
+
+    // Initiales plutot qu'un carre vide, et le motif est ecrit: une photo
+    // manquante est une fiche a completer, pas un defaut d'affichage.
+    expect(find.text('DS'), findsOneWidget);
+    expect(find.text(DossierIdentityCard.photoAbsente), findsOneWidget);
+  });
+
+  testWidgets('avec une photo, aucune mention d_absence', (tester) async {
+    final repository = _FakeRepository(
+      results: [Student.fromJson(_studentJson(id: 1, nom: 'DIARRA Sery'))],
+      dossier: _dossierJson(
+        student: {
+          ..._studentJson(id: 1, nom: 'DIARRA Sery'),
+          'photo': 'https://exemple.invalid/photo.jpg',
+        },
+      ),
+    );
+    await _pump(tester, repository);
+    await _typeAndSettle(tester, 'M001');
+
+    expect(find.text(DossierIdentityCard.photoAbsente), findsNothing);
+    expect(find.byType(Image), findsWidgets);
+  });
+
   testWidgets('une rubrique tronquee annonce le total reel', (tester) async {
     final repository = _FakeRepository(
       results: [Student.fromJson(_studentJson(id: 1, nom: 'DIARRA Sery'))],

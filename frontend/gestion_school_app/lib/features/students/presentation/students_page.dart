@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/models/paginated_result.dart';
+import '../../../core/network/media_url.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
@@ -5485,24 +5486,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
   String _resolveMediaUrl(String value) {
-    final normalized = value.trim();
-    if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
-      return normalized;
-    }
-
-    final baseUrl = ref
-        .read(studentsRepositoryProvider)
-        .dio
-        .options
-        .baseUrl
-        .trim();
-    if (baseUrl.isEmpty) return normalized;
-
-    try {
-      return Uri.parse(baseUrl).resolve(normalized).toString();
-    } catch (_) {
-      return normalized;
-    }
+    return resolveMediaUrl(
+      value,
+      ref.read(studentsRepositoryProvider).dio.options.baseUrl,
+    );
   }
 
   Future<void> _previewMemoryImage(
