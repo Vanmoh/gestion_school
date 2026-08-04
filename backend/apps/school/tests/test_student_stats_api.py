@@ -42,19 +42,17 @@ class StudentStatsTests(APITestCase):
                 role=UserRole.STUDENT,
                 etablissement=cls.etablissement,
             )
-            eleve_cree = Student.objects.create(
+            champs = {}
+            if inscrit is not None:
+                champs["enrollment_date"] = inscrit
+            return Student.objects.create(
                 user=user,
                 classroom=cls.classroom,
                 etablissement=cls.etablissement,
                 is_archived=archive,
                 gender=genre,
+                **champs,
             )
-            # enrollment_date est en auto_now_add: sa valeur est imposee a la
-            # creation. Seul un update() permet de simuler une inscription
-            # anterieure, ce que fait de toute facon un import de donnees.
-            if inscrit is not None:
-                Student.objects.filter(pk=eleve_cree.pk).update(enrollment_date=inscrit)
-            return eleve_cree
 
         # 3 actifs dont 2 inscrits cette annee, 1 archive.
         eleve("a", inscrit=date(2025, 9, 15), genre="M")

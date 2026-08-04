@@ -138,6 +138,9 @@ class StudentsRepository {
     required int classroomId,
     int? parentId,
     DateTime? birthDate,
+    // Absente, le serveur retient la date du jour. Renseignee, elle permet de
+    // saisir en novembre une rentree de septembre sans fausser les effectifs.
+    DateTime? enrollmentDate,
     String? photoPath,
     Uint8List? photoBytes,
     String? photoFileName,
@@ -168,6 +171,8 @@ class StudentsRepository {
         'classroom': classroomId,
         'parent': ?parentId,
         if (birthDate != null) 'birth_date': _apiDate(birthDate),
+        if (enrollmentDate != null)
+          'enrollment_date': _apiDate(enrollmentDate),
       };
 
       final bool hasPhoto =
@@ -238,6 +243,7 @@ class StudentsRepository {
     int? classroomId,
     int? parentId,
     DateTime? birthDate,
+    DateTime? enrollmentDate,
     String? gender,
   }) async {
     await dio.patch(
@@ -256,6 +262,10 @@ class StudentsRepository {
         'classroom': classroomId,
         'parent': parentId,
         'birth_date': birthDate == null ? null : _apiDate(birthDate),
+        // Jamais envoyee a null, contrairement a birth_date: la colonne est
+        // obligatoire cote base et un effacement partirait en 400.
+        if (enrollmentDate != null)
+          'enrollment_date': _apiDate(enrollmentDate),
         if (gender != null && gender.isNotEmpty) 'gender': gender,
       },
     );
