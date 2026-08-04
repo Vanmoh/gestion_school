@@ -14,6 +14,7 @@ import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../../../features/auth/presentation/auth_controller.dart';
 import '../../payments/presentation/payment_entry_dialog.dart';
+import '../../student_lookup/presentation/student_lookup_page.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../../../models/etablissement.dart';
 import '../domain/student.dart';
@@ -3361,6 +3362,25 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   selected.isArchived,
                 ),
               ],
+            ),
+            const SizedBox(height: 10),
+            // Ce panneau ne montre que quatre rubriques; la vue 360 en couvre
+            // onze (notes, examens, bibliotheque, cantine, passage...).
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () {
+                  Navigator.of(panelContext).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          StudentLookupPage(initialStudentId: selected.id),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.open_in_full, size: 18),
+                label: const Text('Voir le dossier complet'),
+              ),
             ),
             const SizedBox(height: 10),
             Row(

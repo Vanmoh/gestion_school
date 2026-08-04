@@ -530,32 +530,7 @@ class StudentsRepository {
     return Uint8List.fromList(bytes);
   }
 
-  Student _toStudent(Map<String, dynamic> map) {
-    final fullName = map['user_full_name']?.toString().trim();
-    return Student(
-      id: _asInt(map['id']),
-      userId: _asInt(map['user']),
-      username: map['user_username']?.toString() ?? '',
-      firstName: map['user_first_name']?.toString() ?? '',
-      lastName: map['user_last_name']?.toString() ?? '',
-      email: map['user_email']?.toString() ?? '',
-      phone: map['user_phone']?.toString() ?? '',
-      matricule: map['matricule'] as String? ?? '',
-      gender: map['gender']?.toString() ?? '',
-      fullName: (fullName != null && fullName.isNotEmpty)
-          ? fullName
-          : 'Inconnu',
-      isArchived: map['is_archived'] as bool? ?? false,
-      classroomId: map['classroom'] == null ? null : _asInt(map['classroom']),
-      classroomName: map['classroom_name']?.toString() ?? '',
-      parentId: map['parent'] == null ? null : _asInt(map['parent']),
-      parentName: map['parent_name']?.toString() ?? '',
-      parentPhone: map['parent_phone']?.toString() ?? '',
-      photo: map['photo']?.toString() ?? '',
-      birthDate: _toDate(map['birth_date']),
-      enrollmentDate: _toDate(map['enrollment_date']),
-    );
-  }
+  Student _toStudent(Map<String, dynamic> map) => Student.fromJson(map);
 
   List<Map<String, dynamic>> _extractRows(dynamic data) {
     final List<dynamic> rows;
@@ -576,11 +551,6 @@ class StudentsRepository {
   int _asInt(dynamic value) {
     if (value is int) return value;
     return int.tryParse(value?.toString() ?? '') ?? 0;
-  }
-
-  DateTime? _toDate(dynamic value) {
-    if (value == null) return null;
-    return DateTime.tryParse(value.toString());
   }
 
   String _apiDate(DateTime value) {
