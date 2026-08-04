@@ -192,6 +192,33 @@ class StudentDossierTests(APITestCase):
         self.assertEqual(payload["student"]["matricule"], self.eleve.matricule)
         self.assertEqual(payload["student"]["classroom_name"], "10eme CT")
 
+    def test_each_item_carries_readable_labels(self):
+        """Plusieurs serializers partages ne rendent que des identifiants.
+
+        GradeSerializer expose `subject: 7`; sans libelle, l'ecran afficherait
+        "Matiere 7". Les libelles sont ajoutes par le dossier lui-meme.
+        """
+        self.client.force_authenticate(self.directeur)
+        payload = self._dossier()
+
+        note = self._section(payload, "grades")["items"][0]
+        self.assertEqual(note["labels"]["matiere"], "Mathematiques")
+        self.assertEqual(note["labels"]["classe"], "10eme CT")
+        self.assertEqual(note["labels"]["annee"], "2025-2026")
+
+        emprunt = self._section(payload, "library")["items"][0]
+        self.assertEqual(emprunt["labels"]["livre"], "Le petit prince")
+
+        examen = self._section(payload, "exams")["items"][0]
+        self.assertEqual(examen["labels"]["matiere"], "Mathematiques")
+        self.assertEqual(examen["labels"]["session"], "Composition T1")
+
+        frais = self._section(payload, "fees")["items"][0]
+        self.assertEqual(frais["labels"]["type"], "Frais inscription")
+
+        repas = self._section(payload, "canteen_services")["items"][0]
+        self.assertEqual(repas["labels"]["menu"], "Riz sauce")
+
     def test_summaries_describe_the_section_not_the_page(self):
         self.client.force_authenticate(self.directeur)
         payload = self._dossier()

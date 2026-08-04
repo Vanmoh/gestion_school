@@ -2843,12 +2843,20 @@ class StudentViewSet(BaseModelViewSet):
         serializer_class,
         aggregates=None,
         count_queryset=None,
+        labeller=None,
     ):
         """Une section du dossier, ou son refus motive.
 
         Une section interdite est renvoyee vide plutot qu'omise: sans elle,
         un directeur sans acces discipline lirait "aucun incident" la ou il
         faut lire "vous n'avez pas le droit de savoir".
+
+        `labeller` ajoute a chaque element un dictionnaire "labels". Plusieurs
+        serializers partages exposent des cles etrangeres brutes (`subject: 7`)
+        et l'ecran afficherait "Matiere 7". Les libelles sont lus sur les
+        objets deja charges par select_related, donc sans requete de plus, et
+        localement plutot qu'en modifiant des serializers dont dependent tous
+        les autres ecrans.
         """
         if not can_read(role, module):
             return {
@@ -2866,6 +2874,11 @@ class StudentViewSet(BaseModelViewSet):
         )
         total = stats.pop("count", 0) or 0
         items = list(queryset[: self.DOSSIER_ITEM_LIMIT])
+        rows = serializer_class(items, many=True).data
+
+        if labeller is not None:
+            for row, instance in zip(rows, items):
+                row["labels"] = labeller(instance)
 
         return {
             "key": key,
@@ -2874,9 +2887,15 @@ class StudentViewSet(BaseModelViewSet):
             "granted": True,
             "count": total,
             "summary": stats,
-            "items": serializer_class(items, many=True).data,
+            "items": rows,
             "has_more": total > len(items),
         }
+
+    @staticmethod
+    def _name_of(obj, attribut, champ="name"):
+        """Libelle d'une relation, chaine vide si elle est absente."""
+        related = getattr(obj, attribut, None)
+        return getattr(related, champ, "") if related is not None else ""
 
     @action(detail=True, methods=["get"], url_path="dossier")
     def dossier(self, request, pk=None):
@@ -2899,7 +2918,7 @@ class StudentViewSet(BaseModelViewSet):
         sections = [
             self._dossier_section(
                 key="history",
-                label="Historique academique",
+                label="Historique académique",
                 module="students",
                 role=role,
                 queryset=StudentAcademicHistory.objects.filter(student=student)
@@ -2907,16 +2926,33 @@ class StudentViewSet(BaseModelViewSet):
                 .order_by("-academic_year__start_date", "-id"),
                 serializer_class=StudentAcademicHistorySerializer,
                 aggregates={"moyenne": Avg("average")},
+                labeller=lambda obj: {
+                    "annee": self._name_of(obj, "academic_year"),
+                    "classe": self._name_of(obj, "classroom"),
+                },
             ),
             self._dossier_section(
                 key="promotion",
-                label="Decisions de passage",
+                label="Décisions de passage",
                 module="promotion",
                 role=role,
                 queryset=PromotionDecision.objects.filter(student=student)
-                .select_related("run", "source_classroom", "target_classroom")
+                .select_related(
+                    "run",
+                    "run__source_academic_year",
+                    "source_classroom",
+                    "target_classroom",
+                )
                 .order_by("-created_at", "-id"),
                 serializer_class=PromotionDecisionSerializer,
+                labeller=lambda obj: {
+                    "decision": obj.get_decision_display(),
+                    "annee": self._name_of(
+                        obj.run, "source_academic_year"
+                    )
+                    if obj.run
+                    else "",
+                },
             ),
             self._dossier_section(
                 key="grades",
@@ -2928,6 +2964,11 @@ class StudentViewSet(BaseModelViewSet):
                 .order_by("-academic_year__start_date", "-term", "-id"),
                 serializer_class=GradeSerializer,
                 aggregates={"moyenne": Avg("value")},
+                labeller=lambda obj: {
+                    "matiere": self._name_of(obj, "subject"),
+                    "classe": self._name_of(obj, "classroom"),
+                    "annee": self._name_of(obj, "academic_year"),
+                },
             ),
             self._dossier_section(
                 key="attendance",
@@ -2965,6 +3006,10 @@ class StudentViewSet(BaseModelViewSet):
                 # amount_due est compte une fois par paiement.
                 count_queryset=StudentFee.objects.filter(student=student),
                 aggregates={"total_du": Sum("amount_due")},
+                labeller=lambda obj: {
+                    "annee": self._name_of(obj, "academic_year"),
+                    "type": obj.get_fee_type_display(),
+                },
             ),
             self._dossier_section(
                 key="payments",
@@ -2972,7 +3017,15 @@ class StudentViewSet(BaseModelViewSet):
                 module="finance",
                 role=role,
                 queryset=Payment.objects.filter(fee__student=student)
-                .select_related("fee", "fee__student", "fee__student__user", "received_by")
+                .select_related(
+                    "fee",
+                    "fee__student",
+                    "fee__student__user",
+                    # PaymentSerializer.get_classroom_name descend jusqu'a la
+                    # classe: sans elle, c'est une requete par paiement.
+                    "fee__student__classroom",
+                    "received_by",
+                )
                 .order_by("-created_at", "-id"),
                 serializer_class=PaymentSerializer,
                 aggregates={
@@ -2981,7 +3034,7 @@ class StudentViewSet(BaseModelViewSet):
             ),
             self._dossier_section(
                 key="exams",
-                label="Resultats d'examens",
+                label="Résultats d'examens",
                 module="exams",
                 role=role,
                 queryset=ExamResult.objects.filter(student=student)
@@ -2989,10 +3042,14 @@ class StudentViewSet(BaseModelViewSet):
                 .order_by("-session__start_date", "-id"),
                 serializer_class=ExamResultSerializer,
                 aggregates={"moyenne": Avg("score")},
+                labeller=lambda obj: {
+                    "matiere": self._name_of(obj, "subject"),
+                    "session": self._name_of(obj, "session", champ="title"),
+                },
             ),
             self._dossier_section(
                 key="library",
-                label="Bibliotheque",
+                label="Bibliothèque",
                 module="library",
                 role=role,
                 queryset=Borrow.objects.filter(student=student)
@@ -3001,6 +3058,10 @@ class StudentViewSet(BaseModelViewSet):
                 serializer_class=BorrowSerializer,
                 aggregates={
                     "en_cours": Count("id", filter=Q(returned_at__isnull=True)),
+                },
+                labeller=lambda obj: {
+                    "livre": self._name_of(obj, "book", champ="title"),
+                    "auteur": self._name_of(obj, "book", champ="author"),
                 },
             ),
             self._dossier_section(
@@ -3012,6 +3073,10 @@ class StudentViewSet(BaseModelViewSet):
                 .select_related("academic_year")
                 .order_by("-start_date", "-id"),
                 serializer_class=CanteenSubscriptionSerializer,
+                labeller=lambda obj: {
+                    "annee": self._name_of(obj, "academic_year"),
+                    "statut": obj.get_status_display(),
+                },
             ),
             self._dossier_section(
                 key="canteen_services",
@@ -3023,6 +3088,7 @@ class StudentViewSet(BaseModelViewSet):
                 .order_by("-served_on", "-id"),
                 serializer_class=CanteenServiceSerializer,
                 aggregates={"impayes": Count("id", filter=Q(is_paid=False))},
+                labeller=lambda obj: {"menu": self._name_of(obj, "menu")},
             ),
         ]
 
