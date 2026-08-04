@@ -14,6 +14,7 @@ import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../../../features/auth/presentation/auth_controller.dart';
 import '../../payments/presentation/payment_entry_dialog.dart';
+import '../../student_lookup/presentation/student_lookup_page.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../../../models/etablissement.dart';
 import '../domain/student.dart';
@@ -111,6 +112,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   int? _registrationParentId;
   String? _registrationGender;
   DateTime? _birthDate;
+  // Laissee vide, le serveur inscrit a la date du jour. Le champ ne sert qu'a
+  // antidater: saisir en novembre une rentree de septembre, ou reprendre
+  // l'existant sans que toute l'ecole apparaisse inscrite le meme jour.
+  DateTime? _enrollmentDate;
   int? _historyYearId;
   int? _historyClassroomId;
 
@@ -131,6 +136,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   int? _selectedClassroomUpdateId;
   int? _selectedParentUpdateId;
   DateTime? _updateBirthDate;
+  DateTime? _updateEnrollmentDate;
   String? _updateGender;
 
   List<Map<String, dynamic>> _history = [];
@@ -436,6 +442,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     _selectedClassroomUpdateId = student.classroomId;
     _selectedParentUpdateId = student.parentId;
     _updateBirthDate = student.birthDate;
+    _updateEnrollmentDate = student.enrollmentDate;
     _updateGender = student.gender.isEmpty ? null : student.gender;
     _clearUpdateProfilePhotoSelection();
     _updateFirstNameController.text = student.firstName;
@@ -517,6 +524,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             classroomId: classroomId,
             parentId: _registrationParentId,
             birthDate: _birthDate,
+            enrollmentDate: _enrollmentDate,
             photoPath: _registrationPhotoPath,
             photoBytes: _registrationPhotoBytes,
             photoFileName: _registrationPhotoFileName,
@@ -531,6 +539,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       _passwordController.clear();
       _clearRegistrationPhotoSelection();
       _birthDate = null;
+      _enrollmentDate = null;
       _registrationParentId = null;
       _registrationGender = null;
       setState(() {
@@ -642,6 +651,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final hasParentChanges = _selectedParentUpdateId != student.parentId;
     final hasBirthDateChanges =
         _apiDateOrEmpty(_updateBirthDate) != _apiDateOrEmpty(student.birthDate);
+    final hasEnrollmentDateChanges =
+        _apiDateOrEmpty(_updateEnrollmentDate) !=
+        _apiDateOrEmpty(student.enrollmentDate);
     final hasGenderChanges = (_updateGender ?? '') != student.gender.trim();
     final hasPhotoChanges =
         (_updatePhotoPath ?? '').trim().isNotEmpty ||
@@ -651,6 +663,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         !hasClassroomChanges &&
         !hasParentChanges &&
         !hasBirthDateChanges &&
+        !hasEnrollmentDateChanges &&
         !hasGenderChanges &&
         !hasPhotoChanges) {
       _showMessage('Aucune modification détectée.');
@@ -666,6 +679,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           hasClassroomChanges ||
           hasParentChanges ||
           hasBirthDateChanges ||
+          hasEnrollmentDateChanges ||
           hasGenderChanges) {
         final updated = await repository.updateStudentProfile(
           studentId: student.id,
@@ -677,6 +691,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           classroomId: _selectedClassroomUpdateId,
           parentId: _selectedParentUpdateId,
           birthDate: _updateBirthDate,
+          enrollmentDate: _updateEnrollmentDate,
           gender: _updateGender,
         );
         selectedId = updated.id;
@@ -1777,6 +1792,30 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 _birthDate == null ? 'Date naissance' : _apiDate(_birthDate!),
               ),
             ),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final picked = await showDatePicker(
+                  context: panelContext,
+                  initialDate: _enrollmentDate ?? DateTime.now(),
+                  // Une inscription anterieure a la rentree precedente releve
+                  // de la reprise d'historique, pas de la saisie courante.
+                  firstDate: DateTime(DateTime.now().year - 15),
+                  // Postdater fausserait les effectifs de l'annee en cours; le
+                  // serveur le refuse, autant ne pas le proposer.
+                  lastDate: DateTime.now(),
+                );
+                if (picked != null) {
+                  _enrollmentDate = picked;
+                  refreshPanel();
+                }
+              },
+              icon: const Icon(Icons.event_available_outlined),
+              label: Text(
+                _enrollmentDate == null
+                    ? "Inscrit(e) aujourd'hui"
+                    : 'Inscrit(e) le ${_apiDate(_enrollmentDate!)}',
+              ),
+            ),
             SizedBox(
               width: 560,
               child: Wrap(
@@ -1948,6 +1987,29 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                 _updateBirthDate == null
                     ? 'Date naissance'
                     : _apiDate(_updateBirthDate!),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final picked = await showDatePicker(
+                  context: panelContext,
+                  initialDate:
+                      _updateEnrollmentDate ??
+                      student.enrollmentDate ??
+                      DateTime.now(),
+                  firstDate: DateTime(DateTime.now().year - 15),
+                  lastDate: DateTime.now(),
+                );
+                if (picked != null) {
+                  _updateEnrollmentDate = picked;
+                  refreshPanel();
+                }
+              },
+              icon: const Icon(Icons.event_available_outlined),
+              label: Text(
+                _updateEnrollmentDate == null
+                    ? "Date d'inscription"
+                    : 'Inscrit(e) le ${_apiDate(_updateEnrollmentDate!)}',
               ),
             ),
             SizedBox(
@@ -3300,6 +3362,25 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   selected.isArchived,
                 ),
               ],
+            ),
+            const SizedBox(height: 10),
+            // Ce panneau ne montre que quatre rubriques; la vue 360 en couvre
+            // onze (notes, examens, bibliotheque, cantine, passage...).
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () {
+                  Navigator.of(panelContext).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          StudentLookupPage(initialStudentId: selected.id),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.open_in_full, size: 18),
+                label: const Text('Voir le dossier complet'),
+              ),
             ),
             const SizedBox(height: 10),
             Row(

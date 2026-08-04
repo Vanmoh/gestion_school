@@ -43,6 +43,7 @@ import 'features/payments/presentation/payments_page.dart';
 import 'features/reports/presentation/reports_page.dart';
 import 'features/stock/presentation/stock_page.dart';
 import 'features/students/presentation/students_controller.dart';
+import 'features/student_lookup/presentation/student_lookup_page.dart';
 import 'features/students/presentation/students_page.dart';
 import 'features/teachers/presentation/teachers_page.dart';
 import 'features/timetable/presentation/timetable_module_page.dart';
@@ -196,6 +197,8 @@ class GestionSchoolApp extends ConsumerWidget {
         '/exams': (_) => const _GlobalFeatureRefreshHost(child: ExamsPage()),
         '/students': (_) =>
             const _GlobalFeatureRefreshHost(child: StudentsPage()),
+        '/students/recherche': (_) =>
+            const _GlobalFeatureRefreshHost(child: StudentLookupPage()),
         '/imports': (_) => const AcademicImportsFloatingRoutePage(),
         '/payments': (_) =>
             const _GlobalFeatureRefreshHost(child: PaymentsPage()),
@@ -259,6 +262,12 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       label: 'Gestion des élèves',
       icon: Icons.school_outlined,
       view: StudentsPage(),
+    ),
+    _AdminMenuItem(
+      keyName: 'student_lookup',
+      label: 'Recherche élève',
+      icon: Icons.person_search_outlined,
+      view: StudentLookupPage(),
     ),
     _AdminMenuItem(
       keyName: 'teachers',

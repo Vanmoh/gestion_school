@@ -1,0 +1,95 @@
+name: Sauvegarde de la base
+
+# Le plan gratuit Render ne propose pas de Background Worker: le beat Celery
+# configure dans settings.py (CELERY_BEAT_SCHEDULE) n'a donc aucun processus
+# pour l'executer, et la sauvegarde quotidienne exigee n'a jamais lieu.
+# Ce workflow tient ce role, gratuitement, jusqu'a ce qu'un worker existe.
+#
+# Il appelle la meme commande `manage.py backup_db` que le beat: un seul
+# chemin de code, donc un seul endroit ou une regression peut se glisser.
+on:
+  schedule:
+    # 02:30 UTC = 02:30 a Abidjan (TIME_ZONE du projet, UTC+0 sans heure d'ete),
+    # soit l'heure choisie dans CELERY_BEAT_SCHEDULE. Hors des heures de saisie.
+    - cron: "30 2 * * *"
+  # Permet de declencher une sauvegarde a la demande, et de verifier la
+  # configuration sans attendre la nuit.
+  workflow_dispatch:
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+jobs:
+  dump:
+    name: Dump PostgreSQL vers le stockage objet
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Un fork herite du planning mais pas des secrets: le job y echouerait
+    # chaque nuit en signalant une panne qui n'existe pas.
+    if: github.repository == 'Vanmoh/gestion_school'
+
+    env:
+      DEBUG: "False"
+      # Aucune requete HTTP n'est servie ici: cette cle ne signe rien et ne
+      # doit surtout pas etre celle de production.
+      SECRET_KEY: cle-inutilisee-sauvegarde-planifiee-0123456789abcdef
+      ALLOWED_HOSTS: localhost
+      ENABLE_FILE_LOGGING: "False"
+      # Le pooler transactionnel (port 6543) ne supporte pas pg_dump: ce secret
+      # doit pointer sur le pooler de session (5432) ou la connexion directe.
+      DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_STORAGE_BUCKET_NAME: ${{ secrets.AWS_STORAGE_BUCKET_NAME }}
+      AWS_S3_ENDPOINT_URL: ${{ secrets.AWS_S3_ENDPOINT_URL }}
+      AWS_S3_REGION_NAME: ${{ secrets.AWS_S3_REGION_NAME }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verifier que les secrets sont poses
+        # Sans ce garde-fou, un secret oublie ferait ecrire la sauvegarde sur
+        # le disque du runner, qui disparait: un job vert, et rien de sauve.
+        run: |
+          manquants=""
+          for nom in DATABASE_URL AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+                     AWS_STORAGE_BUCKET_NAME AWS_S3_ENDPOINT_URL AWS_S3_REGION_NAME; do
+            if [ -z "${!nom}" ]; then manquants="$manquants $nom"; fi
+          done
+          if [ -n "$manquants" ]; then
+            echo "::error::Secrets absents:$manquants"
+            exit 1
+          fi
+
+      - name: Installer pg_dump 17
+        # Le runner fournit un client PostgreSQL 16, et pg_dump refuse de lire
+        # un serveur plus recent que lui. Supabase sert du 15 ou du 17 selon le
+        # projet; le client 17 couvre les deux.
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          pg_dump --version
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.render.txt
+
+      - name: Installer les dependances
+        working-directory: backend
+        # Le jeu de production, sans mysqlclient: rien a compiler.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.render.txt
+
+      - name: Sauvegarder
+        working-directory: backend
+        run: python manage.py backup_db

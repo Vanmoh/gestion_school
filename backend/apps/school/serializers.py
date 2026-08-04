@@ -1,7 +1,7 @@
 import re
 import unicodedata
 from decimal import Decimal
-from datetime import timedelta
+from datetime import date, timedelta
 from django.utils import timezone
 from rest_framework import serializers
 from .term_utils import normalize_term
@@ -593,6 +593,23 @@ class StudentSerializer(serializers.ModelSerializer):
         parent = obj.parent
         user = parent.user if parent else None
         return user.phone if user else ""
+
+    # Le modele refuse deja ces deux dates dans son `clean()`, mais il leve la
+    # ValidationError de Django, que DRF ne traduit pas: une faute de frappe
+    # sortait en 500. Repris ici pour repondre 400 avec le champ fautif.
+    def validate_birth_date(self, value):
+        if value and value > date.today():
+            raise serializers.ValidationError(
+                "La date de naissance ne peut pas être dans le futur."
+            )
+        return value
+
+    def validate_enrollment_date(self, value):
+        if value and value > date.today():
+            raise serializers.ValidationError(
+                "La date d'inscription ne peut pas être dans le futur."
+            )
+        return value
 
     def validate(self, attrs):
         if self.instance is None and not attrs.get("gender"):

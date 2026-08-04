@@ -241,7 +241,12 @@ class Student(TimeStampedModel):
     )
     parent = models.ForeignKey(ParentProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name="children")
     photo = models.ImageField(upload_to="students/", null=True, blank=True)
-    enrollment_date = models.DateField(auto_now_add=True)
+    # `auto_now_add` imposait la date du jour et interdisait toute correction:
+    # une ecole qui saisit en novembre les inscriptions de septembre, ou qui
+    # importe l'existant, voyait toute sa base datee du jour de la saisie. Le
+    # compteur "nouveaux cette annee" mesurait alors la creation des fiches, pas
+    # les inscriptions. La date reste celle du jour par defaut, mais se corrige.
+    enrollment_date = models.DateField(default=date.today)
     is_archived = models.BooleanField(default=False)
     conduite = models.DecimalField(max_digits=4, decimal_places=2, default=18)
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="students", null=True, blank=True)
@@ -256,6 +261,10 @@ class Student(TimeStampedModel):
         from django.core.exceptions import ValidationError
         if self.birth_date and self.birth_date > date.today():
             raise ValidationError({'birth_date': 'Date de naissance ne peut pas être dans le futur'})
+        # Antidater est le cas d'usage; postdater fausserait les effectifs de
+        # l'annee en cours sans qu'aucun ecran ne le signale.
+        if self.enrollment_date and self.enrollment_date > date.today():
+            raise ValidationError({'enrollment_date': "La date d'inscription ne peut pas être dans le futur"})
         if self.conduite and not (0 <= self.conduite <= 20):
             raise ValidationError({'conduite': 'Conduite doit être entre 0 et 20'})
 
