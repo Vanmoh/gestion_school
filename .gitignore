@@ -26,6 +26,13 @@ frontend/gestion_school_app/backend/
 core
 core.*
 *.core
+# Le motif `core` ci-dessus ne distingue pas un fichier d'un repertoire: il
+# emportait aussi lib/core/ et test/core/ du client Flutter. Les fichiers
+# ajoutes avant l'apparition du motif restaient suivis, les nouveaux
+# disparaissaient des commits sans un mot -- et la compilation cassait chez
+# les autres, pas chez l'auteur.
+!**/lib/core/
+!**/test/core/
 
 # Flutter
 **/.dart_tool/
