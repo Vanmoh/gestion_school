@@ -22,6 +22,7 @@ import '../domain/student.dart';
 import '../domain/students_stats.dart';
 import '../domain/students_sort.dart';
 import 'students_controller.dart';
+import 'widgets/student_roster_dialog.dart';
 
 class StudentsPage extends ConsumerStatefulWidget {
   const StudentsPage({super.key});
@@ -104,9 +105,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   String _statusFilter = 'active';
   int? _classFilterId;
-  // Le montage du PDF passe par le serveur: sans repere visuel, un second clic
-  // relancerait une generation deja en cours.
-  bool _printingRoster = false;
   int? _cardsClassroomId;
   String _cardsLayoutMode = 'a4_6up';
   String _sortBy = 'name';
@@ -1029,29 +1027,19 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     }
   }
 
-  /// Liste d'appel de la classe filtree, ou de tout l'etablissement.
+  /// Ouvre la liste des eleves: consultation a l'ecran, puis impression.
   ///
-  /// Le PDF est monte par le serveur, comme les bulletins, les recus et les
-  /// cartes: c'est lui qui detient le logo, les effectifs et l'annee scolaire,
-  /// et l'en-tete reste identique d'un document a l'autre.
-  Future<void> _printClassRoster() async {
-    setState(() => _printingRoster = true);
-    try {
-      final bytes = await ref
-          .read(studentsRepositoryProvider)
-          .fetchClassRosterPdf(
-            classroomId: _classFilterId,
-            // Le document reprend exactement ce que montre l'ecran: imprimer
-            // les actifs alors que la table affiche les archives serait une
-            // surprise decouverte apres coup, sur papier.
-            status: _statusFilter,
-          );
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
-    } catch (error) {
-      _showMessage('Erreur impression liste: $error');
-    } finally {
-      if (mounted) setState(() => _printingRoster = false);
-    }
+  /// La fenetre reprend les filtres courants comme point de depart, sans s'y
+  /// enfermer: on y change de classe ou de statut sans refermer.
+  Future<void> _openStudentRoster() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => StudentRosterDialog(
+        classroomId: _classFilterId,
+        status: _statusFilter,
+        classrooms: _classrooms,
+      ),
+    );
   }
 
   Future<void> _printPaymentReceipt(int paymentId) async {
@@ -4480,22 +4468,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   label: const Text('Copier CSV'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: _printingRoster ? null : _printClassRoster,
-                  icon: _printingRoster
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.print_outlined),
-                  // Le libelle suit le filtre: sans classe choisie, le bouton
-                  // sort tout l'etablissement, ce qu'il vaut mieux annoncer
-                  // avant le clic qu'apres l'impression.
-                  label: Text(
-                    _classFilterId == null
-                        ? 'Imprimer toutes les listes'
-                        : 'Imprimer la liste',
-                  ),
+                  onPressed: _openStudentRoster,
+                  icon: const Icon(Icons.groups_2_outlined),
+                  label: const Text('Liste des élèves'),
                 ),
                 OutlinedButton.icon(
                   onPressed: (_saving || !canOpenAcademicImports)
