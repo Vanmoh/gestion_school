@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -22,6 +21,7 @@ import '../domain/student.dart';
 import '../domain/students_stats.dart';
 import '../domain/students_sort.dart';
 import 'students_controller.dart';
+import 'widgets/student_palette_card.dart';
 import 'widgets/student_roster_dialog.dart';
 
 class StudentsPage extends ConsumerStatefulWidget {
@@ -36,21 +36,18 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   final _pageScrollController = ScrollController();
   Timer? _searchDebounce;
 
-  static const List<int> _tableRowsPerPageOptions = [10, 15, 25, 50];
   static const double _studentCardTemplateAspectRatio = 148 / 105;
   static const String _studentCardStampAsset =
       'assets/images/str_cachet_signature.png';
   static const String _studentCardSignatureAsset =
       'assets/images/str_signature.png';
-  int _tableRowsPerPage = 15;
+  final int _tableRowsPerPage = 15;
   int _tablePage = 1;
   int _serverTotalStudents = 0;
   StudentsStats _stats = const StudentsStats.empty();
   // Selection multiple, distincte de _selectedStudent qui pilote le
   // dossier ouvert: cocher des lignes ne doit pas changer la fiche.
   final Set<int> _checkedStudentIds = <int>{};
-  bool _serverHasNext = false;
-  bool _serverHasPrevious = false;
   int? _lastScopeEtablissementId;
 
   void _openAcademicImports() {
@@ -103,7 +100,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   List<Map<String, dynamic>> _parents = [];
   List<Map<String, dynamic>> _years = [];
 
-  String _statusFilter = 'active';
   int? _classFilterId;
   int? _cardsClassroomId;
   String _cardsLayoutMode = 'a4_6up';
@@ -209,10 +205,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           page: _tablePage,
           pageSize: _tableRowsPerPage,
           search: _searchController.text.trim(),
-          classroomId: _classFilterId,
-          isArchived: _statusFilter == 'all'
-              ? null
-              : _statusFilter == 'archived',
+          // La barre unique doit trouver n'importe quel eleve, archive
+          // compris: il n'y a plus de filtre pour l'inclure, et sa palette
+          // porte la mention « Archivé ». Le restreindre aux actifs le
+          // rendrait introuvable sans que rien ne l'explique.
+          isArchived: null,
           ordering: _studentsOrdering(),
         ),
         repository.fetchClassrooms(),
@@ -228,8 +225,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         _students = studentsPage.results;
         _filteredStudents = studentsPage.results;
         _serverTotalStudents = studentsPage.count;
-        _serverHasNext = studentsPage.hasNext;
-        _serverHasPrevious = studentsPage.hasPrevious;
         _classrooms = results[1] as List<Map<String, dynamic>>;
         _parents = results[2] as List<Map<String, dynamic>>;
         _years = results[3] as List<Map<String, dynamic>>;
@@ -323,32 +318,15 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     });
   }
 
-  void _clearSearch() {
-    _searchDebounce?.cancel();
-    _searchController.clear();
-    _reloadStudentsTable(page: 1);
-  }
-
+  /// Efface la recherche et referme la palette.
   void _resetStudentsFilters() {
     _searchDebounce?.cancel();
     _searchController.clear();
     setState(() {
       _classFilterId = null;
-      _statusFilter = 'all';
+      _selectedStudent = null;
       _sortBy = defaultStudentSortKey;
       _sortAscending = true;
-    });
-    _reloadStudentsTable(page: 1);
-  }
-
-  int? get _sortColumnIndex => studentSortColumnIndex(_sortBy);
-
-  void _onStudentColumnSort(int columnIndex, bool ascending) {
-    final sortKey = studentSortKeyForColumn(columnIndex);
-    if (sortKey == null) return;
-    setState(() {
-      _sortBy = sortKey;
-      _sortAscending = ascending;
     });
     _reloadStudentsTable(page: 1);
   }
@@ -546,12 +524,13 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       _registrationGender = null;
       setState(() {
         _searchController.clear();
-        _classFilterId = null;
         _tablePage = 1;
       });
       await _loadBaseData(keepSelectedId: student.id);
+      // L'eleve vient d'etre cree: on ouvre sa palette directement. Parcourir
+      // les pages pour le retrouver n'avait de sens qu'avec un tableau.
       if (_selectedStudent?.id != student.id) {
-        await _focusStudentInTable(student.id);
+        _activateStudent(student);
       }
       _lastRegisteredStudent = student;
       return true;
@@ -1034,9 +1013,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   Future<void> _openStudentRoster() async {
     await showDialog<void>(
       context: context,
+      // La fenetre porte ses propres selecteurs: elle part de l'etat le plus
+      // courant plutot que d'un filtre de page qui n'existe plus.
       builder: (_) => StudentRosterDialog(
-        classroomId: _classFilterId,
-        status: _statusFilter,
+        classroomId: null,
+        status: 'active',
         classrooms: _classrooms,
       ),
     );
@@ -2897,29 +2878,13 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               : (selectedEtablissement?.name ?? 'Établissement utilisateur'));
     // Le tri n'est plus compte ici: il se lit directement dans l'en-tete du
     // tableau, l'inclure dans le compteur de filtres induisait en erreur.
-    final appliedFilters =
-        (_searchController.text.trim().isNotEmpty ? 1 : 0) +
-        (_classFilterId != null ? 1 : 0) +
-        (_statusFilter != 'active' ? 1 : 0);
-    final selectedClassLabel = _classFilterId == null
-        ? 'Toutes classes'
-        : _classroomName(_classFilterId!);
     final screenWidth = MediaQuery.of(context).size.width;
     final isCompactLayout = screenWidth < 1100;
     final pagePadding = isCompactLayout ? 12.0 : 18.0;
     final sectionGap = isCompactLayout ? 12.0 : 14.0;
     final totalFiltered = _serverTotalStudents;
-    final totalPages = totalFiltered == 0
-        ? 1
-        : ((totalFiltered + _tableRowsPerPage - 1) ~/ _tableRowsPerPage);
-    final currentPage = math.min(_tablePage, totalPages);
-    final startIndex = totalFiltered == 0
-        ? 0
-        : (currentPage - 1) * _tableRowsPerPage;
-    final endIndex = math.min(
-      startIndex + _filteredStudents.length,
-      totalFiltered,
-    );
+    // La pagination a disparu avec le tableau: la palette montre un eleve,
+    // et la fenetre « Liste des eleves » se charge des groupes.
     final visibleStudents = _filteredStudents;
 
     return ListView(
@@ -2943,28 +2908,18 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           totalFiltered: totalFiltered,
           scopeLabel: scopeLabel,
           refreshLabel: refreshLabel,
-          appliedFilters: appliedFilters,
-          selectedClassLabel: selectedClassLabel,
         ),
         SizedBox(height: sectionGap),
-        _buildStudentsFiltersCard(
+        _buildStudentSearchCard(
           textTheme: textTheme,
           colorScheme: colorScheme,
           isCompactLayout: isCompactLayout,
-          totalFiltered: totalFiltered,
-          appliedFilters: appliedFilters,
-          selectedClassLabel: selectedClassLabel,
         ),
         SizedBox(height: sectionGap),
-        _buildStudentsTableCard(
+        _buildStudentPaletteCard(
           textTheme: textTheme,
           colorScheme: colorScheme,
-          totalFiltered: totalFiltered,
           visibleStudents: visibleStudents,
-          startIndex: startIndex,
-          endIndex: endIndex,
-          currentPage: currentPage,
-          totalPages: totalPages,
         ),
       ],
     );
@@ -3802,37 +3757,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     _loadBaseData(keepSelectedId: _selectedStudent?.id, lightweight: true);
   }
 
-  Future<void> _focusStudentInTable(int studentId) async {
-    final totalPages = _serverTotalStudents <= 0
-        ? 1
-        : ((_serverTotalStudents + _tableRowsPerPage - 1) ~/ _tableRowsPerPage);
-
-    final repository = ref.read(studentsRepositoryProvider);
-    for (var page = 1; page <= totalPages; page++) {
-      final result = await repository.fetchStudentsPage(
-        page: page,
-        pageSize: _tableRowsPerPage,
-        search: _searchController.text.trim(),
-        classroomId: _classFilterId,
-        isArchived: _statusFilter == 'all' ? null : _statusFilter == 'archived',
-        ordering: _studentsOrdering(),
-      );
-
-      final existsInPage = result.results.any((row) => row.id == studentId);
-      if (!existsInPage) {
-        continue;
-      }
-
-      if (!mounted) {
-        return;
-      }
-      setState(() => _tablePage = page);
-      await _loadBaseData(keepSelectedId: studentId);
-      return;
-    }
-  }
-
-
   String _activeAcademicYearLabel() {
     Map<String, dynamic>? activeYear;
     for (final row in _years) {
@@ -3894,207 +3818,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
 
-  /// Age en annees revolues, ou "-" si la date manque.
-  ///
-  /// Pour un etablissement, l'age est ce qui sert -- redoublement,
-  /// orientation, eligibilite a un examen -- la date brute demande un calcul
-  /// mental a chaque ligne lue.
-  String _ageLabel(DateTime? birthDate) {
-    if (birthDate == null) return '-';
-    final today = DateTime.now();
-    var age = today.year - birthDate.year;
-    final aEuSonAnniversaire =
-        today.month > birthDate.month ||
-        (today.month == birthDate.month && today.day >= birthDate.day);
-    if (!aEuSonAnniversaire) age -= 1;
-    if (age < 0 || age > 120) return '-';
-    return '$age ans';
-  }
-
-  void _toggleChecked(int studentId) {
-    setState(() {
-      if (!_checkedStudentIds.remove(studentId)) {
-        _checkedStudentIds.add(studentId);
-      }
-    });
-  }
-
-  void _toggleAllVisible(List<Student> visibles) {
-    setState(() {
-      final tousCoches = visibles.every(
-        (s) => _checkedStudentIds.contains(s.id),
-      );
-      if (tousCoches) {
-        _checkedStudentIds.removeAll(visibles.map((s) => s.id));
-      } else {
-        _checkedStudentIds.addAll(visibles.map((s) => s.id));
-      }
-    });
-  }
-
-  /// Barre d'actions groupees, visible seulement quand des lignes sont cochees.
-  ///
-  /// Une rentree se gere par lots: archiver une promotion sortante, deplacer
-  /// une classe entiere. Ligne a ligne, c'est autant d'allers-retours et
-  /// autant d'occasions d'en oublier un.
-  Widget _buildBulkActionBar() {
-    final colorScheme = Theme.of(context).colorScheme;
-    final nombre = _checkedStudentIds.length;
-    final lectureSeule =
-        ref.read(authControllerProvider).value?.role == 'censor';
-
-    return Container(
-      margin: const EdgeInsets.only(top: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: colorScheme.primaryContainer.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          Text(
-            '$nombre élève${nombre > 1 ? 's' : ''} sélectionné${nombre > 1 ? 's' : ''}',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          if (!lectureSeule) ...[
-            OutlinedButton.icon(
-              onPressed: _saving ? null : () => _bulkArchive(true),
-              icon: const Icon(Icons.archive_outlined, size: 18),
-              label: const Text('Archiver'),
-            ),
-            OutlinedButton.icon(
-              onPressed: _saving ? null : () => _bulkArchive(false),
-              icon: const Icon(Icons.unarchive_outlined, size: 18),
-              label: const Text('Désarchiver'),
-            ),
-            OutlinedButton.icon(
-              onPressed: _saving ? null : _bulkChangeClassroom,
-              icon: const Icon(Icons.swap_horiz, size: 18),
-              label: const Text('Changer de classe'),
-            ),
-          ],
-          TextButton(
-            onPressed: () => setState(_checkedStudentIds.clear),
-            child: const Text('Tout décocher'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _bulkArchive(bool archiver) async {
-    final ids = _checkedStudentIds.toList();
-    final verbe = archiver ? 'Archiver' : 'Désarchiver';
-    final confirme = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('$verbe ${ids.length} élève${ids.length > 1 ? 's' : ''} ?'),
-        content: Text(
-          archiver
-              ? 'Les élèves archivés sortent des listes actives. '
-                    'L\'opération est réversible.'
-              : 'Les élèves redeviendront actifs dans toutes les listes.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Annuler'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(verbe),
-          ),
-        ],
-      ),
-    );
-    if (confirme != true) return;
-
-    await _runBulk(
-      () => ref
-          .read(studentsRepositoryProvider)
-          .bulkUpdate(ids: ids, isArchived: archiver),
-      succes: '${ids.length} élève(s) ${archiver ? 'archivé(s)' : 'réactivé(s)'}.',
-    );
-  }
-
-  Future<void> _bulkChangeClassroom() async {
-    if (_classrooms.isEmpty) {
-      _showMessage('Aucune classe disponible.');
-      return;
-    }
-
-    int? cible = _asInt(_classrooms.first['id']);
-    final choisie = await showDialog<int>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(
-            'Déplacer ${_checkedStudentIds.length} élève(s)',
-          ),
-          content: DropdownButtonFormField<int>(
-            initialValue: cible,
-            decoration: const InputDecoration(labelText: 'Classe de destination'),
-            items: _classrooms
-                .map(
-                  (row) => DropdownMenuItem<int>(
-                    value: _asInt(row['id']),
-                    child: Text((row['name'] ?? '').toString()),
-                  ),
-                )
-                .toList(),
-            onChanged: (value) => setDialogState(() => cible = value),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Annuler'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, cible),
-              child: const Text('Déplacer'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (choisie == null) return;
-
-    final ids = _checkedStudentIds.toList();
-    await _runBulk(
-      () => ref
-          .read(studentsRepositoryProvider)
-          .bulkUpdate(ids: ids, classroomId: choisie),
-      succes: '${ids.length} élève(s) déplacé(s).',
-    );
-  }
-
-  /// Le serveur refuse la demande entiere plutot que d'en appliquer une
-  /// partie: en cas d'erreur, rien n'a bouge et la selection est conservee
-  /// pour permettre une nouvelle tentative.
-  Future<void> _runBulk(
-    Future<int> Function() operation, {
-    required String succes,
-  }) async {
-    setState(() => _saving = true);
-    try {
-      await operation();
-      if (!mounted) return;
-      setState(_checkedStudentIds.clear);
-      _showMessage(succes);
-      _reloadStudentsTable(page: _tablePage);
-    } catch (error) {
-      if (!mounted) return;
-      _showMessage('Action groupée impossible: $error');
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
   Widget _buildStudentsDashboardCard({
     required TextTheme textTheme,
     required ColorScheme colorScheme,
@@ -4104,8 +3827,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required int totalFiltered,
     required String scopeLabel,
     required String refreshLabel,
-    required int appliedFilters,
-    required String selectedClassLabel,
   }) {
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -4306,13 +4027,15 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
-  Widget _buildStudentsFiltersCard({
+  /// Barre de recherche unique.
+  ///
+  /// Les filtres classe/statut ont quitte cette page: ils vivent desormais
+  /// dans la fenetre « Liste des eleves », qui est l'endroit ou l'on consulte
+  /// un groupe. Ici on cherche une personne, et une seule.
+  Widget _buildStudentSearchCard({
     required TextTheme textTheme,
     required ColorScheme colorScheme,
     required bool isCompactLayout,
-    required int totalFiltered,
-    required int appliedFilters,
-    required String selectedClassLabel,
   }) {
     final role = ref.read(authControllerProvider).value?.role;
     final canOpenAcademicImports =
@@ -4324,149 +4047,48 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     return Card(
       child: Padding(
-        padding: EdgeInsets.all(isCompactLayout ? 12 : 16),
+        padding: EdgeInsets.all(isCompactLayout ? 12 : 18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+            TextField(
+              controller: _searchController,
+              onChanged: _onSearchChanged,
+              autofocus: !isCompactLayout,
+              style: textTheme.titleMedium,
+              decoration: InputDecoration(
+                hintText:
+                    'Rechercher un élève : nom, matricule, classe, parent, téléphone…',
+                prefixIcon: const Icon(Icons.search, size: 24),
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Effacer',
+                        icon: const Icon(Icons.clear),
+                        onPressed: _resetStudentsFilters,
+                      ),
+                border: const OutlineInputBorder(),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 18,
                 ),
-              ),
-              child: Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 520),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Recherche et filtres',
-                          style: textTheme.titleMedium,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      if (_tableRefreshing)
-                        const Chip(
-                          avatar: SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          label: Text('Mise à jour liste...'),
-                        ),
-                      if (appliedFilters > 0)
-                        Chip(
-                          avatar: const Icon(Icons.filter_alt_outlined, size: 16),
-                          label: Text(
-                            '$appliedFilters filtre${appliedFilters > 1 ? 's' : ''} actif${appliedFilters > 1 ? 's' : ''}',
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
               ),
             ),
             const SizedBox(height: 12),
             Wrap(
-              spacing: 10,
-              runSpacing: 10,
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                SizedBox(
-                  width: 320,
-                  child: TextField(
-                    controller: _searchController,
-                    textInputAction: TextInputAction.search,
-                    decoration: InputDecoration(
-                      hintText: 'Rechercher un élève...',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _searchController.text.isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: 'Effacer',
-                              icon: const Icon(Icons.clear),
-                              onPressed: _clearSearch,
-                            ),
+                if (_tableRefreshing)
+                  const Chip(
+                    avatar: SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                    onChanged: _onSearchChanged,
-                    onSubmitted: (_) {
-                      _reloadStudentsTable(page: 1);
-                    },
+                    label: Text('Recherche...'),
                   ),
-                ),
-                SizedBox(
-                  width: 220,
-                  child: DropdownButtonFormField<int?>(
-                    initialValue: _classFilterId,
-                    decoration: const InputDecoration(labelText: 'Classe'),
-                    items: [
-                      const DropdownMenuItem<int?>(
-                        value: null,
-                        child: Text('Toutes les classes'),
-                      ),
-                      ..._classrooms.map(
-                        (row) => DropdownMenuItem<int?>(
-                          value: _asInt(row['id']),
-                          child: Text('${row['name']}'),
-                        ),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _classFilterId = value);
-                      _reloadStudentsTable(page: 1);
-                    },
-                  ),
-                ),
-                SizedBox(
-                  width: 200,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _statusFilter,
-                    decoration: const InputDecoration(labelText: 'Statut'),
-                    items: const [
-                      DropdownMenuItem(value: 'all', child: Text('Tous')),
-                      DropdownMenuItem(value: 'active', child: Text('Actifs')),
-                      DropdownMenuItem(
-                        value: 'archived',
-                        child: Text('Archivés'),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _statusFilter = value ?? 'active');
-                      _reloadStudentsTable(page: 1);
-                    },
-                  ),
-                ),
-                FilledButton.icon(
-                  onPressed: _saving
-                      ? null
-                      : () => _reloadStudentsTable(page: 1),
-                  icon: const Icon(Icons.filter_alt_outlined),
-                  label: const Text('Filtrer'),
-                ),
-                TextButton.icon(
-                  onPressed: _saving ? null : _resetStudentsFilters,
-                  icon: const Icon(Icons.restart_alt),
-                  label: const Text('Réinitialiser'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _filteredStudents.isEmpty
-                      ? null
-                      : _copyFilteredStudentsCsv,
-                  icon: const Icon(Icons.content_copy_outlined),
-                  label: const Text('Copier CSV'),
-                ),
                 OutlinedButton.icon(
                   onPressed: _openStudentRoster,
                   icon: const Icon(Icons.groups_2_outlined),
@@ -4479,380 +4101,158 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   icon: const Icon(Icons.upload_file_outlined),
                   label: const Text('Imports académiques'),
                   style: AcademicImportsUiReference.importActionStyle(
-                    Theme.of(context).colorScheme,
+                    colorScheme,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              'Classe affichée: $selectedClassLabel',
-              style: textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            if (_tableRefreshing)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: LinearProgressIndicator(minHeight: 2.5),
-              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildStudentsTableCard({
+  /// Palette d'un eleve: ce qui se modifie ici, pas le dossier complet.
+  ///
+  /// Le dossier de A a Z existe deja dans « Recherche eleve », en lecture
+  /// seule. Cette palette-ci sert a agir: elle montre l'identite, la
+  /// scolarite, le parent, l'etat des frais et ce qui s'est passe recemment.
+  Widget _buildStudentPaletteCard({
     required TextTheme textTheme,
     required ColorScheme colorScheme,
-    required int totalFiltered,
     required List<Student> visibleStudents,
-    required int startIndex,
-    required int endIndex,
-    required int currentPage,
-    required int totalPages,
+  }) {
+    final student = _selectedStudent;
+    final query = _searchController.text.trim();
+
+    if (_tableRefreshing && student == null) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 48),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+
+    // Plusieurs correspondances: on demande laquelle avant d'afficher quoi
+    // que ce soit, plutot que d'en choisir une au hasard.
+    if (student == null && visibleStudents.length > 1) {
+      return _buildStudentMatchesCard(
+        textTheme: textTheme,
+        colorScheme: colorScheme,
+        matches: visibleStudents,
+      );
+    }
+
+    if (student == null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 56, horizontal: 24),
+          child: Column(
+            children: [
+              Icon(
+                query.isEmpty ? Icons.search : Icons.person_search_outlined,
+                size: 44,
+                color: colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                query.isEmpty
+                    ? 'Recherchez un élève pour ouvrir sa palette.'
+                    : 'Aucun élève ne correspond à « $query ».',
+                textAlign: TextAlign.center,
+                style: textTheme.titleSmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              if (query.isEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Nom, matricule, classe, parent ou téléphone.',
+                  textAlign: TextAlign.center,
+                  style: textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    return StudentPaletteCard(
+      student: student,
+      fees: _fees,
+      payments: _payments,
+      attendances: _attendances,
+      incidents: _incidents,
+      history: _history,
+      loading: _detailLoading,
+      onClear: visibleStudents.length > 1
+          ? () => setState(() => _selectedStudent = null)
+          : null,
+    );
+  }
+
+  Widget _buildStudentMatchesCard({
+    required TextTheme textTheme,
+    required ColorScheme colorScheme,
+    required List<Student> matches,
   }) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: colorScheme.outlineVariant.withValues(alpha: 0.5),
-                ),
-              ),
-              child: Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 540),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Registre des élèves ($totalFiltered)',
-                          style: textTheme.titleMedium,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      if (_selectedStudent != null)
-                        Chip(
-                          avatar: const Icon(Icons.person_outline, size: 16),
-                          label: SizedBox(
-                            width: 220,
-                            child: Text(
-                              _selectedStudent!.fullName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
+            Text(
+              '${matches.length} élèves correspondent',
+              style: textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Choisissez celui dont vous voulez ouvrir la palette.',
+              style: textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 10),
-            if (_filteredStudents.isEmpty)
-              const Text('Aucun élève trouvé avec ces critères.')
-            else ...[
-              Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: colorScheme.outlineVariant.withValues(alpha: 0.5),
-                  ),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: DataTable(
-                      showBottomBorder: true,
-                      dividerThickness: 0.65,
-                      border: TableBorder.all(
-                        color: colorScheme.outlineVariant.withValues(
-                          alpha: 0.4,
-                        ),
-                        width: 0.7,
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 420),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: matches.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final row = matches[index];
+                  return ListTile(
+                    dense: true,
+                    leading: CircleAvatar(
+                      backgroundColor: colorScheme.primaryContainer,
+                      child: Text(
+                        row.fullName.isEmpty
+                            ? '?'
+                            : row.fullName.characters.first.toUpperCase(),
+                        style: TextStyle(color: colorScheme.onPrimaryContainer),
                       ),
-                      headingRowColor: WidgetStatePropertyAll(
-                        colorScheme.surfaceContainerHighest.withValues(
-                          alpha: 0.9,
-                        ),
-                      ),
-                      headingTextStyle: textTheme.labelLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                      dataTextStyle: textTheme.bodyMedium?.copyWith(
-                        fontSize: 13,
-                      ),
-                      columnSpacing: 20,
-                      horizontalMargin: 12,
-                      headingRowHeight: 48,
-                      dataRowMinHeight: 52,
-                      dataRowMaxHeight: 62,
-                      sortColumnIndex: _sortColumnIndex,
-                      sortAscending: _sortAscending,
-                      // La case integree de DataTable se declenche au clic
-                      // sur la ligne, qui ouvre le dossier: deux gestes pour
-                      // un seul controle. On gere donc la notre.
-                      showCheckboxColumn: false,
-                      columns: [
-                        DataColumn(
-                          label: Tooltip(
-                            message: visibleStudents.every(
-                              (s) => _checkedStudentIds.contains(s.id),
-                            )
-                                ? 'Tout décocher'
-                                : 'Tout sélectionner sur cette page',
-                            child: Checkbox(
-                              value: visibleStudents.isNotEmpty &&
-                                      visibleStudents.every(
-                                        (s) => _checkedStudentIds.contains(s.id),
-                                      )
-                                  ? true
-                                  : (visibleStudents.any(
-                                          (s) => _checkedStudentIds.contains(s.id),
-                                        )
-                                        ? null
-                                        : false),
-                              tristate: true,
-                              onChanged: visibleStudents.isEmpty
-                                  ? null
-                                  : (_) => _toggleAllVisible(visibleStudents),
-                            ),
-                          ),
-                        ),
-                        const DataColumn(label: Text('N°')),
-                        DataColumn(
-                          label: const Text('Matricule'),
-                          tooltip: 'Trier par matricule',
-                          onSort: _onStudentColumnSort,
-                        ),
-                        DataColumn(
-                          label: const Text('Nom complet'),
-                          tooltip: 'Trier par nom',
-                          onSort: _onStudentColumnSort,
-                        ),
-                        DataColumn(
-                          label: const Text('Genre'),
-                          tooltip: 'Trier par genre',
-                          onSort: _onStudentColumnSort,
-                        ),
-                        DataColumn(
-                          label: const Text('Classe'),
-                          tooltip: 'Trier par classe',
-                          onSort: _onStudentColumnSort,
-                        ),
-                        DataColumn(
-                          label: const Text('Âge'),
-                          tooltip: 'Trier par date de naissance',
-                          onSort: _onStudentColumnSort,
-                        ),
-                        const DataColumn(label: Text('Téléphone')),
-                        DataColumn(
-                          label: const Text('Statut'),
-                          tooltip: 'Trier par statut',
-                          onSort: _onStudentColumnSort,
-                        ),
-                        const DataColumn(label: Text('Accès')),
-                      ],
-                      rows: visibleStudents.asMap().entries.map((entry) {
-                        final rowIndex = entry.key;
-                        final student = entry.value;
-                        final selected = _selectedStudent?.id == student.id;
-                        final rowActionStyle = OutlinedButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          minimumSize: const Size(0, 34),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 6,
-                          ),
-                        );
-                        return DataRow(
-                          selected: selected,
-                          color: WidgetStateProperty.resolveWith<Color?>((
-                            states,
-                          ) {
-                            if (selected) {
-                              return colorScheme.primary.withValues(alpha: 0.1);
-                            }
-                            if (states.contains(WidgetState.hovered)) {
-                              return colorScheme.primary.withValues(
-                                alpha: 0.05,
-                              );
-                            }
-                            return rowIndex.isEven
-                                ? colorScheme.surface
-                                : colorScheme.surfaceContainerHighest
-                                      .withValues(alpha: 0.22);
-                          }),
-                          onSelectChanged: (_) => _activateStudent(student),
-                          cells: [
-                            DataCell(
-                              Checkbox(
-                                value: _checkedStudentIds.contains(student.id),
-                                onChanged: (_) => _toggleChecked(student.id),
-                              ),
-                            ),
-                            DataCell(Text('${startIndex + rowIndex + 1}')),
-                            DataCell(Text(student.matricule)),
-                            DataCell(
-                              Text(
-                                student.fullName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            DataCell(Text(_genderLabel(student.gender))),
-                            DataCell(
-                              Text(
-                                student.classroomName.isEmpty
-                                    ? 'Non attribuée'
-                                    : student.classroomName,
-                              ),
-                            ),
-                            DataCell(
-                              Tooltip(
-                                message: student.birthDate == null
-                                    ? 'Date de naissance non renseignée'
-                                    : 'Né(e) le ${_apiDate(student.birthDate!)}',
-                                child: Text(_ageLabel(student.birthDate)),
-                              ),
-                            ),
-                            DataCell(
-                              Text(
-                                student.phone.trim().isEmpty
-                                    ? '-'
-                                    : student.phone,
-                              ),
-                            ),
-                            DataCell(
-                              _statusBadge(
-                                student.isArchived ? 'Archivé' : 'Actif',
-                                student.isArchived,
-                              ),
-                            ),
-                            DataCell(
-                              Wrap(
-                                spacing: 4,
-                                runSpacing: 4,
-                                children: [
-                                  OutlinedButton.icon(
-                                    style: rowActionStyle,
-                                    onPressed: _saving
-                                        ? null
-                                        : () => _openStudentFullDetailsPanel(
-                                            student,
-                                          ),
-                                    icon: const Icon(
-                                      Icons.visibility_outlined,
-                                      size: 16,
-                                    ),
-                                    label: const Text('Ouvrir fiche'),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        );
-                      }).toList(),
                     ),
-                  ),
-                ),
+                    title: Text(row.fullName),
+                    subtitle: Text(
+                      [
+                        row.matricule,
+                        if (row.classroomName.trim().isNotEmpty)
+                          row.classroomName,
+                      ].join('  ·  '),
+                    ),
+                    trailing: row.isArchived
+                        ? const Chip(label: Text('Archivé'))
+                        : const Icon(Icons.chevron_right),
+                    onTap: () => _activateStudent(row),
+                  );
+                },
               ),
-              if (_checkedStudentIds.isNotEmpty) _buildBulkActionBar(),
-              const SizedBox(height: 8),
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text(
-                    totalFiltered == 0
-                        ? 'Aucun résultat'
-                        : 'Affichage ${startIndex + 1}-$endIndex sur $totalFiltered',
-                  ),
-                  Wrap(
-                    spacing: 2,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      const Text('Lignes/page:'),
-                      const SizedBox(width: 6),
-                      DropdownButton<int>(
-                        value: _tableRowsPerPage,
-                        items: _tableRowsPerPageOptions
-                            .map(
-                              (rows) => DropdownMenuItem<int>(
-                                value: rows,
-                                child: Text('$rows'),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value == null || value == _tableRowsPerPage) {
-                            return;
-                          }
-                          setState(() {
-                            _tableRowsPerPage = value;
-                          });
-                          _reloadStudentsTable(page: 1);
-                        },
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        tooltip: 'Première page',
-                        onPressed: currentPage > 1
-                            ? () => _reloadStudentsTable(page: 1)
-                            : null,
-                        icon: const Icon(Icons.first_page),
-                      ),
-                      IconButton(
-                        tooltip: 'Page précédente',
-                        onPressed: _serverHasPrevious
-                            ? () => _reloadStudentsTable(page: currentPage - 1)
-                            : null,
-                        icon: const Icon(Icons.chevron_left),
-                      ),
-                      Text(
-                        'Page $currentPage / $totalPages',
-                        style: textTheme.bodyMedium,
-                      ),
-                      IconButton(
-                        tooltip: 'Page suivante',
-                        onPressed: _serverHasNext
-                            ? () => _reloadStudentsTable(page: currentPage + 1)
-                            : null,
-                        icon: const Icon(Icons.chevron_right),
-                      ),
-                      IconButton(
-                        tooltip: 'Dernière page',
-                        onPressed: currentPage < totalPages
-                            ? () => _reloadStudentsTable(page: totalPages)
-                            : null,
-                        icon: const Icon(Icons.last_page),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ],
+            ),
           ],
         ),
       ),
@@ -5395,17 +4795,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
-  String _genderLabel(String gender) {
-    switch (gender.trim().toUpperCase()) {
-      case 'M':
-        return 'Masculin';
-      case 'F':
-        return 'Féminin';
-      default:
-        return '-';
-    }
-  }
-
   String _parentLabel(Map<String, dynamic> row) {
     final fullName = (row['user_full_name'] ?? '').toString().trim();
     if (fullName.isNotEmpty) {
@@ -5638,61 +5027,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       mediaPath: proofPath,
       emptyMessage: 'Aucun justificatif disponible.',
     );
-  }
-
-  Future<void> _copyFilteredStudentsCsv() async {
-    if (_filteredStudents.isEmpty) {
-      _showMessage('Aucun élève à exporter.');
-      return;
-    }
-
-    const separator = ';';
-    final csv = StringBuffer();
-    csv.writeln(
-      [
-        'Matricule',
-        'Nom complet',
-        'Classe',
-        'Date naissance',
-        'Téléphone',
-        'Email',
-        'Parent',
-        'Statut',
-      ].join(separator),
-    );
-
-    for (final student in _filteredStudents) {
-      csv.writeln(
-        [
-          _csvCell(student.matricule),
-          _csvCell(student.fullName),
-          _csvCell(
-            student.classroomName.trim().isEmpty
-                ? 'Non attribuée'
-                : student.classroomName,
-          ),
-          _csvCell(
-            student.birthDate == null ? '' : _apiDate(student.birthDate!),
-          ),
-          _csvCell(student.phone),
-          _csvCell(student.email),
-          _csvCell(student.parentName),
-          _csvCell(student.isArchived ? 'Archivé' : 'Actif'),
-        ].join(separator),
-      );
-    }
-
-    await Clipboard.setData(ClipboardData(text: csv.toString()));
-    _showMessage(
-      'CSV copié (${_filteredStudents.length} élève${_filteredStudents.length > 1 ? 's' : ''}).',
-      isSuccess: true,
-    );
-  }
-
-  String _csvCell(String value) {
-    final normalized = value.replaceAll('\n', ' ').trim();
-    final escaped = normalized.replaceAll('"', '""');
-    return '"$escaped"';
   }
 
   String _refreshTimestampLabel(DateTime value) {
