@@ -683,6 +683,188 @@ def _draw_student_card_block(
     )
 
 
+ROSTER_COLUMNS = (
+    ("N°", 12.0),
+    ("Matricule", 34.0),
+    ("Nom et prénoms", 68.0),
+    ("Sexe", 14.0),
+    ("Naissance", 26.0),
+    ("Émargement", 36.0),
+)
+
+
+def _roster_gender_counts(students: list[Student]) -> tuple[int, int]:
+    """Effectifs garcons/filles.
+
+    Le genre peut manquer sur les fiches anciennes: ces eleves comptent dans
+    le total sans etre attribues, plutot que d'etre ranges d'office dans une
+    colonne et de fausser les deux chiffres.
+    """
+    garcons = sum(1 for student in students if (student.gender or "").upper() == "M")
+    filles = sum(1 for student in students if (student.gender or "").upper() == "F")
+    return garcons, filles
+
+
+def _draw_roster_class_page(
+    pdf: FPDF,
+    *,
+    classroom_name: str,
+    students: list[Student],
+    school: dict[str, str],
+    logo_path: str | None,
+    year_label: str,
+) -> None:
+    """Une page de liste d'appel pour une classe."""
+    pdf.add_page()
+
+    if logo_path:
+        try:
+            pdf.image(logo_path, x=12, y=10, w=18)
+        except Exception:
+            # Un logo illisible ne doit pas priver l'ecole de sa liste.
+            pass
+
+    pdf.set_xy(34, 11)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 6, _pdf_text(school.get("name", "")), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_x(34)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(0, 5, _pdf_text(f"Année scolaire {year_label}"), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.ln(6)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 7, _pdf_text(f"LISTE DES ÉLÈVES - Classe {classroom_name}"),
+             align="C", new_x="LMARGIN", new_y="NEXT")
+
+    garcons, filles = _roster_gender_counts(students)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(
+        0, 5,
+        _pdf_text(f"Effectif : {len(students)}  ({garcons} G / {filles} F)"),
+        align="C", new_x="LMARGIN", new_y="NEXT",
+    )
+    pdf.ln(3)
+
+    _draw_roster_table_header(pdf)
+
+    pdf.set_font("Helvetica", "", 9)
+    for index, student in enumerate(students, start=1):
+        # Le tableau repart avec ses en-tetes en haut de chaque page: une
+        # colonne sans titre ne se remplit pas correctement.
+        if pdf.get_y() > pdf.h - 25:
+            pdf.add_page()
+            _draw_roster_table_header(pdf)
+            pdf.set_font("Helvetica", "", 9)
+
+        _, last_name, full_name = _student_name_parts(student)
+        birth = student.birth_date.strftime("%d/%m/%Y") if student.birth_date else ""
+        valeurs = (
+            str(index),
+            student.matricule or "",
+            full_name if full_name != "-" else last_name,
+            (student.gender or "").upper(),
+            birth,
+            "",
+        )
+        for (_, largeur), valeur in zip(ROSTER_COLUMNS, valeurs):
+            pdf.cell(largeur, 7, _pdf_text(valeur), border=1)
+        pdf.ln(7)
+
+    if not students:
+        pdf.set_font("Helvetica", "I", 9)
+        largeur_totale = sum(largeur for _, largeur in ROSTER_COLUMNS)
+        pdf.cell(largeur_totale, 8, _pdf_text("Aucun élève inscrit dans cette classe."),
+                 border=1, align="C")
+        pdf.ln(8)
+
+
+def _draw_roster_table_header(pdf: FPDF) -> None:
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(232, 232, 240)
+    for titre, largeur in ROSTER_COLUMNS:
+        pdf.cell(largeur, 8, _pdf_text(titre), border=1, align="C", fill=True)
+    pdf.ln(8)
+
+
+def _draw_roster_summary_page(
+    pdf: FPDF,
+    *,
+    par_classe: list[tuple[str, list[Student]]],
+    school: dict[str, str],
+    year_label: str,
+) -> None:
+    """Recapitulatif des effectifs, en fin de document multi-classes."""
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 7, _pdf_text(school.get("name", "")), align="C",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, _pdf_text(f"RÉCAPITULATIF DES EFFECTIFS - {year_label}"),
+             align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    colonnes = (("Classe", 80.0), ("Garçons", 30.0), ("Filles", 30.0), ("Total", 30.0))
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_fill_color(232, 232, 240)
+    for titre, largeur in colonnes:
+        pdf.cell(largeur, 8, _pdf_text(titre), border=1, align="C", fill=True)
+    pdf.ln(8)
+
+    total_garcons = total_filles = total_eleves = 0
+    pdf.set_font("Helvetica", "", 10)
+    for nom_classe, eleves in par_classe:
+        garcons, filles = _roster_gender_counts(eleves)
+        total_garcons += garcons
+        total_filles += filles
+        total_eleves += len(eleves)
+
+        pdf.cell(colonnes[0][1], 7, _pdf_text(nom_classe), border=1)
+        pdf.cell(colonnes[1][1], 7, str(garcons), border=1, align="C")
+        pdf.cell(colonnes[2][1], 7, str(filles), border=1, align="C")
+        pdf.cell(colonnes[3][1], 7, str(len(eleves)), border=1, align="C")
+        pdf.ln(7)
+
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(colonnes[0][1], 8, _pdf_text("TOTAL"), border=1, fill=True)
+    pdf.cell(colonnes[1][1], 8, str(total_garcons), border=1, align="C", fill=True)
+    pdf.cell(colonnes[2][1], 8, str(total_filles), border=1, align="C", fill=True)
+    pdf.cell(colonnes[3][1], 8, str(total_eleves), border=1, align="C", fill=True)
+    pdf.ln(8)
+
+
+def _build_class_roster_pdf(
+    par_classe: list[tuple[str, list[Student]]],
+    *,
+    school: dict[str, str],
+    logo_path: str | None,
+    year_label: str,
+    with_summary: bool,
+) -> FPDF:
+    """Liste d'appel: une classe par page, recapitulatif optionnel a la fin."""
+    pdf = FPDF(format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    for nom_classe, eleves in par_classe:
+        _draw_roster_class_page(
+            pdf,
+            classroom_name=nom_classe,
+            students=eleves,
+            school=school,
+            logo_path=logo_path,
+            year_label=year_label,
+        )
+
+    # Sur une classe unique, le recapitulatif ne ferait que repeter l'en-tete.
+    if with_summary and len(par_classe) > 1:
+        _draw_roster_summary_page(
+            pdf, par_classe=par_classe, school=school, year_label=year_label
+        )
+
+    return pdf
+
+
 def _build_student_cards_pdf(
     students: list[Student],
     *,
@@ -2762,3 +2944,97 @@ class ClassStudentCardsPdfView(APIView):
             else ""
         )
         return pdf_output_response(pdf, f"cartes_{class_slug}{suffix}.pdf")
+
+
+class ClassRosterPdfView(APIView):
+    """Liste d'appel imprimable, pour une classe ou pour tout l'etablissement.
+
+    Volontairement sans `_ensure_sensitive_export_access`: ce garde-fou reserve
+    les exports a l'administration et a la finance, alors qu'une liste d'appel
+    sert d'abord en classe. Enseignants, censeurs et surveillants y ont donc
+    acces via le module "reports"; parents et eleves en sont exclus, comme pour
+    les cartes de classe.
+    """
+
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request, classroom_id: int | None = None):
+        if getattr(request.user, "role", "") in {UserRole.PARENT, UserRole.STUDENT}:
+            raise PermissionDenied("Accès refusé aux listes de classe.")
+
+        target_etablissement_id = _effective_etablissement_id(request)
+        if getattr(request.user, "role", "") == UserRole.SUPER_ADMIN and target_etablissement_id is None:
+            raise PermissionDenied("Selectionnez un etablissement actif.")
+
+        # Trois etats, comme le filtre de l'ecran. Un simple booleen
+        # "inclure les archives" ne saurait pas rendre "archives seulement",
+        # et le document ne correspondrait plus a ce qui est affiche.
+        statut = str(request.query_params.get("status", "active")).strip().lower()
+        if statut not in {"active", "archived", "all"}:
+            return Response(
+                {"detail": "status invalide. Valeurs: active, archived, all."},
+                status=400,
+            )
+
+        classrooms = ClassRoom.objects.all()
+        if target_etablissement_id:
+            classrooms = classrooms.filter(etablissement_id=target_etablissement_id)
+
+        if classroom_id is not None:
+            classroom = get_object_or_404(ClassRoom, id=classroom_id)
+            if target_etablissement_id and classroom.etablissement_id != target_etablissement_id:
+                raise PermissionDenied("Accès refusé à cette classe.")
+            classrooms = classrooms.filter(id=classroom.id)
+
+        classrooms = list(classrooms.order_by("name", "id"))
+        if not classrooms:
+            return Response({"detail": "Aucune classe trouvée."}, status=404)
+
+        students = Student.objects.select_related("user", "classroom").filter(
+            classroom_id__in=[item.id for item in classrooms]
+        )
+        if statut == "active":
+            students = students.filter(is_archived=False)
+        elif statut == "archived":
+            students = students.filter(is_archived=True)
+        students = students.order_by("user__last_name", "user__first_name", "matricule")
+
+        # Un seul parcours, puis regroupement en memoire: interroger la base
+        # par classe ferait une requete de plus a chaque classe.
+        par_classe_map: dict[int, list[Student]] = {item.id: [] for item in classrooms}
+        for student in students:
+            par_classe_map[student.classroom_id].append(student)
+
+        # Les classes vides restent dans le document: leur absence se lirait
+        # comme un oubli, alors qu'un effectif nul est une information.
+        par_classe = [(item.name, par_classe_map[item.id]) for item in classrooms]
+
+        premier_eleve = next((eleve for _, eleves in par_classe for eleve in eleves), None)
+        if premier_eleve is not None:
+            school = _school_identity_for_student(premier_eleve)
+            logo_path = _etablissement_logo_path(premier_eleve) or _school_logo_path()
+        else:
+            etablissement = (
+                Etablissement.objects.filter(id=target_etablissement_id).first()
+                if target_etablissement_id
+                else None
+            )
+            school = _school_identity()
+            if etablissement is not None:
+                school = {**school, "name": etablissement.name}
+            logo_path = _etablissement_media_field_path(etablissement, "logo") or _school_logo_path()
+
+        pdf = _build_class_roster_pdf(
+            par_classe,
+            school=school,
+            logo_path=logo_path,
+            year_label=_active_academic_year_label(),
+            with_summary=classroom_id is None,
+        )
+
+        if classroom_id is not None:
+            nom_fichier = f"liste_{classrooms[0].name.replace(' ', '_')}.pdf"
+        else:
+            nom_fichier = "listes_toutes_classes.pdf"
+        return pdf_output_response(pdf, nom_fichier)

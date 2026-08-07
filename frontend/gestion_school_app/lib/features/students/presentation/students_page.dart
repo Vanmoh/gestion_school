@@ -104,6 +104,9 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   String _statusFilter = 'active';
   int? _classFilterId;
+  // Le montage du PDF passe par le serveur: sans repere visuel, un second clic
+  // relancerait une generation deja en cours.
+  bool _printingRoster = false;
   int? _cardsClassroomId;
   String _cardsLayoutMode = 'a4_6up';
   String _sortBy = 'name';
@@ -1023,6 +1026,31 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       return false;
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Liste d'appel de la classe filtree, ou de tout l'etablissement.
+  ///
+  /// Le PDF est monte par le serveur, comme les bulletins, les recus et les
+  /// cartes: c'est lui qui detient le logo, les effectifs et l'annee scolaire,
+  /// et l'en-tete reste identique d'un document a l'autre.
+  Future<void> _printClassRoster() async {
+    setState(() => _printingRoster = true);
+    try {
+      final bytes = await ref
+          .read(studentsRepositoryProvider)
+          .fetchClassRosterPdf(
+            classroomId: _classFilterId,
+            // Le document reprend exactement ce que montre l'ecran: imprimer
+            // les actifs alors que la table affiche les archives serait une
+            // surprise decouverte apres coup, sur papier.
+            status: _statusFilter,
+          );
+      await Printing.layoutPdf(onLayout: (_) async => bytes);
+    } catch (error) {
+      _showMessage('Erreur impression liste: $error');
+    } finally {
+      if (mounted) setState(() => _printingRoster = false);
     }
   }
 
@@ -4450,6 +4478,24 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                       : _copyFilteredStudentsCsv,
                   icon: const Icon(Icons.content_copy_outlined),
                   label: const Text('Copier CSV'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _printingRoster ? null : _printClassRoster,
+                  icon: _printingRoster
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.print_outlined),
+                  // Le libelle suit le filtre: sans classe choisie, le bouton
+                  // sort tout l'etablissement, ce qu'il vaut mieux annoncer
+                  // avant le clic qu'apres l'impression.
+                  label: Text(
+                    _classFilterId == null
+                        ? 'Imprimer toutes les listes'
+                        : 'Imprimer la liste',
+                  ),
                 ),
                 OutlinedButton.icon(
                   onPressed: (_saving || !canOpenAcademicImports)

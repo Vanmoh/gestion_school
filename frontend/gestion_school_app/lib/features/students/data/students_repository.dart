@@ -507,6 +507,34 @@ class StudentsRepository {
     return Uint8List.fromList(bytes);
   }
 
+  /// Liste d'appel imprimable.
+  ///
+  /// Sans classe, le serveur rend toutes les classes de l'etablissement, une
+  /// par page, suivies du recapitulatif des effectifs.
+  Future<Uint8List> fetchClassRosterPdf({
+    int? classroomId,
+    String status = 'active',
+  }) async {
+    final chemin = classroomId == null
+        ? '/reports/class-roster/'
+        : '/reports/class-roster/$classroomId/';
+
+    final response = await dio.get<List<int>>(
+      chemin,
+      queryParameters: {
+        'status': status,
+        '_ts': DateTime.now().millisecondsSinceEpoch,
+      },
+      options: Options(responseType: ResponseType.bytes),
+    );
+
+    final bytes = response.data;
+    if (bytes == null || bytes.isEmpty) {
+      throw Exception('PDF liste de classe vide');
+    }
+    return Uint8List.fromList(bytes);
+  }
+
   Future<Uint8List> fetchClassStudentCardsPdf(
     int classroomId, {
     String layoutMode = 'standard',
