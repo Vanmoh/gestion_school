@@ -20,6 +20,7 @@ import '../../../models/etablissement.dart';
 import '../domain/student.dart';
 import '../domain/students_stats.dart';
 import '../domain/students_sort.dart';
+import 'student_actions.dart';
 import 'students_controller.dart';
 import 'widgets/student_palette_card.dart';
 import 'widgets/student_roster_dialog.dart';
@@ -3804,22 +3805,36 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   ///
   /// Elles n'existent que lorsqu'un eleve est ouvert: leur destinataire est
   /// donc celui qu'on lit, sans avoir a le rappeler.
+  ///
+  /// Un profil sans droit d'ecriture les voit grisees. Les gardes internes
+  /// existaient deja, mais elles n'intervenaient qu'apres le clic, sur un
+  /// « Mode lecture seule » decouvert une fois le formulaire ouvert et
+  /// parfois rempli. Le refus se lit maintenant avant l'effort.
   List<Widget> _paletteActions() {
-    Widget action(IconData icone, String label, VoidCallback onPressed) {
-      return FilledButton.tonalIcon(
-        style: _compactUnifiedActionButtonStyle(),
-        onPressed: _saving ? null : onPressed,
-        icon: Icon(icone, size: 18),
-        label: Text(label),
-      );
-    }
+    final handlers = <String, VoidCallback>{
+      'Éditer': _openProfileForm,
+      'Historique': _openHistoryForm,
+      'Incident': _openIncidentForm,
+      'Absence': _openAttendanceForm,
+      'Frais': _openFeeForm,
+      'Paiement': _openPaymentForm,
+    };
 
     return [
-      action(Icons.history_edu_outlined, 'Historique', _openHistoryForm),
-      action(Icons.gavel_outlined, 'Incident', _openIncidentForm),
-      action(Icons.fact_check_outlined, 'Absence', _openAttendanceForm),
-      action(Icons.add_card_outlined, 'Frais', _openFeeForm),
-      action(Icons.payments_outlined, 'Paiement', _openPaymentForm),
+      for (final action in buildStudentActions(
+        canWrite: !_isStudentsReadOnlyRole(),
+        saving: _saving,
+        studentName: _selectedStudent?.fullName ?? '',
+      ))
+        Tooltip(
+          message: action.tooltip,
+          child: FilledButton.tonalIcon(
+            style: _compactUnifiedActionButtonStyle(),
+            onPressed: action.enabled ? handlers[action.label] : null,
+            icon: Icon(action.icon, size: 18),
+            label: Text(action.label),
+          ),
+        ),
     ];
   }
 
@@ -3965,11 +3980,18 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                         // Seule action pleine de la page: c'est celle qu'on
                         // vient chercher. Les suivantes portent sur un eleve
                         // deja selectionne, ou changent de vue.
-                        FilledButton.icon(
-                          style: _compactUnifiedActionButtonStyle(),
-                          onPressed: _saving ? null : _openRegistrationForm,
-                          icon: const Icon(Icons.person_add_alt_1),
-                          label: const Text('Ajouter élève'),
+                        Tooltip(
+                          message: _isStudentsReadOnlyRole()
+                              ? lectureSeuleMotif
+                              : 'Inscrire un nouvel élève',
+                          child: FilledButton.icon(
+                            style: _compactUnifiedActionButtonStyle(),
+                            onPressed: (_saving || _isStudentsReadOnlyRole())
+                                ? null
+                                : _openRegistrationForm,
+                            icon: const Icon(Icons.person_add_alt_1),
+                            label: const Text('Ajouter élève'),
+                          ),
                         ),
                         // Historique, Incident, Absence, Frais et Paiement
                         // ont rejoint la palette: ils agissent sur un eleve,
