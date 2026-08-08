@@ -1,5 +1,34 @@
 services:
+  # La production tourne sur PostgreSQL (Supabase). Developper sur MySQL
+  # laissait passer des fautes qui n'apparaissaient qu'une fois deployees:
+  # c'est ainsi que l'ecriture du chat est restee cassee sans que rien ne le
+  # signale en local. Meme version majeure que Supabase, 17.
+  postgres:
+    image: postgres:17
+    container_name: gestion_school_pg
+    environment:
+      POSTGRES_DB: gestion_school
+      POSTGRES_USER: gestion_user
+      POSTGRES_PASSWORD: gestion_password
+    # 5433 cote hote: laisse libre le 5432 d'un PostgreSQL deja installe.
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      # `pg_isready` renvoie 0 des que le serveur repond, meme s'il refuse la
+      # base: pendant l'initialisation il declarait le service pret alors que
+      # `gestion_school` n'existait pas encore. Une vraie requete tranche.
+      test:
+        ["CMD-SHELL", "psql -U gestion_user -d gestion_school -c 'select 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Conserve mais plus demarre par defaut, pour ne pas detruire son volume.
+  # Pour le relancer: docker compose --profile mysql up -d db
   db:
+    profiles: ["mysql"]
     image: mysql:8.4
     container_name: gestion_school_db
     environment:
@@ -31,10 +60,18 @@ services:
     container_name: gestion_school_backend
     env_file:
       - ../backend/.env.example
+    # Prime env_file: .env.example laisse DATABASE_URL vide, ce qui faisait
+    # retomber les conteneurs sur le MySQL local, vide, pendant que le
+    # `manage.py` de l'hote parlait a un SQLite. Trois bases pour un projet.
+    environment:
+      DATABASE_URL: postgresql://gestion_user:gestion_password@postgres:5432/gestion_school
+      # .env.example impose DB_SSL_REQUIRE=True pour Supabase; un PostgreSQL
+      # local n'a pas de certificat et refuse la connexion chiffree.
+      DB_SSL_REQUIRE: "False"
     volumes:
       - ../backend:/app
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_started
@@ -50,6 +87,11 @@ services:
     command: celery -A config worker -l info
     env_file:
       - ../backend/.env.example
+    environment:
+      DATABASE_URL: postgresql://gestion_user:gestion_password@postgres:5432/gestion_school
+      # .env.example impose DB_SSL_REQUIRE=True pour Supabase; un PostgreSQL
+      # local n'a pas de certificat et refuse la connexion chiffree.
+      DB_SSL_REQUIRE: "False"
     volumes:
       - ../backend:/app
     depends_on:
@@ -65,6 +107,11 @@ services:
     command: celery -A config beat -l info
     env_file:
       - ../backend/.env.example
+    environment:
+      DATABASE_URL: postgresql://gestion_user:gestion_password@postgres:5432/gestion_school
+      # .env.example impose DB_SSL_REQUIRE=True pour Supabase; un PostgreSQL
+      # local n'a pas de certificat et refuse la connexion chiffree.
+      DB_SSL_REQUIRE: "False"
     volumes:
       - ../backend:/app
     depends_on:
@@ -73,3 +120,4 @@ services:
 
 volumes:
   mysql_data:
+  pg_data:
