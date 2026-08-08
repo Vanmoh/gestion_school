@@ -1,6 +1,10 @@
 #!/usr/bin/env sh
 set -e
 
+# Voir entrypoint.sh: un worker abandonne sur timeout ecrirait sinon toute sa
+# memoire -- SECRET_KEY et identifiants compris -- dans un fichier core.
+ulimit -c 0 2>/dev/null || true
+
 if [ -z "${DATABASE_URL:-}" ] && [ -n "${database_url:-}" ]; then
   export DATABASE_URL="${database_url}"
 fi
