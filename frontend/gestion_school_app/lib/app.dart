@@ -157,6 +157,32 @@ class _GlobalFeatureRefreshHostState
   }
 }
 
+/// Rend selectionnable, donc copiable, tout le texte de l'application.
+///
+/// Les `Text` de Flutter ne le sont pas: sur le web, un matricule, un numero de
+/// telephone ou un message d'erreur ne pouvaient etre que recopies a la main.
+///
+/// Pose ici plutot que sur chaque ecran: `builder` enveloppe le Navigator, donc
+/// aussi les boites de dialogue et les panneaux, ou se trouve l'essentiel des
+/// identifiants qu'on veut copier.
+///
+/// L'`Overlay` n'est pas decoratif. `builder` insere son widget au-dessus du
+/// Navigator, hors de portee de l'Overlay de celui-ci; sans cette couche,
+/// `SelectableRegion` leve « No Overlay widget found » des la premiere
+/// selection, car la barre « Copier » n'a nulle part ou s'afficher.
+/// Publique pour etre eprouvee directement: montee dans l'application
+/// complete, elle n'affiche rien en test (l'ecran d'accueil attend un stockage
+/// securise qui ne repond pas), et la selection n'aurait aucun texte a saisir.
+Widget selectableTextLayer(BuildContext context, Widget? child) {
+  return Overlay(
+    initialEntries: [
+      OverlayEntry(
+        builder: (_) => SelectionArea(child: child ?? const SizedBox.shrink()),
+      ),
+    ],
+  );
+}
+
 class GestionSchoolApp extends ConsumerWidget {
   const GestionSchoolApp({super.key});
 
@@ -171,6 +197,7 @@ class GestionSchoolApp extends ConsumerWidget {
       darkTheme: AppTheme.dark,
       themeMode: themeMode,
       scrollBehavior: const _AppScrollBehavior(),
+      builder: selectableTextLayer,
       routes: {
         '/': (_) => const PublicEtablissementEntryPage(),
         '/login': (_) => const LoginPage(),

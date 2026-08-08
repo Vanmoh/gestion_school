@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/media_url.dart';
 import '../../students/domain/student.dart';
 import '../data/student_lookup_repository.dart';
 import '../domain/student_dossier.dart';
@@ -180,6 +181,15 @@ class _StudentLookupPageState extends ConsumerState<StudentLookupPage> {
     );
   }
 
+  /// Le stockage objet signe ses liens et renvoie une URL absolue; en local,
+  /// l'API sert un chemin relatif qu'il faut resoudre contre sa base.
+  String _photoUrl(StudentDossier dossier) {
+    return resolveMediaUrl(
+      dossier.student.photo,
+      ref.read(studentLookupRepositoryProvider).dio.options.baseUrl,
+    );
+  }
+
   List<Widget> _buildBody() {
     if (_loadingDossier) {
       return const [
@@ -200,7 +210,7 @@ class _StudentLookupPageState extends ConsumerState<StudentLookupPage> {
               : null,
         ),
         const SizedBox(height: 16),
-        _DossierBody(dossier: dossier),
+        _DossierBody(dossier: dossier, photoUrl: _photoUrl(dossier)),
       ];
     }
 
@@ -575,12 +585,16 @@ class _DossierHeader extends StatelessWidget {
 
 class _DossierBody extends StatelessWidget {
   final StudentDossier dossier;
+  final String photoUrl;
 
-  const _DossierBody({required this.dossier});
+  const _DossierBody({required this.dossier, this.photoUrl = ''});
 
   @override
   Widget build(BuildContext context) {
-    final identite = DossierIdentityCard(student: dossier.student);
+    final identite = DossierIdentityCard(
+      student: dossier.student,
+      photoUrl: photoUrl,
+    );
     final sections = DossierSectionsPanel(sections: dossier.sections);
 
     return LayoutBuilder(

@@ -3,6 +3,7 @@ from .views import (
     BatchPaymentReceiptsPdfView,
     BulletinPdfView,
     ClassBulletinsPdfView,
+    ClassRosterPdfView,
     ClassStudentCardsPdfView,
     ExpenseJournalExportView,
     ExpenseJournalPageView,
@@ -33,4 +34,8 @@ urlpatterns = [
     path("journal/expenses/", ExpenseJournalPageView.as_view(), name="journal-expenses-page"),
     path("student-card/<int:student_id>/", StudentCardPdfView.as_view(), name="student-card-pdf"),
     path("student-cards/class/<int:classroom_id>/", ClassStudentCardsPdfView.as_view(), name="class-student-cards-pdf"),
+    # Sans classe: toutes les classes de l'etablissement, une par page,
+    # suivies du recapitulatif des effectifs.
+    path("class-roster/", ClassRosterPdfView.as_view(), name="class-roster-all-pdf"),
+    path("class-roster/<int:classroom_id>/", ClassRosterPdfView.as_view(), name="class-roster-pdf"),
 ]

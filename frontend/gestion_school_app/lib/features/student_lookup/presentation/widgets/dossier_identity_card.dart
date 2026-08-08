@@ -12,9 +12,19 @@ class DossierIdentityCard extends StatelessWidget {
   /// Injectee pour que l'age affiche soit testable sans dependre du jour.
   final DateTime? today;
 
-  const DossierIdentityCard({super.key, required this.student, this.today});
+  /// Adresse absolue de la photo, deja resolue par l'appelant qui seul
+  /// connait l'URL de base de l'API.
+  final String photoUrl;
+
+  const DossierIdentityCard({
+    super.key,
+    required this.student,
+    this.today,
+    this.photoUrl = '',
+  });
 
   static const nonRenseigne = 'Non renseigné';
+  static const photoAbsente = 'Photo non fournie';
 
   @override
   Widget build(BuildContext context) {
@@ -41,15 +51,23 @@ class DossierIdentityCard extends StatelessWidget {
       title: 'INFORMATIONS ÉLÈVE',
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // Trois colonnes comme le portail de reference, deux puis une quand
-          // la largeur ne suit plus.
-          final colonnes = constraints.maxWidth > 620
-              ? 3
-              : (constraints.maxWidth > 380 ? 2 : 1);
-          final largeur =
-              (constraints.maxWidth - (colonnes - 1) * 16) / colonnes;
+          final photo = _Photo(
+            url: photoUrl,
+            initiales: _initiales(student.fullName),
+          );
+          // La photo prend sa colonne tant qu'il reste de quoi lire les champs
+          // a cote; en dessous elle passe au-dessus d'eux.
+          final photoACote = constraints.maxWidth > 520;
+          final largeurChamps = photoACote
+              ? constraints.maxWidth - _Photo.taille - 18
+              : constraints.maxWidth;
 
-          return Wrap(
+          final colonnes = largeurChamps > 560
+              ? 3
+              : (largeurChamps > 330 ? 2 : 1);
+          final largeur = (largeurChamps - (colonnes - 1) * 16) / colonnes;
+
+          final grille = Wrap(
             spacing: 16,
             runSpacing: 18,
             children: [
@@ -65,9 +83,39 @@ class DossierIdentityCard extends StatelessWidget {
                 ),
             ],
           );
+
+          if (!photoACote) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [photo, const SizedBox(height: 18), grille],
+            );
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              photo,
+              const SizedBox(width: 18),
+              Expanded(child: grille),
+            ],
+          );
         },
       ),
     );
+  }
+
+  /// Initiales de repli, pour que l'emplacement reste identifiable quand
+  /// aucune photo n'a ete televersee.
+  static String _initiales(String nomComplet) {
+    final mots = nomComplet
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((mot) => mot.isNotEmpty)
+        .toList();
+    if (mots.isEmpty) return '?';
+    if (mots.length == 1) return mots.first.characters.first.toUpperCase();
+    return (mots.first.characters.first + mots.last.characters.first)
+        .toUpperCase();
   }
 
   static String _genre(String code) {
@@ -86,6 +134,87 @@ class DossierIdentityCard extends StatelessWidget {
     final jour = value.day.toString().padLeft(2, '0');
     final mois = value.month.toString().padLeft(2, '0');
     return '$jour/$mois/${value.year}';
+  }
+}
+
+/// Photo de l'eleve, ou son emplacement quand elle manque.
+///
+/// Le chargement peut echouer pour de bon -- lien signe expire, stockage
+/// injoignable. On retombe alors sur les initiales plutot que sur l'icone
+/// d'image cassee du navigateur, qui se lit comme un bug de l'application.
+class _Photo extends StatelessWidget {
+  final String url;
+  final String initiales;
+
+  static const taille = 132.0;
+
+  const _Photo({required this.url, required this.initiales});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: taille,
+          height: taille,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: scheme.primaryContainer,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: scheme.outlineVariant.withValues(alpha: 0.6),
+            ),
+          ),
+          child: url.isEmpty
+              ? _Initiales(initiales: initiales, scheme: scheme)
+              : Image.network(
+                  url,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) =>
+                      _Initiales(initiales: initiales, scheme: scheme),
+                ),
+        ),
+        if (url.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: SizedBox(
+              width: taille,
+              child: Text(
+                DossierIdentityCard.photoAbsente,
+                textAlign: TextAlign.center,
+                style: textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _Initiales extends StatelessWidget {
+  final String initiales;
+  final ColorScheme scheme;
+
+  const _Initiales({required this.initiales, required this.scheme});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Text(
+        initiales,
+        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+          fontWeight: FontWeight.w800,
+          color: scheme.onPrimaryContainer,
+        ),
+      ),
+    );
   }
 }
 

@@ -423,7 +423,11 @@ class _ContactRow extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 2),
-                SelectableText(
+                // Etait un SelectableText, seul endroit de l'application ou la
+                // copie marchait. `SelectionArea` couvre desormais tout
+                // l'ecran, et Flutter ne supporte pas d'imbriquer les deux: la
+                // ligne serait sautee par une selection qui la traverse.
+                Text(
                   filled ? value : 'Non renseigné',
                   style: textTheme.bodyMedium?.copyWith(
                     fontWeight: filled ? FontWeight.w600 : FontWeight.w400,
