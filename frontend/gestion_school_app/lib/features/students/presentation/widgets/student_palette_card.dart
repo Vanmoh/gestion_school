@@ -2,6 +2,53 @@ import 'package:flutter/material.dart';
 
 import '../../domain/student.dart';
 
+/// Photo de l'eleve, ou son emplacement quand elle manque.
+///
+/// Un lien signe expire ou un stockage injoignable retombent sur les
+/// initiales, jamais sur l'icone d'image cassee du navigateur, qui se lit
+/// comme un defaut de l'application.
+class _Photo extends StatelessWidget {
+  final String url;
+  final String initiales;
+  final ColorScheme scheme;
+  final TextTheme textTheme;
+
+  static const taille = 56.0;
+
+  const _Photo({
+    required this.url,
+    required this.initiales,
+    required this.scheme,
+    required this.textTheme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final repli = StudentPaletteCard._initialesWidget(
+      initiales,
+      scheme,
+      textTheme,
+    );
+
+    return Container(
+      width: taille,
+      height: taille,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer,
+        shape: BoxShape.circle,
+      ),
+      child: url.isEmpty
+          ? repli
+          : Image.network(
+              url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => repli,
+            ),
+    );
+  }
+}
+
 /// Ce qu'il faut savoir d'un eleve pour agir sur lui.
 ///
 /// Deliberement plus courte que le dossier consolide de « Recherche eleve »:
@@ -17,6 +64,12 @@ class StudentPaletteCard extends StatelessWidget {
   final List<Map<String, dynamic>> history;
   final bool loading;
 
+  /// Adresse absolue de la photo, deja resolue par l'appelant.
+  final String photoUrl;
+
+  /// Boutons d'ecriture, places sous le nom: on agit la ou on regarde.
+  final List<Widget> actions;
+
   /// Presente seulement quand la recherche avait plusieurs reponses: sinon le
   /// bouton proposerait de revenir a une liste qui n'existe pas.
   final VoidCallback? onClear;
@@ -30,6 +83,8 @@ class StudentPaletteCard extends StatelessWidget {
     required this.incidents,
     required this.history,
     this.loading = false,
+    this.photoUrl = '',
+    this.actions = const [],
     this.onClear,
   });
 
@@ -110,16 +165,11 @@ class StudentPaletteCard extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        CircleAvatar(
-          radius: 26,
-          backgroundColor: scheme.primaryContainer,
-          child: Text(
-            _initiales(student.fullName),
-            style: textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: scheme.onPrimaryContainer,
-            ),
-          ),
+        _Photo(
+          url: photoUrl,
+          initiales: _initiales(student.fullName),
+          scheme: scheme,
+          textTheme: textTheme,
         ),
         const SizedBox(width: 14),
         Expanded(
@@ -151,6 +201,10 @@ class StudentPaletteCard extends StatelessWidget {
                     ),
                 ],
               ),
+              if (actions.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Wrap(spacing: 8, runSpacing: 8, children: actions),
+              ],
             ],
           ),
         ),
@@ -180,6 +234,45 @@ class StudentPaletteCard extends StatelessWidget {
     final ouverts = incidents
         .where((row) => (row['status'] ?? '').toString() != 'resolved')
         .length;
+
+    // Quatre tuiles pour dire quatre fois « rien » occupent une rangee sans
+    // rien apprendre. Une phrase suffit; les tuiles reviennent des qu'il y a
+    // quelque chose a montrer.
+    if (fees.isEmpty &&
+        attendances.isEmpty &&
+        incidents.isEmpty &&
+        history.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerLowest,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: scheme.outlineVariant.withValues(alpha: 0.6),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.check_circle_outline,
+              size: 20,
+              color: scheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Rien à signaler : aucun frais, aucune absence, '
+                'aucun incident, aucun historique.',
+                style: textTheme.bodyMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Wrap(
       spacing: 12,
@@ -371,6 +464,22 @@ class StudentPaletteCard extends StatelessWidget {
         style: textTheme.labelMedium?.copyWith(
           fontWeight: FontWeight.w700,
           color: texteCouleur ?? scheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  static Widget _initialesWidget(
+    String initiales,
+    ColorScheme scheme,
+    TextTheme textTheme,
+  ) {
+    return Center(
+      child: Text(
+        initiales,
+        style: textTheme.titleMedium?.copyWith(
+          fontWeight: FontWeight.w800,
+          color: scheme.onPrimaryContainer,
         ),
       ),
     );

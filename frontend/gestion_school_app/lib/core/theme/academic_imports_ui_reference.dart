@@ -40,10 +40,17 @@ class AcademicImportsUiReference {
     );
   }
 
+  /// Bouton d'acces aux imports academiques.
+  ///
+  /// Les couleurs viennent du schema, pas des constantes pastel ci-dessus:
+  /// `infoBackground` est un bleu pale fige, et l'associer a
+  /// `scheme.onSurface` -- quasi blanc en theme sombre -- rendait le bouton
+  /// illisible, donc invisible. Le defaut touchait les trois pages qui
+  /// utilisent ce style: eleves, emploi du temps et notes.
   static ButtonStyle importActionStyle(ColorScheme scheme) {
     return FilledButton.styleFrom(
-      backgroundColor: infoBackground,
-      foregroundColor: scheme.onSurface,
+      backgroundColor: scheme.secondaryContainer,
+      foregroundColor: scheme.onSecondaryContainer,
       disabledBackgroundColor: scheme.surfaceContainerHighest,
       disabledForegroundColor: scheme.onSurfaceVariant,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

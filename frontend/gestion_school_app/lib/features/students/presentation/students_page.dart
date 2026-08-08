@@ -278,12 +278,14 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       }
     }
 
+    // Aucune selection d'office. Avec un tableau, mettre en evidence la
+    // premiere ligne etait anodin; avec une palette qui remplit l'ecran et
+    // des boutons qui ecrivent -- incident, absence, frais, paiement -- cela
+    // designait un eleve que personne n'avait choisi. On preferera toujours
+    // l'invitation a chercher.
     if (nextSelected != null &&
         !filtered.any((s) => s.id == nextSelected!.id)) {
-      nextSelected = filtered.isNotEmpty ? filtered.first : null;
-    }
-    if (nextSelected == null && filtered.isNotEmpty) {
-      nextSelected = filtered.first;
+      nextSelected = null;
     }
     final selectedClassroomId = nextSelected?.classroomId;
 
@@ -3798,23 +3800,27 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   ///
   /// Grisee sans selection, avec l'infobulle qui dit pourquoi: un bouton
   /// inerte et muet se lit comme un dysfonctionnement.
-  Widget _studentContextAction({
-    required IconData icon,
-    required String label,
-    required VoidCallback onPressed,
-  }) {
-    final bool sansSelection = _selectedStudent == null;
-    return Tooltip(
-      message: sansSelection
-          ? 'Sélectionnez un élève dans le tableau'
-          : '$label — ${_selectedStudent!.fullName}',
-      child: FilledButton.tonalIcon(
+  /// Actions d'ecriture, rendues dans l'en-tete de la palette.
+  ///
+  /// Elles n'existent que lorsqu'un eleve est ouvert: leur destinataire est
+  /// donc celui qu'on lit, sans avoir a le rappeler.
+  List<Widget> _paletteActions() {
+    Widget action(IconData icone, String label, VoidCallback onPressed) {
+      return FilledButton.tonalIcon(
         style: _compactUnifiedActionButtonStyle(),
-        onPressed: (_saving || sansSelection) ? null : onPressed,
-        icon: Icon(icon),
+        onPressed: _saving ? null : onPressed,
+        icon: Icon(icone, size: 18),
         label: Text(label),
-      ),
-    );
+      );
+    }
+
+    return [
+      action(Icons.history_edu_outlined, 'Historique', _openHistoryForm),
+      action(Icons.gavel_outlined, 'Incident', _openIncidentForm),
+      action(Icons.fact_check_outlined, 'Absence', _openAttendanceForm),
+      action(Icons.add_card_outlined, 'Frais', _openFeeForm),
+      action(Icons.payments_outlined, 'Paiement', _openPaymentForm),
+    ];
   }
 
 
@@ -3965,31 +3971,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                           icon: const Icon(Icons.person_add_alt_1),
                           label: const Text('Ajouter élève'),
                         ),
-                        _studentContextAction(
-                          icon: Icons.history_edu_outlined,
-                          label: 'Historique',
-                          onPressed: _openHistoryForm,
-                        ),
-                        _studentContextAction(
-                          icon: Icons.gavel_outlined,
-                          label: 'Incident',
-                          onPressed: _openIncidentForm,
-                        ),
-                        _studentContextAction(
-                          icon: Icons.fact_check_outlined,
-                          label: 'Absence',
-                          onPressed: _openAttendanceForm,
-                        ),
-                        _studentContextAction(
-                          icon: Icons.add_card_outlined,
-                          label: 'Frais',
-                          onPressed: _openFeeForm,
-                        ),
-                        _studentContextAction(
-                          icon: Icons.payments_outlined,
-                          label: 'Paiement',
-                          onPressed: _openPaymentForm,
-                        ),
+                        // Historique, Incident, Absence, Frais et Paiement
+                        // ont rejoint la palette: ils agissent sur un eleve,
+                        // et les laisser ici obligeait a remonter en haut de
+                        // page pour agir sur celui qu'on avait sous les yeux.
                         MenuAnchor(
                           builder: (context, controller, _) => IconButton(
                             tooltip: 'Autres vues',
@@ -4189,6 +4174,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       incidents: _incidents,
       history: _history,
       loading: _detailLoading,
+      photoUrl: _resolveMediaUrl(student.photo),
+      actions: _paletteActions(),
       onClear: visibleStudents.length > 1
           ? () => setState(() => _selectedStudent = null)
           : null,
