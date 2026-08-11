@@ -972,6 +972,38 @@ class TeacherViewSet(BaseModelViewSet):
     serializer_class = TeacherSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
+    filterset_fields = [
+        "user",
+        "etablissement",
+        "hire_date",
+    ]
+    # Sans cette liste, `?search=` etait accepte et ignore: l'ecran croyait
+    # filtrer et recevait tout l'effectif. On cherche un enseignant comme on
+    # cherche un eleve -- par ce qu'on a sous la main.
+    search_fields = [
+        "employee_code",
+        "user__first_name",
+        "user__last_name",
+        "user__username",
+        "user__email",
+        # Le secretariat appelle avant de connaitre le code employe.
+        "user__phone",
+        # La matiere et la classe: "qui fait maths en 6A ?" est la question
+        # posee en salle des professeurs.
+        "assignments__subject__name",
+        "assignments__classroom__name",
+    ]
+    ordering_fields = [
+        "employee_code",
+        "hire_date",
+        "created_at",
+        "user__last_name",
+        "user__first_name",
+    ]
+    # "-id" en second: sur deux profils crees dans la meme seconde, l'ordre
+    # resterait indefini et une ligne pourrait paraitre sur deux pages.
+    ordering = ["user__last_name", "user__first_name", "id"]
+
     def _backfill_missing_teacher_etablissements(self):
         missing_teachers = list(
             Teacher.objects.select_related("user")
