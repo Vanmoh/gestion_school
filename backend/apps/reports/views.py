@@ -16,7 +16,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from PIL import Image
 from rest_framework.exceptions import PermissionDenied, ValidationError
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from apps.accounts.permissions import HasModuleAccess
 from rest_framework.response import Response
@@ -34,14 +34,37 @@ from apps.school.models import (
     Student,
     StudentAcademicHistory,
     Subject,
+    Teacher,
     TeacherAssignment,
 )
+from django.utils.html import escape
+
+from apps.reports.card_verification import (
+    signature_valide as signature_carte_valide,
+)
+from apps.reports.card_verification import signer as signer_carte
 from apps.school.serializers import AcademicYearSerializer, PaymentSerializer, StudentSerializer
 from apps.school.term_utils import normalize_term
 
 
 def _pdf_text(value) -> str:
     return str(value or "").encode("latin-1", "replace").decode("latin-1")
+
+
+def _ecourte(valeur: str, limite: int) -> str:
+    """Coupe une valeur trop longue en le signalant.
+
+    La coupe etait muette: « Mamadou Oualiyou Diallo » devenait « Mamadou
+    Ouali », qui se lit comme un nom complet et faux. Les points de suspension
+    disent au lecteur qu'il manque quelque chose.
+
+    Trois points et non le caractere « … »: le PDF est encode en latin-1, qui
+    ne le contient pas et l'aurait remplace par un point d'interrogation.
+    """
+    texte = str(valeur or "")
+    if limite <= 0 or len(texte) <= limite:
+        return texte
+    return texte[: max(1, limite - 3)].rstrip() + "..."
 
 
 def _school_logo_path() -> str | None:
@@ -213,6 +236,89 @@ def _pdf_compatible_image_path(source_path: str | None, *, cache_prefix: str) ->
         return str(source)
 
 
+def _photo_cadree(source_path: str | None, ratio: float) -> str | None:
+    """Photo recadree au centre pour remplir un cadre de proportion donnee.
+
+    `keep_aspect_ratio` seul empeche la deformation mais laisse deux bandes
+    blanches quand la photo n'a pas les proportions du cadre. Un recadrage
+    central remplit le cadre sans etirer personne, comme le ferait une photo
+    d'identite passee sous massicot.
+    """
+    if not source_path or ratio <= 0:
+        return None
+    source = Path(source_path)
+    if not source.exists():
+        return None
+    try:
+        cache_dir = Path(tempfile.gettempdir()) / "gestion_school_pdf_assets"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        stat = source.stat()
+        cle = f"{source.resolve()}::{stat.st_mtime_ns}::{stat.st_size}::{ratio:.4f}"
+        cible = cache_dir / f"portrait_{hashlib.sha1(cle.encode()).hexdigest()[:12]}.jpg"
+        if cible.exists():
+            return str(cible)
+
+        with Image.open(source) as image:
+            image = image.convert("RGB")
+            largeur, hauteur = image.size
+            if largeur <= 0 or hauteur <= 0:
+                return None
+            if largeur / hauteur > ratio:
+                neuve_l = int(hauteur * ratio)
+                gauche = (largeur - neuve_l) // 2
+                boite = (gauche, 0, gauche + neuve_l, hauteur)
+            else:
+                neuve_h = int(largeur / ratio)
+                # Legerement au-dessus du centre: sur un portrait, le visage
+                # se tient dans le tiers superieur, pas au milieu.
+                haut = max(0, int((hauteur - neuve_h) * 0.35))
+                boite = (0, haut, largeur, haut + neuve_h)
+            image.crop(boite).save(cible, format="JPEG", quality=92, optimize=True)
+        return str(cible)
+    except Exception:
+        return None
+
+
+def _carte_verification_url(student, annee: str, base_url: str) -> str:
+    """Adresse portee par le QR de la carte."""
+    signature = signer_carte(getattr(student, "id", 0) or 0, annee)
+    return f"{base_url.rstrip('/')}/api/reports/carte/{student.id}/{annee}/{signature}/"
+
+
+def _carte_qr_image_path(url: str) -> str | None:
+    """Image du QR, mise en cache par URL.
+
+    Renvoie None si la generation echoue: une carte sans QR reste une carte,
+    alors qu'une exception ici priverait l'ecole de toute sa planche.
+    """
+    if not url:
+        return None
+    try:
+        import qrcode
+
+        cache_dir = Path(tempfile.gettempdir()) / "gestion_school_pdf_assets"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_hash = hashlib.sha1(url.encode("utf-8")).hexdigest()[:12]
+        cached_file = cache_dir / f"qr_{cache_hash}.png"
+        if cached_file.exists():
+            return str(cached_file)
+
+        code = qrcode.QRCode(
+            version=None,
+            # Correction haute: une carte se plie, se salit et se raye. Un QR
+            # imprime a 15 mm ne se relit pas si le moindre module manque.
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=10,
+            border=2,
+        )
+        code.add_data(url)
+        code.make(fit=True)
+        code.make_image(fill_color="black", back_color="white").save(cached_file)
+        return str(cached_file)
+    except Exception:
+        return None
+
+
 def pdf_output_response(pdf: FPDF, filename: str) -> HttpResponse:
     data = bytes(pdf.output())
     response = HttpResponse(data, content_type="application/pdf")
@@ -235,35 +341,65 @@ def _school_identity() -> dict[str, str]:
     }
 
 
-def _school_identity_for_student(student: Student) -> dict[str, str]:
-    school = _school_identity()
+_MOTS_LIAISON = {"de", "du", "des", "la", "le", "les", "et", "d", "l"}
 
+
+def _school_acronym(name: str) -> str:
+    """Sigle d'un etablissement, tire des initiales de ses mots.
+
+    `name[:16]` coupait au milieu d'un mot: « Complexe Scolaire Oumar Bah »
+    s'imprimait « COMPLEXE SCOLAIR ». Un nom deja court, ou deja sigle, est
+    garde tel quel: abreger « LTOB » n'aurait aucun sens.
+    """
+    propre = " ".join(str(name or "").split())
+    if not propre:
+        return ""
+    if len(propre) <= 12 or " " not in propre:
+        return propre.upper()
+
+    initiales = "".join(
+        mot[0]
+        for mot in propre.replace("-", " ").split()
+        if mot and mot.lower().strip(".") not in _MOTS_LIAISON
+    )
+    # Deux lettres ne distinguent rien; on retombe alors sur le nom entier,
+    # que la mise en page reduira si besoin.
+    return initiales.upper() if len(initiales) >= 3 else propre.upper()
+
+
+def _school_identity_for_student(student: Student) -> dict[str, str]:
     etablissement = getattr(student, "etablissement", None)
     if etablissement is None and getattr(student, "classroom", None) is not None:
         etablissement = getattr(student.classroom, "etablissement", None)
 
     if etablissement is None:
-        return school
+        return _school_identity()
 
-    etablissement_name = str(getattr(etablissement, "name", "") or "").strip()
-    etablissement_phone = str(getattr(etablissement, "phone", "") or "").strip()
-    etablissement_address = str(getattr(etablissement, "address", "") or "").strip()
+    # Volontairement sans repli sur _school_identity(): ses valeurs decrivent
+    # un etablissement precis (nom, telephone, etage du LTOB). Les heriter
+    # faisait imprimer le telephone du LTOB sur les documents des trois autres
+    # ecoles, dont les fiches n'ont ni telephone ni adresse. Mieux vaut une
+    # ligne absente qu'une ligne qui renvoie vers la mauvaise ecole.
+    nom = str(getattr(etablissement, "name", "") or "").strip()
+    return {
+        "name": nom,
+        "short": _school_acronym(nom),
+        "level": str(getattr(etablissement, "address", "") or "").strip(),
+        "phone": str(getattr(etablissement, "phone", "") or "").strip(),
+        "city": str(getattr(etablissement, "city", "") or "").strip(),
+    }
 
-    if etablissement_name:
-        school["name"] = etablissement_name
-        school["short"] = etablissement_name[:16].upper()
-    if etablissement_phone:
-        school["phone"] = etablissement_phone
-    if etablissement_address:
-        school["level"] = etablissement_address
 
-    return school
+def _active_academic_year():
+    """Annee scolaire active, ou la plus recente a defaut."""
+    return (
+        AcademicYear.objects.filter(is_active=True).order_by("-start_date", "-id").first()
+        or AcademicYear.objects.order_by("-start_date", "-id").first()
+    )
 
 
 def _active_academic_year_label() -> str:
-    year = AcademicYear.objects.filter(is_active=True).order_by("-start_date", "-id").first()
-    if year is None:
-        year = AcademicYear.objects.order_by("-start_date", "-id").first()
+    year = _active_academic_year()
 
     if year is None:
         current_year = timezone.localdate().year
@@ -356,6 +492,7 @@ def _draw_student_card_template(
     y: float,
     width: float,
     height: float,
+    verify_base_url: str = "",
 ) -> None:
     if width <= 0 or height <= 0:
         return
@@ -382,16 +519,28 @@ def _draw_student_card_template(
     if content_w <= 0 or content_h <= 0:
         return
 
-    school_name_raw = (school.get("name") or "LYCEE TECHNIQUE OUMAR BAH").strip().upper()
-    school_short_raw = (school.get("short") or "LTOB").strip().upper()
-    school_level_raw = (school.get("level") or "1er ETAGE").strip().upper()
-    school_phone_raw = (school.get("phone") or "78 78 59 13 / 66 74 22 32").strip()
+    # Aucune valeur de repli: une carte qui affiche le telephone d'une autre
+    # ecole invite a appeler le mauvais numero, ce qu'une ligne absente ne fait
+    # pas. Trois des quatre etablissements n'ont ni telephone ni adresse.
+    school_name_raw = (school.get("name") or "").strip().upper()
+    school_short_raw = (school.get("short") or "").strip().upper()
+    school_level_raw = (school.get("level") or "").strip().upper()
+    school_phone_raw = (school.get("phone") or "").strip()
 
     school_name = _pdf_text(school_name_raw)
-    school_subtitle = _pdf_text(f"{school_short_raw} ({school_level_raw})")
-    school_phone = _pdf_text(f"Tel : {school_phone_raw}")
+    # « LTOB » sous « LTOB » n'apprend rien: le sigle ne s'affiche que s'il
+    # differe du nom deja ecrit au-dessus.
+    sigle = school_short_raw if school_short_raw != school_name_raw else ""
+    if sigle and school_level_raw:
+        school_subtitle = _pdf_text(f"{sigle} ({school_level_raw})")
+    else:
+        school_subtitle = _pdf_text(sigle or school_level_raw)
+    school_phone = _pdf_text(f"Tel : {school_phone_raw}") if school_phone_raw else ""
 
-    header_h = max(8.7, min(16.2, content_h * 0.22))
+    # L'en-tete reservait toujours la place de trois lignes. Quand l'ecole n'a
+    # ni sigle distinct ni telephone, cette reserve laissait une bande vide.
+    lignes_entete = 1 + bool(school_subtitle) + bool(school_phone)
+    header_h = max(8.7, min(16.2, content_h * 0.22)) * (0.52 + 0.16 * lignes_entete)
     header_name_font = 11.0 if width >= 120 else 8.8 if width >= 85 else 6.8 if width >= 72 else 5.8
     header_sub_font = header_name_font * 0.86
     header_phone_font = header_name_font * 0.66
@@ -401,15 +550,17 @@ def _draw_student_card_template(
     pdf.set_font("Helvetica", "B", header_name_font)
     pdf.cell(content_w, max(2.7, header_h * 0.34), school_name, align="C")
 
-    pdf.set_text_color(44, 45, 59)
-    pdf.set_xy(content_x, content_y + max(2.5, header_h * 0.31))
-    pdf.set_font("Helvetica", "B", header_sub_font)
-    pdf.cell(content_w, max(2.3, header_h * 0.25), school_subtitle, align="C")
+    if school_subtitle:
+        pdf.set_text_color(44, 45, 59)
+        pdf.set_xy(content_x, content_y + max(2.5, header_h * 0.31))
+        pdf.set_font("Helvetica", "B", header_sub_font)
+        pdf.cell(content_w, max(2.3, header_h * 0.25), school_subtitle, align="C")
 
-    pdf.set_text_color(177, 59, 67)
-    pdf.set_xy(content_x, content_y + max(4.8, header_h * 0.56))
-    pdf.set_font("Helvetica", "B", header_phone_font)
-    pdf.cell(content_w, max(2.0, header_h * 0.18), school_phone, align="C")
+    if school_phone:
+        pdf.set_text_color(177, 59, 67)
+        pdf.set_xy(content_x, content_y + max(4.8, header_h * 0.56))
+        pdf.set_font("Helvetica", "B", header_phone_font)
+        pdf.cell(content_w, max(2.0, header_h * 0.18), school_phone, align="C")
 
     title_y = content_y + header_h + max(0.45, content_h * 0.008)
     title_h = max(3.1, min(5.9, content_h * 0.088))
@@ -433,14 +584,22 @@ def _draw_student_card_template(
     photo_x = content_x
     photo_y = body_top
     photo_w = max(13.0, min(34.0, content_w * (0.30 if not compact else 0.34)))
-    photo_h = max(15.0, body_bottom - body_top)
+    # Proportion d'une photo d'identite (35 x 45 mm). Le cadre occupait toute
+    # la hauteur du corps, bien plus allongee, d'ou de larges bandes vides.
+    photo_h = min(
+        max(15.0, body_bottom - body_top),
+        photo_w * (45.0 / 35.0),
+    )
 
     pdf.set_fill_color(255, 255, 255)
     pdf.set_draw_color(50, 106, 176)
     pdf.set_line_width(max(0.09, outer_line_w * 0.57))
     pdf.rect(photo_x, photo_y, photo_w, photo_h, style="DF")
 
-    photo_path = _student_photo_path(student)
+    photo_path = _photo_cadree(
+        _student_photo_path(student),
+        (photo_w - 1.0) / max(0.1, photo_h - 1.0),
+    )
     if photo_path:
         try:
             pdf.image(
@@ -466,10 +625,26 @@ def _draw_student_card_template(
     birth_date = student.birth_date.strftime("%d/%m/%Y") if student.birth_date else "-"
     year_label = _active_academic_year_label()
 
+    # Une carte sans echeance reste valable indefiniment aux yeux de celui qui
+    # la controle: celle de 2019 ressemble a celle de cette annee.
+    annee = _active_academic_year()
+    fin_annee = getattr(annee, "end_date", None)
+    validity_label = (
+        f"Valable jusqu'au {fin_annee.strftime('%d/%m/%Y')}" if fin_annee else ""
+    )
+    qr_url = (
+        _carte_verification_url(student, year_label, verify_base_url)
+        if verify_base_url and getattr(student, "id", 0)
+        else ""
+    )
+
     info_x = photo_x + photo_w + max(1.0, min(3.4, content_w * 0.024))
     info_w = max(8.0, (content_x + content_w) - info_x)
     label_w = max(6.5, min(info_w * 0.42, info_w - 4.0))
-    row_h = max(2.1, min(4.0, (body_bottom - body_top) * 0.135))
+    # Six lignes suivies de leurs ecarts occupent 8,27 fois la hauteur d'une
+    # ligne. A 0,135 elles debordaient de 12 % sous le pied de carte, ou la
+    # derniere venait chevaucher la mention de validite.
+    row_h = max(2.1, min(4.0, (body_bottom - body_top) * 0.118))
     row_gap = max(0.45, min(1.25, row_h * 0.42))
     label_font = 8.2 if width >= 120 else 6.7 if width >= 85 else 5.4 if width >= 72 else 4.7
     value_font = label_font * 1.02
@@ -484,7 +659,12 @@ def _draw_student_card_template(
         pdf.set_xy(info_x + label_w, row_y)
         pdf.set_text_color(25, 72, 138)
         pdf.set_font("Helvetica", "B", value_font)
-        pdf.cell(info_w - label_w, row_h, _pdf_text(value or "-")[:value_limit], align="L")
+        pdf.cell(
+            info_w - label_w,
+            row_h,
+            _pdf_text(_ecourte(value or "-", value_limit)),
+            align="L",
+        )
 
         _draw_card_separator_line(
             pdf,
@@ -496,30 +676,29 @@ def _draw_student_card_template(
     row_y = body_top + max(0.1, row_h * 0.05)
     for label, value in [
         ("Nom", last_name),
-        ("Prenom", first_name),
+        ("Prénom", first_name),
         ("Classe", class_name),
-        ("Annee scolaire", year_label),
+        ("Année scolaire", year_label),
         ("Matricule", student.matricule or "-"),
     ]:
         _draw_info_row(row_y, label, value)
         row_y += row_h + row_gap
 
     row_y += max(0.25, row_gap * 0.4)
-    _draw_info_row(row_y, "Ne(e) le", birth_date)
+    _draw_info_row(row_y, "Né(e) le", birth_date)
 
     footer_y = content_y + content_h - footer_h
 
-    card_digits = ""
-    if int(getattr(student, "id", 0) or 0) > 0:
-        card_digits = str(student.id).zfill(5)
-    if not card_digits:
-        raw_digits = "".join(ch for ch in str(student.matricule or "") if ch.isdigit())
-        card_digits = (raw_digits[-5:] if raw_digits else "00000").zfill(5)
-
+    # Le « No de Carte » affichait la cle primaire en base, sur cinq chiffres.
+    # Elle ne signifie rien pour l'ecole, change si la base est restauree, et
+    # faisait deux numeros concurrents avec le matricule. Sa place revient au
+    # QR de verification et a la date de validite.
     number_x = content_x + max(0.15, content_w * 0.004)
     number_y = footer_y + max(0.46, footer_h * 0.11)
     number_label_font = 8.8 if width >= 120 else 6.9 if width >= 85 else 5.6 if width >= 72 else 4.8
-    number_value_font = number_label_font * 1.02
+
+    qr_d = max(7.0, min(20.0, footer_h * 0.92))
+    qr_path = _carte_qr_image_path(qr_url) if qr_url else None
 
     etablissement = _student_etablissement(student)
     signature_source = _etablissement_media_field_path(etablissement, "principal_signature_image") or _school_signature_asset_path()
@@ -559,28 +738,30 @@ def _draw_student_card_template(
         number_max_x = max(number_x + 12.0, content_x + (content_w * 0.58))
     number_line_w = max(8.0, number_max_x - number_x)
 
-    pdf.set_xy(number_x, number_y)
-    pdf.set_text_color(44, 48, 59)
-    pdf.set_font("Helvetica", "B", number_label_font)
-    label_text = _pdf_text("No de Carte :")
-    label_draw_w = min(number_line_w * 0.62, max(10.0, number_line_w - 8.0))
-    pdf.cell(label_draw_w, max(2.1, footer_h * 0.26), label_text, align="L")
+    texte_x = number_x
+    if qr_path:
+        try:
+            pdf.image(
+                qr_path,
+                x=number_x,
+                y=footer_y + max(0.1, (footer_h - qr_d) * 0.5),
+                w=qr_d,
+                h=qr_d,
+            )
+            texte_x = number_x + qr_d + max(0.8, content_w * 0.008)
+        except Exception:
+            texte_x = number_x
 
-    pdf.set_xy(number_x + label_draw_w, number_y)
-    pdf.set_text_color(25, 72, 138)
-    pdf.set_font("Helvetica", "B", number_value_font)
-    pdf.cell(
-        max(2.0, number_line_w - label_draw_w),
-        max(2.1, footer_h * 0.26),
-        _pdf_text(card_digits),
-        align="L",
-    )
-    _draw_card_separator_line(
-        pdf,
-        number_x,
-        number_y + max(1.9, footer_h * 0.26),
-        number_x + number_line_w,
-    )
+    if validity_label:
+        pdf.set_xy(texte_x, number_y)
+        pdf.set_text_color(44, 48, 59)
+        pdf.set_font("Helvetica", "B", number_label_font * 0.82)
+        pdf.cell(
+            max(2.0, number_max_x - texte_x),
+            max(2.1, footer_h * 0.26),
+            _pdf_text(validity_label),
+            align="L",
+        )
 
     if signature_asset_path:
         try:
@@ -642,6 +823,7 @@ def _add_student_card_page(
     *,
     school: dict[str, str],
     logo_path: str | None,
+    verify_base_url: str = "",
 ) -> None:
     pdf.add_page()
     pdf.set_auto_page_break(auto=False)
@@ -657,6 +839,7 @@ def _add_student_card_page(
         y=4,
         width=page_w - 8,
         height=page_h - 8,
+        verify_base_url=verify_base_url,
     )
 
 
@@ -670,6 +853,7 @@ def _draw_student_card_block(
     y: float,
     width: float,
     height: float,
+    verify_base_url: str = "",
 ) -> None:
     _draw_student_card_template(
         pdf,
@@ -680,6 +864,7 @@ def _draw_student_card_block(
         y=y,
         width=width,
         height=height,
+        verify_base_url=verify_base_url,
     )
 
 
@@ -834,6 +1019,115 @@ def _draw_roster_summary_page(
     pdf.ln(8)
 
 
+STAFF_COLUMNS = (
+    ("N°", 12.0),
+    ("Code", 26.0),
+    ("Nom et prénoms", 58.0),
+    ("Matières", 50.0),
+    ("Émargement", 44.0),
+)
+
+
+def _draw_staff_table_header(pdf: FPDF) -> None:
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(232, 232, 240)
+    for titre, largeur in STAFF_COLUMNS:
+        pdf.cell(largeur, 8, _pdf_text(titre), border=1, align="C", fill=True)
+    pdf.ln(8)
+
+
+def _teacher_subjects_label(teacher: Teacher) -> str:
+    """Matieres enseignees, sans repetition.
+
+    Un professeur de maths sur trois classes a trois affectations mais une
+    seule matiere: les lister toutes remplirait la colonne sans rien apprendre.
+    """
+    matieres = []
+    for affectation in teacher.assignments.all():
+        nom = getattr(getattr(affectation, "subject", None), "name", "")
+        if nom and nom not in matieres:
+            matieres.append(nom)
+    return ", ".join(matieres)
+
+
+def _build_staff_roster_pdf(
+    teachers: list[Teacher],
+    *,
+    school: dict[str, str],
+    logo_path: str | None,
+    year_label: str,
+) -> FPDF:
+    """Liste du personnel enseignant, avec colonne d'emargement."""
+    pdf = FPDF(format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    if logo_path:
+        try:
+            pdf.image(logo_path, x=12, y=10, w=18)
+        except Exception:
+            pass
+
+    pdf.set_xy(34, 11)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 6, _pdf_text(school.get("name", "")), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_x(34)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(0, 5, _pdf_text(f"Année scolaire {year_label}"), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.ln(6)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 7, _pdf_text("LISTE DU PERSONNEL ENSEIGNANT"),
+             align="C", new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(0, 5, _pdf_text(f"Effectif : {len(teachers)}"),
+             align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    _draw_staff_table_header(pdf)
+
+    pdf.set_font("Helvetica", "", 9)
+    for index, teacher in enumerate(teachers, start=1):
+        if pdf.get_y() > pdf.h - 25:
+            pdf.add_page()
+            _draw_staff_table_header(pdf)
+            pdf.set_font("Helvetica", "", 9)
+
+        _, last_name, full_name = _teacher_name_parts(teacher)
+        valeurs = (
+            str(index),
+            teacher.employee_code or "",
+            full_name if full_name != "-" else last_name,
+            _teacher_subjects_label(teacher),
+            "",
+        )
+        for (_, largeur), valeur in zip(STAFF_COLUMNS, valeurs):
+            pdf.cell(largeur, 7, _pdf_text(valeur), border=1)
+        pdf.ln(7)
+
+    if not teachers:
+        pdf.set_font("Helvetica", "I", 9)
+        largeur_totale = sum(largeur for _, largeur in STAFF_COLUMNS)
+        pdf.cell(largeur_totale, 8,
+                 _pdf_text("Aucun enseignant enregistré."), border=1, align="C")
+        pdf.ln(8)
+
+    return pdf
+
+
+def _teacher_name_parts(teacher: Teacher) -> tuple[str, str, str]:
+    user = getattr(teacher, "user", None)
+    if not user:
+        return "-", "-", "-"
+
+    first_name = (user.first_name or "").strip()
+    last_name = (user.last_name or "").strip()
+    full_name = (user.get_full_name() or "").strip() or user.username
+    return first_name or "-", last_name or "-", full_name or "-"
+
+
 def _build_class_roster_pdf(
     par_classe: list[tuple[str, list[Student]]],
     *,
@@ -865,58 +1159,144 @@ def _build_class_roster_pdf(
     return pdf
 
 
+# Dimensions en millimetres, paysage.
+#   a6   : le format historique. Grand et lisible, mais ne rentre dans aucun
+#          portefeuille, donc rarement porte par l'eleve.
+#   cr80 : le format des cartes d'identite et bancaires.
+CARD_FORMATS: dict[str, tuple[float, float]] = {
+    "a6": (148.0, 105.0),
+    "cr80": (85.6, 54.0),
+}
+CARD_FORMAT_DEFAUT = "a6"
+
+
+def _draw_crop_marks(pdf: FPDF, x: float, y: float, w: float, h: float) -> None:
+    """Traits de coupe aux quatre coins d'une carte.
+
+    Les planches se decoupaient a vue, faute de reperes. Les traits sont
+    places hors de la carte pour ne pas la barrer.
+    """
+    longueur = 3.0
+    ecart = 0.8
+    pdf.set_draw_color(150, 150, 150)
+    pdf.set_line_width(0.1)
+    for cx, sens_x in ((x, -1), (x + w, 1)):
+        for cy, sens_y in ((y, -1), (y + h, 1)):
+            pdf.line(cx + sens_x * ecart, cy, cx + sens_x * (ecart + longueur), cy)
+            pdf.line(cx, cy + sens_y * ecart, cx, cy + sens_y * (ecart + longueur))
+
+
+def _grille_a4(card_w: float, card_h: float) -> tuple[int, int, float, float]:
+    """Nombre de cartes par planche A4, a leur taille reelle.
+
+    L'ancienne grille imposait 3x3 et etirait chaque case aux dimensions
+    obtenues: les cartes devenaient portrait alors que la maquette est
+    paysage, d'ou un quart de vide par carte et un en-tete a 4 points.
+    """
+    marge = 10.0
+    gap = 5.0
+    utile_w = 210.0 - (2 * marge)
+    utile_h = 297.0 - (2 * marge)
+    cols = max(1, int((utile_w + gap) // (card_w + gap)))
+    rows = max(1, int((utile_h + gap) // (card_h + gap)))
+    return cols, rows, marge, gap
+
+
 def _build_student_cards_pdf(
     students: list[Student],
     *,
     school: dict[str, str],
     logo_path: str | None,
     layout_mode: str,
+    card_format: str = CARD_FORMAT_DEFAUT,
+    verify_base_url: str = "",
 ) -> FPDF:
-    if layout_mode in {"a4_9up", "a4_6up"}:
-        pdf = FPDF(format="A4")
-        pdf.set_auto_page_break(auto=False)
+    card_w, card_h = CARD_FORMATS.get(card_format, CARD_FORMATS[CARD_FORMAT_DEFAUT])
 
-        if layout_mode == "a4_6up":
-            cols = 2
-            rows = 3
-        else:
-            cols = 3
-            rows = 3
-        margin_x = 8.0
-        margin_y = 10.0
-        gap_x = 4.0
-        gap_y = 4.0
-
-        card_w = (pdf.w - (2 * margin_x) - ((cols - 1) * gap_x)) / cols
-        card_h = (pdf.h - (2 * margin_y) - ((rows - 1) * gap_y)) / rows
-
-        for index, student in enumerate(students):
-            if index % (cols * rows) == 0:
-                pdf.add_page()
-
-            slot = index % (cols * rows)
-            row = slot // cols
-            col = slot % cols
-            x = margin_x + col * (card_w + gap_x)
-            y = margin_y + row * (card_h + gap_y)
-
-            _draw_student_card_block(
+    if layout_mode == "standard":
+        pdf = FPDF(format=(card_w, card_h))
+        for student in students:
+            _add_student_card_page(
                 pdf,
                 student,
                 school=school,
                 logo_path=logo_path,
-                x=x,
-                y=y,
-                width=card_w,
-                height=card_h,
+                verify_base_url=verify_base_url,
             )
-
         return pdf
 
-    pdf = FPDF(format=(148, 105))
-    for student in students:
-        _add_student_card_page(pdf, student, school=school, logo_path=logo_path)
+    pdf = FPDF(format="A4")
+    pdf.set_auto_page_break(auto=False)
+
+    if layout_mode == "a4":
+        cols, rows, marge, gap = _grille_a4(card_w, card_h)
+    else:
+        # a4_6up / a4_9up: grille imposee, mais la carte garde desormais ses
+        # proportions et se centre dans sa case au lieu d'y etre etiree.
+        cols, rows = (2, 3) if layout_mode == "a4_6up" else (3, 3)
+        marge, gap = 10.0, 5.0
+        case_w = (210.0 - (2 * marge) - ((cols - 1) * gap)) / cols
+        case_h = (297.0 - (2 * marge) - ((rows - 1) * gap)) / rows
+        echelle = min(case_w / card_w, case_h / card_h)
+        card_w, card_h = card_w * echelle, card_h * echelle
+
+    par_planche = cols * rows
+    for index, student in enumerate(students):
+        if index % par_planche == 0:
+            pdf.add_page()
+
+        slot = index % par_planche
+        x = marge + (slot % cols) * (card_w + gap)
+        y = marge + (slot // cols) * (card_h + gap)
+
+        _draw_crop_marks(pdf, x, y, card_w, card_h)
+        _draw_student_card_block(
+            pdf,
+            student,
+            school=school,
+            logo_path=logo_path,
+            x=x,
+            y=y,
+            width=card_w,
+            height=card_h,
+            verify_base_url=verify_base_url,
+        )
+
     return pdf
+
+
+def _student_photo_url(student, request) -> str | None:
+    """URL de la photo, ou None si l'eleve n'en a pas."""
+    photo = getattr(student, "photo", None)
+    if not photo:
+        return None
+    try:
+        url = photo.url
+    except Exception:
+        return None
+    return request.build_absolute_uri(url) if url.startswith("/") else url
+
+
+def _requested_card_format(request) -> str | None:
+    """Format demande, ou None si la valeur est inconnue.
+
+    None plutot qu'un repli silencieux: une planche imprimee au mauvais format
+    ne se rattrape qu'en la rejetant et en recommencant.
+    """
+    demande = str(request.query_params.get("card_format", CARD_FORMAT_DEFAUT)).strip().lower()
+    return demande if demande in CARD_FORMATS else None
+
+
+def _verify_base_url(request) -> str:
+    """Racine publique a inscrire dans le QR.
+
+    Deduite de la requete: le projet n'a pas de reglage d'URL publique, et
+    l'ecrire en dur reproduirait exactement la faute que ce lot corrige.
+    """
+    try:
+        return request.build_absolute_uri("/").rstrip("/")
+    except Exception:
+        return ""
 
 
 def _requested_etablissement_id(request):
@@ -2876,11 +3256,24 @@ class StudentCardPdfView(APIView):
         )
         _ensure_student_access(request, student)
 
+        card_format = _requested_card_format(request)
+        if card_format is None:
+            return Response(
+                {"detail": f"card_format invalide. Valeurs: {', '.join(CARD_FORMATS)}."},
+                status=400,
+            )
+
         school = _school_identity_for_student(student)
         logo_path = _etablissement_logo_path(student) or _school_logo_path()
 
-        pdf = FPDF(format=(148, 105))
-        _add_student_card_page(pdf, student, school=school, logo_path=logo_path)
+        pdf = _build_student_cards_pdf(
+            [student],
+            school=school,
+            logo_path=logo_path,
+            layout_mode="standard",
+            card_format=card_format,
+            verify_base_url=_verify_base_url(request),
+        )
 
         return pdf_output_response(pdf, f"carte_eleve_{student.matricule}.pdf")
 
@@ -2907,9 +3300,16 @@ class ClassStudentCardsPdfView(APIView):
             in {"1", "true", "yes"}
         )
         layout_mode = str(request.query_params.get("layout_mode", "standard")).strip().lower()
-        if layout_mode not in {"standard", "a4_6up", "a4_9up"}:
+        if layout_mode not in {"standard", "a4", "a4_6up", "a4_9up"}:
             return Response(
-                {"detail": "layout_mode invalide. Valeurs: standard, a4_6up, a4_9up."},
+                {"detail": "layout_mode invalide. Valeurs: standard, a4, a4_6up, a4_9up."},
+                status=400,
+            )
+
+        card_format = _requested_card_format(request)
+        if card_format is None:
+            return Response(
+                {"detail": f"card_format invalide. Valeurs: {', '.join(CARD_FORMATS)}."},
                 status=400,
             )
 
@@ -2933,17 +3333,156 @@ class ClassStudentCardsPdfView(APIView):
             school=school,
             logo_path=logo_path,
             layout_mode=layout_mode,
+            card_format=card_format,
+            verify_base_url=_verify_base_url(request),
         )
 
         class_slug = classroom.name.replace(" ", "_")
-        suffix = (
-            "_6parA4"
-            if layout_mode == "a4_6up"
-            else "_9parA4"
-            if layout_mode == "a4_9up"
-            else ""
-        )
+        suffix = {
+            "a4": "_plancheA4",
+            "a4_6up": "_6parA4",
+            "a4_9up": "_9parA4",
+        }.get(layout_mode, "")
+        if card_format != CARD_FORMAT_DEFAUT:
+            suffix += f"_{card_format}"
         return pdf_output_response(pdf, f"cartes_{class_slug}{suffix}.pdf")
+
+
+class StudentCardVerifyView(APIView):
+    """Page affichee quand on scanne le QR d'une carte scolaire.
+
+    Publique par necessite: celui qui controle au portail n'a pas de compte.
+    Elle ne revele donc aucune identite — ni nom, ni date de naissance, ni
+    classe. Elle repond « valide » ou non, nomme l'ecole et l'annee, et montre
+    la photo pour que le controleur compare un visage. Une carte perdue et
+    scannee par un inconnu n'apprend rien sur l'eleve.
+
+    L'acces suppose la signature imprimee sur la carte: les identifiants ne
+    s'enumerent pas.
+    """
+
+    authentication_classes = ()
+    permission_classes = [AllowAny]
+
+    def get(self, request, student_id: int, annee: str, signature: str):
+        if not signature_carte_valide(student_id, annee, signature):
+            return self._page(
+                titre="Carte non reconnue",
+                detail="Cette carte n'a pas ete emise par l'etablissement.",
+                valide=False,
+            )
+
+        student = Student.objects.select_related("etablissement").filter(id=student_id).first()
+        if student is None:
+            return self._page(
+                titre="Carte non reconnue",
+                detail="Cette carte ne correspond a aucun eleve.",
+                valide=False,
+            )
+
+        annee_courante = _active_academic_year_label()
+        ecole = str(getattr(getattr(student, "etablissement", None), "name", "") or "")
+
+        if student.is_archived:
+            return self._page(
+                titre="Carte revoquee",
+                detail=f"{ecole} — l'eleve n'est plus inscrit.",
+                valide=False,
+            )
+        if annee != annee_courante:
+            return self._page(
+                titre="Carte expiree",
+                detail=f"{ecole} — carte de l'annee {annee}, annee en cours : {annee_courante}.",
+                valide=False,
+            )
+
+        return self._page(
+            titre="Carte valide",
+            detail=f"{ecole} — annee scolaire {annee}.",
+            valide=True,
+            photo_url=_student_photo_url(student, request),
+        )
+
+    def _page(self, *, titre, detail, valide, photo_url=None):
+        couleur = "#1b7f3b" if valide else "#a3241f"
+        photo = (
+            f'<img src="{escape(photo_url)}" alt="Photo de l\'eleve">' if photo_url else ""
+        )
+        html = f"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{escape(titre)}</title>
+<style>
+ body{{font-family:system-ui,sans-serif;margin:0;padding:2rem 1rem;
+      background:#f5f7fb;color:#1c2230;text-align:center}}
+ .etat{{color:{couleur};font-size:1.6rem;font-weight:700;margin:0 0 .5rem}}
+ .detail{{color:#4a5265;margin:0 0 1.5rem}}
+ img{{max-width:220px;width:60%;border-radius:8px;border:3px solid {couleur}}}
+ .note{{margin-top:2rem;font-size:.85rem;color:#6b7385}}
+</style></head><body>
+<p class="etat">{escape(titre)}</p>
+<p class="detail">{escape(detail)}</p>
+{photo}
+<p class="note">Comparez la photo au porteur de la carte.</p>
+</body></html>"""
+        response = HttpResponse(html, content_type="text/html; charset=utf-8")
+        response["Cache-Control"] = "no-store"
+        response["X-Robots-Tag"] = "noindex, nofollow"
+        return response
+
+
+class StaffRosterPdfView(APIView):
+    """Liste imprimable du personnel enseignant, avec colonne d'emargement.
+
+    Memes regles que la liste d'appel des eleves: le module "reports" ouvre
+    l'acces au personnel encadrant, les familles en sont exclues. Un document
+    nommant tout le corps enseignant n'a rien a faire entre leurs mains.
+    """
+
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request):
+        if getattr(request.user, "role", "") in {UserRole.PARENT, UserRole.STUDENT}:
+            raise PermissionDenied("Accès refusé à la liste du personnel.")
+
+        target_etablissement_id = _effective_etablissement_id(request)
+        # Sans etablissement determine, le filtre ci-dessous ne s'applique pas
+        # et le document listerait tout le personnel de toutes les ecoles. Le
+        # cas n'est pas theorique: un compte directeur mal rattache suffit.
+        if target_etablissement_id is None:
+            raise PermissionDenied("Selectionnez un etablissement actif.")
+
+        queryset = Teacher.objects.select_related("user").prefetch_related(
+            # Sans ce prefetch, _teacher_subjects_label ferait deux requetes
+            # par enseignant: une pour ses affectations, une par matiere.
+            "assignments__subject"
+        )
+        if target_etablissement_id:
+            queryset = queryset.filter(etablissement_id=target_etablissement_id)
+
+        teachers = list(queryset.order_by("user__last_name", "user__first_name", "id"))
+
+        etablissement = (
+            Etablissement.objects.filter(id=target_etablissement_id).first()
+            if target_etablissement_id
+            else None
+        )
+        school = _school_identity()
+        if etablissement is not None:
+            school = {**school, "name": etablissement.name}
+        logo_path = (
+            _etablissement_media_field_path(etablissement, "logo") or _school_logo_path()
+        )
+
+        pdf = _build_staff_roster_pdf(
+            teachers,
+            school=school,
+            logo_path=logo_path,
+            year_label=_active_academic_year_label(),
+        )
+        return pdf_output_response(pdf, "liste_enseignants.pdf")
 
 
 class ClassRosterPdfView(APIView):
@@ -2964,7 +3503,10 @@ class ClassRosterPdfView(APIView):
             raise PermissionDenied("Accès refusé aux listes de classe.")
 
         target_etablissement_id = _effective_etablissement_id(request)
-        if getattr(request.user, "role", "") == UserRole.SUPER_ADMIN and target_etablissement_id is None:
+        # Meme raison que pour la liste du personnel: sans etablissement, le
+        # filtre ne s'applique pas et le document sortirait les classes de
+        # toutes les ecoles. Refuser vaut mieux que fuiter.
+        if target_etablissement_id is None:
             raise PermissionDenied("Selectionnez un etablissement actif.")
 
         # Trois etats, comme le filtre de l'ecran. Un simple booleen
