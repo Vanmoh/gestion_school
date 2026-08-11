@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gestion_school_app/features/students/data/students_repository.dart';
 import 'package:gestion_school_app/features/students/domain/student.dart';
 import 'package:gestion_school_app/features/students/presentation/students_controller.dart';
-import 'package:gestion_school_app/features/students/presentation/widgets/roster_pdf_preview_dialog.dart';
+import 'package:gestion_school_app/core/widgets/roster_pdf_preview_dialog.dart';
 import 'package:gestion_school_app/features/students/presentation/widgets/student_roster_dialog.dart';
 
 class _FakeRepository extends StudentsRepository {
