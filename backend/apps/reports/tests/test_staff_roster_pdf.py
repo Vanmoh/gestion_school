@@ -195,6 +195,54 @@ class StaffRosterPdfTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_a_long_subject_list_is_cut_instead_of_overflowing(self):
+        """Regression: les matieres debordaient sur la colonne d'emargement.
+
+        `FPDF.cell` dessine la bordure a la largeur demandee mais n'ecrete pas
+        son contenu. Un professeur cumulant trois intitules longs voyait son
+        texte se superposer a la case a signer -- visible seulement une fois
+        le document imprime.
+        """
+        from fpdf import FPDF
+
+        from apps.reports.views import STAFF_COLUMNS, _ajuster_a_la_cellule
+
+        pdf = FPDF(format="A4")
+        pdf.add_page()
+        pdf.set_font("Helvetica", "", 9)
+
+        largeur_matieres = dict(STAFF_COLUMNS)["Matières"]
+        long_intitule = (
+            "Education Physique et Sportive (EPS), "
+            "Histoire-Geographie (Histoire-Geo), Langue vivante 2"
+        )
+        self.assertGreater(pdf.get_string_width(long_intitule), largeur_matieres)
+
+        ajuste = _ajuster_a_la_cellule(pdf, long_intitule, largeur_matieres)
+
+        self.assertLessEqual(pdf.get_string_width(ajuste), largeur_matieres)
+        self.assertTrue(ajuste.endswith("..."))
+
+    def test_a_short_value_is_left_untouched(self):
+        from fpdf import FPDF
+
+        from apps.reports.views import _ajuster_a_la_cellule
+
+        pdf = FPDF(format="A4")
+        pdf.add_page()
+        pdf.set_font("Helvetica", "", 9)
+
+        self.assertEqual(_ajuster_a_la_cellule(pdf, "Anglais", 62.0), "Anglais")
+        self.assertEqual(_ajuster_a_la_cellule(pdf, "", 62.0), "")
+
+    def test_the_columns_fit_the_page(self):
+        """Une somme superieure a la largeur utile pousserait la derniere
+        colonne hors de la feuille."""
+        from apps.reports.views import ROSTER_COLUMNS, STAFF_COLUMNS
+
+        for colonnes in (STAFF_COLUMNS, ROSTER_COLUMNS):
+            self.assertLessEqual(sum(largeur for _, largeur in colonnes), 190.0)
+
     def test_it_requires_authentication(self):
         self.client.force_authenticate(None)
         response = self.client.get("/api/reports/staff-roster/")

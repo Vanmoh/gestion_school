@@ -967,7 +967,8 @@ def _draw_roster_class_page(
             "",
         )
         for (_, largeur), valeur in zip(ROSTER_COLUMNS, valeurs):
-            pdf.cell(largeur, 7, _pdf_text(valeur), border=1)
+            texte = _ajuster_a_la_cellule(pdf, _pdf_text(valeur), largeur)
+            pdf.cell(largeur, 7, texte, border=1)
         pdf.ln(7)
 
     if not students:
@@ -1033,13 +1034,41 @@ def _draw_roster_summary_page(
     pdf.ln(8)
 
 
+# Largeurs en mm; la somme fait la largeur utile d'une A4 portrait (190).
+# « Matières » est la colonne qui deborde en pratique -- un professeur cumule
+# volontiers trois intitules longs -- elle prend donc le plus de place apres
+# le nom, l'emargement gardant de quoi signer.
 STAFF_COLUMNS = (
-    ("N°", 12.0),
+    ("N°", 10.0),
     ("Code", 26.0),
-    ("Nom et prénoms", 58.0),
-    ("Matières", 50.0),
-    ("Émargement", 44.0),
+    ("Nom et prénoms", 54.0),
+    ("Matières", 62.0),
+    ("Émargement", 38.0),
 )
+
+
+def _ajuster_a_la_cellule(pdf: FPDF, texte: str, largeur: float) -> str:
+    """Tronque un texte trop long pour sa colonne.
+
+    `FPDF.cell` dessine la bordure a la largeur demandee mais n'ecrete pas son
+    contenu: un intitule trop long depasse simplement sur les colonnes
+    suivantes, et vient se superposer a la colonne d'emargement. Rien ne le
+    signale, sinon le document imprime.
+    """
+    if not texte:
+        return texte
+
+    disponible = largeur - 2  # marges internes de la cellule
+    if pdf.get_string_width(texte) <= disponible:
+        return texte
+
+    # « ... » plutot que le caractere d'ellipse, absent du latin-1 du PDF.
+    suffixe = "..."
+    reste = disponible - pdf.get_string_width(suffixe)
+    coupe = texte
+    while coupe and pdf.get_string_width(coupe) > reste:
+        coupe = coupe[:-1]
+    return f"{coupe.rstrip()}{suffixe}" if coupe else suffixe
 
 
 def _draw_staff_table_header(pdf: FPDF) -> None:
@@ -1118,7 +1147,8 @@ def _build_staff_roster_pdf(
             "",
         )
         for (_, largeur), valeur in zip(STAFF_COLUMNS, valeurs):
-            pdf.cell(largeur, 7, _pdf_text(valeur), border=1)
+            texte = _ajuster_a_la_cellule(pdf, _pdf_text(valeur), largeur)
+            pdf.cell(largeur, 7, texte, border=1)
         pdf.ln(7)
 
     if not teachers:
