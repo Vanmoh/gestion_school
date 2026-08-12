@@ -122,6 +122,31 @@ class CarteScolaireTests(APITestCase):
                 self.assertEqual(response["Content-Type"], "application/pdf")
                 self.assertTrue(response.content.startswith(b"%PDF"))
 
+    def test_the_download_header_survives_an_accented_class_name(self):
+        """Les en-tetes HTTP n'admettent pas d'octets non-ASCII.
+
+        « cartes_1ère_Année_EM2.pdf » y partait tel quel. La RFC 6266 demande
+        un repli ASCII et une forme encodee.
+        """
+        classe = ClassRoom.objects.create(
+            name="1ère Année EM2",
+            academic_year=self.year,
+            etablissement=self.etablissement,
+        )
+        Student.objects.filter(pk=self.eleve.pk).update(classroom=classe)
+
+        response = self.client.get(
+            f"/api/reports/student-cards/class/{classe.id}/",
+            {"layout_mode": "a4_6up"},
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        entete = response["Content-Disposition"]
+        entete.encode("ascii")  # leve UnicodeEncodeError si un accent subsiste
+        self.assertIn("1ere_Annee_EM2", entete)
+        self.assertIn("filename*=UTF-8''", entete)
+
     def test_an_unknown_format_is_refused_rather_than_silently_replaced(self):
         """Une planche imprimee au mauvais format ne se rattrape pas."""
         response = self.client.get(

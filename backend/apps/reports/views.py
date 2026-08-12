@@ -1,6 +1,8 @@
 import hashlib
 import io
 import tempfile
+import unicodedata
+from urllib.parse import quote
 from datetime import date
 from pathlib import Path
 
@@ -322,7 +324,19 @@ def _carte_qr_image_path(url: str) -> str | None:
 def pdf_output_response(pdf: FPDF, filename: str) -> HttpResponse:
     data = bytes(pdf.output())
     response = HttpResponse(data, content_type="application/pdf")
-    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    # Un nom de classe accentue partait tel quel dans l'en-tete: « cartes_
+    # 1ère_Année_EM2.pdf » y arrivait en octets non-ASCII, que la norme
+    # n'admet pas. La RFC 6266 demande deux formes: un repli ASCII pour les
+    # clients anciens, et `filename*` encode pour les autres.
+    repli_ascii = (
+        unicodedata.normalize("NFKD", filename)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    ) or "document.pdf"
+    response["Content-Disposition"] = (
+        f'attachment; filename="{repli_ascii}"; '
+        f"filename*=UTF-8''{quote(filename)}"
+    )
     # Prevent stale browser/proxy cache for dynamically generated PDFs.
     response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response["Pragma"] = "no-cache"
