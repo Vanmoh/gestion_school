@@ -11,6 +11,7 @@ import 'package:printing/printing.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/attendance_student.dart';
 import 'attendance_controller.dart';
+import 'widgets/attendance_sheet_list.dart';
 
 class AttendancePage extends ConsumerStatefulWidget {
   const AttendancePage({super.key});
@@ -575,65 +576,27 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                       if (_sheetItems.isEmpty && !_sheetLoading)
                         const Text('Aucun élève trouvé pour cette classe/date.')
                       else
-                        ..._sheetItems.map((row) {
-                          final studentName =
-                              row['student_full_name']?.toString().trim().isNotEmpty ==
-                                  true
-                              ? row['student_full_name'].toString()
-                              : 'Élève';
-                          final matricule = row['student_matricule']?.toString() ?? '';
-                          return Card(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    '$studentName${matricule.isNotEmpty ? ' ($matricule)' : ''}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  SwitchListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    title: const Text('Absent'),
-                                    value: row['is_absent'] == true,
-                                    onChanged: (canWriteSheet && !_sheetLocked)
-                                        ? (value) {
-                                            setState(() {
-                                              row['is_absent'] = value;
-                                            });
-                                          }
-                                        : null,
-                                  ),
-                                  SwitchListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    title: const Text('Retard'),
-                                    value: row['is_late'] == true,
-                                    onChanged: (canWriteSheet && !_sheetLocked)
-                                        ? (value) {
-                                            setState(() {
-                                              row['is_late'] = value;
-                                            });
-                                          }
-                                        : null,
-                                  ),
-                                  TextFormField(
-                                    initialValue: row['reason']?.toString() ?? '',
-                                    enabled: canWriteSheet && !_sheetLocked,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Motif / remarque',
-                                    ),
-                                    onChanged: (value) {
-                                      row['reason'] = value;
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        }),
+                        AttendanceSheetList(
+                          items: _sheetItems,
+                          editable: canWriteSheet && !_sheetLocked,
+                          onPresenceChanged: (row, etat) => setState(() {
+                            final absent = etat == PresenceEleve.absent;
+                            row['is_absent'] = absent;
+                            // Repasser present efface le motif: il decrivait
+                            // une absence qui n'existe plus, et il serait
+                            // enregistre tel quel.
+                            if (!absent) row['reason'] = '';
+                          }),
+                          onRetardChanged: (row, enRetard) =>
+                              setState(() => row['is_late'] = enRetard),
+                          onMotifChanged: (row, motif) => row['reason'] = motif,
+                          onToutPresent: () => setState(() {
+                            for (final row in _sheetItems) {
+                              row['is_absent'] = false;
+                              row['reason'] = '';
+                            }
+                          }),
+                        ),
                       const SizedBox(height: 8),
                       Align(
                         alignment: Alignment.centerRight,
