@@ -2301,6 +2301,41 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
   /// La recherche serveur ne verrait que les profils crees -- or ce sont
   /// justement les comptes qui n'en ont pas qu'il faut retrouver pour leur
   /// en creer un.
+  /// Saisie dans la barre de recherche.
+  ///
+  /// Une recherche qui ne laisse qu'un enseignant a deja repondu: on ouvre sa
+  /// fiche. Sans cela l'ecran tombait sur l'etat vide et annoncait « aucun
+  /// enseignant ne correspond » alors qu'il venait d'en trouver un -- la carte
+  /// des resultats exige plusieurs correspondances, la fiche exige une
+  /// selection, et rien ne comblait l'entre-deux.
+  ///
+  /// Le choix se fait ici et non pendant le build: muter l'etat en pleine
+  /// construction de l'arbre est precisement ce que cette page faisait avant.
+  void _onTeacherSearchChanged(String valeur) {
+    setState(() {
+      _searchQuery = valeur;
+      if (valeur.trim().isEmpty) {
+        _selectedTeacherUserId = null;
+        _selectedTeacherId = null;
+        return;
+      }
+    });
+
+    final correspondances = _matchingTeacherUsers();
+    if (correspondances.length == 1) {
+      _selectTeacherUser(correspondances.first);
+    } else if (_selectedTeacherUserId != null &&
+        !correspondances.any(
+          (user) => _asInt(user['id']) == _selectedTeacherUserId,
+        )) {
+      // L'enseignant ouvert ne correspond plus a ce qu'on tape.
+      setState(() {
+        _selectedTeacherUserId = null;
+        _selectedTeacherId = null;
+      });
+    }
+  }
+
   List<Map<String, dynamic>> _matchingTeacherUsers() {
     final saisie = _searchQuery.trim().toLowerCase();
     if (saisie.isEmpty) return const [];
@@ -2424,7 +2459,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
         children: [
           TextField(
             controller: _searchController,
-            onChanged: (valeur) => setState(() => _searchQuery = valeur),
+            onChanged: _onTeacherSearchChanged,
             style: textTheme.titleMedium,
             decoration: InputDecoration(
               hintText:

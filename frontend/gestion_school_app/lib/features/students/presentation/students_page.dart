@@ -23,6 +23,7 @@ import '../domain/students_sort.dart';
 import 'student_actions.dart';
 import 'students_controller.dart';
 import 'widgets/student_palette_card.dart';
+import 'widgets/students_dashboard_card.dart';
 import 'widgets/student_roster_dialog.dart';
 
 class StudentsPage extends ConsumerStatefulWidget {
@@ -44,7 +45,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       'assets/images/str_signature.png';
   final int _tableRowsPerPage = 15;
   int _tablePage = 1;
-  int _serverTotalStudents = 0;
   StudentsStats _stats = const StudentsStats.empty();
   // Selection multiple, distincte de _selectedStudent qui pilote le
   // dossier ouvert: cocher des lignes ne doit pas changer la fiche.
@@ -225,7 +225,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       setState(() {
         _students = studentsPage.results;
         _filteredStudents = studentsPage.results;
-        _serverTotalStudents = studentsPage.count;
         _classrooms = results[1] as List<Map<String, dynamic>>;
         _parents = results[2] as List<Map<String, dynamic>>;
         _years = results[3] as List<Map<String, dynamic>>;
@@ -287,6 +286,16 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     if (nextSelected != null &&
         !filtered.any((s) => s.id == nextSelected!.id)) {
       nextSelected = null;
+    }
+
+    // Une recherche qui ne laisse qu'un eleve a deja repondu: demander de
+    // « choisir » dans une liste d'un seul element serait une ceremonie, et
+    // sans cela l'ecran tombait sur l'etat vide et annoncait « aucun eleve ne
+    // correspond » alors qu'il en avait trouve un.
+    if (nextSelected == null &&
+        _searchController.text.trim().isNotEmpty &&
+        filtered.length == 1) {
+      nextSelected = filtered.first;
     }
     final selectedClassroomId = nextSelected?.classroomId;
 
@@ -833,46 +842,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     }
   }
 
-  Future<void> _toggleIncidentStatus(Map<String, dynamic> incident) async {
-    if (_isStudentsReadOnlyRole()) {
-      _showMessage('Mode lecture seule: changement statut incident non autorise.');
-      return;
-    }
-
-    final student = _selectedStudent;
-    if (student == null) return;
-
-    final incidentId = _asInt(incident['id']);
-    if (incidentId <= 0) {
-      _showMessage('Incident invalide.');
-      return;
-    }
-
-    final currentStatus = (incident['status'] ?? 'open').toString();
-    final targetStatus = currentStatus == 'resolved' ? 'open' : 'resolved';
-
-    setState(() => _saving = true);
-    try {
-      await ref
-          .read(studentsRepositoryProvider)
-          .updateDisciplineIncidentStatus(
-            incidentId: incidentId,
-            status: targetStatus,
-          );
-      await _loadStudentLinkedData(student.id);
-      _showMessage(
-        targetStatus == 'resolved'
-            ? 'Incident marqué comme traité.'
-            : 'Incident rouvert.',
-        isSuccess: true,
-      );
-    } catch (error) {
-      _showMessage('Erreur mise à jour incident: $error');
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
   Future<bool> _createAttendanceEntry() async {
     if (_isStudentsReadOnlyRole()) {
       _showMessage('Mode lecture seule: saisie absence/retard non autorisee.');
@@ -1024,17 +993,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         classrooms: _classrooms,
       ),
     );
-  }
-
-  Future<void> _printPaymentReceipt(int paymentId) async {
-    try {
-      final bytes = await ref
-          .read(studentsRepositoryProvider)
-          .fetchReceiptPdf(paymentId);
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
-    } catch (error) {
-      _showMessage('Erreur impression reçu: $error');
-    }
   }
 
   String _classCardsExportFileName(int classroomId) {
@@ -2885,7 +2843,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final isCompactLayout = screenWidth < 1100;
     final pagePadding = isCompactLayout ? 12.0 : 18.0;
     final sectionGap = isCompactLayout ? 12.0 : 14.0;
-    final totalFiltered = _serverTotalStudents;
     // La pagination a disparu avec le tableau: la palette montre un eleve,
     // et la fenetre « Liste des eleves » se charge des groupes.
     final visibleStudents = _filteredStudents;
@@ -2902,15 +2859,19 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
               style: textTheme.bodySmall,
             ),
           ),
-        _buildStudentsDashboardCard(
-          textTheme: textTheme,
-          colorScheme: colorScheme,
-          isCompactLayout: isCompactLayout,
+        StudentsDashboardCard(
+          stats: _stats,
           activeYearLabel: activeYearLabel,
           classCount: classCount,
-          totalFiltered: totalFiltered,
           scopeLabel: scopeLabel,
           refreshLabel: refreshLabel,
+          isCompactLayout: isCompactLayout,
+          saving: _saving,
+          readOnly: _isStudentsReadOnlyRole(),
+          onRefresh: _reloadStudentsTable,
+          onAddStudent: _openRegistrationForm,
+          onOpenByClass: _openStudentsByClassPanel,
+          onOpenClassCards: _openClassCardsPanel,
         ),
         SizedBox(height: sectionGap),
         _buildStudentSearchCard(
@@ -2925,359 +2886,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           visibleStudents: visibleStudents,
         ),
       ],
-    );
-  }
-
-  // ignore: unused_element
-  Widget _buildStudentDossierCard({required ColorScheme colorScheme}) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-        child: _selectedStudent == null
-            ? const Text('Sélectionne un élève pour voir son dossier complet.')
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'Dossier élève',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Fiche complète de l’élève sélectionné.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 10),
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surfaceContainerLowest,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: colorScheme.outlineVariant.withValues(
-                          alpha: 0.55,
-                        ),
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            Chip(
-                              avatar: const Icon(
-                                Icons.person_outline,
-                                size: 16,
-                              ),
-                              label: Text(_selectedStudent!.fullName),
-                            ),
-                            Chip(
-                              avatar: const Icon(
-                                Icons.badge_outlined,
-                                size: 16,
-                              ),
-                              label: Text(_selectedStudent!.matricule),
-                            ),
-                            _statusBadge(
-                              _selectedStudent!.isArchived
-                                  ? 'Archivé'
-                                  : 'Actif',
-                              _selectedStudent!.isArchived,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            _studentInfoPill(
-                              icon: Icons.class_outlined,
-                              label: 'Classe',
-                              value: _selectedStudent!.classroomName.isEmpty
-                                  ? 'Non attribuée'
-                                  : _selectedStudent!.classroomName,
-                            ),
-                            _studentInfoPill(
-                              icon: Icons.family_restroom_outlined,
-                              label: 'Parent',
-                              value: _selectedStudent!.parentName.isEmpty
-                                  ? 'Non attribué'
-                                  : _selectedStudent!.parentName,
-                            ),
-                            _studentInfoPill(
-                              icon: Icons.cake_outlined,
-                              label: 'Naissance',
-                              value: _selectedStudent!.birthDate == null
-                                  ? 'Non renseignée'
-                                  : _apiDate(_selectedStudent!.birthDate!),
-                            ),
-                            if (_selectedStudent!.phone.trim().isNotEmpty)
-                              _studentInfoPill(
-                                icon: Icons.phone_outlined,
-                                label: 'Téléphone',
-                                value: _selectedStudent!.phone,
-                              ),
-                            if (_selectedStudent!.email.trim().isNotEmpty)
-                              _studentInfoPill(
-                                icon: Icons.alternate_email_outlined,
-                                label: 'Email',
-                                value: _selectedStudent!.email,
-                              ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  if (_detailLoading)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 18),
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  else ...[
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        _metricChip(
-                          'Historique académique',
-                          '${_history.length}',
-                        ),
-                        _metricChip(
-                          'Incidents ouverts',
-                          '${_incidents.where((i) => (i['status']?.toString() ?? '') != 'resolved').length}',
-                        ),
-                        _metricChip(
-                          'Absences',
-                          '${_attendances.where((a) => a['is_absent'] == true).length}',
-                        ),
-                        _metricChip(
-                          'Retards',
-                          '${_attendances.where((a) => a['is_late'] == true).length}',
-                        ),
-                        _metricChip(
-                          'Solde frais',
-                          _money(
-                            _fees.fold<double>(
-                              0,
-                              (sum, row) => sum + _toDouble(row['balance']),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    _dossierSectionCard(
-                      title: 'Historique académique (${_history.length})',
-                      children: _history.isEmpty
-                          ? const [
-                              Padding(
-                                padding: EdgeInsets.fromLTRB(16, 0, 16, 14),
-                                child: Text('Aucun historique disponible.'),
-                              ),
-                            ]
-                          : _history
-                                .map(
-                                  (row) => ListTile(
-                                    dense: true,
-                                    title: Text(
-                                      'Année: ${_yearName(_asInt(row['academic_year']))} • Classe: ${_classroomName(_asInt(row['classroom']))}',
-                                    ),
-                                    subtitle: Text(
-                                      'Moyenne: ${row['average'] ?? '-'} • Rang: ${row['rank'] ?? '-'}',
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                    ),
-                    _dossierSectionCard(
-                      title: 'Dossier disciplinaire (${_incidents.length})',
-                      children: _incidents.isEmpty
-                          ? const [
-                              Padding(
-                                padding: EdgeInsets.fromLTRB(16, 0, 16, 14),
-                                child: Text('Aucun incident disciplinaire.'),
-                              ),
-                            ]
-                          : _incidents.take(20).map((row) {
-                              final isResolved =
-                                  (row['status'] ?? '').toString() ==
-                                  'resolved';
-                              return ListTile(
-                                dense: true,
-                                title: Text(
-                                  '${row['category'] ?? 'Incident'} • ${row['incident_date'] ?? ''}',
-                                ),
-                                subtitle: Text(
-                                  '${row['description'] ?? ''}\nStatut: ${isResolved ? 'Traité' : 'Ouvert'} • Gravité: ${_severityLabel((row['severity'] ?? '').toString())}',
-                                ),
-                                isThreeLine: true,
-                                trailing: IconButton(
-                                  tooltip: isResolved
-                                      ? 'Rouvrir incident'
-                                      : 'Marquer traité',
-                                  icon: Icon(
-                                    isResolved
-                                        ? Icons.undo_outlined
-                                        : Icons.check_circle_outline,
-                                  ),
-                                  onPressed: _saving
-                                      ? null
-                                      : () => _toggleIncidentStatus(row),
-                                ),
-                              );
-                            }).toList(),
-                    ),
-                    _dossierSectionCard(
-                      title: 'Absences & retards (${_attendances.length})',
-                      children: _attendances.isEmpty
-                          ? const [
-                              Padding(
-                                padding: EdgeInsets.fromLTRB(16, 0, 16, 14),
-                                child: Text('Aucune donnée de présence.'),
-                              ),
-                            ]
-                          : _attendances.take(25).map((row) {
-                              final proofPath = (row['proof'] ?? '')
-                                  .toString()
-                                  .trim();
-                              final hasProof = proofPath.isNotEmpty;
-                              final proofThumbSize =
-                                  MediaQuery.of(context).size.width < 720
-                                  ? 36.0
-                                  : 44.0;
-                              final proofIconSize = proofThumbSize < 40
-                                  ? 16.0
-                                  : 18.0;
-                              final proofUrl = hasProof
-                                  ? _resolveMediaUrl(proofPath)
-                                  : '';
-                              return ListTile(
-                                dense: true,
-                                leading: hasProof
-                                    ? GestureDetector(
-                                        onTap: () =>
-                                            _viewAttendanceProof(proofPath),
-                                        child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(
-                                            6,
-                                          ),
-                                          child: Container(
-                                            width: proofThumbSize,
-                                            height: proofThumbSize,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .surfaceContainerHighest,
-                                            child: Image.network(
-                                              proofUrl,
-                                              fit: BoxFit.cover,
-                                              errorBuilder:
-                                                  (context, error, stackTrace) {
-                                                    return Icon(
-                                                      Icons
-                                                          .image_not_supported_outlined,
-                                                      size: proofIconSize,
-                                                    );
-                                                  },
-                                            ),
-                                          ),
-                                        ),
-                                      )
-                                    : null,
-                                title: Text('${row['date'] ?? ''}'),
-                                subtitle: Text(
-                                  'Absent: ${row['is_absent'] == true ? 'Oui' : 'Non'} • Retard: ${row['is_late'] == true ? 'Oui' : 'Non'} • Justificatif: ${hasProof ? 'Oui' : 'Non'}'
-                                  '${hasProof ? '\nFichier: ${_fileNameFromPath(proofPath)}' : ''}',
-                                ),
-                                isThreeLine: hasProof,
-                              );
-                            }).toList(),
-                    ),
-                    _dossierSectionCard(
-                      title:
-                          'Frais & paiements (${_fees.length} frais / ${_payments.length} paiements)',
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Text(
-                                'Actions financières',
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Total dû: ${_money(_fees.fold<double>(0, (sum, row) => sum + _toDouble(row['amount_due'])))} • '
-                                'Total payé: ${_money(_fees.fold<double>(0, (sum, row) => sum + _toDouble(row['amount_paid'])))} • '
-                                'Solde: ${_money(_fees.fold<double>(0, (sum, row) => sum + _toDouble(row['balance'])))}',
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (_fees.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(16, 0, 16, 6),
-                            child: Text('Aucun frais scolaire enregistré.'),
-                          )
-                        else
-                          ..._fees
-                              .take(20)
-                              .map(
-                                (row) => ListTile(
-                                  dense: true,
-                                  title: Text(
-                                    '${_feeTypeLabel((row['fee_type'] ?? '').toString())} • Échéance ${row['due_date'] ?? ''}',
-                                  ),
-                                  subtitle: Text(
-                                    'Dû: ${_money(_toDouble(row['amount_due']))} • Payé: ${_money(_toDouble(row['amount_paid']))} • Solde: ${_money(_toDouble(row['balance']))}',
-                                  ),
-                                ),
-                              ),
-                        if (_payments.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(16, 0, 16, 14),
-                            child: Text('Aucun paiement enregistré.'),
-                          )
-                        else
-                          ..._payments
-                              .take(15)
-                              .map(
-                                (row) => ListTile(
-                                  dense: true,
-                                  title: Text(
-                                    '${_money(_toDouble(row['amount']))} • ${row['method'] ?? 'N/A'}',
-                                  ),
-                                  subtitle: Text(
-                                    'Référence: ${row['reference'] ?? '-'} • Date: ${row['created_at'] ?? ''}',
-                                  ),
-                                  trailing: IconButton(
-                                    tooltip: 'Imprimer reçu',
-                                    icon: const Icon(
-                                      Icons.receipt_long_outlined,
-                                    ),
-                                    onPressed: () {
-                                      final paymentId = _asInt(row['id']);
-                                      if (paymentId <= 0) {
-                                        _showMessage(
-                                          'Paiement invalide pour impression.',
-                                        );
-                                        return;
-                                      }
-                                      _printPaymentReceipt(paymentId);
-                                    },
-                                  ),
-                                ),
-                              ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-      ),
     );
   }
 
@@ -3839,201 +3447,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   }
 
 
-  Widget _buildStudentsDashboardCard({
-    required TextTheme textTheme,
-    required ColorScheme colorScheme,
-    required bool isCompactLayout,
-    required String activeYearLabel,
-    required int classCount,
-    required int totalFiltered,
-    required String scopeLabel,
-    required String refreshLabel,
-  }) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              colorScheme.primaryContainer.withValues(alpha: 0.75),
-              colorScheme.surfaceContainerLowest,
-            ],
-          ),
-        ),
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-            isCompactLayout ? 12 : 16,
-            isCompactLayout ? 12 : 14,
-            isCompactLayout ? 12 : 16,
-            isCompactLayout ? 12 : 14,
-          ),
-          child: Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            runSpacing: isCompactLayout ? 10 : 12,
-            crossAxisAlignment: WrapCrossAlignment.start,
-            children: [
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: isCompactLayout ? 760 : 620,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final stackVertically = constraints.maxWidth < 560;
-                        if (stackVertically) {
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Tableau de bord élèves',
-                                style: textTheme.headlineSmall?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: FilledButton.tonalIcon(
-                                  style: _compactUnifiedActionButtonStyle(),
-                                  onPressed: _saving
-                                      ? null
-                                      : () => _reloadStudentsTable(),
-                                  icon: const Icon(Icons.sync),
-                                  label: const Text('Actualiser'),
-                                ),
-                              ),
-                            ],
-                          );
-                        }
-
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'Tableau de bord élèves',
-                                style: textTheme.headlineSmall?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            FilledButton.tonalIcon(
-                              style: _compactUnifiedActionButtonStyle(),
-                              onPressed: _saving
-                                  ? null
-                                  : () => _reloadStudentsTable(),
-                              icon: const Icon(Icons.sync),
-                              label: const Text('Actualiser'),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _dashboardInfoChip(
-                          icon: Icons.calendar_month_outlined,
-                          label: 'Année: $activeYearLabel',
-                        ),
-                        _dashboardInfoChip(
-                          icon: Icons.class_outlined,
-                          label: '$classCount classes',
-                        ),
-                        _dashboardInfoChip(
-                          icon: Icons.analytics_outlined,
-                          label: _stats.isEmpty
-                              ? 'Effectifs indisponibles'
-                              : '${_stats.active} actifs · ${_stats.archived} archivés · ${_stats.newThisYear} nouveaux',
-                          maxWidth: 420,
-                        ),
-                        _dashboardInfoChip(
-                          icon: Icons.apartment_outlined,
-                          label: scopeLabel,
-                          maxWidth: 320,
-                        ),
-                        _dashboardInfoChip(
-                          icon: Icons.schedule_outlined,
-                          label: refreshLabel,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: isCompactLayout ? 760 : 1120,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    _horizontalActionStrip(
-                      children: [
-                        // Seule action pleine de la page: c'est celle qu'on
-                        // vient chercher. Les suivantes portent sur un eleve
-                        // deja selectionne, ou changent de vue.
-                        Tooltip(
-                          message: _isStudentsReadOnlyRole()
-                              ? lectureSeuleMotif
-                              : 'Inscrire un nouvel élève',
-                          child: FilledButton.icon(
-                            style: _compactUnifiedActionButtonStyle(),
-                            onPressed: (_saving || _isStudentsReadOnlyRole())
-                                ? null
-                                : _openRegistrationForm,
-                            icon: const Icon(Icons.person_add_alt_1),
-                            label: const Text('Ajouter élève'),
-                          ),
-                        ),
-                        // Historique, Incident, Absence, Frais et Paiement
-                        // ont rejoint la palette: ils agissent sur un eleve,
-                        // et les laisser ici obligeait a remonter en haut de
-                        // page pour agir sur celui qu'on avait sous les yeux.
-                        MenuAnchor(
-                          builder: (context, controller, _) => IconButton(
-                            tooltip: 'Autres vues',
-                            onPressed: _saving
-                                ? null
-                                : () => controller.isOpen
-                                      ? controller.close()
-                                      : controller.open(),
-                            icon: const Icon(Icons.more_horiz),
-                          ),
-                          menuChildren: [
-                            MenuItemButton(
-                              onPressed: _saving
-                                  ? null
-                                  : _openStudentsByClassPanel,
-                              leadingIcon: const Icon(Icons.groups_2_outlined),
-                              child: const Text('Vue par classe'),
-                            ),
-                            MenuItemButton(
-                              onPressed: _saving ? null : _openClassCardsPanel,
-                              leadingIcon: const Icon(Icons.badge_outlined),
-                              child: const Text('Cartes'),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   /// Barre de recherche unique.
   ///
   /// Les filtres classe/statut ont quitte cette page: ils vivent desormais
@@ -4143,7 +3556,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
     // Plusieurs correspondances: on demande laquelle avant d'afficher quoi
     // que ce soit, plutot que d'en choisir une au hasard.
-    if (student == null && visibleStudents.length > 1) {
+    //
+    // Sans recherche en cours, cette carte listerait tout l'effectif et
+    // remplacerait l'invitation a chercher: on n'a rien demande, il n'y a donc
+    // pas de « correspondances ».
+    if (student == null && query.isNotEmpty && visibleStudents.length > 1) {
       return _buildStudentMatchesCard(
         textTheme: textTheme,
         colorScheme: colorScheme,
@@ -4260,42 +3677,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                     onTap: () => _activateStudent(row),
                   );
                 },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _dashboardInfoChip({
-    required IconData icon,
-    required String label,
-    double maxWidth = 220,
-  }) {
-    final scheme = Theme.of(context).colorScheme;
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxWidth),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: scheme.surface.withValues(alpha: 0.72),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: scheme.outlineVariant.withValues(alpha: 0.55),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 15, color: scheme.primary),
-            const SizedBox(width: 6),
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelMedium,
               ),
             ),
           ],
@@ -4780,20 +4161,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
-  Widget _horizontalActionStrip({required List<Widget> children}) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (var i = 0; i < children.length; i++) ...[
-            children[i],
-            if (i < children.length - 1) const SizedBox(width: 10),
-          ],
-        ],
-      ),
-    );
-  }
-
   ButtonStyle _compactUnifiedActionButtonStyle() {
     return FilledButton.styleFrom(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -4892,16 +4259,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final m = value.month.toString().padLeft(2, '0');
     final d = value.day.toString().padLeft(2, '0');
     return '$y-$m-$d';
-  }
-
-  String _fileNameFromPath(String value) {
-    final normalized = value.trim().replaceAll('\\', '/');
-    if (normalized.isEmpty) return '';
-    final index = normalized.lastIndexOf('/');
-    if (index >= 0 && index < normalized.length - 1) {
-      return normalized.substring(index + 1);
-    }
-    return normalized;
   }
 
   String _resolveMediaUrl(String value) {
