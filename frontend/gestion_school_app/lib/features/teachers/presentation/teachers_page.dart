@@ -1152,6 +1152,12 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     final phoneController = TextEditingController(
       text: (user['phone'] ?? '').toString(),
     );
+    // Photo deja en place, s'il y en a une: sans elle, l'emplacement vide
+    // laisserait croire qu'aucune photo n'a jamais ete televersee.
+    final photoActuelle = (user['profile_photo'] ?? '').toString();
+    Uint8List? photoBytes;
+    String? photoPath;
+    String? photoFileName;
 
     final saved = await showDialog<bool>(
       context: context,
@@ -1214,6 +1220,26 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           ),
                         ),
                       ),
+                      _PhotoField(
+                        bytes: photoBytes,
+                        fileName: photoFileName,
+                        urlActuelle: photoActuelle,
+                        enabled: !savingDialog,
+                        onPick: () async {
+                          final choix = await _pickTeacherPhoto();
+                          if (choix == null) return;
+                          setDialogState(() {
+                            photoBytes = choix.bytes;
+                            photoPath = choix.path;
+                            photoFileName = choix.fileName;
+                          });
+                        },
+                        onClear: () => setDialogState(() {
+                          photoBytes = null;
+                          photoPath = null;
+                          photoFileName = null;
+                        }),
+                      ),
                     ],
                   ),
                 ),
@@ -1235,12 +1261,14 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           final email = emailController.text.trim();
                           final phone = phoneController.text.trim();
 
+                          // L'email suit la creation: facultatif. L'exiger ici
+                          // aurait bloque la premiere modification d'un compte
+                          // cree sans adresse.
                           if (username.isEmpty ||
                               firstName.isEmpty ||
-                              lastName.isEmpty ||
-                              email.isEmpty) {
+                              lastName.isEmpty) {
                             _showMessage(
-                              'Username, prénom, nom et email sont obligatoires.',
+                              'Username, prénom et nom sont obligatoires.',
                             );
                             return;
                           }
@@ -1272,6 +1300,19 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                                       'etablissement': targetEtablissement,
                                   },
                                 );
+
+                            // Envoi separe: le PATCH ci-dessus est en JSON, un
+                            // fichier demande du multipart. Sans nouvelle
+                            // photo choisie, l'existante reste en place.
+                            if (photoBytes != null) {
+                              await _uploadTeacherPhoto(
+                                userId,
+                                bytes: photoBytes,
+                                path: photoPath,
+                                fileName: photoFileName,
+                              );
+                            }
+
                             if (context.mounted) {
                               Navigator.of(context).pop(true);
                             }
@@ -3046,6 +3087,11 @@ class _PhotoChoisie {
 class _PhotoField extends StatelessWidget {
   final Uint8List? bytes;
   final String? fileName;
+
+  /// Photo deja enregistree sur le compte, en edition. Sans elle,
+  /// l'emplacement vide laisserait croire qu'il n'y en a jamais eu.
+  final String urlActuelle;
+
   final bool enabled;
   final Future<void> Function() onPick;
   final VoidCallback onClear;
@@ -3053,6 +3099,7 @@ class _PhotoField extends StatelessWidget {
   const _PhotoField({
     required this.bytes,
     required this.fileName,
+    this.urlActuelle = '',
     required this.enabled,
     required this.onPick,
     required this.onClear,
@@ -3078,12 +3125,21 @@ class _PhotoField extends StatelessWidget {
                 color: scheme.outlineVariant.withValues(alpha: 0.6),
               ),
             ),
-            child: bytes == null
-                ? Icon(
-                    Icons.person_outline,
-                    color: scheme.onSurfaceVariant,
-                  )
-                : Image.memory(bytes!, fit: BoxFit.cover),
+            child: bytes != null
+                ? Image.memory(bytes!, fit: BoxFit.cover)
+                : (urlActuelle.isNotEmpty
+                      ? Image.network(
+                          urlActuelle,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Icon(
+                            Icons.person_outline,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        )
+                      : Icon(
+                          Icons.person_outline,
+                          color: scheme.onSurfaceVariant,
+                        )),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -3102,7 +3158,7 @@ class _PhotoField extends StatelessWidget {
                   TextButton.icon(
                     onPressed: enabled ? () => onPick() : null,
                     icon: const Icon(Icons.upload_outlined, size: 18),
-                    label: const Text('Choisir'),
+                    label: Text(urlActuelle.isEmpty ? 'Choisir' : 'Remplacer'),
                     style: TextButton.styleFrom(
                       padding: EdgeInsets.zero,
                       visualDensity: VisualDensity.compact,
