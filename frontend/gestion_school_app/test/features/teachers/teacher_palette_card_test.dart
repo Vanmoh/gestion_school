@@ -54,6 +54,37 @@ Future<void> _pump(
 }
 
 void main() {
+  group('photo', () {
+    testWidgets('sans photo, les initiales tiennent la place', (tester) async {
+      await _pump(tester);
+
+      expect(find.byType(Image), findsNothing);
+      expect(find.text('AD'), findsOneWidget);
+    });
+
+    testWidgets('avec une photo, l_image remplace les initiales', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        user: {
+          ..._user,
+          'profile_photo': 'https://exemple.invalid/prof.jpg',
+        },
+      );
+
+      expect(find.byType(Image), findsOneWidget);
+    });
+
+    testWidgets('une adresse absente ne casse pas l_en-tete', (tester) async {
+      // L'annuaire ne fournit la photo qu'aux profils autorises: pour les
+      // autres, la cle n'existe pas du tout.
+      await _pump(tester, user: {..._user}..remove('profile_photo'));
+
+      expect(find.text('AD'), findsOneWidget);
+    });
+  });
+
   testWidgets('les trois blocs portent l_identite, le poste et les contacts', (
     tester,
   ) async {

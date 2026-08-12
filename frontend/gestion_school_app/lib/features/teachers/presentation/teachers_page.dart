@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -1357,6 +1358,9 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     final emailController = TextEditingController();
     final phoneController = TextEditingController();
     final passwordController = TextEditingController();
+    Uint8List? photoBytes;
+    String? photoPath;
+    String? photoFileName;
     int? createdUserId;
     String createdUsername = '';
 
@@ -1391,7 +1395,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           controller: emailController,
                           enabled: !savingDialog,
                           decoration: const InputDecoration(
-                            labelText: 'Email *',
+                            labelText: 'Email (facultatif)',
                           ),
                         ),
                       ),
@@ -1434,6 +1438,29 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           ),
                         ),
                       ),
+                      // La photo est televersee apres la creation du compte:
+                      // /auth/register/ recoit du JSON, un fichier demande du
+                      // multipart. Elle est facultative -- une fiche sans
+                      // portrait reste une fiche.
+                      _PhotoField(
+                        bytes: photoBytes,
+                        fileName: photoFileName,
+                        enabled: !savingDialog,
+                        onPick: () async {
+                          final choix = await _pickTeacherPhoto();
+                          if (choix == null) return;
+                          setDialogState(() {
+                            photoBytes = choix.bytes;
+                            photoPath = choix.path;
+                            photoFileName = choix.fileName;
+                          });
+                        },
+                        onClear: () => setDialogState(() {
+                          photoBytes = null;
+                          photoPath = null;
+                          photoFileName = null;
+                        }),
+                      ),
                     ],
                   ),
                 ),
@@ -1457,10 +1484,12 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           final phone = phoneController.text.trim();
                           final password = passwordController.text;
 
+                          // L'email n'est pas exige: beaucoup d'enseignants
+                          // n'en ont pas, et le reclamer poussait a inventer
+                          // une adresse qui ne servira jamais.
                           if (username.isEmpty ||
                               firstName.isEmpty ||
                               lastName.isEmpty ||
-                              email.isEmpty ||
                               password.isEmpty) {
                             _showMessage(
                               'Complétez tous les champs obligatoires.',
@@ -1494,6 +1523,18 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                             final payload = response.data;
                             if (payload is Map<String, dynamic>) {
                               createdUserId = _asInt(payload['id']);
+                            }
+
+                            // Un echec du televersement ne doit pas annuler
+                            // la creation: le compte existe, la photo se
+                            // rajoute ensuite depuis l'edition.
+                            if (createdUserId != null && photoBytes != null) {
+                              await _uploadTeacherPhoto(
+                                createdUserId!,
+                                bytes: photoBytes,
+                                path: photoPath,
+                                fileName: photoFileName,
+                              );
                             }
                             if (context.mounted) {
                               Navigator.of(context).pop(true);
@@ -2614,6 +2655,58 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     );
   }
 
+  /// Photo choisie dans le formulaire, ou null si l'utilisateur renonce.
+  Future<_PhotoChoisie?> _pickTeacherPhoto() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        type: FileType.custom,
+        allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp'],
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return null;
+
+      final fichier = result.files.first;
+      return _PhotoChoisie(
+        bytes: fichier.bytes,
+        path: (fichier.path?.trim().isEmpty ?? true) ? null : fichier.path,
+        fileName: fichier.name.trim().isEmpty ? null : fichier.name,
+      );
+    } catch (error) {
+      _showMessage('Sélection de la photo impossible: $error');
+      return null;
+    }
+  }
+
+  /// Televerse la photo sur le compte, en multipart.
+  ///
+  /// L'echec est signale mais ne remonte pas: le compte vient d'etre cree et
+  /// perdre cette creation pour une image serait disproportionne.
+  Future<void> _uploadTeacherPhoto(
+    int userId, {
+    Uint8List? bytes,
+    String? path,
+    String? fileName,
+  }) async {
+    try {
+      final nom = fileName ?? 'photo.jpg';
+      final fichier = bytes != null
+          ? MultipartFile.fromBytes(bytes, filename: nom)
+          : await MultipartFile.fromFile(path!, filename: nom);
+
+      await ref
+          .read(dioProvider)
+          .patch(
+            '/auth/users/$userId/',
+            data: FormData.fromMap({'profile_photo': fichier}),
+          );
+    } catch (error) {
+      _showMessage(
+        'Compte créé, mais la photo n\'a pas pu être envoyée: $error',
+      );
+    }
+  }
+
   /// Le profil connecte consulte les enseignants sans pouvoir les modifier.
   bool _isTeachersReadOnly() =>
       !ref.read(currentPermissionsProvider).canWrite('teachers');
@@ -2936,6 +3029,109 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Text('$label: $value'),
+    );
+  }
+}
+
+/// Photo retenue dans le formulaire, avant tout envoi.
+class _PhotoChoisie {
+  final Uint8List? bytes;
+  final String? path;
+  final String? fileName;
+
+  const _PhotoChoisie({this.bytes, this.path, this.fileName});
+}
+
+/// Champ photo du formulaire enseignant: apercu, choix, retrait.
+class _PhotoField extends StatelessWidget {
+  final Uint8List? bytes;
+  final String? fileName;
+  final bool enabled;
+  final Future<void> Function() onPick;
+  final VoidCallback onClear;
+
+  const _PhotoField({
+    required this.bytes,
+    required this.fileName,
+    required this.enabled,
+    required this.onPick,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return SizedBox(
+      width: 250,
+      child: Row(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: scheme.outlineVariant.withValues(alpha: 0.6),
+              ),
+            ),
+            child: bytes == null
+                ? Icon(
+                    Icons.person_outline,
+                    color: scheme.onSurfaceVariant,
+                  )
+                : Image.memory(bytes!, fit: BoxFit.cover),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Photo (facultative)',
+                  style: textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                if (bytes == null)
+                  TextButton.icon(
+                    onPressed: enabled ? () => onPick() : null,
+                    icon: const Icon(Icons.upload_outlined, size: 18),
+                    label: const Text('Choisir'),
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  )
+                else
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          fileName ?? 'photo',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.bodySmall,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Retirer',
+                        onPressed: enabled ? onClear : null,
+                        icon: const Icon(Icons.close, size: 16),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

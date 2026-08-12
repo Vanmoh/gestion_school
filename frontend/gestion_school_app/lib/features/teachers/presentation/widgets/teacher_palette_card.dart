@@ -107,16 +107,11 @@ class TeacherPaletteCard extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        CircleAvatar(
-          radius: 28,
-          backgroundColor: scheme.primaryContainer,
-          child: Text(
-            _initiales(_nomComplet()),
-            style: textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: scheme.onPrimaryContainer,
-            ),
-          ),
+        _Photo(
+          url: (user['profile_photo'] ?? '').toString(),
+          initiales: _initiales(_nomComplet()),
+          scheme: scheme,
+          textTheme: textTheme,
         ),
         const SizedBox(width: 14),
         Expanded(
@@ -498,5 +493,56 @@ class TeacherPaletteCard extends StatelessWidget {
     if (mots.length == 1) return mots.first.characters.first.toUpperCase();
     return (mots.first.characters.first + mots.last.characters.first)
         .toUpperCase();
+  }
+}
+
+/// Photo de l'enseignant, ou son emplacement quand elle manque.
+///
+/// L'annuaire ne fournit l'adresse qu'aux profils autorises: sans elle, et
+/// sur un lien mort, on retombe sur les initiales -- jamais sur l'icone
+/// d'image cassee du navigateur, qui se lit comme un defaut de l'application.
+class _Photo extends StatelessWidget {
+  final String url;
+  final String initiales;
+  final ColorScheme scheme;
+  final TextTheme textTheme;
+
+  static const taille = 56.0;
+
+  const _Photo({
+    required this.url,
+    required this.initiales,
+    required this.scheme,
+    required this.textTheme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final repli = Center(
+      child: Text(
+        initiales,
+        style: textTheme.titleMedium?.copyWith(
+          fontWeight: FontWeight.w800,
+          color: scheme.onPrimaryContainer,
+        ),
+      ),
+    );
+
+    return Container(
+      width: taille,
+      height: taille,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer,
+        shape: BoxShape.circle,
+      ),
+      child: url.isEmpty
+          ? repli
+          : Image.network(
+              url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => repli,
+            ),
+    );
   }
 }
