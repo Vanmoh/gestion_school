@@ -10,6 +10,12 @@ import '../../auth/presentation/auth_controller.dart';
 import '../../../core/widgets/roster_pdf_preview_dialog.dart';
 import 'widgets/teacher_palette_card.dart';
 
+/// Motif affiche sur les actions grisees.
+///
+/// Un bouton eteint sans explication passe pour une panne.
+const String teachersLectureSeuleMotif =
+    'Votre profil consulte les enseignants sans les modifier.';
+
 class TeachersPage extends ConsumerStatefulWidget {
   const TeachersPage({super.key});
 
@@ -2273,6 +2279,23 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
             spacing: 10,
             runSpacing: 10,
             children: [
+              // Seule action pleine, comme « Ajouter élève » sur la page des
+              // eleves. Inscrire quelqu'un qui n'existe pas encore demandait
+              // d'ouvrir « Gérer enseignant », d'y trouver la creation de
+              // compte, puis le profil: trois niveaux derriere un libelle qui
+              // ne dit pas « ajouter ».
+              Tooltip(
+                message: _isTeachersReadOnly()
+                    ? teachersLectureSeuleMotif
+                    : 'Créer un compte enseignant, puis son profil',
+                child: FilledButton.icon(
+                  onPressed: (_saving || _isTeachersReadOnly())
+                      ? null
+                      : _openCreateTeacherUserDialog,
+                  icon: const Icon(Icons.person_add_alt_1),
+                  label: const Text('Ajouter enseignant'),
+                ),
+              ),
               OutlinedButton.icon(
                 onPressed: _saving ? null : _openTeacherManagementDialog,
                 icon: const Icon(Icons.groups_2_outlined),
@@ -2591,19 +2614,21 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     );
   }
 
+  /// Le profil connecte consulte les enseignants sans pouvoir les modifier.
+  bool _isTeachersReadOnly() =>
+      !ref.read(currentPermissionsProvider).canWrite('teachers');
+
   /// Actions d'ecriture de la fiche, grisees sans le droit correspondant.
   ///
   /// Les formulaires refusaient deja l'ecriture, mais apres coup: on ouvrait
   /// le dialogue, on le remplissait, puis on apprenait le refus.
   List<Widget> _teacherPaletteActions(Map<String, dynamic>? profile) {
-    final lectureSeule = !ref
-        .read(currentPermissionsProvider)
-        .canWrite('teachers');
+    final lectureSeule = _isTeachersReadOnly();
 
     Widget action(IconData icone, String label, VoidCallback onPressed) {
       return Tooltip(
         message: lectureSeule
-            ? 'Votre profil consulte les enseignants sans les modifier.'
+            ? teachersLectureSeuleMotif
             : label,
         child: FilledButton.tonalIcon(
           onPressed: lectureSeule ? null : onPressed,

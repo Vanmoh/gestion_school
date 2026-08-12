@@ -258,6 +258,61 @@ void main() {
     expect(find.text('Liste des enseignants'), findsOneWidget);
   });
 
+  testWidgets('un bouton permet d_ajouter un enseignant inexistant', (
+    tester,
+  ) async {
+    await _pumpPage(tester);
+
+    // Inscrire quelqu'un qui n'existe pas encore demandait d'ouvrir « Gérer
+    // enseignant », d'y trouver la creation de compte, puis le profil: trois
+    // niveaux derriere un libelle qui ne dit pas « ajouter ».
+    expect(find.text('Ajouter enseignant'), findsOneWidget);
+
+    final bouton = tester.widget<ButtonStyleButton>(
+      find.ancestor(
+        of: find.text('Ajouter enseignant'),
+        matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
+      ),
+    );
+    expect(bouton.onPressed, isNotNull);
+  });
+
+  testWidgets('en lecture seule, Ajouter enseignant est grise et motive', (
+    tester,
+  ) async {
+    await _pumpPage(tester, niveau: AccessLevel.read);
+
+    final bouton = tester.widget<ButtonStyleButton>(
+      find.ancestor(
+        of: find.text('Ajouter enseignant'),
+        matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
+      ),
+    );
+    expect(bouton.onPressed, isNull);
+
+    final infobulle = tester.widget<Tooltip>(
+      find.ancestor(
+        of: find.text('Ajouter enseignant'),
+        matching: find.byType(Tooltip),
+      ),
+    );
+    expect(infobulle.message, contains('sans les modifier'));
+  });
+
+  testWidgets('le bouton ouvre la creation de compte enseignant', (
+    tester,
+  ) async {
+    await _pumpPage(tester);
+
+    await tester.tap(find.text('Ajouter enseignant'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // Le dialogue enchaine ensuite sur le profil: c'est le parcours complet
+    // d'un enseignant qui n'existe pas encore.
+    expect(find.byType(Dialog), findsWidgets);
+  });
+
   testWidgets('la remuneration n_apparait jamais dans la fiche', (
     tester,
   ) async {
