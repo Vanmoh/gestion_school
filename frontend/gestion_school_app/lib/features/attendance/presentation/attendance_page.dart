@@ -407,14 +407,25 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     });
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Gestion des absences')),
+      // Le titre vit desormais dans l'onglet « Élèves » du module Émargements:
+      // une barre de plus repeterait ce que la navigation dit deja.
+      appBar: null,
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          statsAsync.when(
-            loading: () => const LinearProgressIndicator(),
-            error: (error, _) => Text('Erreur stats: $error'),
-            data: (stats) => Card(
+          // Les statistiques decrivent le mois ecoule; la feuille d'appel est
+          // le geste du jour. Depliees en tete, elles obligeaient a defiler
+          // pour faire l'appel. Elles restent a portee d'un clic.
+          ExpansionTile(
+            title: const Text('Statistiques mensuelles'),
+            initiallyExpanded: false,
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            children: [
+              statsAsync.when(
+                loading: () => const LinearProgressIndicator(),
+                error: (error, _) => Text('Erreur stats: $error'),
+                data: (stats) => Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -473,6 +484,8 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                 ),
               ),
             ),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
           if (canUseSheet)

@@ -14,8 +14,9 @@ import 'core/permissions/module_permissions.dart';
 import 'core/providers/navigation_intents.dart';
 import 'core/theme/app_theme.dart';
 import 'features/attendance/presentation/attendance_controller.dart';
+import 'features/attendance/presentation/attendance_module_page.dart';
 import 'features/attendance/presentation/attendance_page.dart';
-import 'features/attendance/presentation/teacher_timesheet_page.dart';
+import 'features/attendance/presentation/parent_attendance_page.dart';
 import 'features/academics/presentation/academics_page.dart';
 import 'features/activity_logs/presentation/activity_logs_page.dart';
 import 'features/auth/presentation/auth_controller.dart';
@@ -219,8 +220,12 @@ class GestionSchoolApp extends ConsumerWidget {
           const RequireEtablissementSelection(child: _AdminShell()),
         '/home/student': (_) =>
           const RequireEtablissementSelection(child: _AdminShell()),
+        // L'ancienne adresse reste servie: un lien memorise ou une intention
+        // de navigation enregistree ne doit pas tomber dans le vide.
         '/attendance': (_) =>
-            const _GlobalFeatureRefreshHost(child: AttendancePage()),
+            const _GlobalFeatureRefreshHost(child: AttendanceModulePage()),
+        '/emargements': (_) =>
+            const _GlobalFeatureRefreshHost(child: AttendanceModulePage()),
         '/exams': (_) => const _GlobalFeatureRefreshHost(child: ExamsPage()),
         '/students': (_) =>
             const _GlobalFeatureRefreshHost(child: StudentsPage()),
@@ -326,17 +331,14 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       icon: Icons.trending_up_outlined,
       view: PromotionPage(),
     ),
+    // Une entree pour les deux emargements, eleves et enseignants. Les deux
+    // cles de droits restent distinctes: seule la presentation fusionne.
     _AdminMenuItem(
       keyName: 'attendance',
-      label: 'Absences',
+      extraKeys: ['teacher_timesheet'],
+      label: 'Émargements',
       icon: Icons.fact_check_outlined,
-      view: AttendancePage(),
-    ),
-    _AdminMenuItem(
-      keyName: 'teacher_timesheet',
-      label: 'Emargement enseignants',
-      icon: Icons.access_time_rounded,
-      view: TeacherTimesheetPage(),
+      view: AttendanceModulePage(),
     ),
     _AdminMenuItem(
       keyName: 'discipline',
@@ -431,7 +433,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         'students',
         'teachers',
         'attendance',
-        'teacher_timesheet',
         'discipline',
       ],
       collapsible: true,
@@ -477,6 +478,10 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   bool _isItemVisible(String key) => _permissions.canRead(key);
 
+  /// Une entree est visible des qu'une seule de ses cles l'est.
+  bool _isEntryVisible(_AdminMenuItem item) =>
+      item.allKeys.any(_isItemVisible);
+
   bool _isItemReadOnly(String key) => _permissions.isReadOnly(key);
 
   /// Vrai quand la matrice n'ouvre aucun module.
@@ -485,11 +490,11 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   /// selection nulle: il ne permet donc pas de distinguer "aucun droit" de
   /// "le tableau de bord seulement".
   bool get _hasVisibleItem =>
-      _items.any((item) => _isItemVisible(item.keyName));
+      _items.any(_isEntryVisible);
 
   String _firstVisibleKey() {
     for (final item in _items) {
-      if (_isItemVisible(item.keyName)) {
+      if (_isEntryVisible(item)) {
         return item.keyName;
       }
     }
@@ -500,7 +505,10 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   /// intent never resolves to a missing item.
   static const _retiredMenuKeys = <String, String>{
     // Le module "Absences enseignants" est remplace par l'emargement.
-    'teacher_attendance': 'teacher_timesheet',
+    'teacher_attendance': 'attendance',
+    // « Absences » et « Emargement enseignants » sont reunis sous
+    // « Émargements », dont l'entree porte la cle "attendance".
+    'teacher_timesheet': 'attendance',
   };
 
   String _resolveMenuKey(String key) => _retiredMenuKeys[key] ?? key;
@@ -549,6 +557,15 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (item.keyName == 'discipline' &&
         (role == 'parent' || role == 'student')) {
       return const ParentDisciplinePage();
+    }
+
+    // Meme raison pour les emargements: la page d'administration leur
+    // presentait un formulaire de saisie inerte et des selecteurs de classe
+    // sans objet. Ils n'ont par ailleurs aucun droit sur l'emargement des
+    // enseignants, donc pas d'onglets a leur montrer.
+    if (item.keyName == 'attendance' &&
+        (role == 'parent' || role == 'student')) {
+      return const ParentAttendancePage();
     }
 
     if (item.keyName != 'dashboard') {
@@ -1858,12 +1875,26 @@ class _AdminMenuItem {
   final IconData icon;
   final Widget view;
 
+  /// Cles de droits supplementaires ouvrant cette entree.
+  ///
+  /// « Émargements » reunit deux modules aux matrices incompatibles: le
+  /// parent lit les absences de son enfant mais rien de l'emargement des
+  /// enseignants, le comptable l'inverse. Les fondre en une seule cle
+  /// obligerait a choisir laquelle des deux populations perdre. L'entree est
+  /// donc visible des que l'une des cles l'est, et chaque onglet reste garde
+  /// par la sienne.
+  final List<String> extraKeys;
+
   const _AdminMenuItem({
     required this.keyName,
     required this.label,
     required this.icon,
     required this.view,
+    this.extraKeys = const [],
   });
+
+  /// Toutes les cles qui rendent cette entree accessible.
+  List<String> get allKeys => [keyName, ...extraKeys];
 }
 
 class _AdminMenuGroup {
