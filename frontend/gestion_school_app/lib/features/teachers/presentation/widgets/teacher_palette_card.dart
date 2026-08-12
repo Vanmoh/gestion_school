@@ -507,7 +507,9 @@ class _Photo extends StatelessWidget {
   final ColorScheme scheme;
   final TextTheme textTheme;
 
-  static const taille = 56.0;
+  /// Assez grande pour reconnaitre un visage a cote d'un nom en gros
+  /// caracteres: a 56 elle passait pour une puce decorative.
+  static const taille = 76.0;
 
   const _Photo({
     required this.url,
@@ -521,7 +523,9 @@ class _Photo extends StatelessWidget {
     final repli = Center(
       child: Text(
         initiales,
-        style: textTheme.titleMedium?.copyWith(
+        // Suit la taille du cercle: en titleMedium les initiales flottaient
+        // au milieu d'un disque devenu plus grand.
+        style: textTheme.headlineSmall?.copyWith(
           fontWeight: FontWeight.w800,
           color: scheme.onPrimaryContainer,
         ),
