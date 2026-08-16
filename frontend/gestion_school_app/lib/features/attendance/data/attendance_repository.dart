@@ -66,6 +66,29 @@ class AttendanceRepository {
         .toList();
   }
 
+  /// Fiches d'appel deja enregistrees, une ligne par classe et par date.
+  ///
+  /// Sans elle, revoir une fiche demandait de resaisir sa classe et sa date
+  /// de memoire.
+  Future<List<Map<String, dynamic>>> fetchSheetJournal({
+    int? classroomId,
+    String? from,
+    String? to,
+  }) async {
+    final response = await dio.get(
+      '/attendances/sheet-journal/',
+      queryParameters: {
+        if (classroomId != null) 'classroom': classroomId,
+        if (from != null && from.isNotEmpty) 'from': from,
+        if (to != null && to.isNotEmpty) 'to': to,
+      },
+    );
+    return _extractRows(response.data)
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+  }
+
   Future<Map<String, dynamic>> fetchClassSheet({
     required int classroomId,
     required String date,

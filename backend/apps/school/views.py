@@ -4611,6 +4611,96 @@ class AttendanceViewSet(BaseModelViewSet):
 
     @action(
         detail=False,
+        methods=["get"],
+        url_path="sheet-journal",
+        permission_classes=[permissions.IsAuthenticated],
+    )
+    def sheet_journal(self, request):
+        """Fiches d'appel deja enregistrees, une ligne par classe et par date.
+
+        Une fois la fiche enregistree, rien ne permettait de la revoir: il
+        fallait resaisir sa classe et sa date de memoire. L'historique
+        existant ne repondait pas -- il listait les enregistrements un par un,
+        tous eleves et toutes dates melanges, ce qui devient illisible des la
+        premiere semaine.
+
+        Une fiche existe des qu'un enregistrement porte sa classe et sa date,
+        validee ou non: on agrege donc les presences plutot que de lister les
+        seules validations, sinon les brouillons resteraient invisibles.
+        """
+        self._assert_sheet_role()
+
+        classrooms = self._sheet_classrooms_queryset()
+        classroom_id = request.query_params.get("classroom")
+        if classroom_id:
+            classrooms = classrooms.filter(
+                id=self._parse_sheet_classroom_id(classroom_id)
+            )
+
+        classroom_ids = list(classrooms.values_list("id", flat=True))
+        if not classroom_ids:
+            return Response([])
+
+        presences = Attendance.objects.filter(
+            student__classroom_id__in=classroom_ids
+        )
+
+        depuis = request.query_params.get("from")
+        jusqua = request.query_params.get("to")
+        if depuis:
+            presences = presences.filter(date__gte=self._parse_sheet_date(depuis))
+        if jusqua:
+            presences = presences.filter(date__lte=self._parse_sheet_date(jusqua))
+
+        lignes = (
+            presences.values("student__classroom_id", "date")
+            .annotate(
+                effectif=Count("id"),
+                absents=Count("id", filter=Q(is_absent=True)),
+                retards=Count("id", filter=Q(is_late=True)),
+            )
+            .order_by("-date", "student__classroom_id")
+        )
+        # Une classe compte facilement trente lignes par jour: sans plafond,
+        # une annee scolaire en rendrait plusieurs milliers d'un coup.
+        lignes = lignes[:400]
+
+        noms = dict(classrooms.values_list("id", "name"))
+        validations = {
+            (row.classroom_id, row.date): row
+            for row in AttendanceSheetValidation.objects.filter(
+                classroom_id__in=classroom_ids,
+                date__in=[ligne["date"] for ligne in lignes],
+            ).select_related("validated_by")
+        }
+
+        resultat = []
+        for ligne in lignes:
+            cle = (ligne["student__classroom_id"], ligne["date"])
+            validation = validations.get(cle)
+            resultat.append(
+                {
+                    "classroom": ligne["student__classroom_id"],
+                    "classroom_name": noms.get(ligne["student__classroom_id"], ""),
+                    "date": ligne["date"],
+                    "effectif": ligne["effectif"],
+                    "absents": ligne["absents"],
+                    "retards": ligne["retards"],
+                    "is_locked": bool(validation and validation.is_locked),
+                    "validated_by_name": (
+                        validation.validated_by.get_full_name()
+                        or validation.validated_by.username
+                        if validation and validation.validated_by
+                        else ""
+                    ),
+                    "validated_at": validation.validated_at if validation else None,
+                }
+            )
+
+        return Response(resultat)
+
+    @action(
+        detail=False,
         methods=["post"],
         url_path="class-sheet-validate",
         permission_classes=[permissions.IsAuthenticated],

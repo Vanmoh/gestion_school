@@ -11,6 +11,7 @@ import 'package:printing/printing.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/attendance_student.dart';
 import 'attendance_controller.dart';
+import 'widgets/attendance_sheet_journal.dart';
 import 'widgets/attendance_sheet_list.dart';
 
 class AttendancePage extends ConsumerStatefulWidget {
@@ -40,6 +41,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   String? _sheetValidatedAt;
 
   bool _sheetBootstrapped = false;
+
+  List<Map<String, dynamic>> _journalFiches = const [];
+  bool _journalLoading = false;
 
   static const _sheetReadRoles = {
     'super_admin',
@@ -77,6 +81,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
       if (role != null && _sheetReadRoles.contains(role)) {
         _sheetBootstrapped = true;
         _loadSheetClassrooms();
+        _loadSheetJournal();
       }
     });
   }
@@ -125,6 +130,52 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
           _sheetLoading = false;
         });
       }
+    }
+  }
+
+  /// Fiches deja enregistrees, toutes classes accessibles confondues.
+  ///
+  /// Volontairement non filtre sur la classe selectionnee: on vient ici pour
+  /// retrouver une fiche, souvent d'une autre classe que celle affichee.
+  Future<void> _loadSheetJournal() async {
+    setState(() => _journalLoading = true);
+    try {
+      final fiches = await ref
+          .read(attendanceRepositoryProvider)
+          .fetchSheetJournal();
+      if (!mounted) return;
+      setState(() => _journalFiches = fiches);
+    } catch (error) {
+      // Un journal indisponible ne doit pas empecher de faire l'appel: la
+      // feuille est au-dessus et fonctionne sans lui.
+      _showMessage(
+        _sheetErrorMessage(error, fallback: 'Erreur chargement des fiches.'),
+      );
+    } finally {
+      if (mounted) setState(() => _journalLoading = false);
+    }
+  }
+
+  /// Exporte une fiche du journal.
+  ///
+  /// Elle est d'abord chargee dans le formulaire au-dessus, puis on reutilise
+  /// les exports existants: ecrire un second chemin d'export ferait deux
+  /// facons de produire le meme document, qui divergeraient.
+  Future<void> _exportSheetAt(
+    int classroomId,
+    String date, {
+    required bool excel,
+  }) async {
+    setState(() {
+      _sheetSelectedClassroomId = classroomId;
+      _sheetSelectedDate = DateTime.tryParse(date) ?? _sheetSelectedDate;
+    });
+    await _loadClassSheet();
+    if (!mounted) return;
+    if (excel) {
+      await _exportClassSheetExcel();
+    } else {
+      await _exportClassSheetPdf();
     }
   }
 
@@ -207,6 +258,8 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
       ref.invalidate(attendancesProvider);
       ref.invalidate(attendanceMonthlyStatsProvider);
       await _loadClassSheet();
+      // La fiche qu'on vient d'enregistrer doit apparaitre au journal.
+      await _loadSheetJournal();
     } catch (error) {
       _showMessage(_sheetErrorMessage(error, fallback: 'Erreur enregistrement fiche.'));
     } finally {
@@ -368,7 +421,6 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   @override
   Widget build(BuildContext context) {
     final studentsAsync = ref.watch(attendanceStudentsProvider);
-    final attendancesAsync = ref.watch(attendancesProvider);
     final statsAsync = ref.watch(attendanceMonthlyStatsProvider);
     final mutationState = ref.watch(attendanceMutationProvider);
     final authState = ref.watch(authControllerProvider);
@@ -836,59 +888,33 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
             ),
           ),
           const SizedBox(height: 16),
-          const Text('Historique'),
-          const SizedBox(height: 8),
-          attendancesAsync.when(
-            loading: () => const Center(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: CircularProgressIndicator(),
-              ),
-            ),
-            error: (error, _) => Text('Erreur absences: $error'),
-            data: (items) {
-              final scopedItems = isTeacherRole
-                  ? (() {
-                      final studentRows = studentsAsync.valueOrNull ?? const <AttendanceStudent>[];
-                      final allowedStudentIds = studentRows
-                          .where(
-                            (student) => student.classroomId != null &&
-                                allowedClassroomIds.contains(student.classroomId),
-                          )
-                          .map((student) => student.id)
-                          .toSet();
-                      return items
-                          .where((item) => allowedStudentIds.contains(item.studentId))
-                          .toList(growable: false);
-                    })()
-                  : items;
-
-              if (scopedItems.isEmpty) {
-                return const Text('Aucune donnée');
-              }
-              return Column(
-                children: scopedItems
-                    .map(
-                      (item) => Card(
-                        child: ListTile(
-                          title: Text(
-                            '${item.studentFullName} (${item.studentMatricule})',
-                          ),
-                          subtitle: Text(
-                            '${item.date} • ${item.isAbsent ? 'Absent' : 'Présent'} • ${item.isLate ? 'Retard' : 'À l\'heure'} • Conduite: ${item.conduite.toStringAsFixed(2)}',
-                          ),
-                          trailing: item.reason.isEmpty
-                              ? null
-                              : Tooltip(
-                                  message: item.reason,
-                                  child: const Icon(Icons.info_outline),
-                                ),
-                        ),
-                      ),
-                    )
-                    .toList(),
-              );
+          const Text(
+            'Fiches enregistrées',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Les fiches déjà saisies, par classe et par date.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 10),
+          AttendanceSheetJournal(
+            fiches: _journalFiches,
+            loading: _journalLoading,
+            onVoir: (classroomId, date) {
+              // Recharger dans le formulaire au-dessus plutot que d'ouvrir un
+              // second ecran: c'est le meme document, verrouille ou non.
+              setState(() {
+                _sheetSelectedClassroomId = classroomId;
+                _sheetSelectedDate =
+                    DateTime.tryParse(date) ?? _sheetSelectedDate;
+              });
+              _loadClassSheet();
             },
+            onExporterPdf: (classroomId, date) =>
+                _exportSheetAt(classroomId, date, excel: false),
+            onExporterExcel: (classroomId, date) =>
+                _exportSheetAt(classroomId, date, excel: true),
           ),
         ],
       ),
