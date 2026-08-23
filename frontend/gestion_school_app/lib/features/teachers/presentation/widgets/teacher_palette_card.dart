@@ -1,96 +1,42 @@
 import 'package:flutter/material.dart';
 
-import '../../domain/student.dart';
-
-/// Photo de l'eleve, ou son emplacement quand elle manque.
+/// Ce qu'il faut savoir d'un enseignant pour agir sur lui.
 ///
-/// Un lien signe expire ou un stockage injoignable retombent sur les
-/// initiales, jamais sur l'icone d'image cassee du navigateur, qui se lit
-/// comme un defaut de l'application.
-class _Photo extends StatelessWidget {
-  final String url;
-  final String initiales;
-  final ColorScheme scheme;
-  final TextTheme textTheme;
+/// Meme grammaire que la palette eleve: en-tete identifiant, trois blocs de
+/// champs, puis des indicateurs. La remuneration en est volontairement
+/// absente -- salaire de base et taux horaire restent dans le module Paie,
+/// ou l'acces est deja restreint. Cet ecran-ci sert a savoir qui enseigne
+/// quoi, pas ce qu'il coute.
+class TeacherPaletteCard extends StatelessWidget {
+  /// Compte utilisateur: nom, email, telephone.
+  final Map<String, dynamic> user;
 
-  /// Assez grande pour reconnaitre un visage a cote d'un nom en gros
-  /// caracteres: a 56 elle passait pour une puce decorative.
-  static const taille = 76.0;
+  /// Profil enseignant: code employe, date d'embauche. Absent tant que le
+  /// profil n'a pas ete cree pour ce compte.
+  final Map<String, dynamic>? profile;
 
-  const _Photo({
-    required this.url,
-    required this.initiales,
-    required this.scheme,
-    required this.textTheme,
-  });
+  final List<Map<String, dynamic>> assignments;
+  final List<Map<String, dynamic>> scheduleSlots;
+  final List<Map<String, dynamic>> timeEntries;
 
-  @override
-  Widget build(BuildContext context) {
-    final repli = StudentPaletteCard._initialesWidget(
-      initiales,
-      scheme,
-      textTheme,
-    );
-
-    return Container(
-      width: taille,
-      height: taille,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: scheme.primaryContainer,
-        shape: BoxShape.circle,
-      ),
-      child: url.isEmpty
-          ? repli
-          : Image.network(
-              url,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => repli,
-            ),
-    );
-  }
-}
-
-/// Ce qu'il faut savoir d'un eleve pour agir sur lui.
-///
-/// Deliberement plus courte que le dossier consolide de « Recherche eleve »:
-/// cette page-ci sert a modifier. On y montre l'identite, la scolarite, le
-/// parent, l'etat des frais et ce qui s'est passe recemment -- pas les onze
-/// rubriques, qui noieraient les boutons d'action.
-class StudentPaletteCard extends StatelessWidget {
-  final Student student;
-  final List<Map<String, dynamic>> fees;
-  final List<Map<String, dynamic>> payments;
-  final List<Map<String, dynamic>> attendances;
-  final List<Map<String, dynamic>> incidents;
-  final List<Map<String, dynamic>> history;
   final bool loading;
-
-  /// Adresse absolue de la photo, deja resolue par l'appelant.
-  final String photoUrl;
-
-  /// Boutons d'ecriture, places sous le nom: on agit la ou on regarde.
   final List<Widget> actions;
-
-  /// Presente seulement quand la recherche avait plusieurs reponses: sinon le
-  /// bouton proposerait de revenir a une liste qui n'existe pas.
   final VoidCallback? onClear;
 
-  const StudentPaletteCard({
+  const TeacherPaletteCard({
     super.key,
-    required this.student,
-    required this.fees,
-    required this.payments,
-    required this.attendances,
-    required this.incidents,
-    required this.history,
+    required this.user,
+    required this.profile,
+    this.assignments = const [],
+    this.scheduleSlots = const [],
+    this.timeEntries = const [],
     this.loading = false,
-    this.photoUrl = '',
     this.actions = const [],
     this.onClear,
   });
 
   static const nonRenseigne = 'Non renseigné';
+  static const sansProfil = 'Profil enseignant non créé';
 
   @override
   Widget build(BuildContext context) {
@@ -120,29 +66,23 @@ class StudentPaletteCard extends StatelessWidget {
                     SizedBox(
                       width: largeur,
                       child: _bloc(scheme, textTheme, 'Identité', [
-                        ('Nom et prénom', student.fullName),
-                        ('Matricule', student.matricule),
-                        ('Genre', _genre(student.gender)),
-                        ('Date de naissance', _date(student.birthDate)),
-                        ('Âge', _age(student)),
+                        ('Nom et prénom', _nomComplet()),
+                        ('Identifiant', _texte(user['username'])),
                       ]),
                     ),
                     SizedBox(
                       width: largeur,
-                      child: _bloc(scheme, textTheme, 'Scolarité', [
-                        ('Classe', student.classroomName),
-                        ('Inscription', _date(student.enrollmentDate)),
-                        ('Statut', student.isArchived ? 'Archivé' : 'Actif'),
-                        ('Identifiant', student.username),
+                      child: _bloc(scheme, textTheme, 'Poste', [
+                        ('Code employé', _texte(profile?['employee_code'])),
+                        ('Embauche', _date(profile?['hire_date'])),
+                        ('Ancienneté', _anciennete()),
                       ]),
                     ),
                     SizedBox(
                       width: largeur,
                       child: _bloc(scheme, textTheme, 'Contacts', [
-                        ('Parent / tuteur', student.parentName),
-                        ('Téléphone parent', student.parentPhone),
-                        ('Téléphone élève', student.phone),
-                        ('Email', student.email),
+                        ('Email', _texte(user['email'])),
+                        ('Téléphone', _texte(user['phone'])),
                       ]),
                     ),
                   ],
@@ -168,8 +108,8 @@ class StudentPaletteCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _Photo(
-          url: photoUrl,
-          initiales: _initiales(student.fullName),
+          url: (user['profile_photo'] ?? '').toString(),
+          initiales: _initiales(_nomComplet()),
           scheme: scheme,
           textTheme: textTheme,
         ),
@@ -179,7 +119,7 @@ class StudentPaletteCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                student.fullName,
+                _nomComplet(),
                 style: textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w800,
                 ),
@@ -190,16 +130,28 @@ class StudentPaletteCard extends StatelessWidget {
                 runSpacing: 6,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  _pastille(scheme, textTheme, student.matricule),
-                  if (student.classroomName.trim().isNotEmpty)
-                    _pastille(scheme, textTheme, student.classroomName),
-                  if (student.isArchived)
+                  if (profile != null)
                     _pastille(
                       scheme,
                       textTheme,
-                      'Archivé',
+                      _texte(profile?['employee_code']),
+                    )
+                  else
+                    // Un compte sans profil ne peut recevoir ni affectation
+                    // ni emargement: le dire ici evite de chercher pourquoi
+                    // les indicateurs restent vides.
+                    _pastille(
+                      scheme,
+                      textTheme,
+                      sansProfil,
                       couleur: scheme.errorContainer,
                       texteCouleur: scheme.onErrorContainer,
+                    ),
+                  if (_texte(user['etablissement_name']).isNotEmpty)
+                    _pastille(
+                      scheme,
+                      textTheme,
+                      _texte(user['etablissement_name']),
                     ),
                 ],
               ),
@@ -221,29 +173,21 @@ class StudentPaletteCard extends StatelessWidget {
   }
 
   Widget _buildIndicateurs(ColorScheme scheme, TextTheme textTheme) {
-    var du = 0.0;
-    var paye = 0.0;
-    for (final ligne in fees) {
-      du += _nombre(ligne['amount_due']);
-      paye += _nombre(ligne['amount_paid']);
+    final matieres = <String>{};
+    final classes = <String>{};
+    for (final ligne in assignments) {
+      final matiere = _texte(ligne['subject_name']);
+      final classe = _texte(ligne['classroom_name']);
+      if (matiere.isNotEmpty) matieres.add(matiere);
+      if (classe.isNotEmpty) classes.add(classe);
     }
-    final reste = du - paye;
 
-    final absences = attendances
-        .where((row) => row['is_absent'] == true)
-        .length;
-    final retards = attendances.where((row) => row['is_late'] == true).length;
-    final ouverts = incidents
-        .where((row) => (row['status'] ?? '').toString() != 'resolved')
+    final minutes = _minutesHebdomadaires();
+    final retards = timeEntries
+        .where((row) => _entier(row['late_minutes']) > 0)
         .length;
 
-    // Quatre tuiles pour dire quatre fois « rien » occupent une rangee sans
-    // rien apprendre. Une phrase suffit; les tuiles reviennent des qu'il y a
-    // quelque chose a montrer.
-    if (fees.isEmpty &&
-        attendances.isEmpty &&
-        incidents.isEmpty &&
-        history.isEmpty) {
+    if (assignments.isEmpty && scheduleSlots.isEmpty && timeEntries.isEmpty) {
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -257,15 +201,17 @@ class StudentPaletteCard extends StatelessWidget {
         child: Row(
           children: [
             Icon(
-              Icons.check_circle_outline,
+              Icons.info_outline,
               size: 20,
               color: scheme.onSurfaceVariant,
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                'Rien à signaler : aucun frais, aucune absence, '
-                'aucun incident, aucun historique.',
+                profile == null
+                    ? 'Créez le profil enseignant pour lui affecter des '
+                          'matières et suivre son émargement.'
+                    : 'Aucune affectation, aucun créneau, aucun émargement.',
                 style: textTheme.bodyMedium?.copyWith(
                   color: scheme.onSurfaceVariant,
                 ),
@@ -283,49 +229,39 @@ class StudentPaletteCard extends StatelessWidget {
         _indicateur(
           scheme,
           textTheme,
-          icone: Icons.account_balance_wallet_outlined,
-          titre: 'Frais',
-          valeur: du == 0
-              ? 'Aucun frais'
-              : '${_money(reste)} restant',
-          detail: du == 0 ? null : '${_money(du)} dû · ${_money(paye)} payé',
-          alerte: reste > 0,
+          icone: Icons.menu_book_outlined,
+          titre: 'Affectations',
+          valeur: matieres.isEmpty
+              ? 'Aucune'
+              : '${matieres.length} matière${matieres.length > 1 ? 's' : ''}',
+          detail: classes.isEmpty
+              ? null
+              : '${classes.length} classe${classes.length > 1 ? 's' : ''}',
+          alerte: assignments.isEmpty,
         ),
         _indicateur(
           scheme,
           textTheme,
-          icone: Icons.event_busy_outlined,
-          titre: 'Assiduité',
-          valeur: absences == 0 && retards == 0
-              ? 'Rien à signaler'
-              : '$absences absence${absences > 1 ? 's' : ''}',
+          icone: Icons.calendar_month_outlined,
+          titre: 'Emploi du temps',
+          valeur: scheduleSlots.isEmpty
+              ? 'Aucun créneau'
+              : '${scheduleSlots.length} créneau${scheduleSlots.length > 1 ? 'x' : ''}',
+          detail: minutes == 0 ? null : '${_heures(minutes)} par semaine',
+          alerte: scheduleSlots.isEmpty,
+        ),
+        _indicateur(
+          scheme,
+          textTheme,
+          icone: Icons.how_to_reg_outlined,
+          titre: 'Émargement',
+          valeur: timeEntries.isEmpty
+              ? 'Aucun pointage'
+              : '${timeEntries.length} pointage${timeEntries.length > 1 ? 's' : ''}',
           detail: retards == 0
               ? null
               : '$retards retard${retards > 1 ? 's' : ''}',
-          alerte: absences > 0,
-        ),
-        _indicateur(
-          scheme,
-          textTheme,
-          icone: Icons.gavel_outlined,
-          titre: 'Discipline',
-          valeur: incidents.isEmpty
-              ? 'Aucun incident'
-              : '${incidents.length} incident${incidents.length > 1 ? 's' : ''}',
-          detail: ouverts == 0 ? null : '$ouverts ouvert${ouverts > 1 ? 's' : ''}',
-          alerte: ouverts > 0,
-        ),
-        _indicateur(
-          scheme,
-          textTheme,
-          icone: Icons.history_edu_outlined,
-          titre: 'Historique',
-          valeur: history.isEmpty
-              ? 'Aucune année'
-              : '${history.length} année${history.length > 1 ? 's' : ''}',
-          detail: payments.isEmpty
-              ? null
-              : '${payments.length} paiement${payments.length > 1 ? 's' : ''}',
+          alerte: retards > 0,
         ),
       ],
     );
@@ -355,11 +291,7 @@ class StudentPaletteCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            icone,
-            size: 20,
-            color: alerte ? scheme.error : scheme.primary,
-          ),
+          Icon(icone, size: 20, color: alerte ? scheme.error : scheme.primary),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -425,8 +357,6 @@ class StudentPaletteCard extends StatelessWidget {
                     color: scheme.onSurfaceVariant,
                   ),
                 ),
-                // Un blanc se lit comme un defaut d'affichage; le motif ecrit
-                // dit que la donnee reste a saisir.
                 Text(
                   valeur.trim().isEmpty ? nonRenseigne : valeur,
                   style: textTheme.bodyMedium?.copyWith(
@@ -471,22 +401,86 @@ class StudentPaletteCard extends StatelessWidget {
     );
   }
 
-  static Widget _initialesWidget(
-    String initiales,
-    ColorScheme scheme,
-    TextTheme textTheme,
-  ) {
-    return Center(
-      child: Text(
-        initiales,
-        // Suit la taille du cercle: en titleMedium les initiales flottaient
-        // au milieu d'un disque devenu plus grand.
-        style: textTheme.headlineSmall?.copyWith(
-          fontWeight: FontWeight.w800,
-          color: scheme.onPrimaryContainer,
-        ),
-      ),
-    );
+  String _nomComplet() {
+    final complet = _texte(user['full_name']);
+    if (complet.isNotEmpty) return complet;
+
+    final parties = [
+      _texte(user['first_name']),
+      _texte(user['last_name']),
+    ].where((mot) => mot.isNotEmpty);
+    if (parties.isNotEmpty) return parties.join(' ');
+
+    return _texte(user['username']);
+  }
+
+  /// Duree hebdomadaire, calculee sur les creneaux et non saisie a part: deux
+  /// sources pour un meme total finissent par diverger.
+  int _minutesHebdomadaires() {
+    var total = 0;
+    for (final creneau in scheduleSlots) {
+      final debut = _minutes(creneau['start_time']);
+      final fin = _minutes(creneau['end_time']);
+      if (debut != null && fin != null && fin > debut) {
+        total += fin - debut;
+      }
+    }
+    return total;
+  }
+
+  String _anciennete() {
+    final embauche = _dateTime(profile?['hire_date']);
+    if (embauche == null) return '';
+
+    final maintenant = DateTime.now();
+    var annees = maintenant.year - embauche.year;
+    final avantAnniversaire =
+        maintenant.month < embauche.month ||
+        (maintenant.month == embauche.month && maintenant.day < embauche.day);
+    if (avantAnniversaire) annees -= 1;
+
+    if (annees < 0) return '';
+    if (annees == 0) return "Moins d'un an";
+    return '$annees an${annees > 1 ? 's' : ''}';
+  }
+
+  static String _heures(int minutes) {
+    final heures = minutes ~/ 60;
+    final reste = minutes % 60;
+    if (heures == 0) return '$reste min';
+    if (reste == 0) return '${heures}h';
+    return '${heures}h$reste';
+  }
+
+  static int? _minutes(dynamic valeur) {
+    final texte = _texte(valeur);
+    if (texte.isEmpty) return null;
+    final morceaux = texte.split(':');
+    if (morceaux.length < 2) return null;
+    final heures = int.tryParse(morceaux[0]);
+    final minutes = int.tryParse(morceaux[1]);
+    if (heures == null || minutes == null) return null;
+    return heures * 60 + minutes;
+  }
+
+  static String _texte(dynamic valeur) => (valeur ?? '').toString().trim();
+
+  static int _entier(dynamic valeur) {
+    if (valeur is int) return valeur;
+    return int.tryParse(_texte(valeur)) ?? 0;
+  }
+
+  static DateTime? _dateTime(dynamic valeur) {
+    final texte = _texte(valeur);
+    return texte.isEmpty ? null : DateTime.tryParse(texte);
+  }
+
+  static String _date(dynamic valeur) {
+    final date = _dateTime(valeur);
+    if (date == null) return '';
+    final jour = date.day.toString().padLeft(2, '0');
+    final mois = date.month.toString().padLeft(2, '0');
+    return '$jour/$mois/${date.year}';
   }
 
   static String _initiales(String nomComplet) {
@@ -500,37 +494,59 @@ class StudentPaletteCard extends StatelessWidget {
     return (mots.first.characters.first + mots.last.characters.first)
         .toUpperCase();
   }
+}
 
-  static String _genre(String code) => switch (code.toUpperCase()) {
-    'M' => 'Masculin',
-    'F' => 'Féminin',
-    _ => '',
-  };
+/// Photo de l'enseignant, ou son emplacement quand elle manque.
+///
+/// L'annuaire ne fournit l'adresse qu'aux profils autorises: sans elle, et
+/// sur un lien mort, on retombe sur les initiales -- jamais sur l'icone
+/// d'image cassee du navigateur, qui se lit comme un defaut de l'application.
+class _Photo extends StatelessWidget {
+  final String url;
+  final String initiales;
+  final ColorScheme scheme;
+  final TextTheme textTheme;
 
-  static String _date(DateTime? value) {
-    if (value == null) return '';
-    final jour = value.day.toString().padLeft(2, '0');
-    final mois = value.month.toString().padLeft(2, '0');
-    return '$jour/$mois/${value.year}';
-  }
+  /// Assez grande pour reconnaitre un visage a cote d'un nom en gros
+  /// caracteres: a 56 elle passait pour une puce decorative.
+  static const taille = 76.0;
 
-  static String _age(Student student) {
-    final age = student.ageAt(DateTime.now());
-    return age == null ? '' : '$age ans';
-  }
+  const _Photo({
+    required this.url,
+    required this.initiales,
+    required this.scheme,
+    required this.textTheme,
+  });
 
-  static double _nombre(dynamic value) {
-    if (value is num) return value.toDouble();
-    return double.tryParse(value?.toString() ?? '') ?? 0;
-  }
+  @override
+  Widget build(BuildContext context) {
+    final repli = Center(
+      child: Text(
+        initiales,
+        // Suit la taille du cercle: en titleMedium les initiales flottaient
+        // au milieu d'un disque devenu plus grand.
+        style: textTheme.headlineSmall?.copyWith(
+          fontWeight: FontWeight.w800,
+          color: scheme.onPrimaryContainer,
+        ),
+      ),
+    );
 
-  static String _money(double value) {
-    final entier = value.round().abs().toString();
-    final buffer = StringBuffer();
-    for (var index = 0; index < entier.length; index++) {
-      if (index > 0 && (entier.length - index) % 3 == 0) buffer.write(' ');
-      buffer.write(entier[index]);
-    }
-    return '${value < 0 ? '-' : ''}$buffer F';
+    return Container(
+      width: taille,
+      height: taille,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer,
+        shape: BoxShape.circle,
+      ),
+      child: url.isEmpty
+          ? repli
+          : Image.network(
+              url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => repli,
+            ),
+    );
   }
 }

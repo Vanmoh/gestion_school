@@ -12,7 +12,9 @@ from .views import (
     PaymentJournalPageView,
     PaymentReceiptPdfView,
     ReportsContextView,
+    StaffRosterPdfView,
     StudentCardPdfView,
+    StudentCardVerifyView,
 )
 
 urlpatterns = [
@@ -34,8 +36,16 @@ urlpatterns = [
     path("journal/expenses/", ExpenseJournalPageView.as_view(), name="journal-expenses-page"),
     path("student-card/<int:student_id>/", StudentCardPdfView.as_view(), name="student-card-pdf"),
     path("student-cards/class/<int:classroom_id>/", ClassStudentCardsPdfView.as_view(), name="class-student-cards-pdf"),
+    # Cible du QR imprime sur la carte. Publique: celui qui controle au
+    # portail n'a pas de compte. La signature tient lieu de cle d'acces.
+    path(
+        "carte/<int:student_id>/<str:annee>/<str:signature>/",
+        StudentCardVerifyView.as_view(),
+        name="student-card-verify",
+    ),
     # Sans classe: toutes les classes de l'etablissement, une par page,
     # suivies du recapitulatif des effectifs.
     path("class-roster/", ClassRosterPdfView.as_view(), name="class-roster-all-pdf"),
     path("class-roster/<int:classroom_id>/", ClassRosterPdfView.as_view(), name="class-roster-pdf"),
+    path("staff-roster/", StaffRosterPdfView.as_view(), name="staff-roster-pdf"),
 ]

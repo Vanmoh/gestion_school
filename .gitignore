@@ -46,3 +46,9 @@ core.*
 .vscode/
 .idea/
 *.iml
+
+# Claude Code
+# `settings.local.json` porte les autorisations acceptees sur ce poste: elles
+# n'ont pas de sens ailleurs. Le reste de .claude/ (settings.json partages,
+# skills, commandes) reste suivi pour profiter a toute l'equipe.
+.claude/settings.local.json

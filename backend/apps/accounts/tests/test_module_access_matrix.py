@@ -62,6 +62,11 @@ class RoutedViewsCoverageTests(APITestCase):
         "LogoutView",  # ferme sa propre session, ne touche aucune ressource
         "HealthCheckView",  # sonde d'infrastructure, n'expose aucune donnee
         "ModulePermissionsView",  # sert la matrice elle-meme
+        # Cible du QR imprime sur la carte scolaire: celui qui controle au
+        # portail n'a pas de compte. Publique par necessite, mais elle
+        # n'expose aucune identite et exige la signature de la carte.
+        # Voir apps/reports/tests/test_student_card.py.
+        "StudentCardVerifyView",
         "SpectacularAPIView",
         "SpectacularSwaggerView",
         "RedirectView",  # admin Django

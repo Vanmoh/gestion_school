@@ -243,6 +243,25 @@ class ClassRosterPdfTests(APITestCase):
         self.assertTrue(response.content.startswith(b"%PDF-"))
         self.assertNotIn(intruse.name.encode(), response.content)
 
+    def test_a_user_without_a_school_is_refused(self):
+        """Sans etablissement, le filtre ne s'applique pas et le document
+        sortirait les classes de toutes les ecoles."""
+        orphelin = User.objects.create_user(
+            username="directeur_sans_etab",
+            password="Pass1234!",
+            role=UserRole.DIRECTOR,
+        )
+        self.assertIsNone(orphelin.etablissement_id)
+
+        self.client.force_authenticate(orphelin)
+        for url in (
+            "/api/reports/class-roster/",
+            f"/api/reports/class-roster/{self.sixieme.id}/",
+        ):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_it_requires_authentication(self):
         self.client.force_authenticate(None)
         response = self.client.get(f"/api/reports/class-roster/{self.sixieme.id}/")
