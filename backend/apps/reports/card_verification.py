@@ -8,6 +8,13 @@ La page de verification n'affiche aucune identite. Une carte perdue, ramassee
 et scannee par un inconnu ne doit rien apprendre sur l'eleve: elle repond
 « valide », nomme l'ecole et l'annee, et montre la photo pour que celui qui
 controle compare un visage. C'est ce qu'il faut au portail, et rien de plus.
+
+Consequence a connaitre avant de toucher a la configuration: la signature
+derive de SECRET_KEY. Une rotation de cette cle -- le premier reflexe apres
+une fuite -- invalide toutes les cartes deja imprimees, qui ne sont pas des
+jetons qu'on renouvelle mais des cartons en poche. Il faudrait alors les
+reimprimer toutes. Si ce couplage devient genant, faire deriver la signature
+d'une cle dediee que l'on puisse garder pendant qu'on change l'autre.
 """
 
 from __future__ import annotations

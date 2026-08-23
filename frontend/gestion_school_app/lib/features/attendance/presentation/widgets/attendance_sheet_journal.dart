@@ -196,7 +196,15 @@ class _LigneFiche extends StatelessWidget {
                 ),
               ),
             ),
-            _etat(scheme, textTheme),
+            // Borne indispensable: une Row donne a ses enfants sans flex une
+            // largeur illimitee. `_etat` contient un Flexible, et un Flexible
+            // sous contrainte illimitee fait echouer RenderFlex. En large le
+            // SizedBox(width: 96) fournissait cette borne; ici, rien ne la
+            // fournissait.
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 120),
+              child: _etat(scheme, textTheme),
+            ),
           ],
         ),
         const SizedBox(height: 4),

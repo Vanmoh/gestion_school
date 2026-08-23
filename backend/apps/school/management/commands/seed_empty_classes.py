@@ -1,17 +1,26 @@
-"""Peuple les classes vides d'eleves de demonstration.
+"""Peuple d'eleves de demonstration les classes sous l'effectif vise.
 
 Une classe sans eleve rend l'ecran d'emargement intestable: la feuille
 d'appel affiche « aucun eleve », ce qui est exact mais ne montre rien. Cette
-commande comble les classes vides pour qu'on puisse voir, et essayer.
+commande comble les classes creuses pour qu'on puisse voir, et essayer.
 
-Elle ne touche jamais une classe qui a deja des eleves.
+Elle vise un effectif, elle ne remplit pas seulement le vide: une classe de
+vingt-deux eleves en recoit huit de plus si la cible est trente. Le
+docstring precedent promettait l'inverse -- « ne touche jamais une classe qui
+a deja des eleves » -- et cette phrase fausse etait la seule chose qui
+ressemblait a une garantie.
+
+D'ou le garde-fou de `handle`: les eleves crees portent de vrais comptes,
+avec un mot de passe faible. En production ils se melangeraient aux
+inscrits, fausseraient les effectifs, et ouvriraient autant de portes.
 """
 
 import random
 from datetime import date, timedelta
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import Count
 
@@ -60,6 +69,12 @@ class Command(BaseCommand):
             "l'atteignent deja ne sont pas touchees.",
         )
         parser.add_argument(
+            "--forcer",
+            action="store_true",
+            help="Passer outre le refus hors DEBUG. A n'employer que sur une "
+            "base jetable dont on accepte de perdre le contenu.",
+        )
+        parser.add_argument(
             "--graine",
             type=int,
             default=2026,
@@ -67,6 +82,19 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        # Une classe reelle sous l'effectif vise est indiscernable d'une classe
+        # de demonstration: rien dans le code ne les separe. Sur la base de
+        # production, la commande melerait donc des eleves inventes aux
+        # inscrits, et ouvrirait pour chacun un compte au mot de passe faible.
+        # DEBUG est le seul signal fiable dont dispose la commande.
+        if not settings.DEBUG and not options["forcer"]:
+            raise CommandError(
+                "Refus: DEBUG est faux, cette base ressemble a une base reelle. "
+                "La commande cree des eleves fictifs et leurs comptes, y compris "
+                "dans les classes deja peuplees mais sous l'effectif vise. "
+                "Relancer avec --forcer si la base est bien jetable."
+            )
+
         cible = options["cible"]
         alea = random.Random(options["graine"])
 
