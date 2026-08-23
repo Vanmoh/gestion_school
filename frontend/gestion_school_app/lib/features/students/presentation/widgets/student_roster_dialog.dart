@@ -5,7 +5,7 @@ import 'package:printing/printing.dart';
 
 import '../../domain/student.dart';
 import '../students_controller.dart';
-import 'roster_pdf_preview_dialog.dart';
+import '../../../../core/widgets/roster_pdf_preview_dialog.dart';
 
 /// Liste des eleves d'une classe, a l'ecran puis sur papier.
 ///

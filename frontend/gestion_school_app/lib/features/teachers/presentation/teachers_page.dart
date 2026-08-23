@@ -1,8 +1,21 @@
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../../core/widgets/roster_pdf_preview_dialog.dart';
+import 'widgets/teacher_palette_card.dart';
+
+/// Motif affiche sur les actions grisees.
+///
+/// Un bouton eteint sans explication passe pour une panne.
+const String teachersLectureSeuleMotif =
+    'Votre profil consulte les enseignants sans les modifier.';
 
 class TeachersPage extends ConsumerStatefulWidget {
   const TeachersPage({super.key});
@@ -15,8 +28,6 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
   final _searchController = TextEditingController();
   final _employeeCodeController = TextEditingController();
   final _salaryController = TextEditingController();
-  DateTime _hireDate = DateTime.now();
-
   int? _selectedTeacherUserId;
   int? _selectedTeacherId;
   int? _selectedSubjectId;
@@ -24,12 +35,20 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
 
   bool _loading = true;
   bool _saving = false;
+  bool _detailLoading = false;
+
+  String _searchQuery = '';
 
   List<Map<String, dynamic>> _teacherUsers = [];
   List<Map<String, dynamic>> _teachers = [];
   List<Map<String, dynamic>> _subjects = [];
   List<Map<String, dynamic>> _classrooms = [];
   List<Map<String, dynamic>> _assignments = [];
+
+  // Creneaux et pointages du seul enseignant ouvert: les charger pour tout
+  // l'effectif ferait des milliers de lignes pour n'en afficher qu'une fiche.
+  List<Map<String, dynamic>> _scheduleSlots = [];
+  List<Map<String, dynamic>> _timeEntries = [];
 
   @override
   void initState() {
@@ -67,12 +86,10 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
         _classrooms = _extractRows(results[3].data);
         _assignments = _extractRows(results[4].data);
 
-        _selectedTeacherUserId ??= _teacherUsers.isNotEmpty
-            ? _asInt(_teacherUsers.first['id'])
-            : null;
-        _selectedTeacherId ??= _teachers.isNotEmpty
-            ? _asInt(_teachers.first['id'])
-            : null;
+        // Aucune selection d'office: designer le premier enseignant venu
+        // ouvrait une fiche que personne n'avait demandee, et les actions
+        // d'ecriture s'appliquaient a lui. Les valeurs par defaut ci-dessous
+        // ne concernent que les listes deroulantes des formulaires.
         _selectedSubjectId ??= _subjects.isNotEmpty
             ? _asInt(_subjects.first['id'])
             : null;
@@ -85,81 +102,6 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     } finally {
       if (mounted) {
         setState(() => _loading = false);
-      }
-    }
-  }
-
-  Future<void> _createTeacherProfile() async {
-    final userId = _selectedTeacherUserId;
-    final employeeCode = _employeeCodeController.text.trim();
-    final salary = double.tryParse(_salaryController.text.trim());
-
-    if (userId == null || employeeCode.isEmpty || salary == null) {
-      _showMessage('Complétez les champs enseignant.');
-      return;
-    }
-
-    setState(() => _saving = true);
-
-    try {
-      await ref
-          .read(dioProvider)
-          .post(
-            '/teachers/',
-            data: {
-              'user': userId,
-              'employee_code': employeeCode,
-              'hire_date': _apiDate(_hireDate),
-              'hourly_rate': salary,
-            },
-          );
-
-      if (!mounted) return;
-      _employeeCodeController.clear();
-      _salaryController.clear();
-      _showMessage('Profil enseignant créé avec succès.', isSuccess: true);
-      await _loadData();
-    } catch (error) {
-      _showMessage('Erreur création enseignant: $error');
-    } finally {
-      if (mounted) {
-        setState(() => _saving = false);
-      }
-    }
-  }
-
-  Future<void> _createAssignment() async {
-    final teacherId = _selectedTeacherId;
-    final subjectId = _selectedSubjectId;
-    final classroomId = _selectedClassroomId;
-
-    if (teacherId == null || subjectId == null || classroomId == null) {
-      _showMessage('Sélectionnez enseignant, matière et classe.');
-      return;
-    }
-
-    setState(() => _saving = true);
-
-    try {
-      await ref
-          .read(dioProvider)
-          .post(
-            '/teacher-assignments/',
-            data: {
-              'teacher': teacherId,
-              'subject': subjectId,
-              'classroom': classroomId,
-            },
-          );
-
-      if (!mounted) return;
-      _showMessage('Affectation créée avec succès.', isSuccess: true);
-      await _loadData();
-    } catch (error) {
-      _showMessage('Erreur création affectation: $error');
-    } finally {
-      if (mounted) {
-        setState(() => _saving = false);
       }
     }
   }
@@ -1210,6 +1152,12 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     final phoneController = TextEditingController(
       text: (user['phone'] ?? '').toString(),
     );
+    // Photo deja en place, s'il y en a une: sans elle, l'emplacement vide
+    // laisserait croire qu'aucune photo n'a jamais ete televersee.
+    final photoActuelle = (user['profile_photo'] ?? '').toString();
+    Uint8List? photoBytes;
+    String? photoPath;
+    String? photoFileName;
 
     final saved = await showDialog<bool>(
       context: context,
@@ -1272,6 +1220,26 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           ),
                         ),
                       ),
+                      _PhotoField(
+                        bytes: photoBytes,
+                        fileName: photoFileName,
+                        urlActuelle: photoActuelle,
+                        enabled: !savingDialog,
+                        onPick: () async {
+                          final choix = await _pickTeacherPhoto();
+                          if (choix == null) return;
+                          setDialogState(() {
+                            photoBytes = choix.bytes;
+                            photoPath = choix.path;
+                            photoFileName = choix.fileName;
+                          });
+                        },
+                        onClear: () => setDialogState(() {
+                          photoBytes = null;
+                          photoPath = null;
+                          photoFileName = null;
+                        }),
+                      ),
                     ],
                   ),
                 ),
@@ -1293,12 +1261,14 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           final email = emailController.text.trim();
                           final phone = phoneController.text.trim();
 
+                          // L'email suit la creation: facultatif. L'exiger ici
+                          // aurait bloque la premiere modification d'un compte
+                          // cree sans adresse.
                           if (username.isEmpty ||
                               firstName.isEmpty ||
-                              lastName.isEmpty ||
-                              email.isEmpty) {
+                              lastName.isEmpty) {
                             _showMessage(
-                              'Username, prénom, nom et email sont obligatoires.',
+                              'Username, prénom et nom sont obligatoires.',
                             );
                             return;
                           }
@@ -1330,6 +1300,19 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                                       'etablissement': targetEtablissement,
                                   },
                                 );
+
+                            // Envoi separe: le PATCH ci-dessus est en JSON, un
+                            // fichier demande du multipart. Sans nouvelle
+                            // photo choisie, l'existante reste en place.
+                            if (photoBytes != null) {
+                              await _uploadTeacherPhoto(
+                                userId,
+                                bytes: photoBytes,
+                                path: photoPath,
+                                fileName: photoFileName,
+                              );
+                            }
+
                             if (context.mounted) {
                               Navigator.of(context).pop(true);
                             }
@@ -1416,6 +1399,9 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     final emailController = TextEditingController();
     final phoneController = TextEditingController();
     final passwordController = TextEditingController();
+    Uint8List? photoBytes;
+    String? photoPath;
+    String? photoFileName;
     int? createdUserId;
     String createdUsername = '';
 
@@ -1450,7 +1436,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           controller: emailController,
                           enabled: !savingDialog,
                           decoration: const InputDecoration(
-                            labelText: 'Email *',
+                            labelText: 'Email (facultatif)',
                           ),
                         ),
                       ),
@@ -1493,6 +1479,29 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           ),
                         ),
                       ),
+                      // La photo est televersee apres la creation du compte:
+                      // /auth/register/ recoit du JSON, un fichier demande du
+                      // multipart. Elle est facultative -- une fiche sans
+                      // portrait reste une fiche.
+                      _PhotoField(
+                        bytes: photoBytes,
+                        fileName: photoFileName,
+                        enabled: !savingDialog,
+                        onPick: () async {
+                          final choix = await _pickTeacherPhoto();
+                          if (choix == null) return;
+                          setDialogState(() {
+                            photoBytes = choix.bytes;
+                            photoPath = choix.path;
+                            photoFileName = choix.fileName;
+                          });
+                        },
+                        onClear: () => setDialogState(() {
+                          photoBytes = null;
+                          photoPath = null;
+                          photoFileName = null;
+                        }),
+                      ),
                     ],
                   ),
                 ),
@@ -1516,10 +1525,12 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                           final phone = phoneController.text.trim();
                           final password = passwordController.text;
 
+                          // L'email n'est pas exige: beaucoup d'enseignants
+                          // n'en ont pas, et le reclamer poussait a inventer
+                          // une adresse qui ne servira jamais.
                           if (username.isEmpty ||
                               firstName.isEmpty ||
                               lastName.isEmpty ||
-                              email.isEmpty ||
                               password.isEmpty) {
                             _showMessage(
                               'Complétez tous les champs obligatoires.',
@@ -1553,6 +1564,18 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                             final payload = response.data;
                             if (payload is Map<String, dynamic>) {
                               createdUserId = _asInt(payload['id']);
+                            }
+
+                            // Un echec du televersement ne doit pas annuler
+                            // la creation: le compte existe, la photo se
+                            // rajoute ensuite depuis l'edition.
+                            if (createdUserId != null && photoBytes != null) {
+                              await _uploadTeacherPhoto(
+                                createdUserId!,
+                                bytes: photoBytes,
+                                path: photoPath,
+                                fileName: photoFileName,
+                              );
                             }
                             if (context.mounted) {
                               Navigator.of(context).pop(true);
@@ -2300,18 +2323,6 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     return 'Enseignant';
   }
 
-  Future<void> _pickHireDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _hireDate,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100),
-    );
-    if (picked != null) {
-      setState(() => _hireDate = picked);
-    }
-  }
-
   Widget _buildTeachersKpiPanel({
     required int usersCount,
     required int profileCount,
@@ -2350,6 +2361,23 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
             spacing: 10,
             runSpacing: 10,
             children: [
+              // Seule action pleine, comme « Ajouter élève » sur la page des
+              // eleves. Inscrire quelqu'un qui n'existe pas encore demandait
+              // d'ouvrir « Gérer enseignant », d'y trouver la creation de
+              // compte, puis le profil: trois niveaux derriere un libelle qui
+              // ne dit pas « ajouter ».
+              Tooltip(
+                message: _isTeachersReadOnly()
+                    ? teachersLectureSeuleMotif
+                    : 'Créer un compte enseignant, puis son profil',
+                child: FilledButton.icon(
+                  onPressed: (_saving || _isTeachersReadOnly())
+                      ? null
+                      : _openCreateTeacherUserDialog,
+                  icon: const Icon(Icons.person_add_alt_1),
+                  label: const Text('Ajouter enseignant'),
+                ),
+              ),
               OutlinedButton.icon(
                 onPressed: _saving ? null : _openTeacherManagementDialog,
                 icon: const Icon(Icons.groups_2_outlined),
@@ -2372,266 +2400,410 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     );
   }
 
-  Widget _buildTeacherFocusPanel({
-    required Map<String, dynamic>? selectedUser,
-    required Map<String, dynamic>? selectedProfile,
-    required List<Map<String, dynamic>> selectedTeacherAssignments,
-    required ColorScheme colorScheme,
-  }) {
+  /// Comptes enseignants correspondant a la saisie.
+  ///
+  /// Le filtrage est local et porte sur l'annuaire complet, profils compris.
+  /// La recherche serveur ne verrait que les profils crees -- or ce sont
+  /// justement les comptes qui n'en ont pas qu'il faut retrouver pour leur
+  /// en creer un.
+  /// Saisie dans la barre de recherche.
+  ///
+  /// Une recherche qui ne laisse qu'un enseignant a deja repondu: on ouvre sa
+  /// fiche. Sans cela l'ecran tombait sur l'etat vide et annoncait « aucun
+  /// enseignant ne correspond » alors qu'il venait d'en trouver un -- la carte
+  /// des resultats exige plusieurs correspondances, la fiche exige une
+  /// selection, et rien ne comblait l'entre-deux.
+  ///
+  /// Le choix se fait ici et non pendant le build: muter l'etat en pleine
+  /// construction de l'arbre est precisement ce que cette page faisait avant.
+  void _onTeacherSearchChanged(String valeur) {
+    setState(() {
+      _searchQuery = valeur;
+      if (valeur.trim().isEmpty) {
+        _selectedTeacherUserId = null;
+        _selectedTeacherId = null;
+        return;
+      }
+    });
+
+    final correspondances = _matchingTeacherUsers();
+    if (correspondances.length == 1) {
+      _selectTeacherUser(correspondances.first);
+    } else if (_selectedTeacherUserId != null &&
+        !correspondances.any(
+          (user) => _asInt(user['id']) == _selectedTeacherUserId,
+        )) {
+      // L'enseignant ouvert ne correspond plus a ce qu'on tape.
+      setState(() {
+        _selectedTeacherUserId = null;
+        _selectedTeacherId = null;
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> _matchingTeacherUsers() {
+    final saisie = _searchQuery.trim().toLowerCase();
+    if (saisie.isEmpty) return const [];
+
+    bool contient(dynamic valeur) =>
+        (valeur ?? '').toString().toLowerCase().contains(saisie);
+
+    return _teacherUsers.where((user) {
+      if (contient(user['full_name']) ||
+          contient(user['first_name']) ||
+          contient(user['last_name']) ||
+          contient(user['username']) ||
+          contient(user['email']) ||
+          contient(user['phone'])) {
+        return true;
+      }
+
+      final profile = _findTeacherProfileByUserId(_asInt(user['id']));
+      if (profile == null) return false;
+      if (contient(profile['employee_code'])) return true;
+
+      // « Qui fait maths en 6A ? » se pose en salle des professeurs.
+      return _assignmentsOf(_asInt(profile['id'])).any(
+        (row) =>
+            contient(row['subject_name']) || contient(row['classroom_name']),
+      );
+    }).toList();
+  }
+
+  List<Map<String, dynamic>> _assignmentsOf(int teacherId) {
+    return _assignments
+        .where((row) => _asInt(row['teacher']) == teacherId)
+        .toList();
+  }
+
+  void _selectTeacherUser(Map<String, dynamic> user) {
+    final profile = _findTeacherProfileByUserId(_asInt(user['id']));
+    setState(() {
+      _selectedTeacherUserId = _asInt(user['id']);
+      _selectedTeacherId = profile == null ? null : _asInt(profile['id']);
+      _scheduleSlots = [];
+      _timeEntries = [];
+    });
+    if (profile != null) {
+      _loadTeacherLinkedData(_asInt(profile['id']));
+    }
+  }
+
+  /// Creneaux et pointages de l'enseignant ouvert.
+  ///
+  /// Un echec ici ne doit pas vider la fiche: l'identite et les affectations
+  /// sont deja a l'ecran, et deux indicateurs manquants valent mieux qu'une
+  /// page blanche.
+  Future<void> _loadTeacherLinkedData(int teacherId) async {
+    setState(() => _detailLoading = true);
+    try {
+      final dio = ref.read(dioProvider);
+      final results = await Future.wait([
+        dio.get(
+          '/teacher-schedule-slots/',
+          queryParameters: {'assignment__teacher': teacherId},
+        ),
+        dio.get(
+          '/teacher-time-entries/',
+          queryParameters: {'teacher': teacherId},
+        ),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _scheduleSlots = _extractRows(results[0].data);
+        _timeEntries = _extractRows(results[1].data);
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _scheduleSlots = [];
+        _timeEntries = [];
+      });
+    } finally {
+      if (mounted) setState(() => _detailLoading = false);
+    }
+  }
+
+  List<Map<String, dynamic>> _scheduleSlotsOf(Map<String, dynamic>? profile) =>
+      profile == null ? const [] : _scheduleSlots;
+
+  List<Map<String, dynamic>> _timeEntriesOf(Map<String, dynamic>? profile) =>
+      profile == null ? const [] : _timeEntries;
+
+  /// Liste imprimable du personnel, dans l'apercu deja utilise cote eleves.
+  ///
+  /// Le PDF est monte par le serveur, comme les bulletins et la liste
+  /// d'appel: c'est lui qui detient le logo, l'annee scolaire et l'effectif.
+  Future<void> _openStaffRoster() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => RosterPdfPreviewDialog(
+        titre: 'Liste des enseignants',
+        nomFichier: 'liste_enseignants.pdf',
+        charger: () async {
+          final response = await ref.read(dioProvider).get<List<int>>(
+            '/reports/staff-roster/',
+            queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
+            options: Options(responseType: ResponseType.bytes),
+          );
+          final bytes = response.data;
+          if (bytes == null || bytes.isEmpty) {
+            throw Exception('PDF liste enseignants vide');
+          }
+          return Uint8List.fromList(bytes);
+        },
+      ),
+    );
+  }
+
+  Widget _buildTeacherSearchCard(ColorScheme colorScheme, TextTheme textTheme) {
     return _panelSurface(
       context,
-      child: selectedUser == null
-          ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 18),
-              child: Center(
-                child: Text(
-                  'Sélectionnez un enseignant dans Gérer profils.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _searchController,
+            onChanged: _onTeacherSearchChanged,
+            style: textTheme.titleMedium,
+            decoration: InputDecoration(
+              hintText:
+                  'Rechercher un enseignant : nom, code, matière, classe, téléphone…',
+              prefixIcon: const Icon(Icons.search, size: 24),
+              suffixIcon: _searchQuery.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Effacer',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() {
+                          _searchQuery = '';
+                          _selectedTeacherUserId = null;
+                          _selectedTeacherId = null;
+                        });
+                      },
+                    ),
+              border: const OutlineInputBorder(),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 18,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTeacherResultsCard(
+    List<Map<String, dynamic>> matches,
+    ColorScheme colorScheme,
+    TextTheme textTheme,
+  ) {
+    return _panelSurface(
+      context,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '${matches.length} enseignants correspondent',
+            style: textTheme.titleMedium,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Choisissez celui dont vous voulez ouvrir la fiche.',
+            style: textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 420),
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: matches.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final user = matches[index];
+                final profile = _findTeacherProfileByUserId(_asInt(user['id']));
+                final nom = _fullNameFromUser(user);
+                return ListTile(
+                  dense: true,
+                  leading: CircleAvatar(
+                    backgroundColor: colorScheme.primaryContainer,
+                    child: Text(
+                      nom.isEmpty ? '?' : nom.characters.first.toUpperCase(),
+                      style: TextStyle(color: colorScheme.onPrimaryContainer),
+                    ),
+                  ),
+                  title: Text(nom),
+                  subtitle: Text(
+                    profile == null
+                        ? TeacherPaletteCard.sansProfil
+                        : (profile['employee_code'] ?? '').toString(),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _selectTeacherUser(user),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTeacherEmptyState(
+    ColorScheme colorScheme,
+    TextTheme textTheme,
+  ) {
+    final aCherche = _searchQuery.trim().isNotEmpty;
+    return _panelSurface(
+      context,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 16),
+        child: Column(
+          children: [
+            Icon(
+              aCherche ? Icons.person_search_outlined : Icons.search,
+              size: 44,
+              color: colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              aCherche
+                  ? 'Aucun enseignant ne correspond à « ${_searchQuery.trim()} ».'
+                  : 'Recherchez un enseignant pour ouvrir sa fiche.',
+              textAlign: TextAlign.center,
+              style: textTheme.titleSmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            if (!aCherche) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Nom, code employé, matière, classe ou téléphone.',
+                textAlign: TextAlign.center,
+                style: textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
                 ),
               ),
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Fiche enseignant',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 8,
-                  children: [
-                    _metricChip('Nom', _fullNameFromUser(selectedUser)),
-                    _metricChip(
-                      'Email',
-                      (selectedUser['email'] ?? '-').toString(),
-                    ),
-                    _metricChip(
-                      'Téléphone',
-                      (selectedUser['phone'] ?? '-').toString(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                if (selectedProfile != null)
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surface,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: colorScheme.outlineVariant.withValues(alpha: 0.5),
-                      ),
-                    ),
-                    child: Wrap(
-                      spacing: 10,
-                      runSpacing: 8,
-                      children: [
-                        _metricChip(
-                          'Code employé',
-                          (selectedProfile['employee_code'] ?? '-').toString(),
-                        ),
-                        _metricChip(
-                          'Date embauche',
-                          (selectedProfile['hire_date'] ?? '-').toString(),
-                        ),
-                        _metricChip(
-                          'Taux horaire',
-                          _formatMoney(selectedProfile['hourly_rate']),
-                        ),
-                        _metricChip(
-                          'Affectations',
-                          '${selectedTeacherAssignments.length}',
-                        ),
-                      ],
-                    ),
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF3E8),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFFFFD3AF)),
-                    ),
-                    child: const Text(
-                      'Ce compte enseignant n\'a pas encore de profil. Complétez la section ci-dessous.',
-                    ),
-                  ),
-                const SizedBox(height: 14),
-                _actionHeader(
-                  context,
-                  title: 'Mode action guidé',
-                  subtitle:
-                      'Etape 1: créer le profil, puis Etape 2: affecter la matière à la classe.',
-                ),
-                const SizedBox(height: 10),
-                _actionSection(
-                  context,
-                  step: 'Etape 1',
-                  title: 'Créer un profil enseignant',
-                  subtitle:
-                      'Choisissez un compte utilisateur enseignant puis complétez les informations RH.',
-                  child: Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      SizedBox(
-                        width: 280,
-                        child: DropdownButtonFormField<int>(
-                          initialValue: _selectedTeacherUserId,
-                          decoration: const InputDecoration(
-                            labelText: 'Compte enseignant',
-                          ),
-                          items: _teacherUsers
-                              .map(
-                                (u) => DropdownMenuItem<int>(
-                                  value: _asInt(u['id']),
-                                  child: Text(_teacherUserActionLabel(u)),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            setState(() {
-                              _selectedTeacherUserId = value;
-                              final profile = value == null
-                                  ? null
-                                  : _findTeacherProfileByUserId(value);
-                              _selectedTeacherId = profile == null
-                                  ? null
-                                  : _asInt(profile['id']);
-                            });
-                          },
-                        ),
-                      ),
-                      SizedBox(
-                        width: 190,
-                        child: TextField(
-                          controller: _employeeCodeController,
-                          decoration: const InputDecoration(
-                            labelText: 'Code employé',
-                          ),
-                        ),
-                      ),
-                      SizedBox(
-                        width: 170,
-                        child: TextField(
-                          controller: _salaryController,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          decoration: const InputDecoration(
-                            labelText: 'Taux horaire',
-                          ),
-                        ),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _saving ? null : _pickHireDate,
-                        icon: const Icon(Icons.calendar_month_outlined),
-                        label: Text(_apiDate(_hireDate)),
-                      ),
-                      FilledButton.icon(
-                        onPressed: _saving ? null : _createTeacherProfile,
-                        icon: const Icon(Icons.person_add_alt_1_rounded),
-                        label: const Text('Valider profil'),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                _actionSection(
-                  context,
-                  step: 'Etape 2',
-                  title: 'Créer une affectation',
-                  subtitle:
-                      'Affectez un enseignant profilé à une matière et une classe.',
-                  child: Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      SizedBox(
-                        width: 260,
-                        child: DropdownButtonFormField<int>(
-                          initialValue: _selectedTeacherId,
-                          decoration: const InputDecoration(
-                            labelText: 'Enseignant',
-                          ),
-                          items: _teachers
-                              .map(
-                                (t) => DropdownMenuItem<int>(
-                                  value: _asInt(t['id']),
-                                  child: Text(_teacherProfileLabel(t)),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            setState(() => _selectedTeacherId = value);
-                          },
-                        ),
-                      ),
-                      SizedBox(
-                        width: 240,
-                        child: DropdownButtonFormField<int>(
-                          initialValue: _selectedSubjectId,
-                          decoration: const InputDecoration(
-                            labelText: 'Matière',
-                          ),
-                          items: _subjects
-                              .map(
-                                (s) => DropdownMenuItem<int>(
-                                  value: _asInt(s['id']),
-                                  child: Text(
-                                    '${s['code'] ?? ''} - ${s['name'] ?? ''}',
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            setState(() => _selectedSubjectId = value);
-                          },
-                        ),
-                      ),
-                      SizedBox(
-                        width: 220,
-                        child: DropdownButtonFormField<int>(
-                          initialValue: _selectedClassroomId,
-                          decoration: const InputDecoration(
-                            labelText: 'Classe',
-                          ),
-                          items: _classrooms
-                              .map(
-                                (c) => DropdownMenuItem<int>(
-                                  value: _asInt(c['id']),
-                                  child: Text((c['name'] ?? '').toString()),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            setState(() => _selectedClassroomId = value);
-                          },
-                        ),
-                      ),
-                      FilledButton.tonalIcon(
-                        onPressed: _saving ? null : _createAssignment,
-                        icon: const Icon(Icons.link_outlined),
-                        label: const Text('Valider affectation'),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+            ],
+          ],
+        ),
+      ),
     );
+  }
+
+  /// Photo choisie dans le formulaire, ou null si l'utilisateur renonce.
+  Future<_PhotoChoisie?> _pickTeacherPhoto() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        type: FileType.custom,
+        allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp'],
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return null;
+
+      final fichier = result.files.first;
+      return _PhotoChoisie(
+        bytes: fichier.bytes,
+        path: (fichier.path?.trim().isEmpty ?? true) ? null : fichier.path,
+        fileName: fichier.name.trim().isEmpty ? null : fichier.name,
+      );
+    } catch (error) {
+      _showMessage('Sélection de la photo impossible: $error');
+      return null;
+    }
+  }
+
+  /// Televerse la photo sur le compte, en multipart.
+  ///
+  /// L'echec est signale mais ne remonte pas: le compte vient d'etre cree et
+  /// perdre cette creation pour une image serait disproportionne.
+  Future<void> _uploadTeacherPhoto(
+    int userId, {
+    Uint8List? bytes,
+    String? path,
+    String? fileName,
+  }) async {
+    try {
+      final nom = fileName ?? 'photo.jpg';
+      final fichier = bytes != null
+          ? MultipartFile.fromBytes(bytes, filename: nom)
+          : await MultipartFile.fromFile(path!, filename: nom);
+
+      await ref
+          .read(dioProvider)
+          .patch(
+            '/auth/users/$userId/',
+            data: FormData.fromMap({'profile_photo': fichier}),
+          );
+    } catch (error) {
+      _showMessage(
+        'Compte créé, mais la photo n\'a pas pu être envoyée: $error',
+      );
+    }
+  }
+
+  /// Le profil connecte consulte les enseignants sans pouvoir les modifier.
+  bool _isTeachersReadOnly() =>
+      !ref.read(currentPermissionsProvider).canWrite('teachers');
+
+  /// Actions d'ecriture de la fiche, grisees sans le droit correspondant.
+  ///
+  /// Les formulaires refusaient deja l'ecriture, mais apres coup: on ouvrait
+  /// le dialogue, on le remplissait, puis on apprenait le refus.
+  List<Widget> _teacherPaletteActions(Map<String, dynamic>? profile) {
+    final lectureSeule = _isTeachersReadOnly();
+
+    Widget action(IconData icone, String label, VoidCallback onPressed) {
+      return Tooltip(
+        message: lectureSeule
+            ? teachersLectureSeuleMotif
+            : label,
+        child: FilledButton.tonalIcon(
+          onPressed: lectureSeule ? null : onPressed,
+          icon: Icon(icone, size: 18),
+          label: Text(label),
+        ),
+      );
+    }
+
+    return [
+      if (profile == null)
+        action(
+          Icons.badge_outlined,
+          'Créer le profil',
+          () => _openCreateProfileDialog(preferredUserId: _selectedTeacherUserId),
+        )
+      else ...[
+        action(Icons.edit_outlined, 'Éditer', _openProfileManagementDialog),
+        action(
+          Icons.assignment_ind_outlined,
+          'Affecter',
+          _openCreateAssignmentDialog,
+        ),
+        action(
+          Icons.list_alt_outlined,
+          'Affectations',
+          _openAssignmentManagementDialog,
+        ),
+      ],
+    ];
   }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final isCompact = MediaQuery.sizeOf(context).width < 900;
-    if (_selectedTeacherUserId == null && _teacherUsers.isNotEmpty) {
-      _selectedTeacherUserId = _asInt(_teacherUsers.first['id']);
-    }
-
+    // Plus de selection d'office ici: outre la fiche ouverte au hasard, muter
+    // l'etat pendant la construction est un anti-patron -- Flutter n'a aucune
+    // garantie que le rebuild suivant parte du meme etat.
+    final textTheme = Theme.of(context).textTheme;
+    final matches = _matchingTeacherUsers();
     final selectedUser = _findUserById(_selectedTeacherUserId ?? 0);
     final selectedProfile = selectedUser == null
         ? null
@@ -2688,12 +2860,37 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
           const SizedBox(height: 14),
           _buildTeachersManagementHub(),
           const SizedBox(height: 14),
-          _buildTeacherFocusPanel(
-            selectedUser: selectedUser,
-            selectedProfile: selectedProfile,
-            selectedTeacherAssignments: selectedTeacherAssignments,
-            colorScheme: colorScheme,
+          _buildTeacherSearchCard(colorScheme, textTheme),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: _openStaffRoster,
+              icon: const Icon(Icons.groups_2_outlined),
+              label: const Text('Liste des enseignants'),
+            ),
           ),
+          const SizedBox(height: 14),
+          if (selectedUser != null)
+            TeacherPaletteCard(
+              user: selectedUser,
+              profile: selectedProfile,
+              assignments: selectedTeacherAssignments,
+              scheduleSlots: _scheduleSlotsOf(selectedProfile),
+              timeEntries: _timeEntriesOf(selectedProfile),
+              loading: _detailLoading,
+              actions: _teacherPaletteActions(selectedProfile),
+              onClear: matches.length > 1
+                  ? () => setState(() {
+                      _selectedTeacherUserId = null;
+                      _selectedTeacherId = null;
+                    })
+                  : null,
+            )
+          else if (matches.length > 1)
+            _buildTeacherResultsCard(matches, colorScheme, textTheme)
+          else
+            _buildTeacherEmptyState(colorScheme, textTheme),
         ],
       ),
     );
@@ -2745,80 +2942,6 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
         ),
       ),
       child: child,
-    );
-  }
-
-  Widget _actionHeader(
-    BuildContext context, {
-    required String title,
-    required String subtitle,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 4),
-        Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
-      ],
-    );
-  }
-
-  Widget _actionSection(
-    BuildContext context, {
-    required String step,
-    required String title,
-    required String subtitle,
-    required Widget child,
-  }) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-      decoration: BoxDecoration(
-        color: colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.45),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Wrap(
-            spacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              _statusTag(context, label: step, color: const Color(0xFF2968C8)),
-              Text(title, style: Theme.of(context).textTheme.titleSmall),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 10),
-          child,
-        ],
-      ),
-    );
-  }
-
-  Widget _statusTag(
-    BuildContext context, {
-    required String label,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: color,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
     );
   }
 
@@ -2947,6 +3070,124 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Text('$label: $value'),
+    );
+  }
+}
+
+/// Photo retenue dans le formulaire, avant tout envoi.
+class _PhotoChoisie {
+  final Uint8List? bytes;
+  final String? path;
+  final String? fileName;
+
+  const _PhotoChoisie({this.bytes, this.path, this.fileName});
+}
+
+/// Champ photo du formulaire enseignant: apercu, choix, retrait.
+class _PhotoField extends StatelessWidget {
+  final Uint8List? bytes;
+  final String? fileName;
+
+  /// Photo deja enregistree sur le compte, en edition. Sans elle,
+  /// l'emplacement vide laisserait croire qu'il n'y en a jamais eu.
+  final String urlActuelle;
+
+  final bool enabled;
+  final Future<void> Function() onPick;
+  final VoidCallback onClear;
+
+  const _PhotoField({
+    required this.bytes,
+    required this.fileName,
+    this.urlActuelle = '',
+    required this.enabled,
+    required this.onPick,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return SizedBox(
+      width: 250,
+      child: Row(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: scheme.outlineVariant.withValues(alpha: 0.6),
+              ),
+            ),
+            child: bytes != null
+                ? Image.memory(bytes!, fit: BoxFit.cover)
+                : (urlActuelle.isNotEmpty
+                      ? Image.network(
+                          urlActuelle,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Icon(
+                            Icons.person_outline,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        )
+                      : Icon(
+                          Icons.person_outline,
+                          color: scheme.onSurfaceVariant,
+                        )),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Photo (facultative)',
+                  style: textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                if (bytes == null)
+                  TextButton.icon(
+                    onPressed: enabled ? () => onPick() : null,
+                    icon: const Icon(Icons.upload_outlined, size: 18),
+                    label: Text(urlActuelle.isEmpty ? 'Choisir' : 'Remplacer'),
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  )
+                else
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          fileName ?? 'photo',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.bodySmall,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Retirer',
+                        onPressed: enabled ? onClear : null,
+                        icon: const Icon(Icons.close, size: 16),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

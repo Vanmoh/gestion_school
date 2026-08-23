@@ -7,7 +7,7 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apps.school.models import Etablissement, ParentProfile
-from .access import role_payload
+from .access import can_read, role_payload
 from .access_routes import module_paths
 from .permissions import HasModuleAccess
 from .serializers import RegisterSerializer, UserSerializer
@@ -213,14 +213,24 @@ class UserViewSet(viewsets.ModelViewSet):
         url_path="directory",
     )
     def directory(self, request):
-        """Annuaire en lecture: identite et role, rien de plus.
+        """Annuaire en lecture: identite et role pour tous, contacts pour ceux
+        qui gerent le personnel.
 
-        Volontairement pauvre en champs: aucun element de compte n'y
-        transite, contrairement au serializer d'administration.
+        L'annuaire est servi a tout compte authentifie -- c'est voulu, sans
+        quoi les ecrans qui choisissent un destinataire se fermeraient a tous
+        sauf a la direction. Y verser en clair le telephone et la photo des
+        enseignants les exposerait donc aussi aux familles.
+
+        Les coordonnees ne sont ajoutees qu'aux lecteurs ayant acces au module
+        « teachers ». Le tri se fait ici, cote serveur: laisser le client
+        demander la version riche reviendrait a lui confier la regle.
         """
         queryset = self.filter_queryset(self.get_queryset())
-        rows = [
-            {
+        avec_contacts = can_read(getattr(request.user, "role", ""), "teachers")
+
+        rows = []
+        for item in queryset:
+            ligne = {
                 "id": item.id,
                 "username": item.username,
                 "first_name": item.first_name,
@@ -229,9 +239,29 @@ class UserViewSet(viewsets.ModelViewSet):
                 "role": item.role,
                 "etablissement": item.etablissement_id,
             }
-            for item in queryset
-        ]
+            if avec_contacts:
+                ligne["email"] = item.email
+                ligne["phone"] = item.phone
+                ligne["profile_photo"] = self._photo_url(request, item)
+            rows.append(ligne)
+
         return Response(rows)
+
+    @staticmethod
+    def _photo_url(request, item):
+        """URL absolue de la photo, ou None.
+
+        Le stockage objet signe deja ses liens; en local l'API sert un chemin
+        relatif que le navigateur ne saurait pas resoudre seul.
+        """
+        photo = getattr(item, "profile_photo", None)
+        if not photo:
+            return None
+        try:
+            return request.build_absolute_uri(photo.url)
+        except Exception:
+            # Un fichier reference mais absent ne doit pas vider l'annuaire.
+            return None
 
     @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
     def me(self, request):
