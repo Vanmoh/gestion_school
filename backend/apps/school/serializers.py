@@ -25,6 +25,9 @@ from .models import (
     Expense,
     Grade,
     GradeValidation,
+    LibraryCategory,
+    LibraryCollection,
+    LibraryDocument,
     Notification,
     ParentProfile,
     Payment,
@@ -609,6 +612,18 @@ class StudentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "La date d'inscription ne peut pas être dans le futur."
             )
+        return value
+
+    def validate_conduite(self, value):
+        """Borne 0-20, refusee ici plutot que par le modele.
+
+        Student.save() appelle full_clean(): une note hors bornes y levait une
+        ValidationError Django, que DRF ne traduit pas -- l'API rendait 500 la
+        ou elle devait rendre 400. AttendanceSerializer bornait deja son
+        propre champ conduite, ce chemin-ci ne le faisait pas.
+        """
+        if value is not None and not (Decimal("0") <= value <= Decimal("20")):
+            raise serializers.ValidationError("La conduite doit être comprise entre 0 et 20.")
         return value
 
     def validate(self, attrs):
@@ -1360,6 +1375,76 @@ class BookSerializer(serializers.ModelSerializer):
     class Meta:
         model = Book
         fields = "__all__"
+
+
+class LibraryCategorySerializer(serializers.ModelSerializer):
+    """Une matiere et son compteur, comme sur l'etagere d'origine.
+
+    Le compteur vient d'une annotation de la vue: le recalculer ici ferait
+    une requete par matiere.
+    """
+
+    document_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = LibraryCategory
+        fields = ["id", "name", "position", "document_count"]
+
+
+class LibraryCollectionSerializer(serializers.ModelSerializer):
+    """Une serie, ses matieres et ses compteurs en une seule reponse.
+
+    L'ecran affiche l'arbre entier des qu'on choisit une serie: le decouper
+    en deux appels ferait clignoter les compteurs.
+    """
+
+    categories = LibraryCategorySerializer(many=True, read_only=True)
+    document_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = LibraryCollection
+        fields = [
+            "id",
+            "code",
+            "label",
+            "source_url",
+            "position",
+            "document_count",
+            "categories",
+        ]
+
+
+class LibraryDocumentSerializer(serializers.ModelSerializer):
+    """Un document du fonds, tel que la liste l'affiche.
+
+    `file_url` est volontairement absent: le client passe toujours par
+    /library-documents/<id>/file/, que le PDF soit deja rapatrie ou encore
+    chez la source. Une URL exterieure servie au navigateur echouerait en
+    CORS et ferait dependre l'ecran d'un domaine tiers.
+    """
+
+    category_name = serializers.CharField(source="category.name", read_only=True)
+    collection_code = serializers.CharField(
+        source="category.collection.code", read_only=True
+    )
+    collection_label = serializers.CharField(
+        source="category.collection.label", read_only=True
+    )
+
+    class Meta:
+        model = LibraryDocument
+        fields = [
+            "id",
+            "title",
+            "category",
+            "category_name",
+            "collection_code",
+            "collection_label",
+            "size_bytes",
+            "is_downloaded",
+            "import_error",
+            "source_url",
+        ]
 
 
 class BorrowSerializer(serializers.ModelSerializer):

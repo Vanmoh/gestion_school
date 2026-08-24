@@ -8,11 +8,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
+import '../../../core/permissions/module_permissions.dart';
+import '../../auth/domain/auth_user.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../domain/attendance_stats.dart';
 import '../domain/attendance_student.dart';
 import 'attendance_controller.dart';
+import 'widgets/attendance_dashboard_card.dart';
 import 'widgets/attendance_sheet_journal.dart';
 import 'widgets/attendance_sheet_list.dart';
+
+/// Ce qu'on fait d'un justificatif deja joint.
+enum _ActionJustificatif { remplacer, retirer }
 
 class AttendancePage extends ConsumerStatefulWidget {
   const AttendancePage({super.key});
@@ -22,14 +29,12 @@ class AttendancePage extends ConsumerStatefulWidget {
 }
 
 class _AttendancePageState extends ConsumerState<AttendancePage> {
-  final _formKey = GlobalKey<FormState>();
-  final _reasonController = TextEditingController();
   final _conduiteController = TextEditingController(text: '18');
+  final _rechercheEleveController = TextEditingController();
 
   int? _selectedStudentId;
-  DateTime _selectedDate = DateTime.now();
-  bool _isAbsent = true;
-  bool _isLate = false;
+  String _rechercheEleve = '';
+  bool _conduiteSaving = false;
   bool _sheetLoading = false;
   bool _sheetSaving = false;
   List<Map<String, dynamic>> _sheetClassrooms = [];
@@ -45,30 +50,19 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   List<Map<String, dynamic>> _journalFiches = const [];
   bool _journalLoading = false;
 
-  static const _sheetReadRoles = {
-    'super_admin',
-    'director',
-    'promoter',
-    'censor',
-    'supervisor',
-    'teacher',
-    'accountant',
-  };
-  static const _sheetWriteRoles = {
-    'super_admin',
-    'director',
-    'promoter',
-    'censor',
-    'supervisor',
-    'teacher',
-  };
-  static const _sheetValidateRoles = {
-    'super_admin',
-    'director',
-    'promoter',
-    'censor',
-    'supervisor',
-  };
+  /// Horodatage du dernier chargement de la fiche, affiche en en-tete comme
+  /// sur les deux autres modules: une page sans indication de fraicheur se
+  /// lit comme un ecran fige.
+  DateTime? _dernierChargement;
+
+  /// Qui note la conduite.
+  ///
+  /// Seule regle de cette page qui reste exprimee en roles: la conduite est
+  /// un champ de l'eleve, pas un module, et la matrice de droits n'a pas de
+  /// cle pour elle. La verite reste cote serveur -- StudentSerializer refuse
+  /// l'ecriture aux autres profils -- et cette liste ne fait que griser un
+  /// champ que le serveur rejetterait.
+  static const _rolesConduite = {'censor', 'supervisor', 'super_admin'};
 
   @override
   void initState() {
@@ -77,8 +71,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
       if (!mounted || _sheetBootstrapped) {
         return;
       }
-      final role = ref.read(authControllerProvider).valueOrNull?.role;
-      if (role != null && _sheetReadRoles.contains(role)) {
+      if (_peutVoirLaFiche(ref.read(currentPermissionsProvider))) {
         _sheetBootstrapped = true;
         _loadSheetClassrooms();
         _loadSheetJournal();
@@ -88,9 +81,28 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
 
   @override
   void dispose() {
-    _reasonController.dispose();
     _conduiteController.dispose();
+    _rechercheEleveController.dispose();
     super.dispose();
+  }
+
+  /// La feuille d'appel decrit une classe, pas un eleve.
+  ///
+  /// Le parent et l'eleve lisent l'assiduite en portee restreinte (leurs
+  /// enfants, soi): la vue par classe ne sait pas restreindre cela et n'aurait
+  /// pas de sens pour eux -- ils ont leur propre ecran. L'enseignant est
+  /// restreint lui aussi, mais a des classes, et il ecrit: c'est ce qui l'en
+  /// distingue. Meme regle que _assert_sheet_scope cote serveur.
+  static bool _peutVoirLaFiche(ModulePermissions droits) {
+    final acces = droits.of('attendance');
+    return acces.canRead && (acces.canWrite || !acces.scoped);
+  }
+
+  /// Cloturer engage la classe entiere: l'enseignant saisit mais ne verrouille
+  /// pas. Ecriture sans portee restreinte, comme cote serveur.
+  static bool _peutValiderLaFiche(ModulePermissions droits) {
+    final acces = droits.of('attendance');
+    return acces.canWrite && !acces.scoped;
   }
 
   Future<void> _loadSheetClassrooms() async {
@@ -209,6 +221,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
         _sheetLocked = payload['is_locked'] == true;
         _sheetValidatedByName = payload['validated_by_name']?.toString() ?? '';
         _sheetValidatedAt = payload['validated_at']?.toString();
+        _dernierChargement = DateTime.now();
       });
     } catch (error) {
       _showMessage(_sheetErrorMessage(error, fallback: 'Erreur chargement fiche.'));
@@ -381,6 +394,148 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     }
   }
 
+  /// Le justificatif d'une absence: deposer, remplacer, retirer.
+  ///
+  /// Le champ existait en base depuis l'origine et les statistiques
+  /// mensuelles comptaient deja les justificatifs, mais aucun ecran ne
+  /// permettait d'en deposer un: le compteur affichait zero en permanence.
+  ///
+  /// Une piece deja jointe ouvre un choix plutot que d'ecraser en silence:
+  /// se tromper de fichier ne doit pas etre un aller sans retour.
+  Future<void> _ouvrirJustificatif(Map<String, dynamic> ligne) async {
+    final attendanceId = AttendanceSheetList.identifiant(ligne);
+    if (attendanceId == null) {
+      _showMessage('Enregistrez la fiche avant de joindre un justificatif.');
+      return;
+    }
+
+    if (AttendanceSheetList.estJustifie(ligne)) {
+      // Retirer demande le niveau administration, comme cote serveur: le
+      // proposer a qui recevra un 403 ne ferait qu'egarer.
+      final peutRetirer = ref
+          .read(currentPermissionsProvider)
+          .of('attendance')
+          .canDelete;
+      final action = await _choisirActionJustificatif(ligne, peutRetirer);
+      if (action == null) return;
+      if (action == _ActionJustificatif.retirer) {
+        await _retirerJustificatif(ligne, attendanceId);
+        return;
+      }
+    }
+
+    await _deposerJustificatif(ligne, attendanceId);
+  }
+
+  /// Que faire de la piece deja jointe.
+  Future<_ActionJustificatif?> _choisirActionJustificatif(
+    Map<String, dynamic> ligne,
+    bool peutRetirer,
+  ) {
+    final nom = (ligne['proof_name'] ?? '').toString();
+    return showDialog<_ActionJustificatif>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Justificatif joint'),
+        content: Text(
+          nom.isEmpty
+              ? 'Une pièce est déjà jointe à cette absence.'
+              : 'Pièce jointe: $nom',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler'),
+          ),
+          if (peutRetirer)
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(_ActionJustificatif.retirer),
+              child: const Text('Retirer'),
+            ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(context).pop(_ActionJustificatif.remplacer),
+            child: const Text('Remplacer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _retirerJustificatif(
+    Map<String, dynamic> ligne,
+    int attendanceId,
+  ) async {
+    setState(() => _sheetSaving = true);
+    try {
+      await ref
+          .read(attendanceRepositoryProvider)
+          .removeProof(attendanceId: attendanceId);
+      if (!mounted) return;
+      setState(() {
+        ligne['has_proof'] = false;
+        ligne['proof_name'] = '';
+        ligne['proof_url'] = '';
+      });
+      _showMessage('Justificatif retiré.', isSuccess: true);
+      ref.invalidate(attendanceMonthlyStatsProvider);
+    } catch (error) {
+      _showMessage(
+        _sheetErrorMessage(error, fallback: 'Erreur retrait du justificatif.'),
+      );
+    } finally {
+      if (mounted) setState(() => _sheetSaving = false);
+    }
+  }
+
+  Future<void> _deposerJustificatif(
+    Map<String, dynamic> ligne,
+    int attendanceId,
+  ) async {
+    final choix = await FilePicker.platform.pickFiles(
+      dialogTitle: 'Justificatif d’absence',
+      withData: true,
+      type: FileType.custom,
+      allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png', 'heic'],
+    );
+    if (choix == null || choix.files.isEmpty) return;
+    final fichier = choix.files.first;
+
+    // Le web ne donne jamais de chemin: seul `bytes` est disponible partout.
+    final octets = fichier.bytes;
+    if (octets == null) {
+      _showMessage('Fichier illisible.');
+      return;
+    }
+
+    setState(() => _sheetSaving = true);
+    try {
+      final resultat = await ref
+          .read(attendanceRepositoryProvider)
+          .uploadProof(
+            attendanceId: attendanceId,
+            fileName: fichier.name,
+            bytes: octets,
+          );
+      if (!mounted) return;
+      setState(() {
+        ligne['has_proof'] = true;
+        ligne['proof_name'] = resultat['proof_name'] ?? fichier.name;
+        ligne['proof_url'] = resultat['proof_url'] ?? '';
+      });
+      _showMessage('Justificatif enregistré.', isSuccess: true);
+      // Le compteur « Justificatifs » de l'en-tete vient du serveur.
+      ref.invalidate(attendanceMonthlyStatsProvider);
+    } catch (error) {
+      _showMessage(
+        _sheetErrorMessage(error, fallback: 'Erreur dépôt du justificatif.'),
+      );
+    } finally {
+      if (mounted) setState(() => _sheetSaving = false);
+    }
+  }
+
   String _sheetErrorMessage(Object error, {required String fallback}) {
     if (error is DioException) {
       final statusCode = error.response?.statusCode;
@@ -422,42 +577,26 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   Widget build(BuildContext context) {
     final studentsAsync = ref.watch(attendanceStudentsProvider);
     final statsAsync = ref.watch(attendanceMonthlyStatsProvider);
-    final mutationState = ref.watch(attendanceMutationProvider);
+    final stats = statsAsync.valueOrNull;
     final authState = ref.watch(authControllerProvider);
+    final droits = ref.watch(currentPermissionsProvider);
+    final acces = droits.of('attendance');
+
     final userRole = authState.valueOrNull?.role;
     final canEditConduite =
-      userRole == 'censor' || userRole == 'supervisor' || userRole == 'super_admin';
-    final isReadOnlyMode = userRole == 'accountant';
-    final canUseSheet = userRole != null && _sheetReadRoles.contains(userRole);
-    final canWriteSheet = userRole != null && _sheetWriteRoles.contains(userRole);
-    final canValidateSheet =
-      userRole != null && _sheetValidateRoles.contains(userRole);
-    final isTeacherRole = userRole == 'teacher';
-    final allowedClassroomIds = isTeacherRole
-      ? _sheetClassrooms
-        .map((row) => _asInt(row['id']))
-        .where((id) => id > 0)
-        .toSet()
-      : <int>{};
-
-    ref.listen<AsyncValue<void>>(attendanceMutationProvider, (prev, next) {
-      if (prev?.isLoading == true && !next.isLoading && mounted) {
-        if (next.hasError) {
-          _showMessage('Erreur enregistrement: ${next.error}');
-        } else {
-          _showMessage('Absence/retard enregistré', isSuccess: true);
-          _reasonController.clear();
-          if (canEditConduite) {
-            _conduiteController.text = '18';
-          }
-          setState(() {
-            _isAbsent = true;
-            _isLate = false;
-            _selectedDate = DateTime.now();
-          });
-        }
-      }
-    });
+        userRole != null && _rolesConduite.contains(userRole);
+    final canUseSheet = _peutVoirLaFiche(droits);
+    final canWriteSheet = acces.canWrite;
+    final canValidateSheet = _peutValiderLaFiche(droits);
+    // Un profil restreint a l'ecriture voit ses propres classes: c'est le
+    // serveur qui borne la liste, on s'y aligne plutot que de nommer un role.
+    final isScopedWriter = acces.canWrite && acces.scoped;
+    final allowedClassroomIds = isScopedWriter
+        ? _sheetClassrooms
+              .map((row) => _asInt(row['id']))
+              .where((id) => id > 0)
+              .toSet()
+        : <int>{};
 
     return Scaffold(
       // Le titre vit desormais dans l'onglet « Élèves » du module Émargements:
@@ -466,80 +605,28 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Les statistiques decrivent le mois ecoule; la feuille d'appel est
-          // le geste du jour. Depliees en tete, elles obligeaient a defiler
-          // pour faire l'appel. Elles restent a portee d'un clic.
-          ExpansionTile(
-            title: const Text('Statistiques mensuelles'),
-            initiallyExpanded: false,
-            tilePadding: EdgeInsets.zero,
-            childrenPadding: EdgeInsets.zero,
-            children: [
-              statsAsync.when(
-                loading: () => const LinearProgressIndicator(),
-                error: (error, _) => Text('Erreur stats: $error'),
-                data: (stats) => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Statistiques mensuelles (${stats.month})'),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        _smallStat(
-                          'Enregistrements',
-                          stats.totalRecords.toString(),
-                        ),
-                        _smallStat('Absences', stats.absences.toString()),
-                        _smallStat('Retards', stats.lates.toString()),
-                        _smallStat(
-                          'Justificatifs',
-                          stats.justifications.toString(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      height: 180,
-                      child: LineChart(
-                        LineChartData(
-                          titlesData: const FlTitlesData(show: true),
-                          lineBarsData: [
-                            LineChartBarData(
-                              spots: [
-                                for (var i = 0; i < stats.daily.length; i++)
-                                  FlSpot(
-                                    i.toDouble(),
-                                    stats.daily[i].absences.toDouble(),
-                                  ),
-                              ],
-                              isCurved: true,
-                            ),
-                            LineChartBarData(
-                              spots: [
-                                for (var i = 0; i < stats.daily.length; i++)
-                                  FlSpot(
-                                    i.toDouble(),
-                                    stats.daily[i].lates.toDouble(),
-                                  ),
-                              ],
-                              isCurved: true,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+          AttendanceDashboardCard(
+            stats: stats,
+            statsError: statsAsync.hasError
+                ? 'Statistiques du mois indisponibles: ${statsAsync.error}'
+                : null,
+            classCount: _sheetClassrooms.length,
+            scopeLabel: _libelleEtablissement(authState.valueOrNull),
+            refreshLabel: _libelleFraicheur(),
+            isCompactLayout: MediaQuery.sizeOf(context).width < 1100,
+            loading: statsAsync.isLoading || _sheetLoading,
+            readOnly: canUseSheet && !canWriteSheet,
+            onRefresh: _toutRecharger,
+            courbe: stats == null ? null : _courbeDuMois(context, stats),
+          ),
+          if (isScopedWriter)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(
+                'Périmètre restreint: classes et élèves de vos affectations.',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
-              ),
-            ],
-          ),
           const SizedBox(height: 16),
           if (canUseSheet)
             Card(
@@ -553,19 +640,40 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 10),
+                    // Couleurs du theme et non figees: l'orange pale d'avant
+                    // rendait ce bandeau illisible en theme sombre.
                     if (_sheetLocked)
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFFF3E0),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .tertiaryContainer
+                              .withValues(alpha: 0.55),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFFFCC80)),
+                          border: Border.all(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .outlineVariant,
+                          ),
                         ),
-                        child: Text(
-                          'Fiche verrouillée'
-                          '${_sheetValidatedByName.isNotEmpty ? ' • par $_sheetValidatedByName' : ''}'
-                          '${_sheetValidatedAt != null ? ' • $_sheetValidatedAt' : ''}',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.lock_outline,
+                              size: 18,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Fiche verrouillée'
+                                '${_sheetValidatedByName.isNotEmpty ? ' • par $_sheetValidatedByName' : ''}'
+                                '${_sheetValidatedAt != null ? ' • $_sheetValidatedAt' : ''}',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     if (_sheetLocked) const SizedBox(height: 10),
@@ -648,6 +756,12 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                               row['reason'] = '';
                             }
                           }),
+                          // Le depot reste ouvert sur une fiche verrouillee:
+                          // le mot d'excuse arrive le lendemain, apres la
+                          // validation du jour.
+                          onJustificatif: canWriteSheet
+                              ? _ouvrirJustificatif
+                              : null,
                         ),
                       const SizedBox(height: 8),
                       Align(
@@ -704,189 +818,98 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                           ],
                         ),
                       ),
-                      if (!canWriteSheet)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Text(
-                            'Lecture seule: ce role peut consulter la fiche sans modifier.',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ),
                     ],
                   ],
                 ),
               ),
             ),
           if (canUseSheet) const SizedBox(height: 16),
-          if (isTeacherRole)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                'Périmètre enseignant: saisie et historique limités aux élèves de vos classes assignées.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Form(
-                key: _formKey,
+          // Ce qui reste de l'ancienne « Saisie absence/retard »: la
+          // conduite, seule chose que la feuille d'appel ne sait pas dire.
+          // Le reste du formulaire redisait la feuille en moins bien, et
+          // echouait des qu'elle etait enregistree -- une seule presence par
+          // eleve et par date, ce que la saisie unitaire ignorait.
+          if (canEditConduite)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text('Saisie absence/retard'),
-                    const SizedBox(height: 10),
+                    Text(
+                      'Note de conduite',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Absences et retards se saisissent dans la feuille d’appel ci-dessus.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 12),
                     studentsAsync.when(
                       loading: () => const LinearProgressIndicator(),
                       error: (error, _) => Text('Erreur élèves: $error'),
                       data: (students) {
-                        final scopedStudents = isTeacherRole
+                        final perimetre = isScopedWriter
                             ? students
                                   .where(
-                                    (student) => student.classroomId != null &&
-                                        allowedClassroomIds.contains(student.classroomId),
+                                    (student) =>
+                                        student.classroomId != null &&
+                                        allowedClassroomIds.contains(
+                                          student.classroomId,
+                                        ),
                                   )
                                   .toList(growable: false)
                             : students;
 
-                        if (scopedStudents.isEmpty) {
+                        if (perimetre.isEmpty) {
                           return const Text('Aucun élève disponible');
                         }
-                        final scopedIds = scopedStudents
-                            .map((student) => student.id)
-                            .toSet();
-                        if (_selectedStudentId == null || !scopedIds.contains(_selectedStudentId)) {
-                          _selectedStudentId = scopedStudents.first.id;
-                        }
-
-                        return DropdownButtonFormField<int>(
-                          initialValue: _selectedStudentId,
-                          items: scopedStudents
-                              .map(
-                                (student) => DropdownMenuItem<int>(
-                                  value: student.id,
-                                  child: Text(_studentLabel(student)),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) =>
-                              setState(() => _selectedStudentId = value),
-                          decoration: const InputDecoration(labelText: 'Élève'),
-                        );
+                        return _selecteurEleve(context, perimetre);
                       },
                     ),
-                    const SizedBox(height: 10),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Date'),
-                      subtitle: Text(_formatDate(_selectedDate)),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.calendar_month),
-                        onPressed: () async {
-                          final picked = await showDatePicker(
-                            context: context,
-                            initialDate: _selectedDate,
-                            firstDate: DateTime(2020),
-                            lastDate: DateTime(2100),
-                          );
-                          if (picked != null) {
-                            setState(() => _selectedDate = picked);
-                          }
-                        },
-                      ),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      value: _isAbsent,
-                      title: const Text('Absent'),
-                      onChanged: (value) => setState(() => _isAbsent = value),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      value: _isLate,
-                      title: const Text('Retard'),
-                      onChanged: (value) => setState(() => _isLate = value),
-                    ),
-                    TextFormField(
-                      controller: _reasonController,
-                      enabled: !isReadOnlyMode,
-                      decoration: const InputDecoration(
-                        labelText: 'Motif / remarque',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      controller: _conduiteController,
-                      enabled: canEditConduite,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: InputDecoration(
-                        labelText: 'Conduite (/20)',
-                        helperText: canEditConduite
-                            ? 'Modifiable par surveillant/super admin.'
-                            : 'Lecture seule: modifiable par surveillant/super admin.',
-                      ),
-                    ),
                     const SizedBox(height: 12),
-                    FilledButton(
-                      onPressed: (mutationState.isLoading || isReadOnlyMode)
-                          ? null
-                          : () async {
-                              final studentId = _selectedStudentId;
-                              if (studentId == null) {
-                                return;
-                              }
-
-                              double? conduite;
-                              if (canEditConduite) {
-                                conduite = double.tryParse(
-                                  _conduiteController.text.trim().replaceAll(
-                                    ',',
-                                    '.',
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 150,
+                          child: TextFormField(
+                            controller: _conduiteController,
+                            keyboardType:
+                                const TextInputType.numberWithOptions(
+                                  decimal: true,
+                                ),
+                            decoration: const InputDecoration(
+                              labelText: 'Conduite (/20)',
+                              isDense: true,
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        FilledButton.icon(
+                          onPressed: (_conduiteSaving || _selectedStudentId == null)
+                              ? null
+                              : _enregistrerConduite,
+                          icon: _conduiteSaving
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
                                   ),
-                                );
-                                if (conduite == null ||
-                                    conduite < 0 ||
-                                    conduite > 20) {
-                                  _showMessage(
-                                    'La conduite doit être comprise entre 0 et 20.',
-                                  );
-                                  return;
-                                }
-                              }
-
-                              await ref
-                                  .read(attendanceMutationProvider.notifier)
-                                  .createAttendance(
-                                    studentId: studentId,
-                                    date: _apiDate(_selectedDate),
-                                    isAbsent: _isAbsent,
-                                    isLate: _isLate,
-                                    reason: _reasonController.text.trim(),
-                                    conduite: conduite,
-                                  );
-                            },
-                      child: mutationState.isLoading
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Enregistrer'),
+                                )
+                              : const Icon(Icons.save_outlined),
+                          label: const Text('Enregistrer la conduite'),
+                        ),
+                      ],
                     ),
-                    if (isReadOnlyMode) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Mode lecture seule: le comptable peut consulter sans modifier.',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
                   ],
                 ),
               ),
             ),
-          ),
           const SizedBox(height: 16),
           const Text(
             'Fiches enregistrées',
@@ -921,24 +944,267 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     );
   }
 
-  Widget _smallStat(String title, String value) {
-    return SizedBox(
-      width: 160,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title),
-          Text(
-            value,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+  /// Courbe du mois, lisible: deux series de meme couleur sans legende ne
+  /// disaient pas laquelle etait « absences ».
+  Widget _courbeDuMois(BuildContext context, AttendanceMonthlyStats stats) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    if (stats.daily.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: Text(
+            'Aucun enregistrement ce mois-ci.',
+            style: textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
           ),
+        ),
+      );
+    }
+
+    Widget legende(String libelle, Color couleur) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 14,
+            height: 3,
+            decoration: BoxDecoration(
+              color: couleur,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(libelle, style: textTheme.labelSmall),
         ],
-      ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 14,
+          children: [
+            legende('Absences', scheme.error),
+            legende('Retards', scheme.tertiary),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 180,
+          child: LineChart(
+            LineChartData(
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                getDrawingHorizontalLine: (_) => FlLine(
+                  color: scheme.outlineVariant.withValues(alpha: 0.4),
+                  strokeWidth: 1,
+                ),
+              ),
+              borderData: FlBorderData(show: false),
+              titlesData: FlTitlesData(
+                topTitles: const AxisTitles(),
+                rightTitles: const AxisTitles(),
+                leftTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: true, reservedSize: 28),
+                ),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 26,
+                    // Trente etiquettes se chevauchent: on n'en garde qu'une
+                    // sur cinq, et seulement le quantieme.
+                    interval: (stats.daily.length / 5).ceilToDouble(),
+                    getTitlesWidget: (valeur, meta) {
+                      final index = valeur.round();
+                      if (index < 0 || index >= stats.daily.length) {
+                        return const SizedBox.shrink();
+                      }
+                      final jour = DateTime.tryParse(stats.daily[index].date);
+                      return Text(
+                        jour == null ? '' : '${jour.day}',
+                        style: textTheme.labelSmall,
+                      );
+                    },
+                  ),
+                ),
+              ),
+              lineBarsData: [
+                _serie(
+                  [for (final jour in stats.daily) jour.absences],
+                  scheme.error,
+                ),
+                _serie(
+                  [for (final jour in stats.daily) jour.lates],
+                  scheme.tertiary,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
-  String _studentLabel(AttendanceStudent student) {
-    return '${student.fullName} (${student.matricule})';
+  LineChartBarData _serie(List<int> valeurs, Color couleur) {
+    return LineChartBarData(
+      spots: [
+        for (var i = 0; i < valeurs.length; i++)
+          FlSpot(i.toDouble(), valeurs[i].toDouble()),
+      ],
+      isCurved: true,
+      color: couleur,
+      barWidth: 2,
+      dotData: const FlDotData(show: false),
+    );
+  }
+
+  /// Etablissement dont on regarde l'emargement, comme l'affichent « Gestion
+  /// des eleves » et « Enseignants ».
+  String _libelleEtablissement(AuthUser? utilisateur) {
+    final nom = utilisateur?.etablissementName.trim() ?? '';
+    if (nom.isNotEmpty) return nom;
+    return utilisateur?.role == 'super_admin'
+        ? 'Aucun établissement actif'
+        : 'Établissement utilisateur';
+  }
+
+  String _libelleFraicheur() {
+    final instant = _dernierChargement;
+    if (instant == null) return 'Maj: -';
+    final heures = instant.hour.toString().padLeft(2, '0');
+    final minutes = instant.minute.toString().padLeft(2, '0');
+    return 'Maj: $heures:$minutes';
+  }
+
+  /// Recharge tout ce que la page montre, d'un seul geste.
+  Future<void> _toutRecharger() async {
+    ref.invalidate(attendanceMonthlyStatsProvider);
+    ref.invalidate(attendanceStudentsProvider);
+    await _loadSheetClassrooms();
+    await _loadSheetJournal();
+  }
+
+  /// Selecteur d'eleve filtre par la saisie.
+  ///
+  /// Un menu deroulant listait l'etablissement entier: inutilisable au-dela
+  /// de cent eleves, et la page etait la seule des trois a ne proposer aucune
+  /// recherche.
+  Widget _selecteurEleve(
+    BuildContext context,
+    List<AttendanceStudent> eleves,
+  ) {
+    final saisie = _rechercheEleve.trim().toLowerCase();
+    final correspondances = saisie.isEmpty
+        ? eleves
+        : eleves
+              .where(
+                (eleve) =>
+                    eleve.fullName.toLowerCase().contains(saisie) ||
+                    eleve.matricule.toLowerCase().contains(saisie),
+              )
+              .toList(growable: false);
+
+    final selectionValide =
+        _selectedStudentId != null &&
+        correspondances.any((eleve) => eleve.id == _selectedStudentId);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _rechercheEleveController,
+          decoration: InputDecoration(
+            labelText: 'Rechercher un élève',
+            hintText: 'Nom ou matricule',
+            isDense: true,
+            prefixIcon: const Icon(Icons.search, size: 20),
+            border: const OutlineInputBorder(),
+            suffixIcon: _rechercheEleve.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Effacer',
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () {
+                      _rechercheEleveController.clear();
+                      setState(() => _rechercheEleve = '');
+                    },
+                  ),
+          ),
+          onChanged: (valeur) => setState(() => _rechercheEleve = valeur),
+        ),
+        const SizedBox(height: 10),
+        if (correspondances.isEmpty)
+          Text(
+            'Aucun élève ne correspond à « $_rechercheEleve ».',
+            style: Theme.of(context).textTheme.bodySmall,
+          )
+        else
+          DropdownButtonFormField<int>(
+            initialValue: selectionValide ? _selectedStudentId : null,
+            isExpanded: true,
+            decoration: InputDecoration(
+              labelText: 'Élève',
+              isDense: true,
+              border: const OutlineInputBorder(),
+              helperText: saisie.isEmpty
+                  ? null
+                  : '${correspondances.length} résultat'
+                        '${correspondances.length > 1 ? 's' : ''}',
+            ),
+            // Un menu de mille lignes ne se parcourt pas: la recherche
+            // au-dessus est le chemin, celui-ci confirme le choix.
+            items: correspondances
+                .take(50)
+                .map(
+                  (eleve) => DropdownMenuItem<int>(
+                    value: eleve.id,
+                    child: Text(
+                      '${eleve.fullName} (${eleve.matricule})',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: (valeur) => setState(() => _selectedStudentId = valeur),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _enregistrerConduite() async {
+    final studentId = _selectedStudentId;
+    if (studentId == null) {
+      _showMessage('Sélectionnez un élève.');
+      return;
+    }
+
+    final note = double.tryParse(
+      _conduiteController.text.trim().replaceAll(',', '.'),
+    );
+    if (note == null || note < 0 || note > 20) {
+      _showMessage('La conduite doit être comprise entre 0 et 20.');
+      return;
+    }
+
+    setState(() => _conduiteSaving = true);
+    try {
+      await ref
+          .read(attendanceRepositoryProvider)
+          .saveConduite(studentId: studentId, conduite: note);
+      if (!mounted) return;
+      _showMessage('Conduite enregistrée.', isSuccess: true);
+    } catch (error) {
+      _showMessage(
+        _sheetErrorMessage(error, fallback: 'Erreur enregistrement conduite.'),
+      );
+    } finally {
+      if (mounted) setState(() => _conduiteSaving = false);
+    }
   }
 
   String _formatDate(DateTime value) {

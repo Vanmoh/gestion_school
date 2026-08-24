@@ -25,6 +25,12 @@ class AttendanceSheetList extends StatelessWidget {
   final void Function(Map<String, dynamic> ligne, String motif) onMotifChanged;
   final VoidCallback onToutPresent;
 
+  /// Ouvre le justificatif d'une ligne: deposer, remplacer, retirer.
+  ///
+  /// Nul quand le profil ne peut pas ecrire: la colonne montre alors l'etat
+  /// sans le proposer a la modification.
+  final void Function(Map<String, dynamic> ligne)? onJustificatif;
+
   const AttendanceSheetList({
     super.key,
     required this.items,
@@ -33,10 +39,20 @@ class AttendanceSheetList extends StatelessWidget {
     required this.onRetardChanged,
     required this.onMotifChanged,
     required this.onToutPresent,
+    this.onJustificatif,
   });
 
   static bool estAbsent(Map<String, dynamic> ligne) => ligne['is_absent'] == true;
   static bool estEnRetard(Map<String, dynamic> ligne) => ligne['is_late'] == true;
+  static bool estJustifie(Map<String, dynamic> ligne) => ligne['has_proof'] == true;
+
+  /// Une ligne non encore enregistree n'a pas d'identifiant a qui attacher
+  /// un fichier: on justifie une absence qui existe.
+  static int? identifiant(Map<String, dynamic> ligne) {
+    final brut = ligne['attendance_id'];
+    if (brut is int) return brut;
+    return int.tryParse(brut?.toString() ?? '');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,6 +82,7 @@ class AttendanceSheetList extends StatelessWidget {
                     onPresenceChanged: onPresenceChanged,
                     onRetardChanged: onRetardChanged,
                     onMotifChanged: onMotifChanged,
+                    onJustificatif: onJustificatif,
                   ),
               ],
             );
@@ -95,6 +112,10 @@ class _Bandeau extends StatelessWidget {
     final absents = items.where(AttendanceSheetList.estAbsent).length;
     final retards = items.where(AttendanceSheetList.estEnRetard).length;
     final presents = items.length - absents;
+    final justifies = items
+        .where(AttendanceSheetList.estAbsent)
+        .where(AttendanceSheetList.estJustifie)
+        .length;
 
     return Wrap(
       spacing: 12,
@@ -111,6 +132,7 @@ class _Bandeau extends StatelessWidget {
         Text(
           '$presents présent${presents > 1 ? 's' : ''}'
           '  ·  $absents absent${absents > 1 ? 's' : ''}'
+          '${justifies > 0 ? ' (dont $justifies justifié${justifies > 1 ? 's' : ''})' : ''}'
           '${retards > 0 ? '  ·  $retards retard${retards > 1 ? 's' : ''}' : ''}',
           style: textTheme.titleSmall?.copyWith(
             color: absents > 0 ? scheme.error : scheme.onSurfaceVariant,
@@ -139,7 +161,8 @@ class _EnTeteColonnes extends StatelessWidget {
           SizedBox(width: 78, child: Text('PRÉSENT', style: style)),
           SizedBox(width: 70, child: Text('ABSENT', style: style)),
           SizedBox(width: 66, child: Text('RETARD', style: style)),
-          SizedBox(width: 180, child: Text('MOTIF', style: style)),
+          SizedBox(width: 156, child: Text('MOTIF', style: style)),
+          SizedBox(width: 54, child: Text('JUSTIF.', style: style)),
         ],
       ),
     );
@@ -154,6 +177,7 @@ class _Ligne extends StatelessWidget {
   final void Function(Map<String, dynamic>, PresenceEleve) onPresenceChanged;
   final void Function(Map<String, dynamic>, bool) onRetardChanged;
   final void Function(Map<String, dynamic>, String) onMotifChanged;
+  final void Function(Map<String, dynamic>)? onJustificatif;
 
   const _Ligne({
     required this.rang,
@@ -163,6 +187,7 @@ class _Ligne extends StatelessWidget {
     required this.onPresenceChanged,
     required this.onRetardChanged,
     required this.onMotifChanged,
+    required this.onJustificatif,
   });
 
   String get _nom {
@@ -200,7 +225,8 @@ class _Ligne extends StatelessWidget {
         SizedBox(width: 78, child: _radio(context, PresenceEleve.present)),
         SizedBox(width: 70, child: _radio(context, PresenceEleve.absent)),
         SizedBox(width: 66, child: _caseRetard()),
-        SizedBox(width: 180, child: _champMotif(context)),
+        SizedBox(width: 156, child: _champMotif(context)),
+        SizedBox(width: 54, child: _boutonJustificatif(context)),
       ],
     );
   }
@@ -223,7 +249,12 @@ class _Ligne extends StatelessWidget {
         if (AttendanceSheetList.estAbsent(ligne))
           Padding(
             padding: const EdgeInsets.only(left: 26, top: 4),
-            child: _champMotif(context),
+            child: Row(
+              children: [
+                Expanded(child: _champMotif(context)),
+                _boutonJustificatif(context),
+              ],
+            ),
           ),
       ],
     );
@@ -327,6 +358,47 @@ class _Ligne extends StatelessWidget {
     );
     if (compactLabel == null) return case_;
     return Tooltip(message: 'Retard', child: case_);
+  }
+
+  /// Etat du justificatif, et acces au depot quand il est possible.
+  ///
+  /// Le champ existait en base depuis l'origine et les statistiques
+  /// comptaient deja les justificatifs, mais aucun ecran ne permettait d'en
+  /// deposer un: le compteur affichait zero en permanence.
+  Widget _boutonJustificatif(BuildContext context) {
+    if (!AttendanceSheetList.estAbsent(ligne)) {
+      return const SizedBox.shrink();
+    }
+
+    final scheme = Theme.of(context).colorScheme;
+    final justifie = AttendanceSheetList.estJustifie(ligne);
+    final identifiant = AttendanceSheetList.identifiant(ligne);
+
+    // Une absence pas encore enregistree n'a rien a quoi attacher un fichier.
+    if (identifiant == null) {
+      return Tooltip(
+        message: 'Enregistrez la fiche avant de joindre un justificatif',
+        child: Icon(
+          Icons.attach_file,
+          size: 18,
+          color: scheme.onSurfaceVariant.withValues(alpha: 0.35),
+        ),
+      );
+    }
+
+    final nom = (ligne['proof_name'] ?? '').toString();
+    return IconButton(
+      tooltip: justifie
+          ? (nom.isEmpty ? 'Justificatif joint' : 'Justificatif: $nom')
+          : 'Joindre un justificatif',
+      visualDensity: VisualDensity.compact,
+      onPressed: onJustificatif == null ? null : () => onJustificatif!(ligne),
+      icon: Icon(
+        justifie ? Icons.task_outlined : Icons.attach_file,
+        size: 19,
+        color: justifie ? scheme.primary : scheme.onSurfaceVariant,
+      ),
+    );
   }
 
   Widget _champMotif(BuildContext context) {

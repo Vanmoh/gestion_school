@@ -8,9 +8,9 @@ from django.contrib.auth import get_user_model
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Avg, Count, DecimalField, ExpressionWrapper, F, Q, Sum, Value
+from django.db.models import Avg, Count, DecimalField, ExpressionWrapper, F, Prefetch, Q, Sum, Value
 from django.db.models.functions import Coalesce
-from django.http import HttpResponse
+from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status, viewsets
@@ -27,7 +27,11 @@ try:
 except Exception:  # pragma: no cover - optional dependency in some environments
     XLImage = None
 from openpyxl.styles import Alignment, Font, PatternFill
-from apps.accounts.access import can_read
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import urlopen
+
+from apps.accounts.access import can_read, can_write, is_scoped
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import HasModuleAccess, IsSuperAdmin
 from apps.common.pagination import StandardResultsSetPagination
@@ -54,6 +58,9 @@ from .models import (
     Expense,
     Grade,
     GradeValidation,
+    LibraryCategory,
+    LibraryCollection,
+    LibraryDocument,
     Notification,
     ParentProfile,
     Payment,
@@ -85,6 +92,8 @@ from .serializers import (
     AttendanceSerializer,
     BookSerializer,
     BorrowSerializer,
+    LibraryCollectionSerializer,
+    LibraryDocumentSerializer,
     CanteenMenuSerializer,
     CanteenServiceSerializer,
     CanteenSubscriptionSerializer,
@@ -4270,31 +4279,6 @@ class AttendanceViewSet(BaseModelViewSet):
     filterset_fields = ["date", "student", "is_absent", "is_late"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
-    ATTENDANCE_SHEET_READ_ROLES = {
-        UserRole.SUPER_ADMIN,
-        UserRole.DIRECTOR,
-        UserRole.PROMOTER,
-        UserRole.CENSOR,
-        UserRole.SUPERVISOR,
-        UserRole.TEACHER,
-        UserRole.ACCOUNTANT,
-    }
-    ATTENDANCE_SHEET_WRITE_ROLES = {
-        UserRole.SUPER_ADMIN,
-        UserRole.DIRECTOR,
-        UserRole.PROMOTER,
-        UserRole.CENSOR,
-        UserRole.SUPERVISOR,
-        UserRole.TEACHER,
-    }
-    ATTENDANCE_SHEET_VALIDATOR_ROLES = {
-        UserRole.SUPER_ADMIN,
-        UserRole.DIRECTOR,
-        UserRole.PROMOTER,
-        UserRole.CENSOR,
-        UserRole.SUPERVISOR,
-    }
-
     def _requested_etablissement_id(self):
         raw_value = (
             self.request.headers.get("X-Etablissement-Id")
@@ -4364,13 +4348,54 @@ class AttendanceViewSet(BaseModelViewSet):
             raise ValidationError({"classroom": "classroom est requis."})
         return classroom_id
 
-    def _assert_sheet_role(self, write=False):
+    def _parse_student_id(self, raw_value):
+        """Meme lecture que pour la classe, mais le champ manquant se nomme.
+
+        Reutiliser _parse_sheet_classroom_id repondait « classroom est
+        requis » a qui postait une conduite sans eleve.
+        """
+        try:
+            student_id = int(raw_value)
+        except (TypeError, ValueError):
+            student_id = 0
+        if student_id <= 0:
+            raise ValidationError({"student": "student est requis."})
+        return student_id
+
+    def _assert_sheet_scope(self):
+        """La feuille d'appel decrit une classe, pas un eleve.
+
+        HasModuleAccess verifie le niveau; il ignore la portee. Or la famille
+        lit l'assiduite en lecture restreinte (L*), c'est-a-dire ses enfants
+        ou soi -- ce que la vue par classe ne sait pas restreindre, et qui
+        n'aurait de toute facon pas de sens: une fiche est un document
+        collectif. Le parent et l'eleve ont leur propre ecran.
+
+        L'enseignant est restreint lui aussi, mais a des classes et non a des
+        eleves, et son niveau est l'ecriture: c'est ce qui l'en distingue.
+        """
         role = getattr(self.request.user, "role", "")
-        allowed_roles = (
-            self.ATTENDANCE_SHEET_WRITE_ROLES if write else self.ATTENDANCE_SHEET_READ_ROLES
-        )
-        if role not in allowed_roles:
-            raise ValidationError({"detail": "Acces refuse pour cette fonctionnalite."})
+        module = self.access_module
+        if is_scoped(role, module) and not can_write(role, module):
+            raise ValidationError(
+                {"detail": "La feuille d'appel n'est pas accessible depuis un compte famille."}
+            )
+
+    def _assert_can_validate_sheet(self):
+        """Cloturer une fiche demande l'ecriture sans portee restreinte.
+
+        Le niveau est deja verifie par HasModuleAccess a l'entree de l'action;
+        il ne reste ici que la nuance de perimetre. L'enseignant saisit l'appel
+        de ses classes (E*) mais ne le cloture pas: verrouiller engage la
+        classe entiere vis-a-vis de la direction, pas seulement sa propre
+        saisie.
+        """
+        self._assert_sheet_scope()
+        role = getattr(self.request.user, "role", "")
+        if is_scoped(role, self.access_module):
+            raise ValidationError(
+                {"detail": "Validation de fiche reservee a la direction et a la surveillance."}
+            )
 
     def _sheet_classrooms_queryset(self):
         queryset = ClassRoom.objects.select_related("academic_year", "etablissement").all()
@@ -4401,6 +4426,35 @@ class AttendanceViewSet(BaseModelViewSet):
             is_locked=True,
         ).select_related("validated_by").first()
 
+    @staticmethod
+    def _proof_name(attendance_row):
+        """Nom de fichier seul, sans le dossier de stockage.
+
+        La liste d'appel affiche « justifie » et propose d'ouvrir la piece;
+        le chemin complet (attendance_proofs/2026/...) n'apprendrait rien a
+        qui fait l'appel.
+        """
+        if not attendance_row or not attendance_row.proof:
+            return ""
+        return str(attendance_row.proof.name).rsplit("/", 1)[-1]
+
+    @staticmethod
+    def _proof_url(attendance_row):
+        """Chemin du justificatif, relatif ou absolu selon le stockage.
+
+        Le frontend le resout contre l'URL de l'API (resolveMediaUrl), comme
+        les photos d'eleves: renvoyer une URL absolue ici casserait le
+        stockage objet, qui signe deja les siennes.
+        """
+        if not attendance_row or not attendance_row.proof:
+            return ""
+        try:
+            return attendance_row.proof.url
+        except ValueError:
+            # Fichier reference en base mais absent du stockage: la fiche
+            # doit rester affichable.
+            return ""
+
     def _build_class_sheet_payload(self, classroom, selected_date):
         students = list(
             Student.objects.select_related("user")
@@ -4430,6 +4484,9 @@ class AttendanceViewSet(BaseModelViewSet):
                     "is_absent": bool(attendance_row.is_absent) if attendance_row else False,
                     "is_late": bool(attendance_row.is_late) if attendance_row else False,
                     "reason": attendance_row.reason if attendance_row else "",
+                    "has_proof": bool(attendance_row.proof) if attendance_row else False,
+                    "proof_url": self._proof_url(attendance_row),
+                    "proof_name": self._proof_name(attendance_row),
                 }
             )
 
@@ -4511,9 +4568,123 @@ class AttendanceViewSet(BaseModelViewSet):
         self._validate_student_scope(serializer)
         serializer.save()
 
-    @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
+    def _conduite_students_queryset(self):
+        """Eleves notables, bornes au meme perimetre que les presences.
+
+        La conduite se note par etablissement et non par classe: seuls le
+        censeur, le surveillant et le super admin y touchent, et aucun des
+        trois n'a de perimetre de classe.
+        """
+        queryset = Student.objects.filter(is_archived=False)
+        requested = self._requested_etablissement()
+        if requested is not None:
+            return queryset.filter(etablissement=requested)
+        if getattr(self.request.user, "role", "") == UserRole.SUPER_ADMIN:
+            return queryset
+        return queryset.filter(
+            etablissement=getattr(self.request.user, "etablissement", None)
+        )
+
+    @action(detail=False, methods=["post"], url_path="conduite")
+    def conduite(self, request):
+        """Note de conduite d'un eleve, saisie depuis l'emargement.
+
+        Elle ne s'ecrivait jusqu'ici qu'en effet de bord de la creation d'une
+        absence: le formulaire de saisie unitaire portait un champ
+        « Conduite (/20) » que le serializer d'Attendance reportait sur
+        l'eleve. Ce formulaire faisait par ailleurs doublon avec la feuille
+        d'appel, et echouait des que la fiche du jour etait enregistree
+        (une seule presence par eleve et par date).
+
+        Une route directe est le seul moyen de retirer ce doublon sans perdre
+        la conduite: PATCH /students/ ne convenait pas, la matrice y refuse
+        l'ecriture au censeur et au surveillant, qui sont precisement les
+        deux profils qui notent la conduite.
+
+        La regle « qui peut noter » n'est pas recopiee ici: c'est
+        StudentSerializer qui l'applique, comme pour toute autre ecriture sur
+        l'eleve.
+        """
+        student_id = self._parse_student_id(request.data.get("student"))
+        student = get_object_or_404(self._conduite_students_queryset(), id=student_id)
+
+        serializer = StudentSerializer(
+            student,
+            data={"conduite": request.data.get("conduite")},
+            partial=True,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {
+                "detail": "Conduite enregistree.",
+                "student": student.id,
+                "conduite": str(student.conduite),
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["post", "delete"],
+        url_path="proof",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def proof(self, request, pk=None):
+        """Justificatif d'une absence: depot, remplacement, retrait.
+
+        Le champ existait en base depuis l'origine et les statistiques
+        mensuelles comptaient deja les justificatifs -- mais aucun ecran ne
+        permettait d'en deposer un, si bien que le compteur affichait zero en
+        permanence.
+
+        Volontairement hors du POST de la feuille d'appel, et volontairement
+        accepte sur une fiche verrouillee: le mot d'excuse arrive le
+        lendemain, apres que la fiche du jour a ete validee. Le refuser
+        obligerait a deverrouiller la journee entiere pour classer un papier.
+
+        Le retrait exige le niveau administration (DELETE), tandis que
+        remplacer une piece deposee par erreur reste a portee de qui saisit
+        l'appel: reposter ecrase.
+        """
+        attendance = self.get_object()
+
+        if request.method.lower() == "delete":
+            if not attendance.proof:
+                raise ValidationError({"detail": "Aucun justificatif a retirer."})
+            attendance.proof.delete(save=False)
+            attendance.proof = None
+            attendance.save(update_fields=["proof"])
+            return Response({"detail": "Justificatif retire.", "has_proof": False})
+
+        uploaded = request.FILES.get("proof") or request.data.get("proof")
+        if not uploaded:
+            raise ValidationError({"proof": ["Aucun fichier fourni."]})
+
+        if not attendance.is_absent and not attendance.is_late:
+            raise ValidationError(
+                {"detail": "Cet eleve n'est ni absent ni en retard a cette date."}
+            )
+
+        # Remplacer laisse sinon l'ancienne piece sur le stockage sans que
+        # rien ne la reference.
+        if attendance.proof:
+            attendance.proof.delete(save=False)
+
+        attendance.proof = uploaded
+        attendance.save(update_fields=["proof"])
+        return Response(
+            {
+                "detail": "Justificatif enregistre.",
+                "has_proof": True,
+                "proof_url": self._proof_url(attendance),
+                "proof_name": self._proof_name(attendance),
+            }
+        )
+
+    @action(detail=False, methods=["get"])
     def sheet_classrooms(self, request):
-        self._assert_sheet_role(write=False)
+        self._assert_sheet_scope()
         classrooms = self._sheet_classrooms_queryset()
         rows = [
             {
@@ -4526,21 +4697,15 @@ class AttendanceViewSet(BaseModelViewSet):
         ]
         return Response(rows)
 
-    @action(
-        detail=False,
-        methods=["get", "post"],
-        url_path="class-sheet",
-        permission_classes=[permissions.IsAuthenticated],
-    )
+    @action(detail=False, methods=["get", "post"], url_path="class-sheet")
     def class_sheet(self, request):
+        self._assert_sheet_scope()
         if request.method.lower() == "get":
-            self._assert_sheet_role(write=False)
             classroom_id = self._parse_sheet_classroom_id(request.query_params.get("classroom"))
             selected_date = self._parse_sheet_date(request.query_params.get("date"))
             classroom = self._get_sheet_classroom_or_404(classroom_id)
             return Response(self._build_class_sheet_payload(classroom, selected_date))
 
-        self._assert_sheet_role(write=True)
         classroom_id = self._parse_sheet_classroom_id(request.data.get("classroom"))
         selected_date = self._parse_sheet_date(request.data.get("date"))
         classroom = self._get_sheet_classroom_or_404(classroom_id)
@@ -4609,12 +4774,7 @@ class AttendanceViewSet(BaseModelViewSet):
             }
         )
 
-    @action(
-        detail=False,
-        methods=["get"],
-        url_path="sheet-journal",
-        permission_classes=[permissions.IsAuthenticated],
-    )
+    @action(detail=False, methods=["get"], url_path="sheet-journal")
     def sheet_journal(self, request):
         """Fiches d'appel deja enregistrees, une ligne par classe et par date.
 
@@ -4628,7 +4788,7 @@ class AttendanceViewSet(BaseModelViewSet):
         validee ou non: on agrege donc les presences plutot que de lister les
         seules validations, sinon les brouillons resteraient invisibles.
         """
-        self._assert_sheet_role()
+        self._assert_sheet_scope()
 
         classrooms = self._sheet_classrooms_queryset()
         classroom_id = request.query_params.get("classroom")
@@ -4699,16 +4859,9 @@ class AttendanceViewSet(BaseModelViewSet):
 
         return Response(resultat)
 
-    @action(
-        detail=False,
-        methods=["post"],
-        url_path="class-sheet-validate",
-        permission_classes=[permissions.IsAuthenticated],
-    )
+    @action(detail=False, methods=["post"], url_path="class-sheet-validate")
     def class_sheet_validate(self, request):
-        role = getattr(request.user, "role", "")
-        if role not in self.ATTENDANCE_SHEET_VALIDATOR_ROLES:
-            raise ValidationError({"detail": "Acces refuse pour la validation de fiche."})
+        self._assert_can_validate_sheet()
 
         classroom_id = self._parse_sheet_classroom_id(request.data.get("classroom"))
         selected_date = self._parse_sheet_date(request.data.get("date"))
@@ -4749,14 +4902,9 @@ class AttendanceViewSet(BaseModelViewSet):
             }
         )
 
-    @action(
-        detail=False,
-        methods=["get"],
-        url_path="class-sheet-export",
-        permission_classes=[permissions.IsAuthenticated],
-    )
+    @action(detail=False, methods=["get"], url_path="class-sheet-export")
     def class_sheet_export(self, request):
-        self._assert_sheet_role(write=False)
+        self._assert_sheet_scope()
         classroom_id = self._parse_sheet_classroom_id(request.query_params.get("classroom"))
         selected_date = self._parse_sheet_date(request.query_params.get("date"))
         export_format = str(request.query_params.get("format", "pdf")).strip().lower()
@@ -4863,7 +5011,12 @@ class AttendanceViewSet(BaseModelViewSet):
             total_records=Count("id"),
             absences=Count("id", filter=Q(is_absent=True)),
             lates=Count("id", filter=Q(is_late=True)),
-            justifications=Count("id", filter=Q(proof__isnull=False)),
+            # Un FileField vide vaut tantot NULL, tantot la chaine vide
+            # selon la facon dont la ligne a ete ecrite: ne tester que
+            # isnull comptait des justificatifs inexistants.
+            justifications=Count(
+                "id", filter=Q(proof__isnull=False) & ~Q(proof="")
+            ),
         )
 
         per_day = (
@@ -5007,7 +5160,12 @@ class TeacherAttendanceViewSet(BaseModelViewSet):
             total_records=Count("id"),
             absences=Count("id", filter=Q(is_absent=True)),
             lates=Count("id", filter=Q(is_late=True)),
-            justifications=Count("id", filter=Q(proof__isnull=False)),
+            # Un FileField vide vaut tantot NULL, tantot la chaine vide
+            # selon la facon dont la ligne a ete ecrite: ne tester que
+            # isnull comptait des justificatifs inexistants.
+            justifications=Count(
+                "id", filter=Q(proof__isnull=False) & ~Q(proof="")
+            ),
         )
 
         per_day = (
@@ -6241,6 +6399,122 @@ class SmsProviderConfigViewSet(EtablissementScopedModelViewSet):
         if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN and target_etablissement is None:
             raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
         serializer.save(etablissement=target_etablissement)
+
+
+class LibraryCollectionViewSet(BaseModelViewSet):
+    """Les series du fonds numerique, avec leurs matieres et leurs compteurs.
+
+    Le fonds n'est pas cloisonne par etablissement, contrairement aux
+    ouvrages physiques: ce sont les memes annales pour tout le monde, et les
+    dupliquer par etablissement multiplierait des giga-octets identiques.
+    Qui accede au module voit les neuf series.
+    """
+
+    access_module = "library"
+    serializer_class = LibraryCollectionSerializer
+    queryset = LibraryCollection.objects.all()
+    pagination_class = None
+
+    def get_queryset(self):
+        # Les compteurs viennent d'annotations: les calculer dans le
+        # serializer ferait une requete par serie et par matiere.
+        categories = LibraryCategory.objects.annotate(
+            document_count=Count("documents")
+        ).order_by("position", "name")
+        return (
+            LibraryCollection.objects.annotate(
+                document_count=Count("categories__documents")
+            )
+            .prefetch_related(Prefetch("categories", queryset=categories))
+            .order_by("position", "label")
+        )
+
+
+class LibraryDocumentViewSet(BaseModelViewSet):
+    """Les PDF du fonds: liste filtrable, et lecture du fichier.
+
+    Le fichier passe toujours par cette API, jamais par une URL exterieure
+    donnee au navigateur: tant qu'un document n'est pas rapatrie, le serveur
+    relaie la source. C'est ce qui rend le mode hybride invisible au client
+    -- et ce qui evite un echec CORS sur un domaine tiers.
+    """
+
+    access_module = "library"
+    serializer_class = LibraryDocumentSerializer
+    queryset = LibraryDocument.objects.select_related(
+        "category", "category__collection"
+    ).all()
+
+    # Le relais ne sort pas de la source connue: sans cette borne, un
+    # source_url modifie en base ferait du serveur un proxy ouvert.
+    PROXY_ALLOWED_HOSTS = ("bkalan.ml", "www.bkalan.ml")
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        collection = self.request.query_params.get("collection")
+        if collection not in (None, ""):
+            queryset = (
+                queryset.filter(category__collection_id=collection)
+                if str(collection).isdigit()
+                else queryset.filter(category__collection__code__iexact=collection)
+            )
+
+        category = self.request.query_params.get("category")
+        if category not in (None, ""):
+            queryset = (
+                queryset.filter(category_id=category)
+                if str(category).isdigit()
+                else queryset.filter(category__name__iexact=category)
+            )
+
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(title__icontains=search)
+
+        return queryset
+
+    @action(detail=True, methods=["get"], url_path="file")
+    def file(self, request, pk=None):
+        """Le PDF lui-meme: depuis le stockage, ou relaye depuis la source."""
+        document = self.get_object()
+
+        if document.is_downloaded and document.file:
+            try:
+                return FileResponse(
+                    document.file.open("rb"),
+                    content_type="application/pdf",
+                    filename=document.title,
+                )
+            except FileNotFoundError:
+                # Reference en base mais absent du stockage (disque Render
+                # ephemere, bucket vide): la source reste un repli valable.
+                pass
+
+        return self._relay_source(document)
+
+    def _relay_source(self, document):
+        parsed = urlparse(document.source_url or "")
+        if parsed.scheme != "https" or parsed.hostname not in self.PROXY_ALLOWED_HOSTS:
+            raise ValidationError(
+                {"detail": "Ce document n'est pas encore disponible."}
+            )
+
+        try:
+            amont = urlopen(document.source_url, timeout=30)  # noqa: S310 - hote borne
+        except (HTTPError, URLError) as exc:
+            raise ValidationError(
+                {"detail": f"Document indisponible a la source: {exc}"}
+            ) from exc
+
+        response = StreamingHttpResponse(
+            amont,
+            content_type=amont.headers.get("Content-Type", "application/pdf"),
+        )
+        longueur = amont.headers.get("Content-Length")
+        if longueur:
+            response["Content-Length"] = longueur
+        return response
 
 
 class BookViewSet(BaseModelViewSet):
