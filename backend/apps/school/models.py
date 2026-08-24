@@ -987,7 +987,14 @@ class LibraryDocument(TimeStampedModel):
         LibraryCategory, on_delete=models.CASCADE, related_name="documents"
     )
     title = models.CharField(max_length=255)
-    file = models.FileField(upload_to=library_document_path, null=True, blank=True)
+    # 400 et non les 100 par defaut: le chemin recopie l'arborescence de la
+    # source, et trente-six documents du fonds la depassent deja -- le plus
+    # long tient 127 caracteres. Le fichier partait bien sur le stockage,
+    # puis la ligne mourait en base sur « value too long », laissant des
+    # gigaoctets de PDF orphelins que la base ne connaissait plus.
+    file = models.FileField(
+        upload_to=library_document_path, max_length=400, null=True, blank=True
+    )
     source_url = models.URLField(max_length=500, unique=True)
     size_bytes = models.PositiveBigIntegerField(default=0)
     is_downloaded = models.BooleanField(default=False)

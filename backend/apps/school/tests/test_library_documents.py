@@ -203,6 +203,48 @@ class ImportBkalanTests(APITestCase):
         self.assertFalse(document.is_downloaded)
         self.assertIn("401", document.import_error)
 
+    def test_the_longest_paths_of_the_fund_fit_in_the_field(self):
+        """Les 100 caracteres par defaut coupaient l'import en deux.
+
+        Le chemin recopie l'arborescence de la source; trente-six documents
+        du fonds depassent 100 caracteres, le plus long en tient 127. Le PDF
+        partait bien sur le stockage, puis la ligne mourait en base sur
+        « value too long » -- des gigaoctets sans ligne pour les retrouver.
+        Le test ne peut pas naitre d'une insertion: SQLite ne fait pas
+        respecter la longueur d'un varchar, seul PostgreSQL la refuse.
+        """
+        collection = LibraryCollection.objects.create(code="11-eme-Sciences", label="x")
+        categorie = LibraryCategory.objects.create(
+            collection=collection, name="Physique-Chimie"
+        )
+        document = LibraryDocument(category=categorie, title="x", source_url="x")
+        chemin = library_document_path(
+            document,
+            "BK_cours-prive-papin-LYLY-EXERCICES-SUR-LES-HYDROCARBURES-ET-COMPOSES-OXYGENES.pdf",
+        )
+
+        self.assertGreater(len(chemin), 100)
+        self.assertLessEqual(
+            len(chemin), LibraryDocument._meta.get_field("file").max_length
+        )
+
+    def test_the_progress_line_carries_a_percentage(self):
+        """« 476/1257 » ne se divise pas de tete pendant une descente de nuit.
+
+        La ligne compte les fichiers traites et non les seuls reussis: un lot
+        entierement refuse restait muet jusqu'au resume final.
+        """
+        def _refus(url, chemin):
+            raise OSError("401 Unauthorized")
+
+        journal = StringIO()
+        with patch.object(import_bkalan, "telecharger_fichier", _refus):
+            self._importer("--serie", "10-eme-CG", "--jobs", "1", stdout=journal)
+
+        sortie = journal.getvalue()
+        self.assertIn("3/3 (100 %)", sortie)
+        self.assertIn("3 en echec", sortie)
+
     def test_a_recorded_error_is_not_retried_by_default(self):
         """Sinon chaque execution rejoue les 40 fichiers morts a la source."""
         def _refus(url, chemin):
