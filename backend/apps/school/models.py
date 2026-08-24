@@ -921,6 +921,89 @@ class Borrow(TimeStampedModel):
     penalty_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
 
+def library_document_path(instance, filename):
+    """library_docs/<serie>/<matiere>/<fichier>.
+
+    Le chemin recopie l'arborescence de la source: c'est ce qui permet de
+    relancer l'import sans dupliquer, et de reconnaitre un fichier a l'oeil
+    dans le stockage objet.
+    """
+    categorie = instance.category
+    return f"library_docs/{categorie.collection.code}/{categorie.name}/{filename}"
+
+
+class LibraryCollection(TimeStampedModel):
+    """Une serie du secondaire: TSExp, 11e Sciences, 10e CG...
+
+    Premier niveau de l'etagere numerique, distinct des ouvrages physiques
+    (Book) qui restent comptes en exemplaires et empruntes. Un document n'est
+    pas rattache a un etablissement: le fonds est le meme pour tous, et le
+    dupliquer par etablissement multiplierait des giga-octets identiques.
+    """
+
+    code = models.CharField(max_length=40, unique=True)
+    label = models.CharField(max_length=150)
+    source_url = models.URLField(max_length=500, blank=True)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["position", "label"]
+
+    def __str__(self):
+        return self.label
+
+
+class LibraryCategory(TimeStampedModel):
+    """La matiere, dans une serie donnee: Mathematiques, Philosophie...
+
+    Le meme intitule existe dans plusieurs series avec des documents
+    differents, d'ou l'unicite par couple et non sur le seul nom.
+    """
+
+    collection = models.ForeignKey(
+        LibraryCollection, on_delete=models.CASCADE, related_name="categories"
+    )
+    name = models.CharField(max_length=120)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["position", "name"]
+        unique_together = ("collection", "name")
+
+    def __str__(self):
+        return f"{self.collection.code} / {self.name}"
+
+
+class LibraryDocument(TimeStampedModel):
+    """Un PDF du fonds.
+
+    `file` reste vide tant que le fichier n'a pas ete rapatrie: le catalogue
+    est complet des la premiere passe d'import et l'API sert alors l'URL
+    d'origine. `source_url` porte l'unicite -- c'est elle qui rend l'import
+    rejouable sans creer de doublon.
+    """
+
+    category = models.ForeignKey(
+        LibraryCategory, on_delete=models.CASCADE, related_name="documents"
+    )
+    title = models.CharField(max_length=255)
+    file = models.FileField(upload_to=library_document_path, null=True, blank=True)
+    source_url = models.URLField(max_length=500, unique=True)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    is_downloaded = models.BooleanField(default=False)
+    # Renseigne quand la source refuse le fichier: 40 des 1257 documents de
+    # BKalan repondent 401 sur leur propre serveur, quel que soit l'encodage
+    # essaye -- accent, espace ou caractere invisible dans le chemin. Les
+    # taire les ferait passer pour des telechargements en attente.
+    import_error = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["title", "id"]
+
+    def __str__(self):
+        return self.title
+
+
 class CanteenMenu(TimeStampedModel):
     menu_date = models.DateField()
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="canteen_menus", null=True, blank=True)

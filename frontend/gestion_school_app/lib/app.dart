@@ -38,7 +38,7 @@ import 'features/etablissements/presentation/etablissements_page.dart';
 import 'features/grades/presentation/grades_page.dart';
 import 'features/imports/presentation/academic_imports_page.dart';
 import 'features/imports/presentation/academic_imports_window.dart';
-import 'features/library/presentation/library_page.dart';
+import 'features/library/presentation/library_module_page.dart';
 import 'features/payments/presentation/payments_controller.dart';
 import 'features/payments/presentation/payments_page.dart';
 import 'features/reports/presentation/reports_page.dart';
@@ -404,7 +404,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       keyName: 'library',
       label: 'Bibliothèque',
       icon: Icons.menu_book_outlined,
-      view: LibraryPage(),
+      view: LibraryModulePage(),
     ),
     _AdminMenuItem(
       keyName: 'canteen',
