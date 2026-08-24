@@ -48,7 +48,11 @@ BASE_URL = "https://bkalan.ml/api/files/WhatsApp"
 # La source compare le chemin brut: une parenthese encodee en %28 lui vaut un
 # 401, alors que le meme fichier repond 200 si la parenthese passe telle
 # quelle. On ne code donc que ce que l'URL exige -- espaces et accents.
-SAFE_URL = "/()!*'~$&+,;=:@"
+#
+# Les crochets suivent la meme regle: `BK_Bac_2023_Tsexp[1].pdf` repond 401 en
+# %5B et 200 tel quel. Ils ne figuraient pas ici parce que la RFC 3986 les
+# reserve aux adresses IPv6 -- reserve dont la source ne sait rien.
+SAFE_URL = "/()[]!*'~$&+,;=:@"
 
 # Code sur le site -> libelle affiche. L'ordre est celui de la scolarite, pas
 # celui du site: c'est ainsi que l'ecran presente les series.

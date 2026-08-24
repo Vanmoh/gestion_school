@@ -72,6 +72,16 @@ PAGE_PARENTHESES = """
 """
 
 
+# Crochet dans le nom: meme regle que la parenthese. La RFC 3986 les reserve
+# aux adresses IPv6, `quote` les encode donc par defaut -- et la source rend
+# un 401.
+PAGE_CROCHETS = """
+<ul class="tree">
+  <li class="file"><a class="file-link" href="Physique/BK_Bac_2023[1].pdf"></a></li>
+</ul>
+"""
+
+
 def _page_figee(contenu=PAGE):
     return lambda url: contenu
 
@@ -122,6 +132,16 @@ class ImportBkalanTests(APITestCase):
         self.assertEqual(
             document.source_url,
             "https://bkalan.ml/api/files/WhatsApp/10-eme-CG/Mathematiques/BK_compo-(1).pdf",
+        )
+
+    def test_a_bracketed_name_keeps_its_brackets_too(self):
+        """%5B valait un 401 au seul document du fonds qui porte un crochet."""
+        self._importer("--serie", "10-eme-CG", "--catalogue-seul", page=PAGE_CROCHETS)
+
+        document = LibraryDocument.objects.get()
+        self.assertEqual(
+            document.source_url,
+            "https://bkalan.ml/api/files/WhatsApp/10-eme-CG/Physique/BK_Bac_2023[1].pdf",
         )
 
     def test_a_second_run_creates_nothing(self):

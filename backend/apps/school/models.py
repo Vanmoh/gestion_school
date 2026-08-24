@@ -998,9 +998,11 @@ class LibraryDocument(TimeStampedModel):
     source_url = models.URLField(max_length=500, unique=True)
     size_bytes = models.PositiveBigIntegerField(default=0)
     is_downloaded = models.BooleanField(default=False)
-    # Renseigne quand la source refuse le fichier: 40 des 1257 documents de
+    # Renseigne quand la source refuse le fichier: 43 des 1257 documents de
     # BKalan repondent 401 sur leur propre serveur, quel que soit l'encodage
-    # essaye -- accent, espace ou caractere invisible dans le chemin. Les
+    # essaye -- les cinq variantes (brute, NFC, NFD, crochets et parentheses
+    # laisses tels quels) ont ete sondees une a une. Accent, espace ou
+    # caractere invisible dans le chemin: le fichier est mort chez eux. Les
     # taire les ferait passer pour des telechargements en attente.
     import_error = models.CharField(max_length=255, blank=True)
 
