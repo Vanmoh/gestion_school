@@ -48,7 +48,11 @@ BASE_URL = "https://bkalan.ml/api/files/WhatsApp"
 # La source compare le chemin brut: une parenthese encodee en %28 lui vaut un
 # 401, alors que le meme fichier repond 200 si la parenthese passe telle
 # quelle. On ne code donc que ce que l'URL exige -- espaces et accents.
-SAFE_URL = "/()!*'~$&+,;=:@"
+#
+# Les crochets suivent la meme regle: `BK_Bac_2023_Tsexp[1].pdf` repond 401 en
+# %5B et 200 tel quel. Ils ne figuraient pas ici parce que la RFC 3986 les
+# reserve aux adresses IPv6 -- reserve dont la source ne sait rien.
+SAFE_URL = "/()[]!*'~$&+,;=:@"
 
 # Code sur le site -> libelle affiche. L'ordre est celui de la scolarite, pas
 # celui du site: c'est ainsi que l'ecran presente les series.
@@ -283,11 +287,29 @@ class Command(BaseCommand):
             self.stdout.write("Rien a rapatrier: tout est deja en place.")
             return
 
-        self.stdout.write(f"Rapatriement de {len(a_faire)} fichiers ({jobs} en parallele)...")
+        total = len(a_faire)
+        self.stdout.write(f"Rapatriement de {total} fichiers ({jobs} en parallele)...")
 
         reussis = 0
         echecs = 0
         octets = 0
+
+        def annoncer():
+            """Une ligne d'avancement tous les vingt-cinq fichiers traites.
+
+            Elle compte les traites et non les reussis: un lot ou la source
+            refuse un fichier sur deux avancait par sauts de cinquante, et un
+            lot entierement refuse restait muet jusqu'au resume final. Le
+            pourcentage evite d'avoir a diviser de tete pendant une descente
+            qui dure des heures.
+            """
+            traites = reussis + echecs
+            if traites % 25 and traites != total:
+                return
+            self.stdout.write(
+                f"  {traites}/{total} ({traites * 100 // total} %), "
+                f"{octets / 1e6:.0f} Mo, {echecs} en echec"
+            )
 
         # Les fichiers descendent en parallele, mais l'ecriture en base reste
         # sur ce fil: partager une connexion Django entre threads est le
@@ -300,6 +322,7 @@ class Command(BaseCommand):
                     echecs += 1
                     document.import_error = erreur[:255]
                     document.save(update_fields=["import_error", "updated_at"])
+                    annoncer()
                     continue
                 try:
                     nom = unquote(document.source_url.rsplit("/", 1)[-1])
@@ -322,10 +345,7 @@ class Command(BaseCommand):
                 finally:
                     os.unlink(chemin)
 
-                if reussis % 25 == 0:
-                    self.stdout.write(
-                        f"  {reussis}/{len(a_faire)} fichiers ({octets / 1e6:.0f} Mo)"
-                    )
+                annoncer()
 
         self.stdout.write(
             self.style.SUCCESS(
