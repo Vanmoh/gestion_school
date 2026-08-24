@@ -164,6 +164,52 @@ class AttendanceRepository {
     return const <int>[];
   }
 
+  /// Depose ou remplace le justificatif d'une absence deja enregistree.
+  ///
+  /// Accepte sur une fiche verrouillee: le mot d'excuse arrive le lendemain,
+  /// apres que la fiche du jour a ete validee.
+  Future<Map<String, dynamic>> uploadProof({
+    required int attendanceId,
+    required String fileName,
+    required List<int> bytes,
+  }) async {
+    final formData = FormData.fromMap({
+      'proof': MultipartFile.fromBytes(bytes, filename: fileName),
+    });
+    final response = await dio.post(
+      '/attendances/$attendanceId/proof/',
+      data: formData,
+    );
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
+  /// Retire un justificatif. Reserve au niveau administration cote serveur.
+  Future<void> removeProof({required int attendanceId}) async {
+    await dio.delete('/attendances/$attendanceId/proof/');
+  }
+
+  /// Note de conduite d'un eleve.
+  ///
+  /// Route dediee: la conduite ne s'ecrivait qu'en effet de bord de la
+  /// creation d'une absence, et PATCH /students/ est ferme au censeur comme
+  /// au surveillant, qui sont justement ceux qui la notent.
+  Future<Map<String, dynamic>> saveConduite({
+    required int studentId,
+    required double conduite,
+  }) async {
+    final response = await dio.post(
+      '/attendances/conduite/',
+      data: {'student': studentId, 'conduite': conduite},
+    );
+    if (response.data is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return const <String, dynamic>{};
+  }
+
   Future<AttendanceMonthlyStats> fetchMonthlyStats({String? month}) async {
     final response = await dio.get(
       '/attendances/monthly_stats/',
@@ -188,25 +234,5 @@ class AttendanceRepository {
           )
           .toList(),
     );
-  }
-
-  Future<void> createAttendance({
-    required int studentId,
-    required String date,
-    required bool isAbsent,
-    required bool isLate,
-    required String reason,
-    double? conduite,
-  }) async {
-    final payload = {
-      'student': studentId,
-      'date': date,
-      'is_absent': isAbsent,
-      'is_late': isLate,
-      'reason': reason,
-      ...?(conduite == null ? null : {'conduite': conduite}),
-    };
-
-    await dio.post('/attendances/', data: payload);
   }
 }

@@ -137,10 +137,19 @@ MODULES = {
         "group": "pedagogie",
         "access": _row("A", "L", "A", "L", "L", "-", "-", "-", "-"),
     },
+    # Le promoteur saisit et valide la feuille d'appel, le comptable la
+    # consulte: c'est ce que la fiche de presence faisait deja, via une liste
+    # de roles locale a AttendanceViewSet qui contredisait cette matrice. La
+    # liste a disparu au profit de ces deux colonnes -- c'est le comportement
+    # reel qui monte ici, aucun acces n'est ouvert qui ne l'etait pas.
+    #
+    # Valider et verrouiller une fiche demande l'ecriture sans portee
+    # restreinte: l'enseignant (E*) saisit l'appel de ses classes mais ne
+    # cloture pas, ce que la colonne dit deja sans niveau supplementaire.
     "attendance": {
         "label": "Absences",
         "group": "pedagogie",
-        "access": _row("A", "L", "A", "E", "-", "E", "E*", "L*", "L*"),
+        "access": _row("A", "E", "A", "E", "L", "E", "E*", "L*", "L*"),
     },
     # Separation des taches deja en place avant la matrice: la direction lit
     # l'emargement mais ne le saisit pas, le censeur l'arbitre, l'enseignant
