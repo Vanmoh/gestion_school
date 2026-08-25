@@ -65,6 +65,7 @@ Future<void> _pump(
   WidgetTester tester, {
   String recherche = '',
   int? documentEnCours,
+  double? progressionEnCours,
   void Function(LibraryCollection)? onCollectionChanged,
   void Function(LibraryDocument)? onOuvrir,
   List<LibraryDocument>? documents,
@@ -83,6 +84,7 @@ Future<void> _pump(
             documents: documents ?? _documents(),
             recherche: recherche,
             documentEnCours: documentEnCours,
+            progressionEnCours: progressionEnCours,
             onCollectionChanged: onCollectionChanged ?? (_) {},
             onOuvrir: onOuvrir ?? (_) {},
           ),
@@ -190,5 +192,78 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  });
+
+  testWidgets('sans taille connue, l_attente reste indeterminee', (
+    tester,
+  ) async {
+    await _pump(tester, documentEnCours: 101);
+
+    await tester.tap(find.text('Mathematiques'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final rond = tester.widget<CircularProgressIndicator>(
+      find.byType(CircularProgressIndicator),
+    );
+    // value null: la roue tourne sans fin, seul affichage honnete tant que le
+    // poids total n'a pas ete annonce.
+    expect(rond.value, isNull);
+    expect(find.textContaining('%'), findsNothing);
+  });
+
+  testWidgets('des que la taille est connue, l_attente se chiffre', (
+    tester,
+  ) async {
+    // Le fonds va de 50 Ko a 127 Mo: une roue identique dans les deux cas ne
+    // dit pas au lecteur s'il attend une seconde ou une minute.
+    await _pump(tester, documentEnCours: 101, progressionEnCours: 0.42);
+
+    await tester.tap(find.text('Mathematiques'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final rond = tester.widget<CircularProgressIndicator>(
+      find.byType(CircularProgressIndicator),
+    );
+    expect(rond.value, closeTo(0.42, 0.001));
+    expect(find.text('42 %'), findsOneWidget);
+  });
+
+  testWidgets('la progression ne s_affiche que sur le document ouvert', (
+    tester,
+  ) async {
+    LibraryDocument? demande;
+    await _pump(
+      tester,
+      documentEnCours: 101,
+      progressionEnCours: 0.42,
+      onOuvrir: (document) => demande = document,
+    );
+
+    await tester.tap(find.text('Mathematiques'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // 102 est dans la meme matiere, donc affiche juste a cote: un pourcentage
+    // qui deborderait sur ses voisins laisserait croire que toute la matiere
+    // se telecharge.
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('42 %'), findsOneWidget);
+
+    final voisin = find.ancestor(
+      of: find.text('BAC-2019-corrige'),
+      matching: find.byType(ListTile),
+    );
+    expect(
+      find.descendant(of: voisin, matching: find.byIcon(Icons.open_in_new)),
+      findsOneWidget,
+    );
+
+    // Et il s'ouvre toujours: le telechargement d'un document n'immobilise
+    // pas l'etagere.
+    await tester.tap(voisin);
+    await tester.pump();
+    expect(demande?.id, 102);
   });
 }

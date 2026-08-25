@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,6 +23,7 @@ class PublicEtablissementEntryPage extends ConsumerStatefulWidget {
 class _PublicEtablissementEntryPageState
     extends ConsumerState<PublicEtablissementEntryPage> {
   bool _loading = true;
+  String? _erreur;
 
   @override
   void initState() {
@@ -32,6 +34,12 @@ class _PublicEtablissementEntryPageState
   }
 
   Future<void> _bootstrap() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _erreur = null;
+      });
+    }
     try {
       final provider = ref.read(etablissementProvider);
       await provider.hydrate();
@@ -43,13 +51,49 @@ class _PublicEtablissementEntryPageState
         response.data,
       ).map(Etablissement.fromJson).toList();
       provider.setEtablissements(etablissements);
-    } catch (_) {
-      // Keep the screen usable; an empty state will be shown if the API is down.
+      if (mounted) {
+        setState(() => _erreur = null);
+      }
+    } catch (erreur) {
+      // L'echec etait avale en silence: le portail affichait « Aucun
+      // etablissement disponible » aussi bien pour une base vide que pour un
+      // serveur injoignable, et rien ne permettait de relancer l'appel. Un
+      // simple pic de latence au demarrage du backend figeait donc l'ecran
+      // jusqu'a un rechargement complet de la page -- que rien n'invitait a
+      // faire, puisque l'application semblait fonctionner.
+      if (mounted) {
+        setState(() => _erreur = _raisonLisible(erreur));
+      }
     } finally {
       if (mounted) {
         setState(() => _loading = false);
       }
     }
+  }
+
+  /// La raison de l'echec, avec l'adresse reellement appelee.
+  ///
+  /// L'adresse compte autant que la raison: le build web porte parfois une
+  /// URL d'API figee a la compilation, et c'est en la lisant qu'on voit
+  /// qu'elle ne correspond plus au reseau courant.
+  String _raisonLisible(Object erreur) {
+    if (erreur is DioException) {
+      final cible = erreur.requestOptions.uri.toString();
+      final raison = switch (erreur.type) {
+        DioExceptionType.connectionTimeout ||
+        DioExceptionType.sendTimeout ||
+        DioExceptionType.receiveTimeout =>
+          'Le serveur n\'a pas répondu à temps.',
+        DioExceptionType.connectionError => 'Serveur injoignable.',
+        DioExceptionType.badResponse =>
+          'Le serveur a répondu ${erreur.response?.statusCode}.',
+        DioExceptionType.badCertificate => 'Certificat refusé.',
+        DioExceptionType.cancel => 'Appel interrompu.',
+        _ => 'Appel impossible.',
+      };
+      return '$raison\n$cible';
+    }
+    return erreur.toString();
   }
 
   @override
@@ -61,6 +105,8 @@ class _PublicEtablissementEntryPageState
     }
 
     return EtablissementSelectionScreen(
+      loadError: _erreur,
+      onRetry: _bootstrap,
       onSelected: (etab) async {
         await ref.read(etablissementProvider).selectEtablissement(etab);
         if (!context.mounted) {
@@ -287,7 +333,18 @@ class _HoverLiftState extends State<_HoverLift> {
 class EtablissementSelectionScreen extends ConsumerStatefulWidget {
   final FutureOr<void> Function(Etablissement) onSelected;
 
-  const EtablissementSelectionScreen({super.key, required this.onSelected});
+  /// Pourquoi la liste est vide, quand elle l'est faute d'avoir pu la charger.
+  final String? loadError;
+
+  /// De quoi relancer l'appel sans recharger la page.
+  final Future<void> Function()? onRetry;
+
+  const EtablissementSelectionScreen({
+    super.key,
+    required this.onSelected,
+    this.loadError,
+    this.onRetry,
+  });
 
   @override
   ConsumerState<EtablissementSelectionScreen> createState() =>
@@ -472,7 +529,11 @@ class _EtablissementSelectionScreenState
                     ),
                     Expanded(
                       child: filtered.isEmpty
-                          ? _EmptyResults(query: _searchQuery)
+                          ? _EmptyResults(
+                              query: _searchQuery,
+                              erreur: widget.loadError,
+                              onRetry: widget.onRetry,
+                            )
                           : EtabContentBand(
                               child: LayoutBuilder(
                                 builder: (context, constraints) {
@@ -1393,7 +1454,33 @@ class _EtablissementTile extends StatelessWidget {
 class _EmptyResults extends StatelessWidget {
   final String query;
 
-  const _EmptyResults({required this.query});
+  /// La raison de l'echec, quand la liste est vide faute d'avoir pu la charger.
+  final String? erreur;
+
+  /// Relance l'appel: sans lui, seul un rechargement de page sortait de la.
+  final Future<void> Function()? onRetry;
+
+  const _EmptyResults({required this.query, this.erreur, this.onRetry});
+
+  /// Trois cas et non deux: la recherche infructueuse, la base sans
+  /// etablissement, et le serveur qu'on n'a pas pu joindre. Les deux derniers
+  /// portaient le meme texte, ce qui envoyait chercher une panne de reseau
+  /// quand la base etait simplement vide -- et l'inverse.
+  String get _titre {
+    if (query.isNotEmpty) {
+      return 'Aucun résultat pour "$query"';
+    }
+    return erreur == null
+        ? 'Aucun établissement disponible'
+        : 'Impossible de joindre le serveur';
+  }
+
+  String get _explication {
+    if (query.isNotEmpty) {
+      return 'Essayez un autre nom, une ville ou une adresse e-mail.';
+    }
+    return erreur ?? 'Aucun établissement n\'est enregistré pour le moment.';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1428,9 +1515,7 @@ class _EmptyResults extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                query.isEmpty
-                    ? 'Aucun établissement disponible'
-                    : 'Aucun résultat pour "$query"',
+                _titre,
                 textAlign: TextAlign.center,
                 style: textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w700,
@@ -1438,14 +1523,22 @@ class _EmptyResults extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                query.isEmpty
-                    ? 'Vérifiez la connexion au serveur, puis réessayez.'
-                    : 'Essayez un autre nom, une ville ou une adresse e-mail.',
+                _explication,
                 textAlign: TextAlign.center,
                 style: textTheme.bodySmall?.copyWith(
                   color: scheme.onSurfaceVariant,
                 ),
               ),
+              // Le bouton n'apparait que sur l'echec de chargement: une
+              // recherche sans resultat n'a rien a reessayer.
+              if (query.isEmpty && onRetry != null) ...[
+                const SizedBox(height: 14),
+                FilledButton.tonalIcon(
+                  onPressed: () => onRetry!(),
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Réessayer'),
+                ),
+              ],
             ],
           ),
         ),

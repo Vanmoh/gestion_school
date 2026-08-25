@@ -18,7 +18,7 @@ venv/
 .env.supabase.runtime
 
 # Etat runtime: monte en volume en dev, regenere en prod.
-# staticfiles est reconstruit par collectstatic dans entrypoint.sh,
+# staticfiles est reconstruit par collectstatic pendant le build de l'image,
 # logs/ est recree par start_render.sh.
 staticfiles/
 media/

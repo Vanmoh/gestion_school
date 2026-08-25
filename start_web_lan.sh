@@ -7,16 +7,21 @@ APP_DIR="$ROOT_DIR/frontend/gestion_school_app"
 WEB_PORT="8080"
 API_PORT="8000"
 HOST_IP=""
+# Vide par defaut: l'application deduit l'API de la page servie. Ne la figer
+# que pour pointer une API qui vit ailleurs que sur la machine du serveur web.
+API_URL_FORCEE=""
 GUARD_ETAB_ID="11"
 
 usage() {
   cat <<'EOF'
-Usage: ./start_web_lan.sh [--ip=<LAN_IP>] [--web-port=<port>] [--api-port=<port>] [--dev|--watch] [--pwa]
+Usage: ./start_web_lan.sh [--ip=<LAN_IP>] [--web-port=<port>] [--api-port=<port>]
+                         [--api-url=<url>] [--dev|--watch] [--pwa]
 
 Exemples:
   ./start_web_lan.sh
   ./start_web_lan.sh --ip=192.168.1.25
   ./start_web_lan.sh --web-port=8081 --api-port=8001
+  ./start_web_lan.sh --api-url=https://api.exemple.org/api
   ./start_web_lan.sh --dev
   ./start_web_lan.sh --watch
   ./start_web_lan.sh --pwa
@@ -27,7 +32,7 @@ MODE="stable"
 PWA_STRATEGY="none"
 
 run_flutter_pub_get() {
-  local max_attempts=4
+  local max_attempts=3
   local attempt=1
   local primary_hosted="${PUB_HOSTED_URL:-https://pub.dev}"
   local primary_storage="${FLUTTER_STORAGE_BASE_URL:-https://storage.googleapis.com}"
@@ -50,8 +55,8 @@ run_flutter_pub_get() {
     if grep -qiE "connection reset by peer|failed to update packages|socketexception|timed out|temporary failure" "$pub_log"; then
       rm -f "$pub_log"
       if [[ "$attempt" -lt "$max_attempts" ]]; then
-        echo "[2/3] Echec reseau pub.dev detecte (tentative ${attempt}/${max_attempts}). Nouvelle tentative dans 6s..."
-        sleep 6
+        echo "[2/3] Echec reseau pub.dev detecte (tentative ${attempt}/${max_attempts}). Nouvelle tentative dans 4s..."
+        sleep 4
         ((attempt++))
         continue
       fi
@@ -63,41 +68,30 @@ run_flutter_pub_get() {
     return 1
   done
 
-  if [[ "$primary_hosted" != "$mirror_hosted" ]]; then
-    echo "[2/3] Bascule vers mirror Flutter CN pour les dépendances..."
-    local mirror_attempt
-    for mirror_attempt in 1 2 3; do
-      pub_log="$(mktemp)"
-      set +e
-      PUB_HOSTED_URL="$mirror_hosted" FLUTTER_STORAGE_BASE_URL="$mirror_storage" flutter pub get 2>&1 | tee "$pub_log"
-      local mirror_rc=${PIPESTATUS[0]}
-      set -e
-
-      if [[ "$mirror_rc" -eq 0 ]]; then
-        rm -f "$pub_log"
-        return 0
-      fi
-
-      rm -f "$pub_log"
-      if [[ "$mirror_attempt" -lt 3 ]]; then
-        echo "[2/3] Mirror indisponible (tentative ${mirror_attempt}/3). Nouvelle tentative dans 6s..."
-        sleep 6
-      fi
-    done
-  fi
-
-  echo "[2/3] Tentative finale en mode offline (cache pub local)..."
+  # Cache pub local d'abord: instantane et hors-ligne, contrairement au mirror distant.
+  echo "[2/3] Reseau pub.dev instable: tentative sur le cache pub local (--offline)..."
   set +e
   flutter pub get --offline
   local offline_rc=$?
   set -e
   if [[ "$offline_rc" -eq 0 ]]; then
+    echo "[2/3] Dependances resolues depuis le cache local."
     return 0
   fi
 
-  echo "Erreur: impossible de récupérer les dépendances Flutter (pub.dev et mirror indisponibles)."
-  echo "Action conseillée: relancer ./start_web_lan.sh quand le réseau se stabilise."
-  echo "Astuce: si ton cache est chaud, réessaie avec: flutter pub get --offline"
+  if [[ "$primary_hosted" != "$mirror_hosted" ]]; then
+    echo "[2/3] Cache local insuffisant: bascule vers mirror Flutter CN..."
+    set +e
+    PUB_HOSTED_URL="$mirror_hosted" FLUTTER_STORAGE_BASE_URL="$mirror_storage" flutter pub get
+    local mirror_rc=$?
+    set -e
+    if [[ "$mirror_rc" -eq 0 ]]; then
+      return 0
+    fi
+  fi
+
+  echo "Erreur: impossible de recuperer les dependances Flutter (pub.dev, cache local et mirror indisponibles)."
+  echo "Action conseillee: relancer ./start_web_lan.sh quand le reseau se stabilise."
   return 1
 }
 
@@ -158,6 +152,9 @@ for arg in "$@"; do
     --api-port=*)
       API_PORT="${arg#*=}"
       ;;
+    --api-url=*)
+      API_URL_FORCEE="${arg#*=}"
+      ;;
     --dev|--watch)
       MODE="dev"
       ;;
@@ -216,6 +213,31 @@ fi
 API_URL="http://${HOST_IP}:${API_PORT}/api"
 API_DOCS_URL="http://${HOST_IP}:${API_PORT}/api/docs/"
 
+# L'adresse de l'API n'entre pas dans le build.
+#
+# Elle y entrait, sous la forme --dart-define=API_BASE_URL=http://<IP LAN>:8000,
+# et cette IP survivait au reseau qui l'avait vue naitre: le lendemain, sur un
+# autre Wi-Fi ou apres un bail DHCP different, l'application ouverte sur
+# 127.0.0.1 appelait toujours l'ancienne adresse et n'obtenait plus rien --
+# l'ecran de selection restait vide, sans un mot pour dire pourquoi.
+#
+# Sans cette definition, ApiConstants deduit l'API de la page servie
+# (meme hote, port ${API_PORT}): l'adresse est juste depuis le poste comme
+# depuis un telephone du reseau, sans reconstruire quoi que ce soit.
+# --api-url reste la pour les API qui vivent vraiment ailleurs.
+#
+# Seul le port entre dans le build: l'hote se lit sur la page, le port non.
+# Sans lui, --api-port=8001 etait honore par le controle du backend et par
+# les URL affichees, mais pas par l'application, qui continuait d'appeler
+# 8000 -- le drapeau semblait pris en compte alors qu'il ne l'etait qu'a
+# moitie.
+DART_DEFINES=()
+if [[ -n "$API_URL_FORCEE" ]]; then
+  DART_DEFINES+=(--dart-define="API_BASE_URL=${API_URL_FORCEE}")
+else
+  DART_DEFINES+=(--dart-define="API_PORT=${API_PORT}")
+fi
+
 echo "[1/3] Vérification API backend sur ${API_DOCS_URL} ..."
 if ! curl -fsS --max-time 8 "$API_DOCS_URL" >/dev/null 2>&1; then
   echo "Backend non joignable via IP LAN: $HOST_IP:$API_PORT"
@@ -239,7 +261,12 @@ run_flutter_pub_get
 echo "[3/3] Lancement web (accessible sur le réseau local)..."
 echo "URL locale : http://127.0.0.1:${WEB_PORT}"
 echo "URL réseau : http://${HOST_IP}:${WEB_PORT}"
-echo "API utilisée: ${API_URL}"
+if [[ -n "$API_URL_FORCEE" ]]; then
+  echo "API utilisée: ${API_URL_FORCEE} (figée dans le build)"
+else
+  echo "API utilisée: déduite de la page servie, port ${API_PORT}"
+  echo "               (http://127.0.0.1:${API_PORT}/api ou http://${HOST_IP}:${API_PORT}/api)"
+fi
 
 free_web_port
 
@@ -249,13 +276,16 @@ if [[ "$MODE" == "dev" ]]; then
     -d web-server \
     --web-hostname=0.0.0.0 \
     --web-port="$WEB_PORT" \
-    --dart-define="API_BASE_URL=${API_URL}"
+    "${DART_DEFINES[@]}"
 fi
 
 echo "Mode stable: build web puis serveur statique"
-flutter build web --release --no-wasm-dry-run \
+# --no-web-resources-cdn: CanvasKit sort du build et non de gstatic.com. Servi
+# depuis le CDN, l'application ne demarrait pas du tout sans Internet -- or un
+# serveur de classe sur reseau local est precisement le cas ou il n'y en a pas.
+flutter build web --release --no-wasm-dry-run --no-web-resources-cdn \
   --pwa-strategy="$PWA_STRATEGY" \
-  --dart-define="API_BASE_URL=${API_URL}"
+  "${DART_DEFINES[@]}"
 
 if [[ "$PWA_STRATEGY" == "none" ]]; then
   echo "Serveur anti-cache actif (headers no-store)"

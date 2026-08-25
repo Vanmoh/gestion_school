@@ -7,10 +7,17 @@ import os
 from django.contrib.auth import get_user_model
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Avg, Count, DecimalField, ExpressionWrapper, F, Prefetch, Q, Sum, Value
 from django.db.models.functions import Coalesce
-from django.http import FileResponse, HttpResponse, StreamingHttpResponse
+from django.http import (
+    FileResponse,
+    HttpResponse,
+    HttpResponseNotModified,
+    HttpResponseRedirect,
+    StreamingHttpResponse,
+)
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status, viewsets
@@ -36,6 +43,7 @@ from apps.accounts.models import UserRole
 from apps.accounts.permissions import HasModuleAccess, IsSuperAdmin
 from apps.common.pagination import StandardResultsSetPagination
 from apps.common.models import ActivityLog
+from .dashboard_cache import STATS_CACHE_SECONDS, stats_cache_key
 from .term_utils import normalize_term
 from .models import (
     AcademicYear,
@@ -6474,14 +6482,68 @@ class LibraryDocumentViewSet(BaseModelViewSet):
 
         return queryset
 
+    # Un PDF rapatrie ne change plus jamais: son contenu est fige et son nom
+    # porte l'empreinte du chemin d'origine. Une journee de cache evite de
+    # retraverser le reseau pour un document qu'un eleve rouvre trois fois
+    # dans la meme seance de revision.
+    FILE_CACHE_SECONDS = 24 * 3600
+    # Le relais, lui, ne maitrise pas ce qu'il sert: la source peut corriger
+    # un fichier sans prevenir. Une heure suffit a absorber les relectures
+    # sans figer une correction pour la journee.
+    RELAY_CACHE_SECONDS = 3600
+
+    # 64 Ko: le meme calibre que le rapatriement (import_bkalan). Sans decoupe
+    # explicite, StreamingHttpResponse itere l'objet HTTPResponse ligne par
+    # ligne -- un decoupage qui n'a aucun sens sur du binaire et qui multiplie
+    # les allers-retours entre le flux amont et le client.
+    RELAY_CHUNK_SIZE = 64 * 1024
+
+    @staticmethod
+    def _par_blocs(flux, taille):
+        """Le flux amont, decoupe en blocs, referme a la fin.
+
+        Le `close` est explicite: l'iterateur est consomme par le serveur bien
+        apres le retour de la vue, et une connexion laissee ouverte reste
+        comptee jusqu'a expiration cote source.
+        """
+        try:
+            while True:
+                bloc = flux.read(taille)
+                if not bloc:
+                    return
+                yield bloc
+        finally:
+            flux.close()
+
+    def _etag(self, document):
+        """Empreinte du document tel qu'il est servi aujourd'hui.
+
+        `is_downloaded` en fait partie: le jour ou un document passe du relais
+        au stockage, le client doit cesser d'utiliser sa copie -- ce n'est
+        plus la meme chaine qui le sert.
+        """
+        marqueur = document.updated_at.isoformat() if document.updated_at else ""
+        return f'W/"doc-{document.pk}-{int(document.is_downloaded)}-{document.size_bytes}-{marqueur}"'
+
     @action(detail=True, methods=["get"], url_path="file")
     def file(self, request, pk=None):
         """Le PDF lui-meme: depuis le stockage, ou relaye depuis la source."""
         document = self.get_object()
 
+        etag = self._etag(document)
+        if request.headers.get("If-None-Match") == etag:
+            # Rien n'a bouge: le client garde sa copie, et ni le stockage ni
+            # la source ne sont sollicites.
+            reponse = HttpResponseNotModified()
+            reponse["ETag"] = etag
+            return reponse
+
         if document.is_downloaded and document.file:
+            redirection = self._redirection_stockage(document, etag)
+            if redirection is not None:
+                return redirection
             try:
-                return FileResponse(
+                reponse = FileResponse(
                     document.file.open("rb"),
                     content_type="application/pdf",
                     filename=document.title,
@@ -6490,10 +6552,60 @@ class LibraryDocumentViewSet(BaseModelViewSet):
                 # Reference en base mais absent du stockage (disque Render
                 # ephemere, bucket vide): la source reste un repli valable.
                 pass
+            else:
+                return self._avec_cache(reponse, etag, self.FILE_CACHE_SECONDS)
 
-        return self._relay_source(document)
+        return self._relay_source(document, etag)
 
-    def _relay_source(self, document):
+    def _redirection_stockage(self, document, etag):
+        """URL signee vers le stockage, ou None s'il faut servir le fichier.
+
+        Rediriger evite au conteneur de relayer des dizaines de megaoctets
+        qu'un stockage objet sert mieux que lui. Trois conditions, toutes
+        necessaires:
+
+        - le reglage est actif -- il ne l'est pas par defaut, car sur le web
+          la redirection vers un autre domaine passe par un controle CORS que
+          le bucket doit autoriser;
+        - le stockage sait produire une URL absolue -- un stockage sur disque
+          rend un chemin relatif, qui ne redirige nulle part;
+        - cette URL est signee -- une URL nue laisserait un PDF accessible a
+          qui l'a vue passer, sans expiration.
+        """
+        if not getattr(settings, "LIBRARY_STORAGE_REDIRECT", False):
+            return None
+        try:
+            url = document.file.url
+        except (ValueError, NotImplementedError, OSError):
+            # Un stockage muet ne doit pas priver le lecteur de son document:
+            # le flux local prend le relais.
+            return None
+        if not url.startswith(("https://", "http://")):
+            return None
+        if "X-Amz-Signature" not in url and "Signature=" not in url:
+            return None
+
+        reponse = HttpResponseRedirect(url)
+        # Duree calee sur la signature: garder l'adresse en cache plus
+        # longtemps que sa validite ferait echouer la lecture suivante sur un
+        # lien expire.
+        duree = min(
+            self.FILE_CACHE_SECONDS,
+            int(getattr(settings, "AWS_QUERYSTRING_EXPIRE", 3600)),
+        )
+        return self._avec_cache(reponse, etag, duree)
+
+    def _avec_cache(self, reponse, etag, duree):
+        """Ce qu'il faut pour qu'une seconde lecture ne coute rien.
+
+        `private` et non `public`: la route est authentifiee, et un cache
+        partage n'a pas a garder une reponse servie a un compte precis.
+        """
+        reponse["ETag"] = etag
+        reponse["Cache-Control"] = f"private, max-age={duree}"
+        return reponse
+
+    def _relay_source(self, document, etag=None):
         parsed = urlparse(document.source_url or "")
         if parsed.scheme != "https" or parsed.hostname not in self.PROXY_ALLOWED_HOSTS:
             raise ValidationError(
@@ -6508,13 +6620,17 @@ class LibraryDocumentViewSet(BaseModelViewSet):
             ) from exc
 
         response = StreamingHttpResponse(
-            amont,
+            self._par_blocs(amont, self.RELAY_CHUNK_SIZE),
             content_type=amont.headers.get("Content-Type", "application/pdf"),
         )
         longueur = amont.headers.get("Content-Length")
         if longueur:
+            # Transmise telle quelle: c'est elle qui permet au client
+            # d'afficher une progression plutot qu'une attente sans fin.
             response["Content-Length"] = longueur
-        return response
+        if etag is None:
+            return response
+        return self._avec_cache(response, etag, self.RELAY_CACHE_SECONDS)
 
 
 class BookViewSet(BaseModelViewSet):
@@ -7888,6 +8004,16 @@ class DashboardViewSet(viewsets.ViewSet):
         if getattr(request.user, "role", None) == UserRole.SUPER_ADMIN and active_etablissement is None:
             raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
 
+        # Cle et duree viennent de dashboard_cache, que les signaux
+        # d'invalidation utilisent aussi (voir signals.py).
+        cache_key = stats_cache_key(
+            active_etablissement.id if active_etablissement is not None else None,
+            month_start,
+        )
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         payment_qs = Payment.objects.filter(created_at__date__gte=month_start, is_cancelled=False)
         students_qs = Student.objects.filter(is_archived=False)
         attendance_qs = Attendance.objects.filter(is_absent=True, date__gte=month_start)
@@ -7921,15 +8047,15 @@ class DashboardViewSet(viewsets.ViewSet):
                 "email": active_etablissement.email,
             }
 
-        return Response(
-            {
-                "students": students,
-                "monthly_revenue": revenue,
-                "monthly_expenses": expenses,
-                "monthly_profit": revenue - expenses,
-                "monthly_absences": absences,
-                "classrooms": classroom_count,
-                "teachers": teacher_count,
-                "active_etablissement": etablissement_payload,
-            }
-        )
+        payload = {
+            "students": students,
+            "monthly_revenue": revenue,
+            "monthly_expenses": expenses,
+            "monthly_profit": revenue - expenses,
+            "monthly_absences": absences,
+            "classrooms": classroom_count,
+            "teachers": teacher_count,
+            "active_etablissement": etablissement_payload,
+        }
+        cache.set(cache_key, payload, STATS_CACHE_SECONDS)
+        return Response(payload)

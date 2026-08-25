@@ -17,6 +17,12 @@ services:
     envVars:
       - key: DEBUG
         value: "False"
+      # Nombre de workers gunicorn, lu nativement par gunicorn (voir le
+      # Dockerfile). Chaque worker uvicorn charge Django en entier, ~180 Mo:
+      # au-dela de 2, les 512 Mo du plan gratuit passent en swap et toutes les
+      # requetes ralentissent. A relever avec le plan, pas avant.
+      - key: WEB_CONCURRENCY
+        value: "2"
       - key: SECRET_KEY
         generateValue: true
       # Jamais "*": avec un joker, un Host falsifie est accepte et se
@@ -76,6 +82,13 @@ services:
         sync: false
       - key: AWS_S3_REGION_NAME
         sync: false
+      # Catalogue du fonds documentaire au demarrage (backend/entrypoint.sh):
+      # les series, les matieres et les 1257 references entrent en base, sans
+      # telecharger un seul PDF -- tant qu'un fichier n'est pas rapatrie,
+      # l'API relaie la source. Passer a "False" coupe tout appel a
+      # bkalan.ml au demarrage.
+      - key: LIBRARY_AUTO_IMPORT
+        value: "True"
       # Supervision des erreurs. Vide = desactive.
       - key: SENTRY_DSN
         sync: false

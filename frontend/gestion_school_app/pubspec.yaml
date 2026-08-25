@@ -41,7 +41,6 @@ dependencies:
   printing: ^5.14.2
   file_picker: ^10.3.2
   excel: ^4.0.6
-  google_fonts: ^8.0.2
   web_socket_channel: ^3.0.3
 
 dev_dependencies:
@@ -56,8 +55,34 @@ dev_dependencies:
 # The following section is specific to Flutter packages.
 flutter:
   uses-material-design: true
+  # Liste explicite et non le dossier entier: `- assets/images/` embarquait
+  # 7,6 Mo dans le bundle web, dont 7,3 Mo de fichiers que plus aucune ligne de
+  # `lib/` ne reference (anciens logos, gabarit de carte scolaire). Un fichier
+  # ajoute ici doit donc etre declare -- c'est le prix pour que le poids
+  # telecharge au demarrage reste celui des images reellement affichees.
   assets:
-    - assets/images/
+    - assets/images/ecole_photo.png
+    - assets/images/logo_ecole.png
+    - assets/images/logo_icone_application.png
+    - assets/images/str_cachet_signature.png
+    - assets/images/str_signature.png
+  # Inter embarquee plutot que recuperee par google_fonts a l'execution.
+  # Le paquet allait chercher ces memes fichiers sur fonts.gstatic.com apres le
+  # demarrage de Flutter: un tiers a joindre avant que le texte s'affiche, un
+  # re-rendu complet a l'arrivee, et une police de secours la ou le domaine est
+  # injoignable -- sur mobile hors ligne, notamment.
+  # Licence SIL OFL 1.1: assets/fonts/OFL.txt.
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
 
 flutter_launcher_icons:
   android: true

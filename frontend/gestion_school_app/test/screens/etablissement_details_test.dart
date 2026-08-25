@@ -35,7 +35,9 @@ Future<void> _pumpDetails(
 
   await tester.pumpWidget(
     MaterialApp(
-      // Theme neutre: AppTheme passe par google_fonts, indisponible en test.
+      // Theme neutre: ce test porte sur la mise en page de la fiche, pas sur
+      // la charte. Le decoupler d'AppTheme evite qu'un changement de couleur
+      // ou de typographie fasse echouer une verification de structure.
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF123D68)),
