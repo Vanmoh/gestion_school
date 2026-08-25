@@ -25,6 +25,13 @@ class LibraryDocumentTree extends StatelessWidget {
   /// pendant le telechargement.
   final int? documentEnCours;
 
+  /// Avancement de ce telechargement, de 0 a 1, ou null quand le poids total
+  /// n'est pas connu. Les documents du fonds vont de 50 Ko a 127 Mo: un rond
+  /// qui tourne ne distingue pas l'attente d'une seconde de celle d'une
+  /// minute, et le lecteur clique une deuxieme fois en croyant que rien ne
+  /// s'est passe.
+  final double? progressionEnCours;
+
   final void Function(LibraryCollection collection) onCollectionChanged;
   final void Function(LibraryDocument document) onOuvrir;
 
@@ -35,6 +42,7 @@ class LibraryDocumentTree extends StatelessWidget {
     required this.documents,
     required this.recherche,
     required this.documentEnCours,
+    this.progressionEnCours,
     required this.onCollectionChanged,
     required this.onOuvrir,
   });
@@ -152,17 +160,39 @@ class LibraryDocumentTree extends StatelessWidget {
       title: Text(document.title),
       subtitle: details.isEmpty ? null : Text(details.join('  ·  ')),
       trailing: enCours
-          ? const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
+          ? _avancement(context)
           : IconButton(
               tooltip: indisponible ? 'Indisponible' : 'Ouvrir',
               icon: const Icon(Icons.open_in_new),
               onPressed: indisponible ? null : () => onOuvrir(document),
             ),
       onTap: indisponible || enCours ? null : () => onOuvrir(document),
+    );
+  }
+
+  /// Le rond de progression, chiffre des que la taille est connue.
+  Widget _avancement(BuildContext context) {
+    final fraction = progressionEnCours;
+    final rond = SizedBox(
+      width: 18,
+      height: 18,
+      // value null redonne l'animation indeterminee: c'est le bon affichage
+      // tant qu'on ignore la taille, et le mauvais des qu'on la connait.
+      child: CircularProgressIndicator(strokeWidth: 2, value: fraction),
+    );
+    if (fraction == null) {
+      return rond;
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '${(fraction * 100).clamp(0, 100).toStringAsFixed(0)} %',
+          style: Theme.of(context).textTheme.labelSmall,
+        ),
+        const SizedBox(width: 8),
+        rond,
+      ],
     );
   }
 }

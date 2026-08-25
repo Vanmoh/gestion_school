@@ -72,10 +72,28 @@ class LibraryRepository {
   ///
   /// Toujours par l'API, jamais par l'URL de la source: c'est elle qui sait
   /// si le fichier est deja rapatrie ou s'il faut encore le relayer.
-  Future<Uint8List> fetchDocumentFile(int documentId) async {
+  ///
+  /// [onProgression] recoit une fraction entre 0 et 1, ou null tant que le
+  /// poids total reste inconnu. Le fonds va de 50 Ko a 127 Mo: sans ce
+  /// retour, l'ecran affichait le meme rond qui tourne pour une brochure de
+  /// deux pages et pour un recueil d'annales entier.
+  Future<Uint8List> fetchDocumentFile(
+    int documentId, {
+    void Function(double? fraction)? onProgression,
+  }) async {
     final response = await dio.get<List<int>>(
       '/library-documents/$documentId/file/',
       options: Options(responseType: ResponseType.bytes),
+      onReceiveProgress: onProgression == null
+          ? null
+          : (recus, total) {
+              // total vaut -1 quand la reponse ne porte pas de
+              // Content-Length. L'API prend soin de le transmettre, y compris
+              // pour un document relaye, mais un intermediaire peut le
+              // retirer: on annonce alors une progression indeterminee
+              // plutot qu'une fraction fausse.
+              onProgression(total > 0 ? recus / total : null);
+            },
     );
     return Uint8List.fromList(response.data ?? const <int>[]);
   }

@@ -71,6 +71,22 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Les listes paginees de l'API sont du JSON tres repetitif: une page de
+    # 80 eleves pese 43 Ko brute et 3 Ko compressee, mesure sur la base de
+    # developpement. Sur une connexion mobile, ces 40 Ko economises sont
+    # l'essentiel du temps d'affichage d'un ecran de liste.
+    #
+    # Place avant WhiteNoise, qui sert deja ses propres fichiers compresses et
+    # n'a donc rien a gagner a repasser dessous.
+    #
+    # A savoir: compresser une reponse qui melange un secret et une entree
+    # controlee par l'attaquant ouvre la voie a BREACH. Ici les reponses sont
+    # du JSON servi a une origine unique et declaree (CORS_ALLOWED_ORIGINS),
+    # les jetons ne voyagent pas avec du contenu reflechi, et Django laisse de
+    # toute facon les reponses de moins de 200 octets non compressees.
+    # Celui d'apps.common et non celui de Django: voir la classe, qui laisse
+    # passer PDF et images au lieu de les recompresser en pure perte.
+    "apps.common.middleware.GZipMiddleware",
     # Doit suivre SecurityMiddleware et preceder tout le reste: gunicorn ne
     # sert pas /static/, l'admin Django et DRF n'auraient donc aucun style.
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -218,6 +234,24 @@ if USE_OBJECT_STORAGE:
     AWS_QUERYSTRING_EXPIRE = config("AWS_QUERYSTRING_EXPIRE", cast=int, default=3600)
     STORAGES["default"] = {"BACKEND": "storages.backends.s3.S3Storage"}
 
+# Rediriger le lecteur vers le stockage plutot que lui relayer le PDF.
+#
+# Le gain est net: un document de 40 Mo cesse de traverser le conteneur, qui
+# ne dispose que de 0,1 CPU et 512 Mo. Le client va le chercher directement
+# la ou il est, par une URL signee a duree limitee (AWS_QUERYSTRING_EXPIRE).
+#
+# Desactive par defaut, et ce n'est pas de la prudence excessive: sur le web,
+# l'application lit ce fichier en XHR, et une redirection vers un autre
+# domaine declenche un controle CORS cote bucket. Tant que le bucket n'a pas
+# ete configure pour accepter l'origine de l'application, activer ce reglage
+# casse l'ouverture des documents dans le navigateur -- sans rien casser sur
+# Android ni sur le poste, ou le CORS n'existe pas.
+#
+# Marche a suivre pour l'activer: docs/OPERATIONS_BIBLIOTHEQUE.md, §3.
+LIBRARY_STORAGE_REDIRECT = config(
+    "LIBRARY_STORAGE_REDIRECT", cast=bool, default=False
+)
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOW_ALL_ORIGINS = config(
@@ -356,6 +390,15 @@ CELERY_BEAT_SCHEDULE = {
             hour=CELERY_BEAT_BACKUP_HOUR,
             minute=CELERY_BEAT_BACKUP_MINUTE,
         ),
+    },
+    # Filet, et non le mecanisme principal: le catalogue est demande au
+    # demarrage de l'API (entrypoint.sh). Ce passage quotidien rattrape le cas
+    # ou le courtier etait injoignable a ce moment-la. La tache s'arrete d'
+    # elle-meme si le fonds est deja catalogue, elle ne coute alors qu'une
+    # requete en base.
+    "catalogue-fonds-documentaire": {
+        "task": "apps.school.tasks.import_library_catalogue",
+        "schedule": crontab(hour=3, minute=15),
     },
 }
 

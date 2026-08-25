@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:gestion_school_app/core/network/token_storage.dart';
 import 'package:gestion_school_app/models/etablissement.dart';
 import 'package:gestion_school_app/screens/etablissement_details_screen.dart';
@@ -23,9 +22,6 @@ Future<void> _advance(WidgetTester tester) async {
   for (var i = 0; i < 40; i++) {
     await tester.pump(const Duration(milliseconds: 40));
   }
-  // google_fonts leve une exception asynchrone en test: pas d'acces reseau et
-  // la police n'est pas dans les assets.
-  tester.takeException();
 }
 
 Future<void> _pumpPortal(
@@ -34,6 +30,8 @@ Future<void> _pumpPortal(
   bool reduceMotion = false,
   Size size = const Size(1280, 900),
   List<Etablissement>? etablissements,
+  String? loadError,
+  Future<void> Function()? onRetry,
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
   final provider = EtablissementProvider(TokenStorage());
@@ -52,7 +50,11 @@ Future<void> _pumpPortal(
       child: MaterialApp(
         home: MediaQuery(
           data: MediaQueryData(size: size, disableAnimations: reduceMotion),
-          child: EtablissementSelectionScreen(onSelected: (_) async {}),
+          child: EtablissementSelectionScreen(
+            onSelected: (_) async {},
+            loadError: loadError,
+            onRetry: onRetry,
+          ),
         ),
       ),
     ),
@@ -61,10 +63,6 @@ Future<void> _pumpPortal(
 }
 
 void main() {
-  setUpAll(() {
-    GoogleFonts.config.allowRuntimeFetching = false;
-  });
-
   testWidgets('affiche chaque etablissement une seule fois', (tester) async {
     await _pumpPortal(tester);
 
@@ -243,6 +241,66 @@ void main() {
     await _advance(tester);
 
     expect(find.text('Aucun résultat pour "zzzz"'), findsOneWidget);
+  });
+
+  testWidgets('une base vide n_accuse pas le reseau', (tester) async {
+    await _pumpPortal(tester, etablissements: []);
+
+    expect(find.text('Aucun établissement disponible'), findsOneWidget);
+    // Rien a reessayer: l'appel a abouti, la reponse etait vide.
+    expect(find.text('Réessayer'), findsNothing);
+  });
+
+  testWidgets('un serveur injoignable se distingue d_une base vide', (
+    tester,
+  ) async {
+    await _pumpPortal(
+      tester,
+      etablissements: [],
+      loadError: 'Serveur injoignable.\nhttp://192.168.1.25:8000/api',
+      onRetry: () async {},
+    );
+
+    // Regression: les deux cas portaient le meme texte, ce qui envoyait
+    // chercher une panne de reseau quand la base etait simplement vide.
+    expect(find.text('Impossible de joindre le serveur'), findsOneWidget);
+    expect(find.text('Aucun établissement disponible'), findsNothing);
+    // L'adresse reellement appelee est lisible a l'ecran: c'est elle qui
+    // trahit une URL d'API figee a la compilation.
+    expect(find.textContaining('192.168.1.25:8000'), findsOneWidget);
+  });
+
+  testWidgets('le bouton Reessayer relance le chargement', (tester) async {
+    var appels = 0;
+    await _pumpPortal(
+      tester,
+      etablissements: [],
+      loadError: 'Serveur injoignable.',
+      onRetry: () async => appels++,
+    );
+
+    await tester.tap(find.text('Réessayer'));
+    await _advance(tester);
+
+    // Sans lui, seul un rechargement complet de la page sortait de cet ecran.
+    expect(appels, 1);
+  });
+
+  testWidgets('une recherche sans resultat n_offre pas de reessai', (
+    tester,
+  ) async {
+    await _pumpPortal(
+      tester,
+      loadError: 'Serveur injoignable.',
+      onRetry: () async {},
+    );
+
+    await tester.enterText(find.byType(TextField), 'zzzz');
+    await _advance(tester);
+
+    // La liste chargee est bien la: c'est le filtre qui ne rend rien.
+    expect(find.text('Aucun résultat pour "zzzz"'), findsOneWidget);
+    expect(find.text('Réessayer'), findsNothing);
   });
 
   testWidgets('le contenu reste dans une bande centree sur grand ecran', (

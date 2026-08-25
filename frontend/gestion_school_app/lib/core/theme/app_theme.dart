@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
   static const _lightScheme = ColorScheme(
@@ -76,7 +75,11 @@ class AppTheme {
       bodyColor: scheme.onSurface,
       displayColor: scheme.onSurface,
     );
-    final inter = GoogleFonts.interTextTheme(colored);
+    // Inter est declaree dans pubspec.yaml et embarquee avec l'application.
+    // GoogleFonts.interTextTheme la telechargeait a chaque premier lancement,
+    // apres le demarrage de Flutter: le texte s'affichait d'abord dans la
+    // police de secours, puis tout etait redessine a l'arrivee du fichier.
+    final inter = colored.apply(fontFamily: 'Inter');
     return inter.copyWith(
       headlineMedium: inter.headlineMedium?.copyWith(
         fontWeight: FontWeight.w700,

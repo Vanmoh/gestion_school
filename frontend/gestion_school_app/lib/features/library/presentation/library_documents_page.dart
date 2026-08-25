@@ -31,6 +31,9 @@ class _LibraryDocumentsPageState extends ConsumerState<LibraryDocumentsPage> {
   List<LibraryDocument> _documents = const [];
   int? _serieChoisie;
   int? _documentEnCours;
+  /// Fraction telechargee du document en cours, null tant que le poids total
+  /// n'est pas connu.
+  double? _progressionEnCours;
   String _recherche = '';
 
   @override
@@ -98,11 +101,21 @@ class _LibraryDocumentsPageState extends ConsumerState<LibraryDocumentsPage> {
   /// si le fichier est deja rapatrie, et une URL exterieure donnee au
   /// navigateur echouerait en CORS.
   Future<void> _ouvrir(LibraryDocument document) async {
-    setState(() => _documentEnCours = document.id);
+    setState(() {
+      _documentEnCours = document.id;
+      _progressionEnCours = null;
+    });
     try {
       final octets = await ref
           .read(libraryRepositoryProvider)
-          .fetchDocumentFile(document.id);
+          .fetchDocumentFile(
+            document.id,
+            onProgression: (fraction) {
+              // L'ecran peut avoir ete quitte pendant un telechargement long.
+              if (!mounted || _documentEnCours != document.id) return;
+              setState(() => _progressionEnCours = fraction);
+            },
+          );
       if (!mounted) return;
       if (octets.isEmpty) {
         _signaler('Document vide.');
@@ -115,7 +128,12 @@ class _LibraryDocumentsPageState extends ConsumerState<LibraryDocumentsPage> {
     } catch (error) {
       _signaler(_message(error, 'Impossible d’ouvrir ce document.'));
     } finally {
-      if (mounted) setState(() => _documentEnCours = null);
+      if (mounted) {
+        setState(() {
+          _documentEnCours = null;
+          _progressionEnCours = null;
+        });
+      }
     }
   }
 
@@ -229,6 +247,7 @@ class _LibraryDocumentsPageState extends ConsumerState<LibraryDocumentsPage> {
           documents: _documents,
           recherche: _recherche,
           documentEnCours: _documentEnCours,
+          progressionEnCours: _progressionEnCours,
           onCollectionChanged: (collection) {
             setState(() => _serieChoisie = collection.id);
             _chargerDocuments(collection.id);
