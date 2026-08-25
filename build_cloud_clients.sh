@@ -82,7 +82,9 @@ build_apk() {
 
 build_web() {
   echo "[3/4] Build web release..."
-  flutter build web --release --dart-define=API_BASE_URL="$API_URL"
+  # Voir Dockerfile.web: le moteur de rendu est servi avec l'application,
+  # et non depuis gstatic.com.
+  flutter build web --release --no-web-resources-cdn --dart-define=API_BASE_URL="$API_URL"
   echo "WEB: $APP_DIR/build/web"
 }
 

@@ -2,8 +2,46 @@ import time
 
 from django.conf import settings
 from django.db import connection
+from django.middleware.gzip import GZipMiddleware as DjangoGZipMiddleware
 
 from apps.common.models import ActivityLog
+
+
+class GZipMiddleware(DjangoGZipMiddleware):
+    """Compression des reponses, sauf ce qui est deja compresse.
+
+    Celui de Django ne regarde pas le type de contenu: il gzippait donc les
+    PDF de la bibliotheque et les photos d'eleves, qui n'y gagnent pas un
+    octet. Sur les 0,1 CPU du plan gratuit, ce travail se paie sur le temps
+    de reponse de tout le monde.
+
+    Plus grave que le gaspillage: pour une reponse en flux, Django supprime
+    Content-Length puisqu'il ignore la taille compressee finale. Le client
+    perdait alors la seule information qui lui permet d'afficher une
+    progression -- un PDF de 40 Mo se telechargeait derriere un rond qui
+    tourne, sans fin annoncee.
+    """
+
+    # Prefixes et non egalites: « application/pdf » arrive souvent suivi d'un
+    # parametre de charset, et les familles image/, video/, audio/ sont
+    # compressees en entier par leurs propres formats.
+    TYPES_DEJA_COMPRESSES = (
+        "application/pdf",
+        "application/zip",
+        "application/gzip",
+        "application/x-7z-compressed",
+        "application/vnd.rar",
+        "image/",
+        "video/",
+        "audio/",
+        "font/",
+    )
+
+    def process_response(self, request, response):
+        type_contenu = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        if type_contenu.startswith(self.TYPES_DEJA_COMPRESSES):
+            return response
+        return super().process_response(request, response)
 
 
 class RequestTimingMiddleware:

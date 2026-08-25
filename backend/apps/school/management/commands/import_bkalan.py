@@ -17,6 +17,15 @@ ne le connait plus -- les media survivent souvent a la base.
     manage.py import_bkalan --catalogue-seul     # les 1257 entrees
     manage.py import_bkalan                      # + les fichiers manquants
     manage.py import_bkalan --serie TSExp        # une seule serie
+    manage.py import_bkalan --taille-max 5       # seulement les PDF <= 5 Mo
+    manage.py import_bkalan --catalogue-seul --si-vide   # au demarrage
+
+Le fonds pese environ 6,4 Go, mais sa moitie basse est minuscule: 86 % des
+documents tiennent sous 5 Mo et ne font ensemble que 0,93 Go, tandis qu'une
+centaine de gros fichiers -- jusqu'a 127 Mo piece -- portent le reste. D'ou
+`--taille-max`: un stockage a la capacite comptee prend la partie legere, un
+disque local prend tout. Ce qui depasse le seuil reste relaye depuis la
+source, exactement comme avant son rapatriement.
 """
 
 from __future__ import annotations
@@ -27,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from django.core.exceptions import SuspiciousOperation
 from django.core.files import File
@@ -96,16 +105,43 @@ def lire_page(url):
         return reponse.read().decode("utf-8", errors="replace")
 
 
-def telecharger_fichier(url, chemin):
-    """Ecrit le PDF distant dans `chemin`. Point d'injection des tests."""
+def taille_distante(url):
+    """Poids annonce par la source, ou None si elle ne le dit pas.
+
+    Une requete HEAD coute un aller-retour, contre plusieurs dizaines de
+    megaoctets pour decouvrir la meme chose en telechargeant. Point
+    d'injection des tests, comme lire_page et telecharger_fichier.
+    """
+    requete = Request(url, method="HEAD")
+    with urlopen(requete, timeout=30) as reponse:  # noqa: S310 - hote fixe
+        annonce = reponse.headers.get("Content-Length")
+    try:
+        return int(annonce) if annonce is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+class _TropGros(Exception):
+    """Le fichier depasse le seuil demande: transfert interrompu."""
+
+
+def telecharger_fichier(url, chemin, taille_max=0):
+    """Ecrit le PDF distant dans `chemin`. Point d'injection des tests.
+
+    Le seuil est verifie pendant l'ecriture et pas seulement avant: la source
+    n'annonce pas toujours Content-Length, et un fichier de 127 Mo qu'on
+    croyait petit ne doit pas descendre en entier avant d'etre ecarte.
+    """
     with urlopen(url, timeout=180) as amont, open(chemin, "wb") as sortie:  # noqa: S310
         taille = 0
         while True:
             morceau = amont.read(64 * 1024)
             if not morceau:
                 break
-            sortie.write(morceau)
             taille += len(morceau)
+            if taille_max and taille > taille_max:
+                raise _TropGros(url)
+            sortie.write(morceau)
     return taille
 
 
@@ -169,9 +205,26 @@ class Command(BaseCommand):
             help="S'arrete apres N telechargements. 0 = sans limite.",
         )
         parser.add_argument(
+            "--taille-max",
+            type=float,
+            default=0,
+            dest="taille_max",
+            metavar="MO",
+            help=(
+                "Ne rapatrie que les documents jusqu'a ce poids, en Mo. "
+                "Au-dela, le document reste relaye depuis la source. "
+                "0 (defaut) ne pose aucune limite."
+            ),
+        )
+        parser.add_argument(
             "--retenter-erreurs",
             action="store_true",
             help="Retelecharge les documents marques en erreur.",
+        )
+        parser.add_argument(
+            "--si-vide",
+            action="store_true",
+            help="Ne fait rien si les series visees sont deja cataloguees.",
         )
         parser.add_argument(
             "--dry-run",
@@ -189,6 +242,17 @@ class Command(BaseCommand):
                 f"Serie inconnue: {', '.join(inconnus)}. "
                 f"Connues: {', '.join(connus)}."
             )
+
+        # Le demarrage du conteneur rejoue la commande (entrypoint.sh), et
+        # Render reveille le service bien plus souvent qu'il ne le deploie.
+        # L'import est rejouable, mais relire neuf pages chez la source a
+        # chaque reveil ne changerait rien a la base. Un catalogue present
+        # dit que la premiere passe a eu lieu: cela suffit a s'arreter.
+        if options["si_vide"] and LibraryDocument.objects.filter(
+            category__collection__code__in=codes
+        ).exists():
+            self.stdout.write("Catalogue deja en place: rien a faire (--si-vide).")
+            return
 
         self.base_url = options["base_url"].rstrip("/")
         self.dry_run = options["dry_run"]
@@ -217,6 +281,7 @@ class Command(BaseCommand):
             jobs=max(1, options["jobs"]),
             limite=max(0, options["limit"]),
             retenter=options["retenter_erreurs"],
+            taille_max=int(max(0.0, options["taille_max"]) * 1024 * 1024),
         )
 
     # --- Catalogue ---------------------------------------------------------
@@ -262,7 +327,7 @@ class Command(BaseCommand):
 
     # --- Rapatriement ------------------------------------------------------
 
-    def _rapatrier(self, codes, jobs, limite, retenter):
+    def _rapatrier(self, codes, jobs, limite, retenter, taille_max=0):
         a_faire = LibraryDocument.objects.filter(
             category__collection__code__in=codes, is_downloaded=False
         ).select_related("category", "category__collection")
@@ -288,10 +353,16 @@ class Command(BaseCommand):
             return
 
         total = len(a_faire)
-        self.stdout.write(f"Rapatriement de {total} fichiers ({jobs} en parallele)...")
+        borne = (
+            f", jusqu'a {taille_max / 1048576:.0f} Mo piece" if taille_max else ""
+        )
+        self.stdout.write(
+            f"Rapatriement de {total} fichiers ({jobs} en parallele{borne})..."
+        )
 
         reussis = 0
         echecs = 0
+        ignores = 0
         octets = 0
 
         def annoncer():
@@ -303,21 +374,30 @@ class Command(BaseCommand):
             pourcentage evite d'avoir a diviser de tete pendant une descente
             qui dure des heures.
             """
-            traites = reussis + echecs
+            traites = reussis + echecs + ignores
             if traites % 25 and traites != total:
                 return
+            trop_gros = f", {ignores} trop gros" if ignores else ""
             self.stdout.write(
                 f"  {traites}/{total} ({traites * 100 // total} %), "
-                f"{octets / 1e6:.0f} Mo, {echecs} en echec"
+                f"{octets / 1e6:.0f} Mo, {echecs} en echec{trop_gros}"
             )
 
         # Les fichiers descendent en parallele, mais l'ecriture en base reste
         # sur ce fil: partager une connexion Django entre threads est le
         # meilleur moyen de corrompre une transaction.
         with ThreadPoolExecutor(max_workers=jobs) as executeur:
-            for document, chemin, taille, erreur in executeur.map(
-                self._telecharger, a_faire
+            for document, chemin, taille, erreur, trop_gros in executeur.map(
+                lambda doc: self._telecharger(doc, taille_max), a_faire
             ):
+                if trop_gros:
+                    # Ni succes ni echec: le document reste relaye, et une
+                    # execution ulterieure sans seuil le prendra. L'ecrire
+                    # dans import_error le ferait passer pour mort a la
+                    # source, ce qu'il n'est pas.
+                    ignores += 1
+                    annoncer()
+                    continue
                 if erreur:
                     echecs += 1
                     document.import_error = erreur[:255]
@@ -352,6 +432,12 @@ class Command(BaseCommand):
                 f"Rapatriement: {reussis} fichiers ({octets / 1e6:.0f} Mo), {echecs} en echec."
             )
         )
+        if ignores:
+            self.stdout.write(
+                f"{ignores} documents au-dela de {taille_max / 1048576:.0f} Mo: "
+                "laisses a la source, relayes par l'API. Relancer sans "
+                "--taille-max les rapatriera."
+            )
         if echecs:
             self.stdout.write(
                 "Les echecs sont conserves dans import_error; "
@@ -400,16 +486,44 @@ class Command(BaseCommand):
             adoptes += 1
         return adoptes
 
-    def _telecharger(self, document):
-        """(document, chemin temporaire, taille, erreur). Tourne dans un thread."""
+    def _telecharger(self, document, taille_max=0):
+        """(document, chemin temporaire, taille, erreur, trop_gros).
+
+        Tourne dans un thread. `trop_gros` distingue le document ecarte par
+        le seuil de celui que la source refuse: le premier reste rapatriable,
+        le second est note en base comme illisible.
+        """
+        if taille_max:
+            annoncee = self._taille_annoncee(document.source_url)
+            # Une source muette sur le poids ne fait pas ecarter le document:
+            # le telechargement ci-dessous s'arretera de lui-meme au seuil.
+            if annoncee is not None and annoncee > taille_max:
+                return document, "", annoncee, "", True
+
         descripteur, chemin = tempfile.mkstemp(suffix=".pdf")
         os.close(descripteur)
         try:
-            taille = telecharger_fichier(document.source_url, chemin)
+            taille = telecharger_fichier(document.source_url, chemin, taille_max)
+        except _TropGros:
+            os.unlink(chemin)
+            return document, "", 0, "", True
         except (HTTPError, URLError, OSError) as exc:
             os.unlink(chemin)
-            return document, "", 0, f"{type(exc).__name__}: {exc}"
+            return document, "", 0, f"{type(exc).__name__}: {exc}", False
         if not taille:
             os.unlink(chemin)
-            return document, "", 0, "Fichier vide a la source"
-        return document, chemin, taille, ""
+            return document, "", 0, "Fichier vide a la source", False
+        return document, chemin, taille, "", False
+
+    @staticmethod
+    def _taille_annoncee(url):
+        """Poids annonce, ou None si la source se tait ou refuse la question.
+
+        Un HEAD en echec ne condamne pas le document: 43 fichiers du fonds
+        repondent deja 401 sur leur propre serveur, et rien ne dit que les
+        autres acceptent tous cette methode. Le telechargement tranchera.
+        """
+        try:
+            return taille_distante(url)
+        except (HTTPError, URLError, OSError):
+            return None

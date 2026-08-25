@@ -8,6 +8,8 @@ Aucun test ne sort sur le reseau: les pages de la source sont figees en
 fixture et le telechargement est remplace par une fonction locale.
 """
 
+import shutil
+import tempfile
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -82,6 +84,34 @@ PAGE_CROCHETS = """
 """
 
 
+class _AmontFactice:
+    """Ce que `urlopen` rend: un flux qu'on lit par blocs, puis qu'on ferme.
+
+    Volontairement sans __iter__: la vue ne doit plus iterer l'objet amont,
+    et une doublure qui le permettrait laisserait passer un retour a la
+    decoupe ligne par ligne.
+    """
+
+    def __init__(self, contenu):
+        self._contenu = contenu
+        self._position = 0
+        self.tailles_demandees = []
+        self.ferme = False
+        self.headers = {
+            "Content-Type": "application/pdf",
+            "Content-Length": str(len(contenu)),
+        }
+
+    def read(self, taille):
+        self.tailles_demandees.append(taille)
+        morceau = self._contenu[self._position : self._position + taille]
+        self._position += len(morceau)
+        return morceau
+
+    def close(self):
+        self.ferme = True
+
+
 def _page_figee(contenu=PAGE):
     return lambda url: contenu
 
@@ -152,6 +182,50 @@ class ImportBkalanTests(APITestCase):
         self.assertEqual(LibraryDocument.objects.count(), 3)
         self.assertEqual(LibraryCategory.objects.count(), 2)
 
+    def test_si_vide_stops_before_touching_the_source(self):
+        """Le demarrage du conteneur rejoue la commande a chaque reveil."""
+        self._importer("--serie", "10-eme-CG", "--catalogue-seul")
+
+        def refuser(url):
+            raise AssertionError(f"la source ne devait pas etre lue: {url}")
+
+        with patch.object(import_bkalan, "lire_page", refuser):
+            call_command(
+                "import_bkalan",
+                "--serie",
+                "10-eme-CG",
+                "--catalogue-seul",
+                "--si-vide",
+                stdout=StringIO(),
+                stderr=StringIO(),
+            )
+
+        self.assertEqual(LibraryDocument.objects.count(), 3)
+
+    def test_si_vide_imports_when_the_catalogue_is_empty(self):
+        self._importer("--serie", "10-eme-CG", "--catalogue-seul", "--si-vide")
+
+        self.assertEqual(LibraryDocument.objects.count(), 3)
+
+    def test_si_vide_looks_only_at_the_series_asked_for(self):
+        """Une serie ajoutee plus tard doit encore pouvoir entrer."""
+        self._importer("--serie", "10-eme-CG", "--catalogue-seul")
+        self._importer("--serie", "TSExp", "--catalogue-seul", "--si-vide")
+
+        self.assertEqual(
+            LibraryDocument.objects.filter(
+                category__collection__code="TSExp"
+            ).count(),
+            3,
+        )
+
+    def test_an_unknown_series_is_refused_even_with_si_vide(self):
+        """La faute de frappe se voit, au lieu de passer pour un import fait."""
+        self._importer("--serie", "10-eme-CG", "--catalogue-seul")
+
+        with self.assertRaises(CommandError):
+            self._importer("--serie", "Terminale-Z", "--catalogue-seul", "--si-vide")
+
     def test_an_accented_path_still_enters_the_catalogue(self):
         self._importer("--serie", "10-eme-CG", "--catalogue-seul", page=PAGE_ACCENTS)
 
@@ -165,7 +239,7 @@ class ImportBkalanTests(APITestCase):
 
     @override_settings(MEDIA_ROOT="/tmp/gs-library-tests")
     def test_the_files_come_down_after_the_catalogue(self):
-        def _faux_telechargement(url, chemin):
+        def _faux_telechargement(url, chemin, taille_max=0):
             with open(chemin, "wb") as sortie:
                 sortie.write(b"%PDF-1.4 contenu")
             return 16
@@ -195,7 +269,7 @@ class ImportBkalanTests(APITestCase):
 
         essais = []
 
-        def _compte(url, cible):
+        def _compte(url, cible, taille_max=0):
             essais.append(url)
             raise OSError("le fichier etait deja sur le disque")
 
@@ -213,7 +287,7 @@ class ImportBkalanTests(APITestCase):
         chemin.unlink()
 
     def test_a_refused_file_is_recorded_not_swallowed(self):
-        def _refus(url, chemin):
+        def _refus(url, chemin, taille_max=0):
             raise OSError("401 Unauthorized")
 
         with patch.object(import_bkalan, "telecharger_fichier", _refus):
@@ -254,7 +328,7 @@ class ImportBkalanTests(APITestCase):
         La ligne compte les fichiers traites et non les seuls reussis: un lot
         entierement refuse restait muet jusqu'au resume final.
         """
-        def _refus(url, chemin):
+        def _refus(url, chemin, taille_max=0):
             raise OSError("401 Unauthorized")
 
         journal = StringIO()
@@ -267,7 +341,7 @@ class ImportBkalanTests(APITestCase):
 
     def test_a_recorded_error_is_not_retried_by_default(self):
         """Sinon chaque execution rejoue les 40 fichiers morts a la source."""
-        def _refus(url, chemin):
+        def _refus(url, chemin, taille_max=0):
             raise OSError("401 Unauthorized")
 
         with patch.object(import_bkalan, "telecharger_fichier", _refus):
@@ -275,7 +349,7 @@ class ImportBkalanTests(APITestCase):
 
         essais = []
 
-        def _compte(url, chemin):
+        def _compte(url, chemin, taille_max=0):
             essais.append(url)
             raise OSError("401 Unauthorized")
 
@@ -286,6 +360,132 @@ class ImportBkalanTests(APITestCase):
         with patch.object(import_bkalan, "telecharger_fichier", _compte):
             self._importer("--serie", "10-eme-CG", "--jobs", "1", "--retenter-erreurs")
         self.assertEqual(len(essais), 3)
+
+
+class ImportTailleMaxTests(APITestCase):
+    """`--taille-max`: le stockage a la capacite comptee prend la partie legere.
+
+    Le fonds pese ~6,4 Go, mais 86 % des documents tiennent sous 5 Mo pour
+    0,93 Go a eux tous: une centaine de gros fichiers -- jusqu'a 127 Mo --
+    portent tout le reste. Le seuil permet de rapatrier la partie utile dans
+    un stockage gratuit et de laisser le reste au relais.
+
+    Ce qui est ecarte par le seuil n'est pas en echec: c'est la distinction
+    que ces tests protegent. Un document note en erreur passerait pour mort a
+    la source et sortirait de la file d'attente.
+    """
+
+    def setUp(self):
+        # Un stockage neuf par test, et non un chemin fixe partage.
+        # _adopter_le_disque rattache tout fichier trouve a l'emplacement
+        # attendu: un test qui rapatrie trois PDF les fait adopter par les
+        # suivants, dont la file d'attente se retrouve vide. Le resultat
+        # dependait alors de l'ordre alphabetique des methodes.
+        repertoire = tempfile.mkdtemp(prefix="gs-taille-max-")
+        self.addCleanup(shutil.rmtree, repertoire, ignore_errors=True)
+        reglage = override_settings(MEDIA_ROOT=repertoire)
+        reglage.enable()
+        self.addCleanup(reglage.disable)
+
+    def _importer(self, *args, page=PAGE, **kwargs):
+        kwargs.setdefault("stdout", StringIO())
+        kwargs.setdefault("stderr", StringIO())
+        with patch.object(import_bkalan, "lire_page", _page_figee(page)):
+            call_command("import_bkalan", *args, **kwargs)
+
+    def test_le_document_annonce_trop_gros_n_est_pas_telecharge(self):
+        essais = []
+
+        def _telecharger(url, chemin, taille_max=0):
+            essais.append(url)
+            with open(chemin, "wb") as sortie:
+                sortie.write(b"%PDF")
+            return 4
+
+        # 8 Mo annonces, seuil a 5: la source n'a meme pas a etre sollicitee.
+        with patch.object(import_bkalan, "taille_distante", lambda url: 8 * 1024 * 1024):
+            with patch.object(import_bkalan, "telecharger_fichier", _telecharger):
+                self._importer("--serie", "10-eme-CG", "--jobs", "1", "--taille-max", "5")
+
+        self.assertEqual(essais, [])
+        self.assertEqual(LibraryDocument.objects.filter(is_downloaded=True).count(), 0)
+
+    def test_l_ecart_par_le_seuil_n_est_pas_une_erreur_d_import(self):
+        with patch.object(import_bkalan, "taille_distante", lambda url: 8 * 1024 * 1024):
+            with patch.object(import_bkalan, "telecharger_fichier", lambda *a, **k: 0):
+                self._importer("--serie", "10-eme-CG", "--jobs", "1", "--taille-max", "5")
+
+        # import_error vide: le document reste rapatriable et l'API continue
+        # de le relayer, au lieu de le presenter comme illisible.
+        self.assertFalse(
+            LibraryDocument.objects.exclude(import_error="").exists(),
+            "un document ecarte par le seuil ne doit pas etre note en erreur",
+        )
+
+    def test_le_document_sous_le_seuil_passe_normalement(self):
+        def _telecharger(url, chemin, taille_max=0):
+            with open(chemin, "wb") as sortie:
+                sortie.write(b"%PDF-1.4 leger")
+            return 14
+
+        with patch.object(import_bkalan, "taille_distante", lambda url: 1024):
+            with patch.object(import_bkalan, "telecharger_fichier", _telecharger):
+                self._importer("--serie", "10-eme-CG", "--jobs", "1", "--taille-max", "5")
+
+        self.assertEqual(LibraryDocument.objects.filter(is_downloaded=True).count(), 3)
+
+    def test_une_source_muette_sur_le_poids_est_coupee_pendant_le_transfert(self):
+        """Sans Content-Length, le seuil ne peut etre verifie qu'a l'ecriture."""
+        seuils = []
+
+        def _telecharger(url, chemin, taille_max=0):
+            seuils.append(taille_max)
+            raise import_bkalan._TropGros(url)
+
+        with patch.object(import_bkalan, "taille_distante", lambda url: None):
+            with patch.object(import_bkalan, "telecharger_fichier", _telecharger):
+                self._importer("--serie", "10-eme-CG", "--jobs", "1", "--taille-max", "5")
+
+        # Le seuil est bien transmis au transfert, en octets.
+        self.assertEqual(set(seuils), {5 * 1024 * 1024})
+        self.assertEqual(LibraryDocument.objects.filter(is_downloaded=True).count(), 0)
+        self.assertFalse(LibraryDocument.objects.exclude(import_error="").exists())
+
+    def test_un_head_refuse_ne_condamne_pas_le_document(self):
+        """43 documents repondent deja 401 a la source: le HEAD peut echouer."""
+
+        def _sonde_en_panne(url):
+            raise OSError("HEAD refuse")
+
+        def _telecharger(url, chemin, taille_max=0):
+            with open(chemin, "wb") as sortie:
+                sortie.write(b"%PDF-1.4 leger")
+            return 14
+
+        with patch.object(import_bkalan, "taille_distante", _sonde_en_panne):
+            with patch.object(import_bkalan, "telecharger_fichier", _telecharger):
+                self._importer("--serie", "10-eme-CG", "--jobs", "1", "--taille-max", "5")
+
+        self.assertEqual(LibraryDocument.objects.filter(is_downloaded=True).count(), 3)
+
+    def test_sans_seuil_la_source_n_est_pas_sondee(self):
+        """Le HEAD est un aller-retour de plus: inutile quand tout est pris."""
+        sondes = []
+
+        def _telecharger(url, chemin, taille_max=0):
+            with open(chemin, "wb") as sortie:
+                sortie.write(b"%PDF")
+            return 4
+
+        def _sonde(url):
+            sondes.append(url)
+            return 10
+
+        with patch.object(import_bkalan, "taille_distante", _sonde):
+            with patch.object(import_bkalan, "telecharger_fichier", _telecharger):
+                self._importer("--serie", "10-eme-CG", "--jobs", "1")
+
+        self.assertEqual(sondes, [])
 
 
 class LibraryDocumentApiTests(APITestCase):
@@ -366,20 +566,89 @@ class LibraryDocumentApiTests(APITestCase):
 
     def test_a_missing_file_is_relayed_from_the_source(self):
         """C'est tout le mode hybride: l'ecran marche avant le rapatriement."""
-
-        class _Amont:
-            headers = {"Content-Type": "application/pdf", "Content-Length": "15"}
-
-            def __iter__(self):
-                return iter([b"%PDF-1.4 amont"])
+        amont_factice = _AmontFactice(b"%PDF-1.4 amont")
 
         self.client.force_authenticate(self.directeur)
-        with patch("apps.school.views.urlopen", return_value=_Amont()) as amont:
+        with patch("apps.school.views.urlopen", return_value=amont_factice) as amont:
             reponse = self.client.get(f"/api/library-documents/{self.suites.id}/file/")
 
         self.assertEqual(reponse.status_code, status.HTTP_200_OK)
         self.assertEqual(b"".join(reponse.streaming_content), b"%PDF-1.4 amont")
         amont.assert_called_once()
+        # Le flux amont est referme une fois consomme: il vit plus longtemps
+        # que la vue, et une connexion oubliee reste comptee chez la source.
+        self.assertTrue(amont_factice.ferme)
+
+    def test_le_relais_lit_par_blocs_et_non_ligne_par_ligne(self):
+        """Sur du binaire, la decoupe par lignes n'a aucun sens.
+
+        StreamingHttpResponse iterant l'objet amont appelait readline(): un
+        PDF sans retour a la ligne partait en un seul bloc, un PDF qui en
+        contient beaucoup partait en milliers de morceaux. La vue impose donc
+        sa propre taille de lecture.
+        """
+        amont_factice = _AmontFactice(b"x" * 200_000)
+
+        self.client.force_authenticate(self.directeur)
+        with patch("apps.school.views.urlopen", return_value=amont_factice):
+            reponse = self.client.get(f"/api/library-documents/{self.suites.id}/file/")
+        b"".join(reponse.streaming_content)
+
+        # 200 000 octets: trois blocs pleins, un bloc partiel, et une derniere
+        # lecture vide qui signale la fin du flux.
+        self.assertEqual(
+            amont_factice.tailles_demandees,
+            [64 * 1024] * 5,
+            "la vue doit lire par blocs de 64 Ko, jusqu'a epuisement",
+        )
+
+    def test_le_document_relaye_annonce_sa_taille_et_son_cache(self):
+        """Sans Content-Length, le client ne peut afficher aucune progression."""
+        self.client.force_authenticate(self.directeur)
+        with patch("apps.school.views.urlopen", return_value=_AmontFactice(b"%PDF-1.4 amont")):
+            reponse = self.client.get(f"/api/library-documents/{self.suites.id}/file/")
+        b"".join(reponse.streaming_content)
+
+        self.assertEqual(reponse["Content-Length"], "14")
+        self.assertIn("private", reponse["Cache-Control"])
+        self.assertTrue(reponse["ETag"])
+
+    def test_une_relecture_ne_retraverse_pas_le_reseau(self):
+        """Le coeur du gain: rouvrir un document deja lu ne coute rien."""
+        self.client.force_authenticate(self.directeur)
+        with patch("apps.school.views.urlopen", return_value=_AmontFactice(b"%PDF-1.4 amont")):
+            premiere = self.client.get(f"/api/library-documents/{self.suites.id}/file/")
+        b"".join(premiere.streaming_content)
+
+        with patch("apps.school.views.urlopen") as amont:
+            seconde = self.client.get(
+                f"/api/library-documents/{self.suites.id}/file/",
+                HTTP_IF_NONE_MATCH=premiere["ETag"],
+            )
+
+        self.assertEqual(seconde.status_code, status.HTTP_304_NOT_MODIFIED)
+        amont.assert_not_called()
+
+    def test_le_rapatriement_d_un_document_perime_la_copie_du_client(self):
+        """Passer du relais au stockage change la chaine qui sert le fichier."""
+        self.client.force_authenticate(self.directeur)
+        with patch("apps.school.views.urlopen", return_value=_AmontFactice(b"%PDF-1.4 amont")):
+            avant = self.client.get(f"/api/library-documents/{self.suites.id}/file/")
+        b"".join(avant.streaming_content)
+
+        self.suites.file.save("BK_Suites.pdf", ContentFile(b"%PDF-1.4 local"), save=False)
+        self.suites.is_downloaded = True
+        self.suites.size_bytes = 14
+        self.suites.save(update_fields=["file", "is_downloaded", "size_bytes"])
+        self.addCleanup(self.suites.file.delete, save=False)
+
+        apres = self.client.get(
+            f"/api/library-documents/{self.suites.id}/file/",
+            HTTP_IF_NONE_MATCH=avant["ETag"],
+        )
+
+        self.assertEqual(apres.status_code, status.HTTP_200_OK)
+        self.assertEqual(b"".join(apres.streaming_content), b"%PDF-1.4 local")
 
     def test_the_relay_refuses_a_foreign_host(self):
         """Sans cette borne, un source_url modifie ferait un proxy ouvert."""
@@ -392,6 +661,106 @@ class LibraryDocumentApiTests(APITestCase):
 
         self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
         amont.assert_not_called()
+
+
+class LibraryRedirectionStockageTests(APITestCase):
+    """La redirection vers le stockage: active, elle epargne le conteneur.
+
+    Un PDF de 40 Mo relaye par le service consomme sa memoire et son unique
+    dixieme de coeur pendant tout le transfert. Redirige, il ne le traverse
+    pas. Le reglage reste ferme par defaut: sur le web, la redirection vers
+    un autre domaine dependrait du CORS du bucket.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.etablissement = Etablissement.objects.create(name="LTOB")
+        cls.directeur = User.objects.create_user(
+            username="directeur_redirection",
+            password="Pass1234!",
+            role=UserRole.DIRECTOR,
+            etablissement=cls.etablissement,
+        )
+        collection = LibraryCollection.objects.create(
+            code="TSExp", label="Terminale Sciences Experimentales", source_url="https://bkalan.ml/x"
+        )
+        categorie = LibraryCategory.objects.create(collection=collection, name="Mathematiques")
+        cls.document = LibraryDocument.objects.create(
+            category=categorie,
+            title="Suites",
+            source_url="https://bkalan.ml/api/files/WhatsApp/TSExp/Mathematiques/BK_Suites.pdf",
+        )
+
+    def setUp(self):
+        repertoire = tempfile.mkdtemp(prefix="gs-redirection-")
+        self.addCleanup(shutil.rmtree, repertoire, ignore_errors=True)
+        reglage = override_settings(MEDIA_ROOT=repertoire)
+        reglage.enable()
+        self.addCleanup(reglage.disable)
+
+        self.document.file.save("BK_Suites.pdf", ContentFile(b"%PDF-1.4 local"), save=False)
+        self.document.is_downloaded = True
+        self.document.size_bytes = 14
+        self.document.save(update_fields=["file", "is_downloaded", "size_bytes"])
+        self.client.force_authenticate(self.directeur)
+
+    def _lire(self):
+        return self.client.get(f"/api/library-documents/{self.document.id}/file/")
+
+    @override_settings(LIBRARY_STORAGE_REDIRECT=True)
+    def test_une_url_signee_devient_une_redirection(self):
+        signee = "https://projet.supabase.co/storage/v1/BK_Suites.pdf?X-Amz-Signature=abc"
+        with patch.object(type(self.document.file), "url", property(lambda self: signee)):
+            reponse = self._lire()
+
+        self.assertEqual(reponse.status_code, status.HTTP_302_FOUND)
+        self.assertEqual(reponse["Location"], signee)
+
+    @override_settings(LIBRARY_STORAGE_REDIRECT=True)
+    def test_une_url_nue_n_est_jamais_servie_en_redirection(self):
+        """Sans signature, l'adresse resterait valable pour qui l'a vue passer."""
+        nue = "https://projet.supabase.co/storage/v1/BK_Suites.pdf"
+        with patch.object(type(self.document.file), "url", property(lambda self: nue)):
+            reponse = self._lire()
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+        self.assertEqual(b"".join(reponse.streaming_content), b"%PDF-1.4 local")
+
+    @override_settings(LIBRARY_STORAGE_REDIRECT=True)
+    def test_un_stockage_sur_disque_sert_le_fichier_comme_avant(self):
+        """MEDIA_URL rend un chemin relatif: il ne redirige nulle part."""
+        reponse = self._lire()
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+        self.assertEqual(b"".join(reponse.streaming_content), b"%PDF-1.4 local")
+
+    @override_settings(LIBRARY_STORAGE_REDIRECT=False)
+    def test_le_reglage_ferme_laisse_le_fichier_passer_par_l_api(self):
+        signee = "https://projet.supabase.co/storage/v1/BK_Suites.pdf?X-Amz-Signature=abc"
+        with patch.object(type(self.document.file), "url", property(lambda self: signee)):
+            reponse = self._lire()
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+
+    @override_settings(LIBRARY_STORAGE_REDIRECT=True, AWS_QUERYSTRING_EXPIRE=600)
+    def test_l_adresse_n_est_pas_gardee_plus_longtemps_que_sa_signature(self):
+        """Une adresse cachee au-dela de son expiration mene a un 403."""
+        signee = "https://projet.supabase.co/storage/v1/BK_Suites.pdf?X-Amz-Signature=abc"
+        with patch.object(type(self.document.file), "url", property(lambda self: signee)):
+            reponse = self._lire()
+
+        self.assertEqual(reponse["Cache-Control"], "private, max-age=600")
+
+    @override_settings(LIBRARY_STORAGE_REDIRECT=True)
+    def test_un_stockage_en_panne_ne_prive_pas_le_lecteur(self):
+        def _casse(self):
+            raise ValueError("stockage muet")
+
+        with patch.object(type(self.document.file), "url", property(_casse)):
+            reponse = self._lire()
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+        self.assertEqual(b"".join(reponse.streaming_content), b"%PDF-1.4 local")
 
 
 class LibraryAccessTests(APITestCase):

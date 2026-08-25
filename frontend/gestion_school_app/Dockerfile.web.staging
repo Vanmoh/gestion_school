@@ -3,7 +3,12 @@ FROM ghcr.io/cirruslabs/flutter:stable AS build
 WORKDIR /app
 COPY . .
 RUN flutter pub get
-RUN flutter build web --release --pwa-strategy=none --dart-define=API_BASE_URL=https://gestion-school-staging-api.onrender.com/api
+# --no-web-resources-cdn: sans lui, le navigateur va chercher le moteur de
+# rendu (canvaskit.wasm, ~5 Mo) sur gstatic.com. Un tiers de plus a resoudre
+# et a joindre avant le premier pixel, sans compression ni cache maitrises --
+# et rien a afficher du tout la ou ce domaine est filtre. Servi ici, il passe
+# par le gzip et le cache d'un an de nginx.web.conf.
+RUN flutter build web --release --pwa-strategy=none --no-web-resources-cdn --dart-define=API_BASE_URL=https://gestion-school-staging-api.onrender.com/api
 
 FROM nginx:1.27-alpine
 ENV PORT=80
