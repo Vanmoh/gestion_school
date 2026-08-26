@@ -252,6 +252,14 @@ LIBRARY_STORAGE_REDIRECT = config(
     "LIBRARY_STORAGE_REDIRECT", cast=bool, default=False
 )
 
+# Poids maximal d'un PDF televerse depuis l'application.
+#
+# 50 Mo laisse passer un manuel scanne entier tout en fermant la porte a la
+# video renommee en .pdf. Le fonds importe, lui, monte jusqu'a 127 Mo par
+# document: il n'entre pas par cette porte mais par la commande d'import,
+# que cette limite ne regarde pas.
+LIBRARY_UPLOAD_MAX_MB = config("LIBRARY_UPLOAD_MAX_MB", cast=int, default=50)
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOW_ALL_ORIGINS = config(

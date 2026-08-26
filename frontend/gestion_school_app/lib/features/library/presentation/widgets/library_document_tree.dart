@@ -35,6 +35,16 @@ class LibraryDocumentTree extends StatelessWidget {
   final void Function(LibraryCollection collection) onCollectionChanged;
   final void Function(LibraryDocument document) onOuvrir;
 
+  /// Renommer et supprimer, laisses a null quand le profil ne les a pas.
+  ///
+  /// Les proposer a qui n'y a pas droit ferait cliquer pour rien: la matrice
+  /// ouvre l'ecriture a l'administration et au surveillant, la suppression a
+  /// la seule administration. Ils ne portent de toute facon que sur les
+  /// documents deposes -- le fonds commun revient tel quel au prochain
+  /// import.
+  final void Function(LibraryDocument document)? onRenommer;
+  final void Function(LibraryDocument document)? onSupprimer;
+
   const LibraryDocumentTree({
     super.key,
     required this.collections,
@@ -45,6 +55,8 @@ class LibraryDocumentTree extends StatelessWidget {
     this.progressionEnCours,
     required this.onCollectionChanged,
     required this.onOuvrir,
+    this.onRenommer,
+    this.onSupprimer,
   });
 
   LibraryCollection? get _serie {
@@ -90,6 +102,12 @@ class LibraryDocumentTree extends StatelessWidget {
       children: [
         for (final collection in collections)
           ChoiceChip(
+            // L'icone separe d'un coup d'oeil les annales communes des
+            // etageres que l'ecole s'est constituees: les deux se melent
+            // dans la meme rangee de puces.
+            avatar: collection.isCommun
+                ? null
+                : const Icon(Icons.school_outlined, size: 18),
             label: Text('${collection.label} (${collection.documentCount})'),
             selected: collection.id == active.id,
             onSelected: (_) => onCollectionChanged(collection),
@@ -148,6 +166,9 @@ class LibraryDocumentTree extends StatelessWidget {
     final details = <String>[
       if (matiere && document.categoryName.isNotEmpty) document.categoryName,
       if (document.tailleLisible.isNotEmpty) document.tailleLisible,
+      if (document.estDepose && document.uploadedByName.isNotEmpty)
+        'ajouté par ${document.uploadedByName}',
+      if (document.description.isNotEmpty) document.description,
       if (indisponible) 'indisponible à la source',
     ];
 
@@ -161,12 +182,56 @@ class LibraryDocumentTree extends StatelessWidget {
       subtitle: details.isEmpty ? null : Text(details.join('  ·  ')),
       trailing: enCours
           ? _avancement(context)
-          : IconButton(
-              tooltip: indisponible ? 'Indisponible' : 'Ouvrir',
-              icon: const Icon(Icons.open_in_new),
-              onPressed: indisponible ? null : () => onOuvrir(document),
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: indisponible ? 'Indisponible' : 'Ouvrir',
+                  icon: const Icon(Icons.open_in_new),
+                  onPressed: indisponible ? null : () => onOuvrir(document),
+                ),
+                if (_actionsDe(document).isNotEmpty) _menuActions(context, document),
+              ],
             ),
       onTap: indisponible || enCours ? null : () => onOuvrir(document),
+    );
+  }
+
+  /// Ce que le profil peut faire sur ce document, dans l'ordre du menu.
+  List<String> _actionsDe(LibraryDocument document) {
+    if (!document.estDepose) return const [];
+    return [
+      if (onRenommer != null) 'renommer',
+      if (onSupprimer != null) 'supprimer',
+    ];
+  }
+
+  Widget _menuActions(BuildContext context, LibraryDocument document) {
+    return PopupMenuButton<String>(
+      tooltip: 'Actions',
+      icon: const Icon(Icons.more_vert),
+      onSelected: (action) {
+        if (action == 'renommer') onRenommer?.call(document);
+        if (action == 'supprimer') onSupprimer?.call(document);
+      },
+      itemBuilder: (_) => [
+        for (final action in _actionsDe(document))
+          PopupMenuItem<String>(
+            value: action,
+            child: Row(
+              children: [
+                Icon(
+                  action == 'renommer'
+                      ? Icons.edit_outlined
+                      : Icons.delete_outline,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Text(action == 'renommer' ? 'Modifier' : 'Supprimer'),
+              ],
+            ),
+          ),
+      ],
     );
   }
 

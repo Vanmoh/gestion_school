@@ -50,6 +50,13 @@ class Etablissement(TimeStampedModel):
         default=100,
         validators=[MinValueValidator(40), MaxValueValidator(200)],
     )
+    # Penalite de retard appliquee a un emprunt rendu hors delai, par jour
+    # entame. Zero par defaut: c'est le comportement d'avant, ou la penalite
+    # etait saisie a la main -- une ecole qui n'en applique pas ne doit pas
+    # en voir apparaitre le jour de la mise a jour.
+    library_penalty_per_day = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0
+    )
 
     def __str__(self):
         return self.name
@@ -904,12 +911,69 @@ class SmsProviderConfig(TimeStampedModel):
 
 
 class Book(TimeStampedModel):
+    """Un ouvrage papier, compte en exemplaires.
+
+    `quantity_available` est derive et non saisi: c'est le nombre
+    d'exemplaires en rayon, soit le total moins les emprunts non rendus. Il
+    etait auparavant tape a la main dans le formulaire et ne bougeait
+    jamais -- un livre prete restait annonce disponible.
+    """
+
     title = models.CharField(max_length=150)
     author = models.CharField(max_length=120)
-    isbn = models.CharField(max_length=30, unique=True)
+    # Unique par etablissement et non plus globalement: deux ecoles
+    # possedent le meme manuel de mathematiques, et la contrainte globale
+    # empechait la seconde de l'enregistrer. Voir les contraintes du Meta.
+    isbn = models.CharField(max_length=30)
+    # Facultatifs, mais ce sont eux qui font la difference entre une liste de
+    # titres et un catalogue: retrouver « l'edition de 2019 rangee etagere B »
+    # demandait jusqu'ici de connaitre le fonds par coeur.
+    publisher = models.CharField(max_length=120, blank=True)
+    published_year = models.PositiveSmallIntegerField(null=True, blank=True)
+    subject = models.CharField(max_length=120, blank=True)
+    shelf_location = models.CharField(max_length=60, blank=True)
     quantity_total = models.PositiveIntegerField(default=0)
     quantity_available = models.PositiveIntegerField(default=0)
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="books", null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            # Deux contraintes et non une seule sur (etablissement, isbn):
+            # deux NULL ne sont jamais egaux en base, la paire laisserait
+            # donc passer autant de doublons que d'ouvrages orphelins.
+            models.UniqueConstraint(
+                fields=["isbn"],
+                condition=models.Q(etablissement__isnull=True) & ~models.Q(isbn=""),
+                name="book_isbn_unique_sans_etablissement",
+            ),
+            models.UniqueConstraint(
+                fields=["etablissement", "isbn"],
+                condition=models.Q(etablissement__isnull=False) & ~models.Q(isbn=""),
+                name="book_isbn_unique_par_etablissement",
+            ),
+        ]
+
+    def __str__(self):
+        return self.title
+
+    def exemplaires_sortis(self):
+        """Le nombre d'exemplaires actuellement chez des eleves."""
+        return self.borrows.filter(returned_at__isnull=True).count()
+
+    def recalculer_disponibilite(self, sauvegarder=True):
+        """Remet le compteur d'accord avec les emprunts en cours.
+
+        Recalcul complet plutot qu'un increment a chaque pret: un increment
+        derive au premier emprunt supprime en base ou au premier total
+        corrige a la main, et rien ne le rattrape jamais.
+        """
+        disponible = max(0, self.quantity_total - self.exemplaires_sortis())
+        if disponible == self.quantity_available:
+            return disponible
+        self.quantity_available = disponible
+        if sauvegarder:
+            self.save(update_fields=["quantity_available", "updated_at"])
+        return disponible
 
 
 class Borrow(TimeStampedModel):
@@ -920,34 +984,95 @@ class Borrow(TimeStampedModel):
     returned_at = models.DateField(null=True, blank=True)
     penalty_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
+    @property
+    def est_rendu(self):
+        return self.returned_at is not None
+
+    def jours_de_retard(self, a_la_date=None):
+        """Jours entames au-dela de l'echeance, 0 si le delai est tenu.
+
+        Compte a la date du retour pour un emprunt rendu, a aujourd'hui pour
+        un emprunt en cours: c'est ce qui permet d'afficher un retard qui
+        grandit tant que le livre n'est pas revenu.
+        """
+        reference = self.returned_at or a_la_date or timezone.localdate()
+        if not self.due_date or reference <= self.due_date:
+            return 0
+        return (reference - self.due_date).days
+
+    def penalite_theorique(self, a_la_date=None):
+        """Ce que le retard coute au tarif de l'etablissement."""
+        tarif = getattr(
+            getattr(self.student, "etablissement", None),
+            "library_penalty_per_day",
+            0,
+        ) or 0
+        return Decimal(tarif) * self.jours_de_retard(a_la_date)
+
 
 def library_document_path(instance, filename):
-    """library_docs/<serie>/<matiere>/<fichier>.
+    """library_docs/<serie>/<matiere>/<fichier>, precede de l'etablissement.
 
     Le chemin recopie l'arborescence de la source: c'est ce qui permet de
     relancer l'import sans dupliquer, et de reconnaitre un fichier a l'oeil
     dans le stockage objet.
+
+    Un document televerse par une ecole prend en tete `etab_<id>`: deux
+    ecoles peuvent nommer leur serie « Documents » et y deposer chacune un
+    « reglement.pdf ». Sans ce prefixe, le second ecraserait le premier sur
+    un stockage qui autorise l'ecrasement -- et les deux se disputeraient la
+    meme entree de cache sur celui qui ne l'autorise pas.
     """
     categorie = instance.category
-    return f"library_docs/{categorie.collection.code}/{categorie.name}/{filename}"
+    racine = "library_docs"
+    etablissement_id = getattr(instance, "etablissement_id", None)
+    if etablissement_id:
+        racine = f"{racine}/etab_{etablissement_id}"
+    return f"{racine}/{categorie.collection.code}/{categorie.name}/{filename}"
 
 
 class LibraryCollection(TimeStampedModel):
     """Une serie du secondaire: TSExp, 11e Sciences, 10e CG...
 
     Premier niveau de l'etagere numerique, distinct des ouvrages physiques
-    (Book) qui restent comptes en exemplaires et empruntes. Un document n'est
-    pas rattache a un etablissement: le fonds est le meme pour tous, et le
-    dupliquer par etablissement multiplierait des giga-octets identiques.
+    (Book) qui restent comptes en exemplaires et empruntes.
+
+    `etablissement` vide designe le fonds commun -- celui de l'import, les
+    memes annales pour tout le monde, que dupliquer par etablissement
+    multiplierait en giga-octets identiques. Renseigne, il designe une
+    etagere propre a une ecole: son reglement interieur n'interesse qu'elle.
     """
 
-    code = models.CharField(max_length=40, unique=True)
+    etablissement = models.ForeignKey(
+        'Etablissement',
+        on_delete=models.CASCADE,
+        related_name="library_collections",
+        null=True,
+        blank=True,
+    )
+    code = models.CharField(max_length=40)
     label = models.CharField(max_length=150)
     source_url = models.URLField(max_length=500, blank=True)
     position = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = ["position", "label"]
+        constraints = [
+            # Deux contraintes et non une seule sur (etablissement, code):
+            # en base, deux NULL ne sont jamais egaux, la paire laisserait
+            # donc le fonds commun accepter deux fois « TSExp » -- et
+            # l'import, qui cherche par code seul, en trouverait deux.
+            models.UniqueConstraint(
+                fields=["code"],
+                condition=models.Q(etablissement__isnull=True),
+                name="library_collection_code_unique_commun",
+            ),
+            models.UniqueConstraint(
+                fields=["etablissement", "code"],
+                condition=models.Q(etablissement__isnull=False),
+                name="library_collection_code_unique_par_etablissement",
+            ),
+        ]
 
     def __str__(self):
         return self.label
@@ -974,18 +1099,54 @@ class LibraryCategory(TimeStampedModel):
         return f"{self.collection.code} / {self.name}"
 
 
+class LibraryDocumentOrigin(models.TextChoices):
+    """D'ou vient le document: du fonds importe, ou d'un televersement."""
+
+    IMPORT = "import", "Fonds importé"
+    UPLOAD = "upload", "Ajouté par l'établissement"
+
+
 class LibraryDocument(TimeStampedModel):
     """Un PDF du fonds.
 
     `file` reste vide tant que le fichier n'a pas ete rapatrie: le catalogue
     est complet des la premiere passe d'import et l'API sert alors l'URL
-    d'origine. `source_url` porte l'unicite -- c'est elle qui rend l'import
-    rejouable sans creer de doublon.
+    d'origine. `source_url` porte l'unicite du fonds importe -- c'est elle
+    qui rend l'import rejouable sans creer de doublon.
+
+    Un document televerse n'a pas de source: il arrive avec son fichier et
+    rien d'autre. L'unicite ne peut donc plus porter sur la colonne entiere,
+    sinon le deuxieme televersement se heurterait au premier sur leur
+    `source_url` vide commune -- d'ou la contrainte conditionnelle.
     """
 
     category = models.ForeignKey(
         LibraryCategory, on_delete=models.CASCADE, related_name="documents"
     )
+    # Recopie de la serie plutot que lue a travers elle: le filtrage par
+    # etablissement porte sur chaque document liste, et remonter la chaine
+    # category -> collection a chaque ligne coute une jointure de plus sur
+    # une table de plusieurs milliers d'entrees.
+    etablissement = models.ForeignKey(
+        'Etablissement',
+        on_delete=models.CASCADE,
+        related_name="library_documents",
+        null=True,
+        blank=True,
+    )
+    origin = models.CharField(
+        max_length=10,
+        choices=LibraryDocumentOrigin.choices,
+        default=LibraryDocumentOrigin.UPLOAD,
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="library_documents",
+        null=True,
+        blank=True,
+    )
+    description = models.TextField(blank=True)
     title = models.CharField(max_length=255)
     # 400 et non les 100 par defaut: le chemin recopie l'arborescence de la
     # source, et trente-six documents du fonds la depassent deja -- le plus
@@ -995,7 +1156,7 @@ class LibraryDocument(TimeStampedModel):
     file = models.FileField(
         upload_to=library_document_path, max_length=400, null=True, blank=True
     )
-    source_url = models.URLField(max_length=500, unique=True)
+    source_url = models.URLField(max_length=500, blank=True)
     size_bytes = models.PositiveBigIntegerField(default=0)
     is_downloaded = models.BooleanField(default=False)
     # Renseigne quand la source refuse le fichier: 43 des 1257 documents de
@@ -1008,6 +1169,13 @@ class LibraryDocument(TimeStampedModel):
 
     class Meta:
         ordering = ["title", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source_url"],
+                condition=~models.Q(source_url=""),
+                name="library_document_source_url_unique",
+            ),
+        ]
 
     def __str__(self):
         return self.title

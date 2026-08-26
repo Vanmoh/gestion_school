@@ -69,6 +69,9 @@ Future<void> _pump(
   void Function(LibraryCollection)? onCollectionChanged,
   void Function(LibraryDocument)? onOuvrir,
   List<LibraryDocument>? documents,
+  List<LibraryCollection>? collections,
+  void Function(LibraryDocument)? onRenommer,
+  void Function(LibraryDocument)? onSupprimer,
 }) async {
   tester.view.physicalSize = const Size(1200, 1600);
   tester.view.devicePixelRatio = 1.0;
@@ -79,7 +82,7 @@ Future<void> _pump(
       home: Scaffold(
         body: SingleChildScrollView(
           child: LibraryDocumentTree(
-            collections: _series(),
+            collections: collections ?? _series(),
             selectedCollectionId: 1,
             documents: documents ?? _documents(),
             recherche: recherche,
@@ -87,6 +90,8 @@ Future<void> _pump(
             progressionEnCours: progressionEnCours,
             onCollectionChanged: onCollectionChanged ?? (_) {},
             onOuvrir: onOuvrir ?? (_) {},
+            onRenommer: onRenommer,
+            onSupprimer: onSupprimer,
           ),
         ),
       ),
@@ -96,6 +101,8 @@ Future<void> _pump(
 }
 
 void main() {
+  _testsDesDocumentsDeposes();
+
   testWidgets('chaque serie porte son compteur', (tester) async {
     await _pump(tester);
 
@@ -265,5 +272,114 @@ void main() {
     await tester.tap(voisin);
     await tester.pump();
     expect(demande?.id, 102);
+  });
+}
+
+/// Un document depose par l'ecole, par opposition au fonds importe.
+const _depose = LibraryDocument(
+  id: 201,
+  title: 'Reglement interieur',
+  categoryId: 11,
+  categoryName: 'Mathematiques',
+  sizeBytes: 120 * 1024,
+  isDownloaded: true,
+  importError: '',
+  origin: 'upload',
+  uploadedByName: 'Awa Traore',
+  description: 'Version 2026',
+);
+
+void _testsDesDocumentsDeposes() {
+  testWidgets('un document depose porte son auteur et sa description', (
+    tester,
+  ) async {
+    await _pump(tester, documents: const [_depose], recherche: 'reglement');
+
+    expect(find.textContaining('ajouté par Awa Traore'), findsOneWidget);
+    expect(find.textContaining('Version 2026'), findsOneWidget);
+  });
+
+  testWidgets('le fonds importe n_offre aucune action', (tester) async {
+    // Les callbacks sont pourtant fournis: c'est l'origine du document qui
+    // ferme le menu, pas le profil. Une annale renommee reviendrait telle
+    // quelle a la prochaine passe d'import.
+    await _pump(tester, onRenommer: (_) {}, onSupprimer: (_) {});
+    await tester.tap(find.text('Mathematiques'));
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.more_vert), findsNothing);
+  });
+
+  testWidgets('sans droit d_ecriture, le document depose n_offre aucune action', (
+    tester,
+  ) async {
+    await _pump(tester, documents: const [_depose], recherche: 'reglement');
+
+    expect(find.byIcon(Icons.more_vert), findsNothing);
+  });
+
+  testWidgets('le droit de suppression ouvre la seule suppression', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      documents: const [_depose],
+      recherche: 'reglement',
+      onSupprimer: (_) {},
+    );
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Supprimer'), findsOneWidget);
+    expect(find.text('Modifier'), findsNothing);
+  });
+
+  testWidgets('supprimer remonte le document vise', (tester) async {
+    LibraryDocument? recu;
+    await _pump(
+      tester,
+      documents: const [_depose],
+      recherche: 'reglement',
+      onRenommer: (_) {},
+      onSupprimer: (document) => recu = document,
+    );
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Supprimer'));
+    await tester.pumpAndSettle();
+
+    expect(recu?.id, 201);
+  });
+
+  testWidgets('l_etagere de l_ecole se distingue du fonds commun', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      collections: const [
+        LibraryCollection(
+          id: 1,
+          code: 'TSExp',
+          label: 'Terminale Sciences Expérimentales',
+          documentCount: 3,
+          categories: [
+            LibraryCategory(id: 11, name: 'Mathematiques', documentCount: 2),
+          ],
+        ),
+        LibraryCollection(
+          id: 9,
+          code: 'interne',
+          label: 'Documents de l’école',
+          documentCount: 1,
+          categories: [
+            LibraryCategory(id: 91, name: 'Reglement', documentCount: 1),
+          ],
+          isCommun: false,
+        ),
+      ],
+    );
+
+    expect(find.byIcon(Icons.school_outlined), findsOneWidget);
   });
 }
