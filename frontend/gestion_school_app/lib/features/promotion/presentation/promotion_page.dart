@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../../models/etablissement.dart';
 
 class PromotionPage extends ConsumerStatefulWidget {
@@ -244,6 +245,42 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
     return proceed == true;
   }
 
+  /// Derniere question avant l'irreversible.
+  ///
+  /// « Simuler » et « Executer » etaient deux boutons voisins, et seul le
+  /// second reaffecte toute l'ecole, archive les sortants et ecrit
+  /// l'historique de scolarite. Rien ne separait le clic de l'execution:
+  /// une erreur de visee passait la rentree entiere.
+  Future<bool> _confirmerExecution(
+    List<Map<String, dynamic>> sourceClasses,
+  ) async {
+    final nombre = sourceClasses.length;
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Executer la passation ?'),
+        content: Text(
+          'Cette operation va reaffecter les eleves de $nombre classe(s), '
+          'archiver les sortants et ecrire leur historique de scolarite.\n\n'
+          'Elle ne peut pas etre annulee. Lancez une simulation d\'abord '
+          'si vous voulez en verifier le resultat.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            key: const Key('confirmer-execution'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Executer'),
+          ),
+        ],
+      ),
+    );
+    return confirme == true;
+  }
+
   Future<void> _launchRun({required bool execute}) async {
     if (_sourceYearId == null) {
       _showMessage('Selectionnez une annee source.');
@@ -279,6 +316,10 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
         .toList(growable: false);
 
     if (execute) {
+      final confirme = await _confirmerExecution(sourceClasses);
+      if (!confirme) {
+        return;
+      }
       final proceed = await _confirmExecuteWhenMissingTargets(sourceClasses);
       if (!proceed) {
         return;
@@ -549,22 +590,34 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
                       }).toList(growable: false),
                     ),
                   const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      FilledButton.icon(
-                        onPressed: _busy ? null : () => _launchRun(execute: false),
-                        icon: const Icon(Icons.science_outlined),
-                        label: const Text('Simuler'),
-                      ),
-                      FilledButton.icon(
-                        onPressed: _busy ? null : () => _launchRun(execute: true),
-                        icon: const Icon(Icons.play_circle_outline),
-                        label: const Text('Executer'),
-                      ),
-                    ],
-                  ),
+                  // Droits lus sur la matrice servie par le backend: le
+                  // censeur, en lecture seule sur la passation, obtenait
+                  // deux boutons actifs et un 403 au clic.
+                  if (ref.watch(currentPermissionsProvider).canWrite('promotion'))
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        FilledButton.icon(
+                          key: const Key('bouton-simuler'),
+                          onPressed: _busy ? null : () => _launchRun(execute: false),
+                          icon: const Icon(Icons.science_outlined),
+                          label: const Text('Simuler'),
+                        ),
+                        FilledButton.icon(
+                          key: const Key('bouton-executer'),
+                          onPressed: _busy ? null : () => _launchRun(execute: true),
+                          icon: const Icon(Icons.play_circle_outline),
+                          label: const Text('Executer'),
+                        ),
+                      ],
+                    )
+                  else
+                    Text(
+                      'Consultation seule: le lancement d\'une passation est '
+                      'reserve a la direction.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   if (_sourceYearId == _targetYearId)
                     const Padding(
                       padding: EdgeInsets.only(top: 10),

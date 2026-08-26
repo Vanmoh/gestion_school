@@ -128,15 +128,15 @@ def main():
     else:
         children = list(Student.objects.filter(parent=parent).order_by("id")[:3])
         incidents = [
-            ("Retard repete", "Trois retards en une semaine sur le cours de 8h.",
+            ("retard", "Trois retards en une semaine sur le cours de 8h.",
              "low", "resolved", "Avertissement oral", True),
-            ("Indiscipline", "Bavardages repetes malgre deux rappels a l'ordre.",
+            ("indiscipline", "Bavardages repetes malgre deux rappels a l'ordre.",
              "medium", "open", "", True),
-            ("Materiel", "Degradation d'une chaise en salle 102.",
+            ("degradation", "Degradation d'une chaise en salle 102.",
              "high", "open", "Reparation a la charge de la famille", False),
-            ("Absence non justifiee", "Absent au cours de mathematiques du matin.",
+            ("absence_injustifiee", "Absent au cours de mathematiques du matin.",
              "medium", "resolved", "Rattrapage impose", True),
-            ("Tenue", "Tenue non conforme au reglement interieur.",
+            ("tenue", "Tenue non conforme au reglement interieur.",
              "low", "open", "", False),
         ]
         created_incidents = 0

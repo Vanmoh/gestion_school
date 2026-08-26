@@ -107,7 +107,7 @@ class StudentDossierTests(APITestCase):
         Attendance.objects.create(student=cls.eleve, date=date(2025, 10, 2), is_late=True)
         DisciplineIncident.objects.create(
             student=cls.eleve, incident_date=date(2025, 10, 3),
-            category="Retard", description="Trois retards.",
+            category="retard", description="Trois retards.",
         )
         cls.fee = StudentFee.objects.create(
             student=cls.eleve, academic_year=cls.year, fee_type="registration",

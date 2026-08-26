@@ -73,7 +73,7 @@ class _IncidentReviewDialogState extends State<IncidentReviewDialog> {
               Text(incident.libelleEleve, style: textTheme.titleSmall),
               const SizedBox(height: 4),
               Text(
-                '${incident.category} • ${incident.incidentDate}',
+                '${incident.libelleMotif} • ${incident.incidentDate}',
                 style: textTheme.bodySmall,
               ),
               const SizedBox(height: 10),

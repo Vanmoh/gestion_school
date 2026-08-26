@@ -16,6 +16,7 @@ from apps.school.models import (
     ExamSession,
     Grade,
     GradeValidation,
+    Notification,
     ParentProfile,
     Student,
     StudentAcademicHistory,
@@ -416,14 +417,14 @@ class GradesAndBulletinsApiTests(APITestCase):
         incident_a = DisciplineIncident.objects.create(
             student=self.student_1,
             incident_date=date(2026, 1, 17),
-            category="Indiscipline",
+            category="indiscipline",
             description="Incident A",
             reported_by=self.supervisor_user,
         )
         DisciplineIncident.objects.create(
             student=self.student_3,
             incident_date=date(2026, 1, 17),
-            category="Indiscipline",
+            category="indiscipline",
             description="Incident B",
             reported_by=self.supervisor_user,
             sanction="Mesure",
@@ -442,7 +443,7 @@ class GradesAndBulletinsApiTests(APITestCase):
             {
                 "student": self.student_1.id,
                 "incident_date": "2026-01-18",
-                "category": "Indiscipline",
+                "category": "indiscipline",
                 "description": "Signalement enseignant",
                 "severity": "high",
                 "sanction": "Ne doit pas être gardée",
@@ -482,7 +483,7 @@ class GradesAndBulletinsApiTests(APITestCase):
         incident = DisciplineIncident.objects.create(
             student=self.student_1,
             incident_date=date(2026, 1, 17),
-            category="Indiscipline",
+            category="indiscipline",
             description="Bavardage repete",
             reported_by=self.teacher_user,
         )
@@ -516,14 +517,14 @@ class GradesAndBulletinsApiTests(APITestCase):
         DisciplineIncident.objects.create(
             student=self.student_1,
             incident_date=date(2026, 1, 17),
-            category="Indiscipline",
+            category="indiscipline",
             description="Bavardage repete",
             reported_by=self.teacher_user,
         )
         DisciplineIncident.objects.create(
             student=self.student_1,
             incident_date=date(2026, 1, 18),
-            category="Retard",
+            category="retard",
             description="Arrivee tardive",
             reported_by=self.teacher_user,
             status="resolved",
@@ -541,12 +542,154 @@ class GradesAndBulletinsApiTests(APITestCase):
         recherche = self._results(
             self.client.get("/api/discipline-incidents/", {"search": "Retard"})
         )
-        self.assertEqual([row["category"] for row in recherche], ["Retard"])
+        self.assertEqual([row["category"] for row in recherche], ["retard"])
+        # Le libelle accompagne le code: l'application ne recopie pas les
+        # neuf motifs du referentiel.
+        self.assertEqual(recherche[0]["category_label"], "Retard")
 
         ouverts = self._results(
             self.client.get("/api/discipline-incidents/", {"status": "open"})
         )
-        self.assertEqual([row["category"] for row in ouverts], ["Indiscipline"])
+        self.assertEqual([row["category"] for row in ouverts], ["indiscipline"])
+
+    def test_resolving_an_incident_dates_it_and_reopening_clears_it(self):
+        """« Traite » ne disait pas quand.
+
+        Sans date de cloture, le delai de traitement -- la seule mesure qui
+        dise si le suivi disciplinaire fonctionne -- etait incalculable.
+        """
+        incident = DisciplineIncident.objects.create(
+            student=self.student_1,
+            incident_date=date(2026, 1, 17),
+            category="indiscipline",
+            description="Bavardage repete",
+            reported_by=self.teacher_user,
+        )
+        self.assertIsNone(incident.resolved_at)
+
+        self.client.force_authenticate(self.admin_user)
+        self.client.patch(
+            f"/api/discipline-incidents/{incident.id}/",
+            {"status": "resolved"},
+            format="json",
+        )
+        incident.refresh_from_db()
+        self.assertIsNotNone(incident.resolved_at)
+        cloture = incident.resolved_at
+
+        # Une modification qui ne touche pas au statut ne redate pas la
+        # cloture: sinon le delai de traitement s'allongeait a chaque
+        # correction de sanction.
+        self.client.patch(
+            f"/api/discipline-incidents/{incident.id}/",
+            {"sanction": "Avertissement ecrit"},
+            format="json",
+        )
+        incident.refresh_from_db()
+        self.assertEqual(incident.resolved_at, cloture)
+
+        # Rouvrir efface la date: la laisser aurait fait etat d'un
+        # traitement qui n'a plus cours.
+        self.client.patch(
+            f"/api/discipline-incidents/{incident.id}/",
+            {"status": "open"},
+            format="json",
+        )
+        incident.refresh_from_db()
+        self.assertIsNone(incident.resolved_at)
+
+    def test_resolved_at_is_not_writable_by_the_caller(self):
+        incident = DisciplineIncident.objects.create(
+            student=self.student_1,
+            incident_date=date(2026, 1, 17),
+            category="indiscipline",
+            description="Bavardage repete",
+        )
+
+        self.client.force_authenticate(self.admin_user)
+        self.client.patch(
+            f"/api/discipline-incidents/{incident.id}/",
+            {"resolved_at": "2020-01-01T08:00:00Z"},
+            format="json",
+        )
+
+        incident.refresh_from_db()
+        # L'incident est toujours ouvert: dater une cloture qui n'a pas eu
+        # lieu n'appartient pas a l'appelant.
+        self.assertIsNone(incident.resolved_at)
+
+    def test_informing_parents_creates_a_notification_once(self):
+        """`parent_notified` etait une case cochee sans destinataire.
+
+        Rien n'en sortait, et le module Communication -- qui gere justement
+        les envois -- n'en savait rien.
+        """
+        incident = DisciplineIncident.objects.create(
+            student=self.student_1,
+            incident_date=date(2026, 1, 17),
+            category="indiscipline",
+            description="Bavardage repete",
+        )
+        destinataire = self.student_1.parent.user
+
+        self.client.force_authenticate(self.admin_user)
+        self.client.patch(
+            f"/api/discipline-incidents/{incident.id}/",
+            {"parent_notified": True, "sanction": "Avertissement ecrit"},
+            format="json",
+        )
+
+        notifications = Notification.objects.filter(recipient=destinataire)
+        self.assertEqual(notifications.count(), 1)
+        notification = notifications.first()
+        self.assertEqual(notification.title, "Incident disciplinaire")
+        self.assertIn("Indiscipline", notification.message)
+        self.assertIn("Avertissement ecrit", notification.message)
+        # Aucune passerelle n'expedie encore: la trace existe, l'envoi non.
+        self.assertFalse(notification.is_sent)
+
+        # C'est la transition qui informe, pas la case cochee: une seconde
+        # modification ne renvoie rien.
+        self.client.patch(
+            f"/api/discipline-incidents/{incident.id}/",
+            {"status": "resolved"},
+            format="json",
+        )
+        self.assertEqual(Notification.objects.filter(recipient=destinataire).count(), 1)
+
+    def test_discipline_categories_endpoint_serves_the_referential(self):
+        self.client.force_authenticate(self.admin_user)
+        response = self.client.get("/api/discipline-incidents/categories/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        valeurs = [row["value"] for row in response.data]
+        self.assertIn("indiscipline", valeurs)
+        self.assertIn("autre", valeurs)
+        self.assertEqual(
+            response.data[0], {"value": "indiscipline", "label": "Indiscipline"}
+        )
+
+    def test_discipline_rejects_a_category_outside_the_referential(self):
+        """Un motif libre n'entre plus: c'est tout l'objet du referentiel.
+
+        Chaque etablissement inventait ses libelles, « Retard » cotoyait
+        « retards » et « Arrivee tardive », et aucun comptage par motif
+        n'etait exploitable.
+        """
+        self.client.force_authenticate(self.admin_user)
+        response = self.client.post(
+            "/api/discipline-incidents/",
+            {
+                "student": self.student_1.id,
+                "incident_date": "2026-01-18",
+                "category": "Bavardage en salle informatique",
+                "description": "Motif invente",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("category", response.data)
 
     def test_create_grade_normalizes_term_and_rejects_out_of_range_value(self):
         # Le surveillant n'ecrit plus les notes (matrice de droits): ce test

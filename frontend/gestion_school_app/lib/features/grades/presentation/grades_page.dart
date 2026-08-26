@@ -10,6 +10,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../../imports/presentation/academic_imports_window.dart';
@@ -407,7 +408,27 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     return rowsByStudent;
   }
 
+  /// Vrai si le profil connecte ne peut pas ecrire de notes.
+  ///
+  /// Lu sur la matrice servie par le backend, et non sur une liste de roles:
+  /// l'ecran n'en lisait aucune, si bien que le promoteur -- en lecture
+  /// seule sur les notes -- obtenait la saisie, la validation de periode et
+  /// le recalcul des rangs, pour un 403 au moment d'enregistrer.
+  bool _estLectureSeule() {
+    return !ref.read(currentPermissionsProvider).canWrite('grades');
+  }
+
+  /// Refuse l'action et le dit, plutot que de laisser l'API le faire.
+  bool _refuseSiLectureSeule() {
+    if (!_estLectureSeule()) {
+      return false;
+    }
+    _showMessage('Mode lecture seule: action sur les notes non autorisee.');
+    return true;
+  }
+
   Future<void> _openExamEntryDialog() async {
+    if (_refuseSiLectureSeule()) return;
     if (_isValidated) {
       _showMessage('Période validée par la direction: saisie verrouillée.');
       return;
@@ -844,6 +865,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   }
 
   Future<void> _openGradeEntryDialog() async {
+    if (_refuseSiLectureSeule()) return;
     if (_isValidated) {
       _showMessage('Période validée par la direction: saisie verrouillée.');
       return;
@@ -1428,6 +1450,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   }
 
   Future<void> _recalculateRanking() async {
+    if (_refuseSiLectureSeule()) return;
     if (_isValidated) {
       _showMessage('Période validée par la direction: recalcul verrouillé.');
       return;
@@ -1639,12 +1662,16 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
       try {
         final dio = ref.read(dioProvider);
+        // Sans `page_size`: le client HTTP recolle alors les pages de
+        // lui-meme. Le parametre rendait la main a l'appelant, qui ne
+        // suivait pas `next` -- au-dela de 500 lignes, les eleves manquants
+        // perdaient leur rang et se retrouvaient releques en fin de liste,
+        // sans que rien ne le signale.
         final response = await dio.get(
           '/student-history/',
           queryParameters: {
             'classroom': classroomId,
             'academic_year': academicYearId,
-            'page_size': 500,
           },
         );
 
@@ -2238,6 +2265,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   }
 
   Future<void> _openEditGradeDialog(Map<String, dynamic> gradeRow) async {
+    if (_refuseSiLectureSeule()) return;
     final gradeId = _asInt(gradeRow['id']);
     if (gradeId <= 0) {
       _showMessage('Impossible de modifier cette note (ID invalide).');
@@ -2457,6 +2485,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   }
 
   Future<void> _deleteGrade(Map<String, dynamic> gradeRow) async {
+    if (_refuseSiLectureSeule()) return;
     final gradeId = _asInt(gradeRow['id']);
     if (gradeId <= 0) {
       _showMessage('Impossible de supprimer cette note (ID invalide).');
@@ -2543,6 +2572,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
   }
 
   Future<void> _toggleValidation({required bool validate}) async {
+    if (_refuseSiLectureSeule()) return;
     if (_selectedClassroom == null ||
         _selectedAcademicYear == null ||
         _termController.text.trim().isEmpty) {
@@ -2824,6 +2854,9 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
+    final lectureSeule = !ref
+        .watch(currentPermissionsProvider)
+        .canWrite('grades');
     final visibleClassrooms = _classroomsForCurrentRole();
 
     final studentById = {for (final s in _students) _asInt(s['id']): s};
@@ -2910,24 +2943,32 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             ),
           ),
           const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.tonal(
-                onPressed: _saving
-                    ? null
-                    : () => _toggleValidation(validate: true),
-                child: const Text('Valider periode'),
-              ),
-              FilledButton.tonal(
-                onPressed: _saving
-                    ? null
-                    : () => _toggleValidation(validate: false),
-                child: const Text('Reouvrir periode'),
-              ),
-            ],
-          ),
+          if (lectureSeule)
+            Text(
+              'Mode lecture seule: consultation uniquement pour ce profil.',
+              style: Theme.of(context).textTheme.bodySmall,
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonal(
+                  key: const Key('valider-periode'),
+                  onPressed: _saving
+                      ? null
+                      : () => _toggleValidation(validate: true),
+                  child: const Text('Valider periode'),
+                ),
+                FilledButton.tonal(
+                  key: const Key('reouvrir-periode'),
+                  onPressed: _saving
+                      ? null
+                      : () => _toggleValidation(validate: false),
+                  child: const Text('Reouvrir periode'),
+                ),
+              ],
+            ),
         ],
       ),
     );

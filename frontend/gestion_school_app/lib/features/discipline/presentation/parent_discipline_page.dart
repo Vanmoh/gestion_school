@@ -2,8 +2,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/network/api_client.dart';
+import '../domain/discipline_incident.dart';
 import '../domain/parent_discipline_grouping.dart';
+import 'discipline_controller.dart';
 
 /// Vue discipline en lecture seule destinee aux parents et aux eleves.
 ///
@@ -23,7 +24,7 @@ class _ParentDisciplinePageState extends ConsumerState<ParentDisciplinePage> {
   bool _loading = true;
   bool _restricted = false;
   String? _errorMessage;
-  List<Map<String, dynamic>> _incidents = const [];
+  List<DisciplineIncident> _incidents = const [];
 
   @override
   void initState() {
@@ -40,12 +41,14 @@ class _ParentDisciplinePageState extends ConsumerState<ParentDisciplinePage> {
     }
 
     try {
-      final response = await ref
-          .read(dioProvider)
-          .get('/discipline-incidents/');
+      // Le depot ne lit plus le JSON de l'API a la main: la page recopiait
+      // l'extraction de `results` que chaque ecran refaisait a sa facon.
+      final incidents = await ref
+          .read(disciplineRepositoryProvider)
+          .fetchIncidents();
       if (!mounted) return;
       setState(() {
-        _incidents = _extractRows(response.data);
+        _incidents = incidents;
         _restricted = false;
         _loading = false;
       });
@@ -82,9 +85,7 @@ class _ParentDisciplinePageState extends ConsumerState<ParentDisciplinePage> {
     final textTheme = theme.textTheme;
     final colorScheme = theme.colorScheme;
     final groups = groupIncidentsByChild(_incidents);
-    final openCount = _incidents
-        .where((row) => incidentStatus(row) != 'resolved')
-        .length;
+    final openCount = _incidents.where((row) => row.estOuvert).length;
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -243,7 +244,7 @@ class _ChildIncidentsCard extends StatelessWidget {
 }
 
 class _IncidentTile extends StatelessWidget {
-  final Map<String, dynamic> incident;
+  final DisciplineIncident incident;
 
   const _IncidentTile({required this.incident});
 
@@ -252,11 +253,10 @@ class _IncidentTile extends StatelessWidget {
     final theme = Theme.of(context);
     final textTheme = theme.textTheme;
     final colorScheme = theme.colorScheme;
-    final severity = incident['severity']?.toString() ?? 'medium';
-    final resolved = incidentStatus(incident) == 'resolved';
-    final sanction = incident['sanction']?.toString().trim() ?? '';
-    final description = incident['description']?.toString().trim() ?? '';
-    final category = incident['category']?.toString().trim() ?? '';
+    final severity = incident.severity;
+    final resolved = !incident.estOuvert;
+    final sanction = incident.sanction.trim();
+    final description = incident.description.trim();
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -275,10 +275,7 @@ class _IncidentTile extends StatelessWidget {
             runSpacing: 6,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Text(
-                category.isEmpty ? 'Incident' : category,
-                style: textTheme.titleSmall,
-              ),
+              Text(incident.libelleMotif, style: textTheme.titleSmall),
               _Badge(
                 label: _severityLabel(severity),
                 color: _severityColor(severity, colorScheme),
@@ -293,11 +290,21 @@ class _IncidentTile extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            _formatDate(incident['incident_date']?.toString() ?? ''),
+            _formatDate(incident.incidentDate),
             style: textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),
           ),
+          // « Traite » ne disait pas quand: pour une famille, la date de
+          // cloture est ce qui distingue un dossier suivi d'un dossier
+          // range sans suite.
+          if (resolved && incident.jourDeCloture.isNotEmpty)
+            Text(
+              'Traite le ${_formatDate(incident.jourDeCloture)}',
+              style: textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
           if (description.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(description, style: textTheme.bodyMedium),
@@ -322,7 +329,7 @@ class _IncidentTile extends StatelessWidget {
               ],
             ),
           ],
-          if (incident['parent_notified'] == true) ...[
+          if (incident.parentNotified) ...[
             const SizedBox(height: 8),
             Row(
               children: [
@@ -447,20 +454,4 @@ String _formatDate(String raw) {
   final parsed = DateTime.tryParse(raw);
   if (parsed == null) return raw;
   return '${parsed.day} ${_monthLabels[parsed.month - 1]} ${parsed.year}';
-}
-
-List<Map<String, dynamic>> _extractRows(dynamic data) {
-  final List<dynamic> rows;
-  if (data is Map<String, dynamic> && data['results'] is List) {
-    rows = data['results'] as List<dynamic>;
-  } else if (data is List<dynamic>) {
-    rows = data;
-  } else {
-    rows = const [];
-  }
-
-  return rows
-      .whereType<Map>()
-      .map((row) => Map<String, dynamic>.from(row))
-      .toList();
 }

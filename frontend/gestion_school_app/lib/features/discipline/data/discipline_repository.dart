@@ -4,10 +4,11 @@ import '../domain/discipline_incident.dart';
 
 /// Acces reseau du module discipline.
 ///
-/// La page interrogeait l'API directement et ne lisait que la premiere page
-/// de chaque reponse: au-dela de cent eleves, elle masquait des incidents que
-/// le backend avait pourtant renvoyes. Toute lecture passe desormais par ici,
-/// et suit `next` jusqu'au bout.
+/// La page interrogeait l'API directement, avec sa propre extraction de
+/// `results` et ses propres filtres de perimetre. Tout passe desormais par
+/// ici, et la pagination n'y figure pas: `followRemainingPages` la recolle
+/// au niveau du client HTTP pour toute requete qui ne pilote pas ses pages
+/// elle-meme. Envoyer `page_size` desactiverait ce recollement.
 class DisciplineRepository {
   final Dio dio;
 
@@ -23,32 +24,20 @@ class DisciplineRepository {
     return const [];
   }
 
-  /// Parcourt une collection paginee et rend toutes ses lignes.
+  /// Lit une collection entiere.
+  ///
+  /// Sans `page_size`: le client HTTP suit alors les liens `next` et rend
+  /// la liste complete. Le lui repasser ici rendrait la main a l'appelant
+  /// et tronquerait la reponse a une seule page.
   Future<List<Map<String, dynamic>>> _fetchAll(
     String path, {
     Map<String, dynamic>? query,
   }) async {
-    final rows = <Map<String, dynamic>>[];
-    String? chemin = path;
-    Map<String, dynamic>? parametres = {'page_size': 500, ...?query};
-
-    while (chemin != null) {
-      final response = await dio.get(chemin, queryParameters: parametres);
-      rows.addAll(
-        _extractRows(response.data)
-            .whereType<Map>()
-            .map((row) => Map<String, dynamic>.from(row)),
-      );
-
-      final data = response.data;
-      final suivant = data is Map<String, dynamic> ? data['next'] : null;
-      // `next` est une URL absolue: les parametres y sont deja repris, les
-      // repasser les dupliquerait.
-      chemin = suivant?.toString();
-      parametres = null;
-    }
-
-    return rows;
+    final response = await dio.get(path, queryParameters: query);
+    return _extractRows(response.data)
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
   }
 
   /// Incidents visibles par le profil connecte.
@@ -132,6 +121,25 @@ class DisciplineRepository {
           b.libelle.toLowerCase(),
         ));
     return List.unmodifiable(options);
+  }
+
+  /// Referentiel des motifs, servi par le serveur.
+  ///
+  /// Le champ etait un texte libre pre-rempli « Indiscipline »: chaque
+  /// etablissement inventait ses libelles et aucun comptage par motif
+  /// n'etait exploitable. Recopier la liste ici l'aurait fait diverger du
+  /// modele des la premiere evolution.
+  Future<List<DisciplineCategoryOption>> fetchCategories() async {
+    final response = await dio.get('/discipline-incidents/categories/');
+    final data = response.data;
+    final rows = data is List<dynamic> ? data : _extractRows(data);
+    return rows
+        .whereType<Map>()
+        .map((row) => DisciplineCategoryOption.fromJson(
+              Map<String, dynamic>.from(row),
+            ))
+        .where((option) => option.value.isNotEmpty)
+        .toList(growable: false);
   }
 
   Future<void> createIncident({
