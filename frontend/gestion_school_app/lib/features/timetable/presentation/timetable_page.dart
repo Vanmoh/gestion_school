@@ -108,38 +108,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
-  Future<bool?> _detectScheduleApiSupportFromSchema(Dio dio) async {
-    try {
-      final response = await dio.get(
-        '/schema/',
-        queryParameters: const {'format': 'json'},
-        options: Options(validateStatus: (status) => (status ?? 0) < 500),
-      );
-
-      final statusCode = response.statusCode ?? 0;
-      if (statusCode < 200 || statusCode >= 400) {
-        return null;
-      }
-
-      final data = response.data;
-      if (data is Map<String, dynamic>) {
-        final paths = data['paths'];
-        if (paths is Map) {
-          return paths.containsKey('/api/teacher-schedule-slots/') ||
-              paths.containsKey('/teacher-schedule-slots/');
-        }
-      }
-
-      final raw = data?.toString() ?? '';
-      if (raw.isNotEmpty) {
-        return raw.contains('teacher-schedule-slots');
-      }
-    } catch (_) {
-      // Ignore schema parsing failures and keep fallback heuristics.
-    }
-    return null;
-  }
-
   Future<void> _loadData() async {
     setState(() => _loading = true);
     final dio = ref.read(dioProvider);
@@ -209,13 +177,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             entry.contains('/timetable-publications/') &&
             entry.contains('(404)'),
       );
-      var scheduleApiSupported =
+      // Deduit des appels reels: un 404 sur les creneaux ou sur les
+      // publications est la preuve que le backend ne sert pas ce module.
+      // Le schema OpenAPI complet etait telecharge ici pour repondre a la
+      // meme question -- plusieurs centaines de kilo-octets a chaque
+      // ouverture de la page, pour une reponse qu'on avait deja.
+      final scheduleApiSupported =
           !(hasSlotEndpoint404 || hasPublicationEndpoint404);
-
-      final schemaSupport = await _detectScheduleApiSupportFromSchema(dio);
-      if (schemaSupport != null) {
-        scheduleApiSupported = schemaSupport;
-      }
 
       final hasStoredCustomApi =
           storedBaseUrl != null && storedBaseUrl.trim().isNotEmpty;
@@ -2009,8 +1977,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       );
     }
 
-    final authUser = ref.watch(authControllerProvider).value;
-    final isReadOnlyMode = authUser?.role == 'teacher';
+    // Droits lus sur la matrice, comme le font deja les sept gardes
+    // d'action de cet ecran. La condition `role == 'teacher'` qui tenait
+    // ici en divergeait: la matrice met aussi le promoteur, le comptable
+    // et le surveillant en lecture seule sur l'emploi du temps, et tous
+    // trois obtenaient des boutons actifs pour un 403 au clic.
+    final isReadOnlyMode = !ref
+        .watch(currentPermissionsProvider)
+        .canWrite('timetable');
 
     final assignmentById = _assignmentById();
     final assignmentsByClass = _assignmentsByClass(assignmentById);

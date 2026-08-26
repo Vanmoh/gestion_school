@@ -320,7 +320,7 @@ class Command(BaseCommand):
         DisciplineIncident.objects.get_or_create(
             student=student_2,
             incident_date=today - timedelta(days=4),
-            category="Indiscipline",
+            category="indiscipline",
             defaults={
                 "description": "Bavardage répété en classe malgré plusieurs rappels.",
                 "severity": "medium",

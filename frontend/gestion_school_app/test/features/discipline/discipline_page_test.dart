@@ -27,12 +27,18 @@ const _incident = DisciplineIncident(
   studentFullName: 'Awa Traoré',
   studentMatricule: 'MAT-003',
   incidentDate: '2026-01-17',
-  category: 'Indiscipline',
+  category: 'indiscipline',
+  categoryLabel: 'Indiscipline',
   description: 'Bavardage répété.',
   severity: 'medium',
   status: 'open',
   reportedByName: 'M. Diallo',
 );
+
+const _motifs = [
+  DisciplineCategoryOption(value: 'indiscipline', label: 'Indiscipline'),
+  DisciplineCategoryOption(value: 'retard', label: 'Retard'),
+];
 
 const _eleves = [
   DisciplineStudentOption(id: 3, fullName: 'Awa Traoré', matricule: 'MAT-003'),
@@ -62,6 +68,11 @@ class _FauxDepot extends DisciplineRepository {
   }) async {
     asTeacherDemande = asTeacher;
     return _eleves;
+  }
+
+  @override
+  Future<List<DisciplineCategoryOption>> fetchCategories() async {
+    return _motifs;
   }
 
   @override
@@ -166,6 +177,10 @@ void main() {
     );
 
     expect(find.byKey(const Key('declaration-student')), findsOneWidget);
+    // Le motif se choisit dans le referentiel servi par le serveur: le champ
+    // etait libre, et « Retard », « retards » et « Arrivee tardive »
+    // comptaient pour trois motifs distincts.
+    expect(find.byKey(const Key('declaration-category')), findsOneWidget);
     // Champs d'arbitrage absents: le serveur les remet a zero de toute
     // facon, les afficher promettait une saisie qui n'aboutissait pas.
     expect(find.byKey(const Key('declaration-status')), findsNothing);

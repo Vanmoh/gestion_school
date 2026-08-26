@@ -1,56 +1,48 @@
 // Regroupement des incidents disciplinaires par enfant, pour la vue parent.
 // Logique pure, isolee de la presentation pour rester testable.
 
+import 'discipline_incident.dart';
+
 /// Incidents d'un meme enfant, tries du plus recent au plus ancien.
 class ChildIncidentGroup {
-  final String studentKey;
+  final int studentId;
   final String childName;
   final String matricule;
-  final List<Map<String, dynamic>> incidents;
+  final List<DisciplineIncident> incidents;
 
   const ChildIncidentGroup({
-    required this.studentKey,
+    required this.studentId,
     required this.childName,
     required this.matricule,
     required this.incidents,
   });
 
-  int get openCount =>
-      incidents.where((row) => incidentStatus(row) != 'resolved').length;
-}
-
-/// Statut normalise d'un incident: 'open' par defaut.
-String incidentStatus(Map<String, dynamic> incident) {
-  final raw = incident['status']?.toString().trim() ?? '';
-  return raw.isEmpty ? 'open' : raw;
-}
-
-/// Date de l'incident; les dates absentes ou invalides sont repoussees en fin
-/// de liste plutot que d'interrompre le tri.
-DateTime incidentDate(Map<String, dynamic> incident) {
-  return DateTime.tryParse(incident['incident_date']?.toString() ?? '') ??
-      DateTime.fromMillisecondsSinceEpoch(0);
+  int get openCount => incidents.where((row) => row.estOuvert).length;
 }
 
 /// Groupe les incidents par eleve, chaque groupe trie du plus recent au plus
 /// ancien, les groupes eux-memes tries par nom d'enfant.
+///
+/// Prend des incidents typés et non des `Map` brutes: la vue parent lisait
+/// directement le JSON de l'API, si bien qu'un champ renomme cote serveur
+/// ne se voyait qu'a l'execution, sur un ecran vide.
 List<ChildIncidentGroup> groupIncidentsByChild(
-  List<Map<String, dynamic>> incidents,
+  List<DisciplineIncident> incidents,
 ) {
-  final buckets = <String, List<Map<String, dynamic>>>{};
-  final names = <String, String>{};
-  final matricules = <String, String>{};
+  final buckets = <int, List<DisciplineIncident>>{};
+  final names = <int, String>{};
+  final matricules = <int, String>{};
 
   for (final incident in incidents) {
-    final key = incident['student']?.toString() ?? '';
-    final name = incident['student_full_name']?.toString().trim() ?? '';
-    final matricule = incident['student_matricule']?.toString().trim() ?? '';
+    final key = incident.studentId;
+    buckets.putIfAbsent(key, () => <DisciplineIncident>[]).add(incident);
 
-    buckets.putIfAbsent(key, () => <Map<String, dynamic>>[]).add(incident);
     // Le nom peut manquer sur certaines lignes: on garde le premier non vide.
+    final name = incident.studentFullName.trim();
     if (name.isNotEmpty) {
       names.putIfAbsent(key, () => name);
     }
+    final matricule = incident.studentMatricule.trim();
     if (matricule.isNotEmpty) {
       matricules.putIfAbsent(key, () => matricule);
     }
@@ -58,9 +50,9 @@ List<ChildIncidentGroup> groupIncidentsByChild(
 
   final groups = buckets.entries.map((entry) {
     final sorted = [...entry.value]
-      ..sort((a, b) => incidentDate(b).compareTo(incidentDate(a)));
+      ..sort((a, b) => b.dateDeTri.compareTo(a.dateDeTri));
     return ChildIncidentGroup(
-      studentKey: entry.key,
+      studentId: entry.key,
       childName: names[entry.key] ?? 'Eleve',
       matricule: matricules[entry.key] ?? '',
       incidents: sorted,

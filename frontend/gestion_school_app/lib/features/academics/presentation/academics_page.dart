@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../models/etablissement.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/permissions/module_permissions.dart';
 
 class AcademicsPage extends ConsumerStatefulWidget {
   const AcademicsPage({super.key});
@@ -977,6 +978,13 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
   Widget build(BuildContext context) {
     final authUser = ref.watch(authControllerProvider).value;
     final isSuperAdmin = authUser?.role == 'super_admin';
+    // Droits lus sur la matrice servie par le backend. L'ecran n'en lisait
+    // aucun: le promoteur et l'enseignant, en lecture seule sur
+    // l'academique, obtenaient tous les boutons de creation et un 403 au
+    // clic.
+    final droits = ref.watch(currentPermissionsProvider).of('academics');
+    final peutEcrire = droits.canWrite;
+    final peutSupprimer = droits.canDelete;
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
     final etablissements = ref.watch(etablissementProvider).etablissements;
     final selectedEtablissementId = selectedEtablissement?.id;
@@ -1185,21 +1193,26 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                             spacing: 10,
                             runSpacing: 10,
                             children: [
-                              FilledButton.icon(
-                                onPressed: _saving ? null : _openYearForm,
-                                icon: const Icon(Icons.calendar_month_outlined),
-                                label: const Text('Créer année'),
-                              ),
-                              FilledButton.tonalIcon(
-                                onPressed: _saving ? null : _openSubjectForm,
-                                icon: const Icon(Icons.menu_book_outlined),
-                                label: const Text('Créer matière'),
-                              ),
-                              FilledButton.tonalIcon(
-                                onPressed: _saving ? null : _openClassroomForm,
-                                icon: const Icon(Icons.meeting_room_outlined),
-                                label: const Text('Créer classe'),
-                              ),
+                              if (peutEcrire) ...[
+                                FilledButton.icon(
+                                  key: const Key('creer-annee'),
+                                  onPressed: _saving ? null : _openYearForm,
+                                  icon: const Icon(Icons.calendar_month_outlined),
+                                  label: const Text('Créer année'),
+                                ),
+                                FilledButton.tonalIcon(
+                                  key: const Key('creer-matiere'),
+                                  onPressed: _saving ? null : _openSubjectForm,
+                                  icon: const Icon(Icons.menu_book_outlined),
+                                  label: const Text('Créer matière'),
+                                ),
+                                FilledButton.tonalIcon(
+                                  key: const Key('creer-classe'),
+                                  onPressed: _saving ? null : _openClassroomForm,
+                                  icon: const Icon(Icons.meeting_room_outlined),
+                                  label: const Text('Créer classe'),
+                                ),
+                              ],
                               OutlinedButton.icon(
                                 onPressed: _saving ? null : _loadData,
                                 icon: const Icon(Icons.sync),
@@ -1207,6 +1220,13 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                               ),
                             ],
                           ),
+                          if (!peutEcrire) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              'Mode lecture seule: consultation uniquement pour ce profil.',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -1320,7 +1340,8 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                     Text('Classes', style: textTheme.titleMedium),
                     const Spacer(),
                     FilledButton.tonalIcon(
-                      onPressed: _saving ? null : _openClassroomForm,
+                      key: const Key('creer-classe-liste'),
+                      onPressed: (_saving || !peutEcrire) ? null : _openClassroomForm,
                       icon: const Icon(Icons.add),
                       label: const Text('Ajouter classe'),
                     ),
@@ -1364,10 +1385,24 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                               _confirmDeleteClassroom(classroom);
                             }
                           },
-                          itemBuilder: (context) => const [
-                            PopupMenuItem(value: 'view', child: Text('Afficher')),
-                            PopupMenuItem(value: 'edit', child: Text('Modifier')),
-                            PopupMenuItem(value: 'delete', child: Text('Supprimer')),
+                          // « Modifier » et « Supprimer » n'apparaissent que
+                          // si le profil peut les mener a bien: les proposer
+                          // a tous menait a un 403 en fin de parcours.
+                          itemBuilder: (context) => [
+                            const PopupMenuItem(
+                              value: 'view',
+                              child: Text('Afficher'),
+                            ),
+                            if (peutEcrire)
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: Text('Modifier'),
+                              ),
+                            if (peutSupprimer)
+                              const PopupMenuItem(
+                                value: 'delete',
+                                child: Text('Supprimer'),
+                              ),
                           ],
                         ),
                       ),
@@ -1400,7 +1435,8 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                     Text('Matières', style: textTheme.titleMedium),
                     const Spacer(),
                     FilledButton.tonalIcon(
-                      onPressed: _saving ? null : _openSubjectForm,
+                      key: const Key('creer-matiere-liste'),
+                      onPressed: (_saving || !peutEcrire) ? null : _openSubjectForm,
                       icon: const Icon(Icons.add),
                       label: const Text('Ajouter matière'),
                     ),
@@ -1476,10 +1512,21 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                               _confirmDeleteSubject(subject);
                             }
                           },
-                          itemBuilder: (context) => const [
-                            PopupMenuItem(value: 'view', child: Text('Afficher')),
-                            PopupMenuItem(value: 'edit', child: Text('Modifier')),
-                            PopupMenuItem(value: 'delete', child: Text('Supprimer')),
+                          itemBuilder: (context) => [
+                            const PopupMenuItem(
+                              value: 'view',
+                              child: Text('Afficher'),
+                            ),
+                            if (peutEcrire)
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: Text('Modifier'),
+                              ),
+                            if (peutSupprimer)
+                              const PopupMenuItem(
+                                value: 'delete',
+                                child: Text('Supprimer'),
+                              ),
                           ],
                         ),
                       ),
