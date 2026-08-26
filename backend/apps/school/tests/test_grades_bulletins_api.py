@@ -464,6 +464,90 @@ class GradesAndBulletinsApiTests(APITestCase):
         )
         self.assertEqual(patch_response.status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_censor_closes_incident_declared_by_teacher(self):
+        """Le pendant du test precedent: quelqu'un doit pouvoir clore.
+
+        L'enseignant declare et ne sanctionne pas -- mais aucun test ne
+        verifiait que l'arbitre, lui, y parvient. L'application ne l'exposait
+        d'ailleurs nulle part: un incident ouvert le restait indefiniment.
+        """
+        censor_user = User.objects.create_user(
+            username="censor_discipline",
+            password="censor12345",
+            role=UserRole.CENSOR,
+            first_name="Le",
+            last_name="Censeur",
+            etablissement=self.etablissement_main,
+        )
+        incident = DisciplineIncident.objects.create(
+            student=self.student_1,
+            incident_date=date(2026, 1, 17),
+            category="Indiscipline",
+            description="Bavardage repete",
+            reported_by=self.teacher_user,
+        )
+
+        self.client.force_authenticate(censor_user)
+        response = self.client.patch(
+            f"/api/discipline-incidents/{incident.id}/",
+            {
+                "sanction": "Avertissement ecrit",
+                "status": "resolved",
+                "parent_notified": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        incident.refresh_from_db()
+        self.assertEqual(incident.status, "resolved")
+        self.assertEqual(incident.sanction, "Avertissement ecrit")
+        self.assertTrue(incident.parent_notified)
+        # Clore n'est pas s'approprier: le declarant reste l'enseignant.
+        self.assertEqual(incident.reported_by_id, self.teacher_user.id)
+
+    def test_discipline_list_exposes_reporter_and_supports_search(self):
+        """Le nom du declarant, et la recherche qui evite de tout parcourir.
+
+        Le serializer ne rendait que l'identifiant du declarant, et la vue
+        n'avait pas de `search_fields`: `?search=` etait accepte puis ignore,
+        si bien que l'ecran tronquait la liste faute de pouvoir la filtrer.
+        """
+        DisciplineIncident.objects.create(
+            student=self.student_1,
+            incident_date=date(2026, 1, 17),
+            category="Indiscipline",
+            description="Bavardage repete",
+            reported_by=self.teacher_user,
+        )
+        DisciplineIncident.objects.create(
+            student=self.student_1,
+            incident_date=date(2026, 1, 18),
+            category="Retard",
+            description="Arrivee tardive",
+            reported_by=self.teacher_user,
+            status="resolved",
+        )
+
+        self.client.force_authenticate(self.admin_user)
+
+        listing = self._results(self.client.get("/api/discipline-incidents/"))
+        self.assertEqual(len(listing), 2)
+        self.assertEqual(
+            {row["reported_by_name"] for row in listing},
+            {self.teacher_user.get_full_name().strip()},
+        )
+
+        recherche = self._results(
+            self.client.get("/api/discipline-incidents/", {"search": "Retard"})
+        )
+        self.assertEqual([row["category"] for row in recherche], ["Retard"])
+
+        ouverts = self._results(
+            self.client.get("/api/discipline-incidents/", {"status": "open"})
+        )
+        self.assertEqual([row["category"] for row in ouverts], ["Indiscipline"])
+
     def test_create_grade_normalizes_term_and_rejects_out_of_range_value(self):
         # Le surveillant n'ecrit plus les notes (matrice de droits): ce test
         # porte sur la normalisation du trimestre, pas sur le profil.

@@ -1,5 +1,5 @@
 from datetime import date, datetime, timedelta, time
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 import csv
 import io
@@ -19,6 +19,7 @@ from django.http import (
     StreamingHttpResponse,
 )
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
@@ -69,6 +70,7 @@ from .models import (
     LibraryCategory,
     LibraryCollection,
     LibraryDocument,
+    LibraryDocumentOrigin,
     Notification,
     ParentProfile,
     Payment,
@@ -100,6 +102,7 @@ from .serializers import (
     AttendanceSerializer,
     BookSerializer,
     BorrowSerializer,
+    LibraryCategoryWriteSerializer,
     LibraryCollectionSerializer,
     LibraryDocumentSerializer,
     CanteenMenuSerializer,
@@ -1142,6 +1145,11 @@ class TeacherAssignmentViewSet(BaseModelViewSet):
     access_module = "teachers"
     queryset = TeacherAssignment.objects.select_related("teacher", "subject", "classroom").all().order_by("id")
     serializer_class = TeacherAssignmentSerializer
+    # Sans cette liste, `?teacher=` etait accepte et ignore: la page
+    # discipline demandait les affectations d'un enseignant, recevait la
+    # premiere page de toutes les affectations de l'etablissement, et
+    # refaisait le tri cote client sur cet echantillon.
+    filterset_fields = ["teacher", "classroom", "subject"]
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -5337,6 +5345,17 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
     queryset = DisciplineIncident.objects.select_related("student", "student__user", "reported_by").all().order_by("-incident_date", "-id")
     serializer_class = DisciplineIncidentSerializer
     filterset_fields = ["student", "severity", "status", "incident_date", "parent_notified"]
+    # Le fil d'incidents se lit en cherchant un eleve ou un motif, pas en
+    # faisant defiler: sans ces champs le frontend ne pouvait que tronquer.
+    search_fields = [
+        "category",
+        "description",
+        "sanction",
+        "student__matricule",
+        "student__user__first_name",
+        "student__user__last_name",
+    ]
+    ordering_fields = ["incident_date", "severity", "status", "created_at"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def _requested_etablissement_id(self):
@@ -6409,13 +6428,59 @@ class SmsProviderConfigViewSet(EtablissementScopedModelViewSet):
         serializer.save(etablissement=target_etablissement)
 
 
-class LibraryCollectionViewSet(BaseModelViewSet):
+class _LibraryEtagereMixin:
+    """La regle d'etagere, commune aux series, aux matieres et aux documents.
+
+    Le fonds importe n'est pas cloisonne: ce sont les memes annales pour
+    tout le monde, et les dupliquer par etablissement multiplierait des
+    giga-octets identiques. Ce qu'une ecole depose, en revanche, ne regarde
+    qu'elle -- son reglement interieur n'a rien a faire chez la voisine.
+
+    D'ou la meme lecture partout: le commun, plus le sien. Et la meme
+    ecriture partout: on ne touche pas au commun depuis l'application, il
+    n'entre que par la commande d'import.
+    """
+
+    def _etablissement_courant(self):
+        """L'ecole au nom de laquelle on lit et on ecrit.
+
+        Pour tout le monde sauf le super-administrateur, `initial()` a deja
+        force l'en-tete a l'etablissement du compte: nul ne lit l'etagere
+        d'une autre ecole en changeant un parametre d'URL.
+        """
+        return self._resolve_effective_etablissement_for_create()
+
+    def _filtrer_par_etagere(self, queryset, prefixe=""):
+        etablissement = self._etablissement_courant()
+        champ = f"{prefixe}etablissement"
+        if etablissement is None:
+            # Super-administrateur sans etablissement actif: la vue d'ensemble.
+            if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN:
+                return queryset
+            return queryset.filter(**{f"{champ}__isnull": True})
+        return queryset.filter(
+            Q(**{f"{champ}__isnull": True}) | Q(**{champ: etablissement})
+        )
+
+    def _refuser_le_fonds_commun(self, etablissement_id, quoi):
+        """Le fonds importe ne se modifie pas depuis l'application.
+
+        Sans cette borne, l'ecriture accordee par la matrice sur « library »
+        laisserait un surveillant renommer une annale pour les neuf ecoles a
+        la fois -- et la prochaine passe d'import la remettrait comme avant,
+        sans que personne comprenne pourquoi.
+        """
+        if etablissement_id is None:
+            raise ValidationError(
+                {"detail": f"Le fonds commun ne peut pas être {quoi} depuis l'application."}
+            )
+
+
+class LibraryCollectionViewSet(_LibraryEtagereMixin, BaseModelViewSet):
     """Les series du fonds numerique, avec leurs matieres et leurs compteurs.
 
-    Le fonds n'est pas cloisonne par etablissement, contrairement aux
-    ouvrages physiques: ce sont les memes annales pour tout le monde, et les
-    dupliquer par etablissement multiplierait des giga-octets identiques.
-    Qui accede au module voit les neuf series.
+    Qui accede au module voit les neuf series importees, plus les etageres
+    creees par son propre etablissement.
     """
 
     access_module = "library"
@@ -6429,7 +6494,7 @@ class LibraryCollectionViewSet(BaseModelViewSet):
         categories = LibraryCategory.objects.annotate(
             document_count=Count("documents")
         ).order_by("position", "name")
-        return (
+        return self._filtrer_par_etagere(
             LibraryCollection.objects.annotate(
                 document_count=Count("categories__documents")
             )
@@ -6437,20 +6502,90 @@ class LibraryCollectionViewSet(BaseModelViewSet):
             .order_by("position", "label")
         )
 
+    def perform_create(self, serializer):
+        etablissement = self._etablissement_courant()
+        if etablissement is None:
+            raise ValidationError(
+                {"etablissement": "Sélectionnez un établissement actif."}
+            )
+        serializer.save(etablissement=etablissement)
 
-class LibraryDocumentViewSet(BaseModelViewSet):
-    """Les PDF du fonds: liste filtrable, et lecture du fichier.
+    def perform_update(self, serializer):
+        self._refuser_le_fonds_commun(serializer.instance.etablissement_id, "modifié")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._refuser_le_fonds_commun(instance.etablissement_id, "supprimé")
+        instance.delete()
+
+
+class LibraryCategoryViewSet(_LibraryEtagereMixin, BaseModelViewSet):
+    """Les matieres d'une serie, creables une a une.
+
+    Une matiere ne vit pas sans sa serie et suit son sort: c'est la serie
+    qui porte l'etablissement, la matiere n'en a pas besoin.
+    """
+
+    access_module = "library"
+    serializer_class = LibraryCategoryWriteSerializer
+    queryset = LibraryCategory.objects.select_related("collection").all()
+    pagination_class = None
+
+    def get_queryset(self):
+        queryset = self._filtrer_par_etagere(
+            super().get_queryset().annotate(document_count=Count("documents")),
+            prefixe="collection__",
+        )
+        collection = self.request.query_params.get("collection")
+        if collection not in (None, "") and str(collection).isdigit():
+            queryset = queryset.filter(collection_id=collection)
+        return queryset.order_by("position", "name")
+
+    def _verifier_la_serie(self, serializer):
+        collection = serializer.validated_data.get("collection")
+        if collection is None:
+            return
+        self._refuser_le_fonds_commun(collection.etablissement_id, "modifié")
+        etablissement = self._etablissement_courant()
+        if etablissement and collection.etablissement_id != etablissement.id:
+            raise ValidationError(
+                {"collection": "Cette série n'appartient pas à l'établissement actif."}
+            )
+
+    def perform_create(self, serializer):
+        self._verifier_la_serie(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._refuser_le_fonds_commun(
+            serializer.instance.collection.etablissement_id, "modifié"
+        )
+        self._verifier_la_serie(serializer)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._refuser_le_fonds_commun(
+            instance.collection.etablissement_id, "supprimé"
+        )
+        instance.delete()
+
+
+class LibraryDocumentViewSet(_LibraryEtagereMixin, BaseModelViewSet):
+    """Les PDF du fonds: liste filtrable, lecture, et depot d'un document.
 
     Le fichier passe toujours par cette API, jamais par une URL exterieure
     donnee au navigateur: tant qu'un document n'est pas rapatrie, le serveur
     relaie la source. C'est ce qui rend le mode hybride invisible au client
     -- et ce qui evite un echec CORS sur un domaine tiers.
+
+    Un document depose par une ecole ne connait pas ce mode hybride: il
+    arrive avec son fichier, il est donc rapatrie des la premiere seconde.
     """
 
     access_module = "library"
     serializer_class = LibraryDocumentSerializer
     queryset = LibraryDocument.objects.select_related(
-        "category", "category__collection"
+        "category", "category__collection", "uploaded_by"
     ).all()
 
     # Le relais ne sort pas de la source connue: sans cette borne, un
@@ -6458,7 +6593,7 @@ class LibraryDocumentViewSet(BaseModelViewSet):
     PROXY_ALLOWED_HOSTS = ("bkalan.ml", "www.bkalan.ml")
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = self._filtrer_par_etagere(super().get_queryset())
 
         collection = self.request.query_params.get("collection")
         if collection not in (None, ""):
@@ -6478,9 +6613,80 @@ class LibraryDocumentViewSet(BaseModelViewSet):
 
         search = (self.request.query_params.get("search") or "").strip()
         if search:
-            queryset = queryset.filter(title__icontains=search)
+            queryset = queryset.filter(
+                Q(title__icontains=search) | Q(description__icontains=search)
+            )
+
+        origine = (self.request.query_params.get("origin") or "").strip()
+        if origine in LibraryDocumentOrigin.values:
+            queryset = queryset.filter(origin=origine)
 
         return queryset
+
+    # --- Depot d'un document ------------------------------------------------
+
+    def _verifier_la_matiere(self, categorie):
+        """La matiere visee doit etre une etagere de l'ecole, pas le commun."""
+        if categorie is None:
+            return
+        self._refuser_le_fonds_commun(
+            categorie.collection.etablissement_id, "alimenté"
+        )
+        etablissement = self._etablissement_courant()
+        if etablissement and categorie.collection.etablissement_id != etablissement.id:
+            raise ValidationError(
+                {"category": "Cette matière n'appartient pas à l'établissement actif."}
+            )
+
+    def perform_create(self, serializer):
+        etablissement = self._etablissement_courant()
+        if etablissement is None:
+            raise ValidationError(
+                {"etablissement": "Sélectionnez un établissement actif."}
+            )
+        self._verifier_la_matiere(serializer.validated_data.get("category"))
+
+        fichier = serializer.validated_data.get("file")
+        serializer.save(
+            etablissement=etablissement,
+            origin=LibraryDocumentOrigin.UPLOAD,
+            uploaded_by=self.request.user,
+            # Le poids et l'etat viennent du fichier lui-meme et jamais du
+            # client: un `size_bytes` annonce serait cru sur parole, et c'est
+            # lui qui decide de la progression affichee a la lecture.
+            size_bytes=fichier.size if fichier else 0,
+            is_downloaded=bool(fichier),
+        )
+
+    def perform_update(self, serializer):
+        self._refuser_le_fonds_commun(
+            serializer.instance.etablissement_id, "modifié"
+        )
+        if "category" in serializer.validated_data:
+            self._verifier_la_matiere(serializer.validated_data["category"])
+
+        fichier = serializer.validated_data.get("file")
+        if fichier is None:
+            serializer.save()
+            return
+        # Remplacement du fichier: l'ancien ne sert plus personne et pese sur
+        # le stockage. Il part apres l'enregistrement du nouveau -- l'ordre
+        # inverse laisserait le document sans fichier si l'ecriture echouait.
+        ancien = serializer.instance.file
+        ancien_nom = ancien.name if ancien else ""
+        serializer.save(size_bytes=fichier.size, is_downloaded=True)
+        if ancien_nom and ancien_nom != serializer.instance.file.name:
+            ancien.storage.delete(ancien_nom)
+
+    def perform_destroy(self, instance):
+        self._refuser_le_fonds_commun(instance.etablissement_id, "supprimé")
+        fichier = instance.file
+        nom = fichier.name if fichier else ""
+        instance.delete()
+        if nom:
+            # Apres la suppression en base: un fichier efface alors que la
+            # ligne survit laisserait un document illisible dans la liste.
+            fichier.storage.delete(nom)
 
     # Un PDF rapatrie ne change plus jamais: son contenu est fige et son nom
     # porte l'empreinte du chemin d'origine. Une journee de cache evite de
@@ -6688,30 +6894,95 @@ class BookViewSet(BaseModelViewSet):
             return requested
         return getattr(user, "etablissement", None)
 
+    def _filtres_du_catalogue(self, queryset):
+        """Recherche et disponibilite, tels que l'ecran les demande.
+
+        Le catalogue etait servi entier et trie par titre: chercher un
+        ouvrage dans un fonds de plusieurs centaines de lignes revenait a
+        faire defiler la page.
+        """
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search)
+                | Q(author__icontains=search)
+                | Q(isbn__icontains=search)
+                | Q(publisher__icontains=search)
+                | Q(subject__icontains=search)
+                | Q(shelf_location__icontains=search)
+            )
+
+        disponibilite = (self.request.query_params.get("availability") or "").strip()
+        if disponibilite == "available":
+            queryset = queryset.filter(quantity_available__gt=0)
+        elif disponibilite == "out":
+            queryset = queryset.filter(quantity_available=0)
+
+        return queryset
+
     def get_queryset(self):
         user = self.request.user
-        qs = Book.objects.all()
+        # Le compteur des exemplaires sortis vient d'une annotation: le
+        # calculer par ouvrage ferait une requete par ligne du catalogue.
+        qs = Book.objects.annotate(
+            exemplaires_sortis_count=Count(
+                "borrows", filter=Q(borrows__returned_at__isnull=True)
+            )
+        ).order_by("title", "id")
 
         requested_etablissement = self._requested_etablissement()
         if requested_etablissement is not None:
-            return qs.filter(etablissement=requested_etablissement)
+            return self._filtres_du_catalogue(
+                qs.filter(etablissement=requested_etablissement)
+            )
 
         if self._has_requested_scope():
             return qs.none()
 
         if hasattr(user, "role") and user.role == "super_admin":
-            return qs.all()
+            return self._filtres_du_catalogue(qs)
 
         user_etablissement = getattr(user, "etablissement", None)
         if user_etablissement is None:
             return qs.none()
-        return qs.filter(etablissement=user_etablissement)
+        return self._filtres_du_catalogue(qs.filter(etablissement=user_etablissement))
+
+    def _verifier_l_isbn(self, serializer, etablissement):
+        """Un ISBN ne se repete pas dans le meme fonds.
+
+        La base le garantit, mais son refus arrive en erreur d'integrite --
+        un 500 illisible la ou l'utilisateur a simplement saisi deux fois le
+        meme ouvrage. Le controle ici rend le message utilisable.
+        """
+        isbn = serializer.validated_data.get("isbn")
+        if not isbn:
+            return
+        doublons = Book.objects.filter(isbn=isbn, etablissement=etablissement)
+        if serializer.instance is not None:
+            doublons = doublons.exclude(pk=serializer.instance.pk)
+        if doublons.exists():
+            raise ValidationError(
+                {"isbn": "Un ouvrage porte déjà cet ISBN dans cet établissement."}
+            )
 
     def perform_create(self, serializer):
-        serializer.save(etablissement=self._resolve_target_etablissement())
+        etablissement = self._resolve_target_etablissement()
+        self._verifier_l_isbn(serializer, etablissement)
+        # Un ouvrage qui entre au catalogue est entierement en rayon: sa
+        # disponibilite se deduit, elle ne se saisit pas.
+        livre = serializer.save(
+            etablissement=etablissement,
+            quantity_available=serializer.validated_data.get("quantity_total", 0),
+        )
+        livre.recalculer_disponibilite()
 
     def perform_update(self, serializer):
-        serializer.save(etablissement=self._resolve_target_etablissement())
+        etablissement = self._resolve_target_etablissement()
+        self._verifier_l_isbn(serializer, etablissement)
+        livre = serializer.save(etablissement=etablissement)
+        # Le total a pu changer: la disponibilite suit, sans jamais compter
+        # comme en rayon un exemplaire qui est chez un eleve.
+        livre.recalculer_disponibilite()
 
 
 class BorrowViewSet(BaseModelViewSet):
@@ -6773,9 +7044,11 @@ class BorrowViewSet(BaseModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = super().get_queryset()
+        qs = self._filtrer_par_etat(super().get_queryset())
         role = getattr(user, "role", "")
 
+        # L'eleve et le parent ne voient que leurs propres prets: c'est
+        # l'ecran « Mes emprunts », servi par la meme route.
         if role == UserRole.STUDENT:
             return qs.filter(student__user_id=user.id)
         if role == UserRole.PARENT:
@@ -6801,13 +7074,130 @@ class BorrowViewSet(BaseModelViewSet):
         if target_etablissement and book.etablissement_id != target_etablissement.id:
             raise ValidationError({"book": "Le livre n'appartient pas a l'etablissement actif."})
 
+    def _filtrer_par_etat(self, queryset):
+        """En cours, rendus, en retard: les trois vues de l'ecran.
+
+        Le suivi se faisait a l'oeil sur la liste entiere, ou les retards se
+        perdaient entre les prets rendus il y a six mois.
+        """
+        etat = (self.request.query_params.get("status") or "").strip()
+        if etat == "ongoing":
+            queryset = queryset.filter(returned_at__isnull=True)
+        elif etat == "returned":
+            queryset = queryset.filter(returned_at__isnull=False)
+        elif etat == "late":
+            queryset = queryset.filter(
+                returned_at__isnull=True, due_date__lt=timezone.localdate()
+            )
+
+        eleve = self.request.query_params.get("student")
+        if eleve not in (None, "") and str(eleve).isdigit():
+            queryset = queryset.filter(student_id=eleve)
+
+        livre = self.request.query_params.get("book")
+        if livre not in (None, "") and str(livre).isdigit():
+            queryset = queryset.filter(book_id=livre)
+
+        return queryset
+
+    def _verifier_la_disponibilite(self, livre):
+        """Pas de pret sans exemplaire en rayon.
+
+        Le controle manquait entierement: on pretait le meme exemplaire a
+        cinq eleves, et le compteur affichait toujours le fonds complet.
+        """
+        if livre.quantity_total <= 0:
+            raise ValidationError(
+                {"book": "Cet ouvrage n'a aucun exemplaire enregistré."}
+            )
+        if livre.exemplaires_sortis() >= livre.quantity_total:
+            raise ValidationError(
+                {"book": f"« {livre.title} » n'a plus d'exemplaire disponible."}
+            )
+
     def perform_create(self, serializer):
         self._validate_scope(serializer)
-        serializer.save()
+        livre = serializer.validated_data.get("book")
+
+        # Tout dans la meme transaction, le livre verrouille: deux emprunts
+        # simultanes sur le dernier exemplaire passeraient tous les deux le
+        # controle de disponibilite avant que l'un des deux ne l'ait pris.
+        with transaction.atomic():
+            if livre is not None:
+                livre = Book.objects.select_for_update().get(pk=livre.pk)
+                self._verifier_la_disponibilite(livre)
+            emprunt = serializer.save()
+            if livre is not None:
+                livre.recalculer_disponibilite()
+        return emprunt
 
     def perform_update(self, serializer):
         self._validate_scope(serializer)
-        serializer.save()
+        ancien_livre_id = serializer.instance.book_id
+        with transaction.atomic():
+            emprunt = serializer.save()
+            # Les deux livres, car un emprunt peut avoir change d'ouvrage:
+            # ne recalculer que le nouveau laisserait l'ancien un exemplaire
+            # en moins pour toujours.
+            emprunt.book.recalculer_disponibilite()
+            if ancien_livre_id != emprunt.book_id:
+                Book.objects.filter(pk=ancien_livre_id).first().recalculer_disponibilite()
+
+    def perform_destroy(self, instance):
+        livre = instance.book
+        with transaction.atomic():
+            instance.delete()
+            livre.recalculer_disponibilite()
+
+    @action(detail=True, methods=["post"], url_path="return")
+    def marquer_rendu(self, request, pk=None):
+        """Le retour d'un exemplaire: date, penalite, remise en rayon.
+
+        Rien ne permettait de rendre un livre: `returned_at` n'etait ecrit
+        nulle part et un pret durait indefiniment. La penalite, elle, etait
+        saisie a la creation de l'emprunt -- avant tout retard -- et vaut
+        desormais le tarif journalier de l'etablissement multiplie par les
+        jours entames, sauf montant impose a la main.
+        """
+        emprunt = self.get_object()
+        if emprunt.est_rendu:
+            raise ValidationError(
+                {"detail": "Cet emprunt a déjà été rendu le "
+                           f"{emprunt.returned_at.isoformat()}."}
+            )
+
+        # Le client peut imposer la date -- un livre rendu vendredi, saisi
+        # lundi -- ou la laisser au serveur.
+        date_brute = request.data.get("returned_at")
+        if date_brute in (None, ""):
+            date_retour = timezone.localdate()
+        else:
+            date_retour = parse_date(str(date_brute).strip())
+        if date_retour is None:
+            raise ValidationError({"returned_at": "Date de retour illisible."})
+        if date_retour < emprunt.borrowed_at:
+            raise ValidationError(
+                {"returned_at": "Le retour précède la date d'emprunt."}
+            )
+
+        with transaction.atomic():
+            emprunt.returned_at = date_retour
+            penalite_imposee = request.data.get("penalty_amount")
+            if penalite_imposee not in (None, ""):
+                try:
+                    emprunt.penalty_amount = Decimal(str(penalite_imposee))
+                except (InvalidOperation, ValueError) as exc:
+                    raise ValidationError(
+                        {"penalty_amount": "Montant de pénalité illisible."}
+                    ) from exc
+            else:
+                emprunt.penalty_amount = emprunt.penalite_theorique()
+            emprunt.save(
+                update_fields=["returned_at", "penalty_amount", "updated_at"]
+            )
+            emprunt.book.recalculer_disponibilite()
+
+        return Response(self.get_serializer(emprunt).data)
 
 
 class CanteenMenuViewSet(BaseModelViewSet):
@@ -6952,9 +7342,11 @@ class CanteenSubscriptionViewSet(BaseModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = super().get_queryset()
+        qs = self._filtrer_par_etat(super().get_queryset())
         role = getattr(user, "role", "")
 
+        # L'eleve et le parent ne voient que leurs propres prets: c'est
+        # l'ecran « Mes emprunts », servi par la meme route.
         if role == UserRole.STUDENT:
             return qs.filter(student__user_id=user.id)
         if role == UserRole.PARENT:
@@ -7046,9 +7438,11 @@ class CanteenServiceViewSet(BaseModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = super().get_queryset()
+        qs = self._filtrer_par_etat(super().get_queryset())
         role = getattr(user, "role", "")
 
+        # L'eleve et le parent ne voient que leurs propres prets: c'est
+        # l'ecran « Mes emprunts », servi par la meme route.
         if role == UserRole.STUDENT:
             return qs.filter(student__user_id=user.id)
         if role == UserRole.PARENT:

@@ -9,6 +9,8 @@ from apps.school.models import (
     Book,
     ClassRoom,
     Etablissement,
+    LibraryCategory,
+    LibraryCollection,
     Payment,
     PromotionDecision,
     PromotionDecisionType,
@@ -63,6 +65,70 @@ class BackupRestoreUniqueConflictTests(TestCase):
 
         self.assertIn("school.book.isbn", stats)
         self.assertNotEqual(rewritten_payload[0]["fields"]["isbn"], "ISBN-001")
+
+    def test_le_meme_isbn_dans_une_autre_ecole_n_est_pas_un_conflit(self):
+        """L'unicite de l'ISBN est bornee a l'etablissement.
+
+        La renommer quand meme ferait diverger la copie restauree de
+        l'original sans qu'aucune contrainte ne l'ait exige.
+        """
+        autre = Etablissement.objects.create(name="Autre etablissement")
+        Book.objects.create(
+            title="Livre deja present",
+            author="Auteur",
+            isbn="ISBN-001",
+            quantity_total=1,
+            quantity_available=1,
+            etablissement=self.etablissement,
+        )
+        payload = [
+            {
+                "model": "school.book",
+                "pk": 99,
+                "fields": {
+                    "title": "Le meme livre, chez la voisine",
+                    "author": "Auteur",
+                    "isbn": "ISBN-001",
+                    "quantity_total": 1,
+                    "quantity_available": 1,
+                    "etablissement": autre.id,
+                },
+            }
+        ]
+
+        rewritten_payload, stats = self.viewset._resolve_unique_field_conflicts(payload)
+
+        self.assertEqual(stats, {})
+        self.assertEqual(rewritten_payload[0]["fields"]["isbn"], "ISBN-001")
+
+    def test_une_valeur_vide_sous_contrainte_conditionnelle_reste_vide(self):
+        """Un document televerse n'a pas de `source_url`, et n'en veut pas.
+
+        Sa contrainte d'unicite exclut la chaine vide: lui inventer une URL
+        pour eviter un conflit qui ne peut pas se produire ferait croire a un
+        fichier rapatriable depuis une source qui n'existe pas.
+        """
+        collection = LibraryCollection.objects.create(code="Interne", label="Interne")
+        categorie = LibraryCategory.objects.create(
+            collection=collection, name="Administratif"
+        )
+        payload = [
+            {
+                "model": "school.librarydocument",
+                "pk": 42,
+                "fields": {
+                    "title": "Reglement",
+                    "category": categorie.id,
+                    "source_url": "",
+                    "origin": "upload",
+                },
+            }
+        ]
+
+        rewritten_payload, stats = self.viewset._resolve_unique_field_conflicts(payload)
+
+        self.assertEqual(stats, {})
+        self.assertEqual(rewritten_payload[0]["fields"]["source_url"], "")
 
     def test_rewrites_existing_user_student_and_teacher_identifiers(self):
         user = User.objects.create_user(
