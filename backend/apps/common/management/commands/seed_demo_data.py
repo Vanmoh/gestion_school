@@ -411,7 +411,6 @@ class Command(BaseCommand):
                 "title": "Introduction aux Mathématiques",
                 "author": "Auteur Démo",
                 "quantity_total": 20,
-                "quantity_available": 18,
             },
         )
         Borrow.objects.get_or_create(
@@ -420,6 +419,9 @@ class Command(BaseCommand):
             borrowed_at=today - timedelta(days=2),
             due_date=today + timedelta(days=10),
         )
+        # La disponibilite est derivee des emprunts en cours: la poser en dur
+        # au-dessus donnerait un jeu de demonstration qui se contredit.
+        book.recalculer_disponibilite()
 
         menu_1, _ = CanteenMenu.objects.get_or_create(
             menu_date=today,

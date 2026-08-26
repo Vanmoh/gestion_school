@@ -1,8 +1,23 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/permissions/module_permissions.dart';
+import '../domain/book.dart';
+import 'library_controller.dart';
+import 'widgets/book_form_dialog.dart';
+import 'widgets/books_panel.dart';
+import 'widgets/borrow_form_dialog.dart';
+import 'widgets/borrows_panel.dart';
 
+/// Le fonds papier: le catalogue, les prets, les retours.
+///
+/// L'ecran ne savait que creer -- un livre, un emprunt -- et rien reprendre:
+/// pas de retour, pas de correction de fiche, pas de recherche, et un
+/// compteur de disponibilite saisi a la main qui ne bougeait jamais. Le
+/// serveur tient desormais ces comptes; cette page se contente de les
+/// montrer et d'appeler les actions correspondantes.
 class LibraryPage extends ConsumerStatefulWidget {
   const LibraryPage({super.key});
 
@@ -11,219 +26,338 @@ class LibraryPage extends ConsumerStatefulWidget {
 }
 
 class _LibraryPageState extends ConsumerState<LibraryPage> {
-  final _bookTitleController = TextEditingController();
-  final _bookAuthorController = TextEditingController();
-  final _bookIsbnController = TextEditingController();
-  final _bookTotalController = TextEditingController(text: '1');
-  final _bookAvailableController = TextEditingController(text: '1');
+  bool _chargement = true;
+  bool _enCours = false;
 
-  int? _selectedBorrowStudent;
-  int? _selectedBorrowBook;
-  DateTime _borrowDate = DateTime.now();
-  DateTime _borrowDueDate = DateTime.now().add(const Duration(days: 7));
-  final _borrowPenaltyController = TextEditingController(text: '0');
+  List<Book> _livres = const [];
+  List<Borrow> _emprunts = const [];
+  List<OptionEleve> _eleves = const [];
 
-  bool _loading = true;
-  bool _saving = false;
+  String _recherche = '';
+  String _filtreDisponibilite = '';
+  String _filtreEmprunts = '';
 
-  List<Map<String, dynamic>> _books = [];
-  List<Map<String, dynamic>> _borrows = [];
-  List<Map<String, dynamic>> _students = [];
+  /// Lu hors du `build` -- au chargement notamment, ou il decide si la liste
+  /// des eleves doit seulement etre demandee.
+  bool get _peutEcrire =>
+      ref.read(currentPermissionsProvider).canWrite('library');
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _charger());
   }
 
-  @override
-  void dispose() {
-    _bookTitleController.dispose();
-    _bookAuthorController.dispose();
-    _bookIsbnController.dispose();
-    _bookTotalController.dispose();
-    _bookAvailableController.dispose();
-    _borrowPenaltyController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadData() async {
-    setState(() => _loading = true);
-
+  Future<void> _charger() async {
+    setState(() => _chargement = true);
     try {
-      final dio = ref.read(dioProvider);
-      final results = await Future.wait([
-        dio.get('/books/'),
-        dio.get('/borrows/'),
-        dio.get('/students/'),
-      ]);
+      final depot = ref.read(booksRepositoryProvider);
+      final livres = await depot.fetchBooks(
+        search: _recherche,
+        availability: _filtreDisponibilite,
+      );
+      final emprunts = await depot.fetchBorrows(status: _filtreEmprunts);
+      // La liste des eleves ne sert qu'a enregistrer un pret, et le module
+      // « eleves » est ferme aux profils en lecture: la demander pour eux
+      // faisait echouer le chargement entier de l'onglet sur un 403.
+      final eleves = _peutEcrire ? await _chargerEleves() : const <OptionEleve>[];
 
       if (!mounted) return;
-
       setState(() {
-        _books = _extractRows(results[0].data);
-        _borrows = _extractRows(results[1].data);
-        _students = _extractRows(results[2].data);
-
-        _selectedBorrowBook ??= _books.isNotEmpty
-            ? _asInt(_books.first['id'])
-            : null;
-        _selectedBorrowStudent ??= _students.isNotEmpty
-            ? _asInt(_students.first['id'])
-            : null;
+        _livres = livres;
+        _emprunts = emprunts;
+        _eleves = eleves;
       });
     } catch (error) {
       if (!mounted) return;
-      _showMessage('Erreur chargement bibliothèque: $error');
+      _signaler(_message(error, 'Erreur chargement bibliothèque.'));
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) setState(() => _chargement = false);
     }
   }
 
-  Future<void> _createBook() async {
-    final total = int.tryParse(_bookTotalController.text.trim());
-    final available = int.tryParse(_bookAvailableController.text.trim());
+  Future<List<OptionEleve>> _chargerEleves() async {
+    final reponse = await ref.read(dioProvider).get(
+      '/students/',
+      queryParameters: {'page_size': 500},
+    );
+    final data = reponse.data;
+    final lignes = data is Map<String, dynamic> && data['results'] is List
+        ? data['results'] as List<dynamic>
+        : (data is List<dynamic> ? data : const <dynamic>[]);
 
-    if (_bookTitleController.text.trim().isEmpty ||
-        _bookAuthorController.text.trim().isEmpty ||
-        _bookIsbnController.text.trim().isEmpty ||
-        total == null ||
-        available == null) {
-      _showMessage('Complétez les champs livre.');
+    return lignes
+        .whereType<Map>()
+        .map(
+          (ligne) => (
+            id: (ligne['id'] as num?)?.toInt() ?? 0,
+            matricule: ligne['matricule']?.toString() ?? '',
+            nom: ligne['user_full_name']?.toString() ?? '',
+          ),
+        )
+        .where((eleve) => eleve.id > 0)
+        .toList(growable: false);
+  }
+
+  // --- Catalogue ----------------------------------------------------------
+
+  Future<void> _ajouterUnOuvrage() async {
+    final saisie = await showDialog<BookFormResult>(
+      context: context,
+      builder: (_) => const BookFormDialog(),
+    );
+    if (saisie == null) return;
+
+    await _executer(
+      () => ref.read(booksRepositoryProvider).createBook(
+        title: saisie.title,
+        author: saisie.author,
+        isbn: saisie.isbn,
+        quantityTotal: saisie.quantityTotal,
+        publisher: saisie.publisher,
+        publishedYear: saisie.publishedYear,
+        subject: saisie.subject,
+        shelfLocation: saisie.shelfLocation,
+      ),
+      succes: 'Ouvrage ajouté.',
+      echec: 'Création impossible.',
+    );
+  }
+
+  Future<void> _modifierUnOuvrage(Book livre) async {
+    final saisie = await showDialog<BookFormResult>(
+      context: context,
+      builder: (_) => BookFormDialog(livre: livre),
+    );
+    if (saisie == null) return;
+
+    await _executer(
+      () => ref.read(booksRepositoryProvider).updateBook(
+        livre.id,
+        title: saisie.title,
+        author: saisie.author,
+        isbn: saisie.isbn,
+        quantityTotal: saisie.quantityTotal,
+        publisher: saisie.publisher,
+        publishedYear: saisie.publishedYear,
+        subject: saisie.subject,
+        shelfLocation: saisie.shelfLocation,
+        // L'annee videe doit partir en `null` explicite, sinon l'ancienne
+        // valeur survivrait a la correction.
+        effacerAnnee: saisie.publishedYear == null,
+      ),
+      succes: 'Ouvrage modifié.',
+      echec: 'Modification impossible.',
+    );
+  }
+
+  Future<void> _supprimerUnOuvrage(Book livre) async {
+    final confirme = await _confirmer(
+      titre: 'Supprimer l’ouvrage',
+      corps: '« ${livre.title} » sera retiré du catalogue.',
+      action: 'Supprimer',
+    );
+    if (!confirme) return;
+
+    await _executer(
+      () => ref.read(booksRepositoryProvider).deleteBook(livre.id),
+      succes: 'Ouvrage supprimé.',
+      // Le serveur protege un ouvrage encore rattache a des emprunts
+      // (`on_delete=PROTECT`): son refus est la bonne reponse, pas un bug.
+      echec: 'Suppression impossible : cet ouvrage a un historique d’emprunts.',
+    );
+  }
+
+  // --- Prets --------------------------------------------------------------
+
+  Future<void> _enregistrerUnPret() async {
+    if (_eleves.isEmpty) {
+      _signaler('Aucun élève à qui prêter un ouvrage.');
       return;
     }
+    final saisie = await showDialog<BorrowFormResult>(
+      context: context,
+      builder: (_) => BorrowFormDialog(livres: _livres, eleves: _eleves),
+    );
+    if (saisie == null) return;
 
-    setState(() => _saving = true);
+    await _executer(
+      () => ref.read(booksRepositoryProvider).createBorrow(
+        studentId: saisie.studentId,
+        bookId: saisie.bookId,
+        borrowedAt: saisie.borrowedAt,
+        dueDate: saisie.dueDate,
+      ),
+      succes: 'Emprunt enregistré.',
+      echec: 'Enregistrement impossible.',
+    );
+  }
 
+  Future<void> _rendre(Borrow emprunt) async {
+    final penalite = emprunt.penaltyDue;
+    final confirme = await _confirmer(
+      titre: 'Rendre l’ouvrage',
+      corps: penalite > 0
+          ? '« ${emprunt.bookTitle} » revient avec ${emprunt.daysLate} jour(s) '
+                'de retard. Une pénalité de ${penalite.toStringAsFixed(0)} F '
+                'sera portée au dossier.'
+          : '« ${emprunt.bookTitle} » sera remis en rayon.',
+      action: 'Confirmer le retour',
+    );
+    if (!confirme) return;
+
+    await _executer(
+      () => ref.read(booksRepositoryProvider).returnBorrow(emprunt.id),
+      succes: 'Ouvrage rendu.',
+      echec: 'Retour impossible.',
+    );
+  }
+
+  Future<void> _supprimerUnPret(Borrow emprunt) async {
+    final confirme = await _confirmer(
+      titre: 'Supprimer l’emprunt',
+      corps: 'La ligne disparaîtra de l’historique et l’exemplaire '
+          'retournera au rayon.',
+      action: 'Supprimer',
+    );
+    if (!confirme) return;
+
+    await _executer(
+      () => ref.read(booksRepositoryProvider).deleteBorrow(emprunt.id),
+      succes: 'Emprunt supprimé.',
+      echec: 'Suppression impossible.',
+    );
+  }
+
+  // --- Rouages communs ----------------------------------------------------
+
+  /// Joue une action, puis recharge: les compteurs viennent du serveur et
+  /// les recalculer ici les ferait diverger de la liste affichee.
+  Future<void> _executer(
+    Future<void> Function() action, {
+    required String succes,
+    required String echec,
+  }) async {
+    setState(() => _enCours = true);
     try {
-      await ref
-          .read(dioProvider)
-          .post(
-            '/books/',
-            data: {
-              'title': _bookTitleController.text.trim(),
-              'author': _bookAuthorController.text.trim(),
-              'isbn': _bookIsbnController.text.trim(),
-              'quantity_total': total,
-              'quantity_available': available,
-            },
-          );
-
+      await action();
       if (!mounted) return;
-      _bookTitleController.clear();
-      _bookAuthorController.clear();
-      _bookIsbnController.clear();
-      _bookTotalController.text = '1';
-      _bookAvailableController.text = '1';
-      _showMessage('Livre créé avec succès.', isSuccess: true);
-      await _loadData();
+      _signaler(succes, succes: true);
+      await _charger();
     } catch (error) {
       if (!mounted) return;
-      _showMessage('Erreur création livre: $error');
+      _signaler(_message(error, echec));
     } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) setState(() => _enCours = false);
     }
   }
 
-  Future<void> _createBorrow() async {
-    final student = _selectedBorrowStudent;
-    final book = _selectedBorrowBook;
-    final penalty = double.tryParse(_borrowPenaltyController.text.trim()) ?? 0;
-
-    if (student == null || book == null) {
-      _showMessage('Sélectionnez élève et livre.');
-      return;
-    }
-
-    setState(() => _saving = true);
-
-    try {
-      await ref
-          .read(dioProvider)
-          .post(
-            '/borrows/',
-            data: {
-              'student': student,
-              'book': book,
-              'borrowed_at': _apiDate(_borrowDate),
-              'due_date': _apiDate(_borrowDueDate),
-              'penalty_amount': penalty,
-            },
-          );
-
-      if (!mounted) return;
-      _showMessage('Emprunt enregistré.', isSuccess: true);
-      await _loadData();
-    } catch (error) {
-      if (!mounted) return;
-      _showMessage('Erreur enregistrement emprunt: $error');
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
+  Future<bool> _confirmer({
+    required String titre,
+    required String corps,
+    required String action,
+  }) async {
+    final reponse = await showDialog<bool>(
+      context: context,
+      builder: (contexteDialogue) => AlertDialog(
+        title: Text(titre),
+        content: Text(corps),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(contexteDialogue).pop(true),
+            child: Text(action),
+          ),
+        ],
+      ),
+    );
+    return reponse == true;
   }
 
-  void _showMessage(String message, {bool isSuccess = false}) {
+  String _message(Object error, String repli) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map) {
+        // Le serveur refuse champ par champ: « book » quand il n'y a plus
+        // d'exemplaire, « isbn » sur un doublon. Le message est utilisable
+        // tel quel, la ou « erreur 400 » n'apprend rien.
+        for (final valeur in data.values) {
+          if (valeur is List && valeur.isNotEmpty) return valeur.first.toString();
+          if (valeur is String && valeur.isNotEmpty) return valeur;
+        }
+      }
+    }
+    return repli;
+  }
+
+  void _signaler(String message, {bool succes = false}) {
     if (!mounted) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-    const successColor = Color(0xFF197A43);
-    messenger
+    const vert = Color(0xFF197A43);
+    ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          backgroundColor: isSuccess ? successColor : null,
+          backgroundColor: succes ? vert : null,
           content: Text(
             message,
-            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+            style: succes ? const TextStyle(color: Colors.white) : null,
           ),
         ),
       );
   }
 
-  Future<void> _refreshLibrary() async {
-    await _loadData();
-  }
-
-  Widget _metricChip(String label, String value) {
+  Widget _carte({required String titre, Widget? action, required Widget corps}) {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
+        color: scheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          Row(
+            children: [
+              Expanded(
+                child: Text(titre, style: Theme.of(context).textTheme.titleSmall),
+              ),
+              ?action,
+            ],
           ),
+          const SizedBox(height: 8),
+          corps,
         ],
       ),
     );
   }
 
-  Widget _sectionCard({required String title, required Widget child}) {
-    final colorScheme = Theme.of(context).colorScheme;
+  Widget _pastille(String libelle, String valeur, {bool alerte = false}) {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: alerte ? scheme.error : scheme.outlineVariant,
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          child,
+          Text(libelle, style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: 2),
+          Text(
+            valeur,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: alerte ? scheme.error : null,
+            ),
+          ),
         ],
       ),
     );
@@ -231,216 +365,70 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return RefreshIndicator(
-        onRefresh: _refreshLibrary,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(18),
-          children: const [
-            SizedBox(
-              height: 460,
-              child: Center(child: CircularProgressIndicator()),
-            ),
-          ],
-        ),
-      );
+    final droits = ref.watch(currentPermissionsProvider);
+    final peutEcrire = droits.canWrite('library');
+    final peutSupprimer = droits.canDelete('library');
+
+    if (_chargement) {
+      return const Center(child: CircularProgressIndicator());
     }
 
-    final colorScheme = Theme.of(context).colorScheme;
-    final studentsById = {for (final s in _students) _asInt(s['id']): s};
-    final booksById = {for (final b in _books) _asInt(b['id']): b};
+    final enRetard = _emprunts.where((emprunt) => emprunt.estEnRetard).length;
+    final enCours = _emprunts.where((emprunt) => !emprunt.isReturned).length;
+    final disponibles = _livres.where((livre) => livre.estDisponible).length;
 
-    final availableBooks = _books.where((b) {
-      final qty = int.tryParse(b['quantity_available']?.toString() ?? '') ?? 0;
-      return qty > 0;
-    }).length;
-
-    final overdueBorrows = _borrows.where((br) {
-      final dueDateRaw = br['due_date']?.toString();
-      if (dueDateRaw == null || dueDateRaw.isEmpty) return false;
-      final dueDate = DateTime.tryParse(dueDateRaw);
-      if (dueDate == null) return false;
-      final returned =
-          br['returned_at'] != null &&
-          br['returned_at'].toString().trim().isNotEmpty;
-      return !returned && dueDate.isBefore(DateTime.now());
-    }).length;
-
-    final createBookPanel = _sectionCard(
-      title: 'Ajouter un livre',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            controller: _bookTitleController,
-            decoration: const InputDecoration(labelText: 'Titre'),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _bookAuthorController,
-            decoration: const InputDecoration(labelText: 'Auteur'),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _bookIsbnController,
-            decoration: const InputDecoration(labelText: 'ISBN'),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _bookTotalController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Quantite totale'),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _bookAvailableController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Quantite disponible'),
-          ),
-          const SizedBox(height: 10),
-          FilledButton(
-            onPressed: _saving ? null : _createBook,
-            child: const Text('Ajouter livre'),
-          ),
-        ],
+    final catalogue = _carte(
+      titre: 'Catalogue',
+      action: peutEcrire
+          ? IconButton(
+              tooltip: 'Ajouter un ouvrage',
+              onPressed: _enCours ? null : _ajouterUnOuvrage,
+              icon: const Icon(Icons.add),
+            )
+          : null,
+      corps: BooksPanel(
+        livres: _livres,
+        recherche: _recherche,
+        filtreDisponibilite: _filtreDisponibilite,
+        onRechercheChanged: (valeur) {
+          setState(() => _recherche = valeur);
+          _charger();
+        },
+        onFiltreChanged: (valeur) {
+          setState(() => _filtreDisponibilite = valeur);
+          _charger();
+        },
+        onModifier: peutEcrire ? _modifierUnOuvrage : null,
+        onSupprimer: peutSupprimer ? _supprimerUnOuvrage : null,
       ),
     );
 
-    final createBorrowPanel = _sectionCard(
-      title: 'Enregistrer un emprunt',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          DropdownButtonFormField<int>(
-            initialValue: _selectedBorrowStudent,
-            decoration: const InputDecoration(labelText: 'Eleve'),
-            items: _students
-                .map(
-                  (s) => DropdownMenuItem<int>(
-                    value: _asInt(s['id']),
-                    child: Text(
-                      '${s['matricule']} • ${s['user_full_name'] ?? ''}',
-                    ),
-                  ),
-                )
-                .toList(),
-            onChanged: (v) => setState(() => _selectedBorrowStudent = v),
-          ),
-          const SizedBox(height: 10),
-          DropdownButtonFormField<int>(
-            initialValue: _selectedBorrowBook,
-            decoration: const InputDecoration(labelText: 'Livre'),
-            items: _books
-                .map(
-                  (b) => DropdownMenuItem<int>(
-                    value: _asInt(b['id']),
-                    child: Text(
-                      '${b['title']} (dispo: ${b['quantity_available']})',
-                    ),
-                  ),
-                )
-                .toList(),
-            onChanged: (v) => setState(() => _selectedBorrowBook = v),
-          ),
-          const SizedBox(height: 10),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Date emprunt'),
-            subtitle: Text(_apiDate(_borrowDate)),
-            trailing: const Icon(Icons.calendar_month),
-            onTap: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: _borrowDate,
-                firstDate: DateTime(2020),
-                lastDate: DateTime(2100),
-              );
-              if (picked != null) setState(() => _borrowDate = picked);
-            },
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Date limite retour'),
-            subtitle: Text(_apiDate(_borrowDueDate)),
-            trailing: const Icon(Icons.calendar_month),
-            onTap: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: _borrowDueDate,
-                firstDate: DateTime(2020),
-                lastDate: DateTime(2100),
-              );
-              if (picked != null) setState(() => _borrowDueDate = picked);
-            },
-          ),
-          TextField(
-            controller: _borrowPenaltyController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: 'Penalite (optionnel)',
-            ),
-          ),
-          const SizedBox(height: 10),
-          FilledButton.tonal(
-            onPressed: _saving ? null : _createBorrow,
-            child: const Text('Creer emprunt'),
-          ),
-        ],
+    final prets = _carte(
+      titre: peutEcrire ? 'Emprunts' : 'Mes emprunts',
+      action: peutEcrire
+          ? IconButton(
+              tooltip: 'Enregistrer un emprunt',
+              onPressed: _enCours ? null : _enregistrerUnPret,
+              icon: const Icon(Icons.add),
+            )
+          : null,
+      corps: BorrowsPanel(
+        emprunts: _emprunts,
+        filtre: _filtreEmprunts,
+        onFiltreChanged: (valeur) {
+          setState(() => _filtreEmprunts = valeur);
+          _charger();
+        },
+        onRendre: peutEcrire ? _rendre : null,
+        onSupprimer: peutSupprimer ? _supprimerUnPret : null,
+        // Pour l'eleve et le parent, la liste ne contient que leurs propres
+        // prets: repeter le nom a chaque ligne n'apprendrait rien.
+        masquerEmprunteur: !peutEcrire,
       ),
-    );
-
-    final booksPanel = _sectionCard(
-      title: 'Livres disponibles',
-      child: _books.isEmpty
-          ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 18),
-              child: Text('Aucun livre enregistre'),
-            )
-          : Column(
-              children: _books
-                  .map(
-                    (b) => Card(
-                      child: ListTile(
-                        title: Text('${b['title']}'),
-                        subtitle: Text('${b['author']} • ISBN ${b['isbn']}'),
-                        trailing: Text(
-                          '${b['quantity_available']}/${b['quantity_total']}',
-                        ),
-                      ),
-                    ),
-                  )
-                  .toList(),
-            ),
-    );
-
-    final borrowsPanel = _sectionCard(
-      title: 'Historique emprunts',
-      child: _borrows.isEmpty
-          ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 18),
-              child: Text('Aucun emprunt enregistre'),
-            )
-          : Column(
-              children: _borrows.map((br) {
-                final student = studentsById[_asInt(br['student'])];
-                final book = booksById[_asInt(br['book'])];
-                return Card(
-                  child: ListTile(
-                    title: Text('${book?['title'] ?? 'Livre'}'),
-                    subtitle: Text(
-                      '${student?['matricule'] ?? ''} • ${student?['user_full_name'] ?? ''}\n'
-                      '${br['borrowed_at']} -> ${br['due_date']}',
-                    ),
-                    isThreeLine: true,
-                  ),
-                );
-              }).toList(),
-            ),
     );
 
     return RefreshIndicator(
-      onRefresh: _refreshLibrary,
+      onRefresh: _charger,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(18),
@@ -452,112 +440,61 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Bibliotheque',
+                      'Ouvrages',
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Gestion des livres et suivi des emprunts/retours.',
+                      peutEcrire
+                          ? 'Catalogue papier, prêts et retours.'
+                          : 'Le catalogue de l’établissement et vos emprunts.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
                 ),
               ),
               OutlinedButton.icon(
-                onPressed: _saving ? null : _loadData,
+                onPressed: _enCours ? null : _charger,
                 icon: const Icon(Icons.sync),
                 label: const Text('Actualiser'),
               ),
             ],
           ),
-          if (_saving) ...[
+          if (_enCours) ...[
             const SizedBox(height: 8),
             const LinearProgressIndicator(),
           ],
           const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            decoration: BoxDecoration(
-              color: colorScheme.surfaceContainerLowest,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: colorScheme.outlineVariant.withValues(alpha: 0.55),
-              ),
-            ),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _metricChip('Livres', '${_books.length}'),
-                _metricChip('Disponibles', '$availableBooks'),
-                _metricChip('Emprunts', '${_borrows.length}'),
-                _metricChip('Retards', '$overdueBorrows'),
-                _metricChip('Eleves', '${_students.length}'),
-              ],
-            ),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _pastille('Ouvrages', '${_livres.length}'),
+              _pastille('Disponibles', '$disponibles'),
+              _pastille('Prêts en cours', '$enCours'),
+              _pastille('Retards', '$enRetard', alerte: enRetard > 0),
+            ],
           ),
           const SizedBox(height: 12),
           LayoutBuilder(
             builder: (context, constraints) {
-              final isWide = constraints.maxWidth >= 1120;
-              final leftPanel = Column(
-                children: [
-                  createBookPanel,
-                  const SizedBox(height: 12),
-                  createBorrowPanel,
-                ],
-              );
-              final rightPanel = Column(
-                children: [
-                  booksPanel,
-                  const SizedBox(height: 12),
-                  borrowsPanel,
-                ],
-              );
-
-              if (isWide) {
+              if (constraints.maxWidth >= 1120) {
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(flex: 6, child: leftPanel),
+                    Expanded(flex: 6, child: catalogue),
                     const SizedBox(width: 12),
-                    Expanded(flex: 5, child: rightPanel),
+                    Expanded(flex: 5, child: prets),
                   ],
                 );
               }
-
               return Column(
-                children: [leftPanel, const SizedBox(height: 12), rightPanel],
+                children: [catalogue, const SizedBox(height: 12), prets],
               );
             },
           ),
         ],
       ),
     );
-  }
-
-  List<Map<String, dynamic>> _extractRows(dynamic data) {
-    final List<dynamic> rows;
-    if (data is Map<String, dynamic> && data['results'] is List) {
-      rows = data['results'] as List<dynamic>;
-    } else if (data is List<dynamic>) {
-      rows = data;
-    } else {
-      rows = [];
-    }
-
-    return rows
-        .whereType<Map>()
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList();
-  }
-
-  int _asInt(dynamic value) {
-    if (value is int) return value;
-    return int.tryParse(value?.toString() ?? '') ?? 0;
-  }
-
-  String _apiDate(DateTime value) {
-    return '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
   }
 }

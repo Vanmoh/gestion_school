@@ -751,13 +751,84 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 continue
 
             unique_fields = []
+            deja_vus = set()
             for field in opts.fields:
                 if field.primary_key or not getattr(field, "unique", False):
                     continue
                 if not isinstance(field, string_unique_fields):
                     continue
                 max_length = getattr(field, "max_length", None) or 255
-                unique_fields.append((field.name, max_length))
+                unique_fields.append(
+                    {
+                        "name": field.name,
+                        "max_length": max_length,
+                        # Unique pour toute la table: rien ne borne la
+                        # recherche de collision.
+                        "scope": (),
+                        # Une valeur vide viole la contrainte comme une
+                        # autre: on lui en fabrique une.
+                        "remplir_si_vide": True,
+                    }
+                )
+                deja_vus.add(field.name)
+
+            # Les memes garde-fous pour l'unicite portee par une contrainte
+            # plutot que par le champ. Sans cela, passer `Book.isbn` d'un
+            # `unique=True` global a une unicite par etablissement le faisait
+            # sortir de ce mecanisme, et la restauration echouait sur une
+            # erreur d'integrite au lieu de renommer le doublon.
+            portees_par_champ = {}
+            for constraint in getattr(opts, "constraints", ()):
+                if not isinstance(constraint, models.UniqueConstraint):
+                    continue
+                champs = tuple(getattr(constraint, "fields", ()) or ())
+                if not champs:
+                    # Contrainte sur expressions: hors de portee de cette
+                    # reecriture, qui ne sait comparer que des valeurs.
+                    continue
+
+                textuels = [
+                    nom
+                    for nom in champs
+                    if isinstance(opts.get_field(nom), string_unique_fields)
+                ]
+                # Une seule colonne texte a reecrire: avec deux, il faudrait
+                # choisir laquelle deplacer, et ce choix n'appartient pas a
+                # une restauration.
+                if len(textuels) != 1:
+                    continue
+
+                nom = textuels[0]
+                if nom in deja_vus:
+                    continue
+
+                portee = tuple(c for c in champs if c != nom)
+                # Un meme champ est souvent couvert par deux contraintes
+                # complementaires -- l'une pour les lignes rattachees a un
+                # etablissement, l'autre pour les orphelines. On retient la
+                # portee la plus fine: la recherche « meme ISBN, meme
+                # etablissement » couvre aussi les orphelins entre eux
+                # (etablissement vide des deux cotes), tandis que la portee
+                # large renommerait le livre de la voisine sans raison.
+                ancienne = portees_par_champ.get(nom)
+                if ancienne is None or len(portee) > len(ancienne):
+                    portees_par_champ[nom] = portee
+
+            for nom, portee in portees_par_champ.items():
+                champ = opts.get_field(nom)
+                unique_fields.append(
+                    {
+                        "name": nom,
+                        "max_length": getattr(champ, "max_length", None) or 255,
+                        "scope": portee,
+                        # Ces contraintes portent souvent une condition qui
+                        # exclut le vide (`~Q(source_url="")`): remplir un
+                        # champ laisse vide inventerait une donnee la ou la
+                        # contrainte ne s'applique meme pas.
+                        "remplir_si_vide": False,
+                    }
+                )
+                deja_vus.add(nom)
 
             if unique_fields:
                 model_specs[opts.label_lower] = {
@@ -765,11 +836,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                     "fields": unique_fields,
                 }
 
-        seen_by_spec = {
-            (model_label, field_name): set()
-            for model_label, spec in model_specs.items()
-            for field_name, _ in spec["fields"]
-        }
+        seen_by_spec = {}
         rewrite_stats = {}
 
         def _normalize_model_label(value: str) -> str:
@@ -819,20 +886,38 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 continue
 
             model_cls = spec["model"]
-            for field_name, max_length in spec["fields"]:
+            for champ_spec in spec["fields"]:
+                field_name = champ_spec["name"]
+                max_length = champ_spec["max_length"]
+                portee = champ_spec["scope"]
+
                 original_value = str(fields.get(field_name) or "").strip()
                 if not original_value:
+                    if not champ_spec["remplir_si_vide"]:
+                        continue
                     original_value = f"{_unique_prefix(normalized_model_label, field_name)}_{pk_value or 'restored'}"
+
+                # La portee entre dans la cle: deux etablissements ont le
+                # droit de porter le meme ISBN, et les compter ensemble
+                # renommerait le second sans raison.
+                valeurs_de_portee = tuple(fields.get(nom) for nom in portee)
+                cle = (normalized_model_label, field_name, valeurs_de_portee)
+                seen_values = seen_by_spec.setdefault(cle, set())
+                filtre_de_portee = {
+                    nom: fields.get(nom) for nom in portee
+                }
 
                 new_value = original_value
                 suffix = 0
-                seen_values = seen_by_spec[(normalized_model_label, field_name)]
 
                 while True:
                     normalized_candidate = new_value.strip().lower()
                     collision_in_payload = normalized_candidate in seen_values
                     collision_in_db = (
-                        model_cls.objects.filter(**{f"{field_name}__iexact": new_value})
+                        model_cls.objects.filter(
+                            **{f"{field_name}__iexact": new_value},
+                            **filtre_de_portee,
+                        )
                         .exclude(pk=pk_value)
                         .exists()
                     )

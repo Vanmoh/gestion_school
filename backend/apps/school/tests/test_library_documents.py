@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import CommandError, call_command
 from django.test import override_settings
 from rest_framework import status
@@ -28,6 +29,7 @@ from apps.school.models import (
     LibraryCategory,
     LibraryCollection,
     LibraryDocument,
+    LibraryDocumentOrigin,
     library_document_path,
 )
 
@@ -82,6 +84,30 @@ PAGE_CROCHETS = """
   <li class="file"><a class="file-link" href="Physique/BK_Bac_2023[1].pdf"></a></li>
 </ul>
 """
+
+
+def _pdf(nom="document.pdf", poids=1024):
+    """Un PDF minimal mais authentique: la signature y est.
+
+    Le controle du serveur lit les cinq premiers octets, pas l'extension:
+    un fichier de test sans « %PDF- » serait refuse comme le serait un .exe
+    renomme, et le test passerait pour une raison qui n'est pas la sienne.
+    """
+    corps = b"%PDF-1.4\n" + b"0" * max(0, poids - 9)
+    return SimpleUploadedFile(nom, corps, content_type="application/pdf")
+
+
+class _StockageTemporaireMixin:
+    """Un MEDIA_ROOT jetable par test: rien n'est ecrit dans le depot."""
+
+    def setUp(self):
+        super().setUp()
+        repertoire = tempfile.mkdtemp(prefix="gs-library-upload-")
+        self.addCleanup(shutil.rmtree, repertoire, ignore_errors=True)
+        reglage = override_settings(MEDIA_ROOT=repertoire)
+        reglage.enable()
+        self.addCleanup(reglage.disable)
+        self.media_root = Path(repertoire)
 
 
 class _AmontFactice:
@@ -763,7 +789,7 @@ class LibraryRedirectionStockageTests(APITestCase):
         self.assertEqual(b"".join(reponse.streaming_content), b"%PDF-1.4 local")
 
 
-class LibraryAccessTests(APITestCase):
+class LibraryAccessTests(_StockageTemporaireMixin, APITestCase):
     """Qui lit le fonds, qui l'alimente: la matrice, rien d'autre."""
 
     @classmethod
@@ -777,6 +803,15 @@ class LibraryAccessTests(APITestCase):
             category=cls.categorie,
             title="Suites",
             source_url="https://bkalan.ml/api/files/WhatsApp/TSExp/Mathematiques/BK_S.pdf",
+            origin="import",
+        )
+        # L'etagere propre a l'ecole: c'est la seule que l'application
+        # alimente, le fonds commun n'entre que par la commande d'import.
+        cls.etagere = LibraryCollection.objects.create(
+            code="Interne", label="Documents de l'école", etablissement=cls.etablissement
+        )
+        cls.matiere = LibraryCategory.objects.create(
+            collection=cls.etagere, name="Reglement"
         )
         cls.comptes = {
             role: User.objects.create_user(
@@ -822,10 +857,10 @@ class LibraryAccessTests(APITestCase):
             "/api/library-documents/",
             {
                 "title": "Faux",
-                "category": self.categorie.id,
-                "source_url": "https://bkalan.ml/api/files/WhatsApp/TSExp/x.pdf",
+                "category": self.matiere.id,
+                "file": _pdf("faux.pdf"),
             },
-            format="json",
+            format="multipart",
         )
 
         self.assertEqual(reponse.status_code, status.HTTP_403_FORBIDDEN)
@@ -837,12 +872,338 @@ class LibraryAccessTests(APITestCase):
             "/api/library-documents/",
             {
                 "title": "Annales 2026",
-                "category": self.categorie.id,
-                "source_url": "https://bkalan.ml/api/files/WhatsApp/TSExp/Mathematiques/BK_2026.pdf",
+                "category": self.matiere.id,
+                "file": _pdf("annales-2026.pdf"),
             },
-            format="json",
+            format="multipart",
         )
-        self.assertEqual(ajout.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(ajout.status_code, status.HTTP_201_CREATED, ajout.data)
 
         retrait = self.client.delete(f"/api/library-documents/{ajout.data['id']}/")
         self.assertEqual(retrait.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class LibraryUploadTests(_StockageTemporaireMixin, APITestCase):
+    """Le depot d'un PDF depuis l'application.
+
+    Le fonds importe restait en lecture seule: un etablissement qui voulait
+    diffuser son reglement interieur ou une fiche de revision maison n'avait
+    nulle part ou la mettre. Il pose desormais ses propres etageres, a cote
+    du fonds commun et sans y toucher.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.ecole = Etablissement.objects.create(name="LTOB")
+        cls.voisine = Etablissement.objects.create(name="Lycee Askia")
+
+        # Le fonds commun, tel que l'import le laisse.
+        cls.commun = LibraryCollection.objects.create(code="TSExp", label="TSExp")
+        cls.commun_maths = LibraryCategory.objects.create(
+            collection=cls.commun, name="Mathematiques"
+        )
+        LibraryDocument.objects.create(
+            category=cls.commun_maths,
+            title="Suites",
+            source_url="https://bkalan.ml/api/files/WhatsApp/TSExp/Mathematiques/BK_S.pdf",
+            origin=LibraryDocumentOrigin.IMPORT,
+        )
+
+        cls.directeur = cls._compte("dir_ltob", UserRole.DIRECTOR, cls.ecole)
+        cls.directeur_voisin = cls._compte("dir_askia", UserRole.DIRECTOR, cls.voisine)
+        cls.eleve = cls._compte("eleve_ltob", UserRole.STUDENT, cls.ecole)
+
+    @classmethod
+    def _compte(cls, username, role, etablissement):
+        return User.objects.create_user(
+            username=username, password="Pass1234!", role=role, etablissement=etablissement
+        )
+
+    def _etagere(self, etablissement, code="Interne"):
+        collection = LibraryCollection.objects.create(
+            code=code, label="Documents internes", etablissement=etablissement
+        )
+        return LibraryCategory.objects.create(
+            collection=collection, name="Administratif"
+        )
+
+    def _deposer(self, categorie, fichier=None, titre="Reglement interieur", **extra):
+        charge = {
+            "title": titre,
+            "category": categorie.id,
+            "file": fichier if fichier is not None else _pdf("reglement.pdf"),
+        }
+        charge.update(extra)
+        return self.client.post("/api/library-documents/", charge, format="multipart")
+
+    # --- Le depot lui-meme --------------------------------------------------
+
+    def test_un_pdf_depose_entre_dans_le_fonds_de_son_ecole(self):
+        self.client.force_authenticate(self.directeur)
+        categorie = self._etagere(self.ecole)
+
+        reponse = self._deposer(categorie, _pdf("reglement.pdf", poids=2048))
+
+        self.assertEqual(reponse.status_code, status.HTTP_201_CREATED, reponse.data)
+        document = LibraryDocument.objects.get(id=reponse.data["id"])
+        self.assertEqual(document.etablissement, self.ecole)
+        self.assertEqual(document.origin, LibraryDocumentOrigin.UPLOAD)
+        self.assertEqual(document.uploaded_by, self.directeur)
+        # Pose par le serveur d'apres le fichier, jamais annonce par le client.
+        self.assertTrue(document.is_downloaded)
+        self.assertEqual(document.size_bytes, 2048)
+        self.assertEqual(document.source_url, "")
+
+    def test_le_fichier_depose_se_relit_par_l_api(self):
+        self.client.force_authenticate(self.directeur)
+        categorie = self._etagere(self.ecole)
+        depot = self._deposer(categorie, _pdf("reglement.pdf", poids=512))
+
+        lecture = self.client.get(f"/api/library-documents/{depot.data['id']}/file/")
+
+        self.assertEqual(lecture.status_code, status.HTTP_200_OK)
+        self.assertEqual(lecture["Content-Type"], "application/pdf")
+        self.assertTrue(b"".join(lecture.streaming_content).startswith(b"%PDF-"))
+
+    def test_le_chemin_de_stockage_porte_l_ecole(self):
+        """Deux ecoles peuvent deposer leur « reglement.pdf » sans se marcher dessus."""
+        self.client.force_authenticate(self.directeur)
+        categorie = self._etagere(self.ecole)
+        depot = self._deposer(categorie)
+
+        document = LibraryDocument.objects.get(id=depot.data["id"])
+        self.assertTrue(
+            document.file.name.startswith(f"library_docs/etab_{self.ecole.id}/"),
+            document.file.name,
+        )
+
+    def test_deux_ecoles_deposent_le_meme_nom_sans_collision(self):
+        for compte, etablissement in (
+            (self.directeur, self.ecole),
+            (self.directeur_voisin, self.voisine),
+        ):
+            self.client.force_authenticate(compte)
+            self._deposer(self._etagere(etablissement))
+
+        chemins = set(LibraryDocument.objects.exclude(file="").values_list("file", flat=True))
+        self.assertEqual(len(chemins), 2, chemins)
+
+    # --- Ce que le depot refuse ---------------------------------------------
+
+    def test_un_fichier_qui_n_est_pas_un_pdf_est_refuse(self):
+        self.client.force_authenticate(self.directeur)
+        categorie = self._etagere(self.ecole)
+
+        reponse = self._deposer(
+            categorie,
+            SimpleUploadedFile("notes.txt", b"bonjour", content_type="text/plain"),
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("PDF", str(reponse.data["file"]))
+
+    def test_un_executable_renomme_en_pdf_est_refuse(self):
+        """L'extension ne prouve rien: c'est la signature du format qui decide."""
+        self.client.force_authenticate(self.directeur)
+        categorie = self._etagere(self.ecole)
+
+        reponse = self._deposer(
+            categorie,
+            SimpleUploadedFile("piege.pdf", b"MZ\x90\x00 binaire", content_type="application/pdf"),
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(LibraryDocument.objects.filter(origin="upload").count(), 0)
+
+    @override_settings(LIBRARY_UPLOAD_MAX_MB=1)
+    def test_un_fichier_trop_lourd_est_refuse(self):
+        self.client.force_authenticate(self.directeur)
+        categorie = self._etagere(self.ecole)
+
+        reponse = self._deposer(categorie, _pdf("gros.pdf", poids=2 * 1024 * 1024))
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("1 Mo", str(reponse.data["file"]))
+
+    def test_un_document_sans_fichier_ni_source_est_refuse(self):
+        self.client.force_authenticate(self.directeur)
+        categorie = self._etagere(self.ecole)
+
+        reponse = self.client.post(
+            "/api/library-documents/",
+            {"title": "Vide", "category": categorie.id},
+            format="multipart",
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_l_eleve_ne_depose_rien(self):
+        self.client.force_authenticate(self.eleve)
+        categorie = self._etagere(self.ecole)
+
+        self.assertEqual(
+            self._deposer(categorie).status_code, status.HTTP_403_FORBIDDEN
+        )
+
+    # --- Le fonds commun reste intouchable ----------------------------------
+
+    def test_le_fonds_commun_n_accepte_pas_de_depot(self):
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self._deposer(self.commun_maths)
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("fonds commun", str(reponse.data).lower())
+
+    def test_un_document_du_fonds_commun_ne_se_supprime_pas(self):
+        self.client.force_authenticate(self.directeur)
+        document = LibraryDocument.objects.get(title="Suites")
+
+        reponse = self.client.delete(f"/api/library-documents/{document.id}/")
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(LibraryDocument.objects.filter(id=document.id).exists())
+
+    def test_un_document_du_fonds_commun_ne_se_renomme_pas(self):
+        self.client.force_authenticate(self.directeur)
+        document = LibraryDocument.objects.get(title="Suites")
+
+        reponse = self.client.patch(
+            f"/api/library-documents/{document.id}/",
+            {"title": "Renomme"},
+            format="json",
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # --- Cloisonnement entre ecoles -----------------------------------------
+
+    def test_l_ecole_voisine_ne_voit_pas_le_document_depose(self):
+        self.client.force_authenticate(self.directeur)
+        self._deposer(self._etagere(self.ecole), titre="Reglement LTOB")
+
+        self.client.force_authenticate(self.directeur_voisin)
+        titres = [
+            ligne["title"]
+            for ligne in self.client.get("/api/library-documents/").data["results"]
+        ]
+
+        self.assertNotIn("Reglement LTOB", titres)
+        # Le fonds commun, lui, reste lisible par les deux.
+        self.assertIn("Suites", titres)
+
+    def test_l_ecole_voisine_ne_depose_pas_dans_l_etagere_d_autrui(self):
+        categorie = self._etagere(self.ecole)
+        self.client.force_authenticate(self.directeur_voisin)
+
+        reponse = self._deposer(categorie)
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_l_etagere_d_une_ecole_ne_s_affiche_pas_chez_la_voisine(self):
+        LibraryCollection.objects.create(
+            code="Interne", label="Documents internes", etablissement=self.ecole
+        )
+        self.client.force_authenticate(self.directeur_voisin)
+
+        codes = [
+            ligne["code"]
+            for ligne in self.client.get("/api/library-collections/").data
+        ]
+
+        self.assertEqual(codes, ["TSExp"])
+
+    # --- Le cycle de vie d'un document depose -------------------------------
+
+    def test_le_document_depose_se_renomme_et_change_de_matiere(self):
+        self.client.force_authenticate(self.directeur)
+        categorie = self._etagere(self.ecole)
+        autre = LibraryCategory.objects.create(
+            collection=categorie.collection, name="Fiches"
+        )
+        depot = self._deposer(categorie)
+
+        reponse = self.client.patch(
+            f"/api/library-documents/{depot.data['id']}/",
+            {"title": "Reglement 2026", "category": autre.id},
+            format="json",
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
+        document = LibraryDocument.objects.get(id=depot.data["id"])
+        self.assertEqual(document.title, "Reglement 2026")
+        self.assertEqual(document.category, autre)
+
+    def test_la_suppression_emporte_le_fichier_du_stockage(self):
+        self.client.force_authenticate(self.directeur)
+        depot = self._deposer(self._etagere(self.ecole))
+        document = LibraryDocument.objects.get(id=depot.data["id"])
+        chemin = self.media_root / document.file.name
+        self.assertTrue(chemin.exists())
+
+        reponse = self.client.delete(f"/api/library-documents/{document.id}/")
+
+        self.assertEqual(reponse.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(chemin.exists())
+
+    def test_le_remplacement_du_fichier_efface_l_ancien(self):
+        self.client.force_authenticate(self.directeur)
+        depot = self._deposer(self._etagere(self.ecole))
+        ancien = self.media_root / LibraryDocument.objects.get(id=depot.data["id"]).file.name
+
+        reponse = self.client.patch(
+            f"/api/library-documents/{depot.data['id']}/",
+            {"file": _pdf("reglement.pdf", poids=4096)},
+            format="multipart",
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
+        document = LibraryDocument.objects.get(id=depot.data["id"])
+        self.assertEqual(document.size_bytes, 4096)
+        self.assertFalse(ancien.exists())
+
+    # --- Les etageres de l'ecole --------------------------------------------
+
+    def test_l_ecole_cree_sa_serie_et_sa_matiere(self):
+        self.client.force_authenticate(self.directeur)
+
+        serie = self.client.post(
+            "/api/library-collections/",
+            {"code": "Interne", "label": "Documents de l'école"},
+            format="json",
+        )
+        self.assertEqual(serie.status_code, status.HTTP_201_CREATED, serie.data)
+        self.assertFalse(serie.data["is_commun"])
+
+        matiere = self.client.post(
+            "/api/library-categories/",
+            {"collection": serie.data["id"], "name": "Administratif"},
+            format="json",
+        )
+
+        self.assertEqual(matiere.status_code, status.HTTP_201_CREATED, matiere.data)
+        self.assertEqual(
+            LibraryCollection.objects.get(id=serie.data["id"]).etablissement, self.ecole
+        )
+
+    def test_deux_ecoles_nomment_leur_serie_pareil(self):
+        """« Interne » chez l'une n'empeche pas « Interne » chez l'autre."""
+        for compte in (self.directeur, self.directeur_voisin):
+            self.client.force_authenticate(compte)
+            reponse = self.client.post(
+                "/api/library-collections/",
+                {"code": "Interne", "label": "Documents internes"},
+                format="json",
+            )
+            self.assertEqual(reponse.status_code, status.HTTP_201_CREATED, reponse.data)
+
+    def test_une_matiere_ne_s_ajoute_pas_au_fonds_commun(self):
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.post(
+            "/api/library-categories/",
+            {"collection": self.commun.id, "name": "Matiere pirate"},
+            format="json",
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)

@@ -49,6 +49,7 @@ from apps.school.models import (
     LibraryCategory,
     LibraryCollection,
     LibraryDocument,
+    LibraryDocumentOrigin,
     library_document_path,
 )
 
@@ -249,7 +250,8 @@ class Command(BaseCommand):
         # chaque reveil ne changerait rien a la base. Un catalogue present
         # dit que la premiere passe a eu lieu: cela suffit a s'arreter.
         if options["si_vide"] and LibraryDocument.objects.filter(
-            category__collection__code__in=codes
+            category__collection__code__in=codes,
+            category__collection__etablissement__isnull=True,
         ).exists():
             self.stdout.write("Catalogue deja en place: rien a faire (--si-vide).")
             return
@@ -303,8 +305,12 @@ class Command(BaseCommand):
             return len(entrees)
 
         with transaction.atomic():
+            # `etablissement=None` fait partie de la recherche et non des
+            # valeurs posees: une ecole peut avoir cree sa propre serie sous
+            # le meme code, et chercher par code seul en trouverait deux.
             collection, _ = LibraryCollection.objects.update_or_create(
                 code=code,
+                etablissement=None,
                 defaults={"label": libelle, "source_url": url, "position": position},
             )
 
@@ -319,7 +325,12 @@ class Command(BaseCommand):
                 )
                 LibraryDocument.objects.update_or_create(
                     source_url=f"{self.base_url}/{code}/{quote(href, safe=SAFE_URL)}",
-                    defaults={"category": categorie, "title": titre_lisible(nom_fichier)},
+                    defaults={
+                        "category": categorie,
+                        "title": titre_lisible(nom_fichier),
+                        "origin": LibraryDocumentOrigin.IMPORT,
+                        "etablissement": None,
+                    },
                 )
 
         self.stdout.write(f"{code}: {len(entrees)} documents, {len(rangs)} matieres")
@@ -328,8 +339,13 @@ class Command(BaseCommand):
     # --- Rapatriement ------------------------------------------------------
 
     def _rapatrier(self, codes, jobs, limite, retenter, taille_max=0):
+        # Bornee au fonds commun: une ecole peut avoir baptise son etagere
+        # « TSExp », ses documents n'ont rien a faire dans un rapatriement
+        # depuis la source.
         a_faire = LibraryDocument.objects.filter(
-            category__collection__code__in=codes, is_downloaded=False
+            category__collection__code__in=codes,
+            category__collection__etablissement__isnull=True,
+            is_downloaded=False,
         ).select_related("category", "category__collection")
         if not retenter:
             a_faire = a_faire.filter(import_error="")

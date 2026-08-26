@@ -176,9 +176,67 @@ for d in LibraryDocument.objects.exclude(import_error=''):
 
 `--retenter-erreurs` les remet dans la file si la source se répare un jour.
 
-## 6. Fonds papier
+## 6. Les documents déposés par un établissement
+
+À côté du fonds importé, chaque école pose ses propres étagères depuis
+l'écran : bouton « Ajouter un document » de l'onglet « Documents ». Rien à
+exploiter côté serveur, mais deux règles à connaître quand un utilisateur
+appelle.
+
+**Ce qui est cloisonné.** Une série créée depuis l'application porte un
+`etablissement` ; le fonds importé, non. Chacun voit le fonds commun **plus**
+ses propres documents, jamais ceux d'une autre école. Les fichiers déposés
+sont rangés sous `library_docs/etab_<id>/…`, ce qui laisse deux écoles
+nommer leur série « Documents » et y déposer chacune un `reglement.pdf`.
+
+**Ce qui est refusé, et pourquoi.**
+
+| Message | Cause |
+| --- | --- |
+| « Le fonds commun ne peut pas être alimenté depuis l'application » | La matière visée appartient au fonds importé. Il ne s'alimente que par `import_bkalan`, et une modification serait écrasée à la passe suivante. |
+| « Seuls les fichiers PDF sont acceptés » | Extension autre que `.pdf`. |
+| « Ce fichier n'est pas un PDF valide » | L'extension est bonne mais les cinq premiers octets ne sont pas `%PDF-`. C'est la signature qui fait foi : on renomme un exécutable en `.pdf` en deux secondes. |
+| « Fichier trop volumineux » | Au-delà de `LIBRARY_UPLOAD_MAX_MB` (50 Mo par défaut). Le fonds importé monte jusqu'à 127 Mo par document, mais il n'entre pas par cette porte. |
+
+**Qui peut déposer.** La matrice de `apps/accounts/access.py` : écriture sur
+`library` pour l'administration et le surveillant, suppression pour la seule
+administration. L'élève et le parent lisent.
+
+Supprimer un document efface aussi son fichier du stockage ; remplacer le
+fichier d'un document efface l'ancien. Les documents importés, eux, ne se
+suppriment ni ne se renomment depuis l'application.
+
+## 7. Fonds papier
 
 Sans rapport avec ce qui précède : `Book` et `Borrow` sont cloisonnés par
-établissement et se saisissent depuis l'onglet « Ouvrages » du module. Le
-fonds numérique, lui, est le même pour tous — le dupliquer par établissement
-multiplierait des gigaoctets identiques.
+établissement et se saisissent depuis l'onglet « Ouvrages » du module.
+
+**Les exemplaires se comptent tout seuls.** `quantity_available` est dérivé
+— total moins les emprunts non rendus — et n'est plus saisi ni accepté en
+écriture par l'API. Un prêt le fait baisser, un retour le fait remonter. Si
+un compteur paraît faux (import manuel en base, suppression directe d'un
+emprunt), `Book.recalculer_disponibilite()` le remet d'aplomb sans rien
+recalculer d'autre.
+
+**Rendre un ouvrage** : `POST /api/borrows/<id>/return/`, avec deux champs
+facultatifs — `returned_at` (défaut : aujourd'hui, pour saisir lundi un
+livre rendu vendredi) et `penalty_amount` (impose un montant à la place du
+calcul). Rendre deux fois le même emprunt est refusé : sans ce garde-fou, le
+compteur d'exemplaires remonterait au-delà du fonds réel.
+
+**La pénalité de retard** vaut `library_penalty_per_day` de l'établissement
+multiplié par les jours entamés au-delà de l'échéance. Le tarif se règle sur
+la fiche établissement (champ « Penalite retard / jour ») et vaut **0 par
+défaut** : aucune école ne voit apparaître de pénalité qu'elle n'a pas
+demandée. `penalty_due` sur la ligne d'emprunt montre ce que le retard
+coûterait aujourd'hui, `penalty_amount` ce qui a réellement été porté au
+dossier au retour.
+
+**La fiche accepte quatre compléments facultatifs** — matière, éditeur,
+année d'édition et cote (« Étagère B3 ») — vides sur tout l'existant. La
+recherche du catalogue les couvre, au même titre que le titre, l'auteur et
+l'ISBN.
+
+**L'ISBN est unique par établissement**, plus globalement : deux écoles
+possèdent le même manuel. Un doublon dans la même école est refusé avec un
+message sur le champ `isbn`, pas par une erreur d'intégrité.

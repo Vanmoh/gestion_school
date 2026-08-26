@@ -2,6 +2,7 @@ import re
 import unicodedata
 from decimal import Decimal
 from datetime import date, timedelta
+from django.conf import settings
 from django.utils import timezone
 from rest_framework import serializers
 from .term_utils import normalize_term
@@ -83,6 +84,10 @@ class EtablissementSerializer(serializers.ModelSerializer):
             'stamp_position',
             'principal_signature_scale',
             'stamp_scale',
+            # Tarif journalier de retard du fonds papier. Sans lui dans
+            # l'API, la penalite automatique ne se reglerait que depuis
+            # l'admin Django -- autant dire jamais, pour une ecole.
+            'library_penalty_per_day',
         ]
 
     def validate(self, attrs):
@@ -934,6 +939,20 @@ class TeacherTimeEntrySerializer(serializers.ModelSerializer):
 class DisciplineIncidentSerializer(serializers.ModelSerializer):
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
+    reported_by_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_reported_by_name(self, obj):
+        """Qui a declare l'incident, en clair.
+
+        Le champ ne portait que l'identifiant: cote application, une fiche
+        d'incident ne disait pas de qui elle venait, alors que c'est la
+        premiere question posee au moment d'arbitrer une sanction.
+        """
+        user = obj.reported_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
 
     def get_student_full_name(self, obj):
         student = obj.student
@@ -1371,10 +1390,65 @@ class SmsProviderConfigSerializer(serializers.ModelSerializer):
 
 
 class BookSerializer(serializers.ModelSerializer):
+    """Un ouvrage et l'etat reel de ses exemplaires.
+
+    `quantity_available` ne s'ecrit plus: il etait saisi a la main dans le
+    formulaire et ne bougeait jamais, si bien qu'un livre prete restait
+    annonce disponible. Il vaut desormais le total moins les exemplaires
+    sortis, et c'est le serveur qui le tient.
+    """
+
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    quantity_available = serializers.IntegerField(read_only=True)
+    quantity_borrowed = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = Book
         fields = "__all__"
+
+    def get_quantity_borrowed(self, obj):
+        # Servi par l'annotation de la vue quand elle existe: sans elle, une
+        # liste de cent ouvrages ferait cent requetes de comptage.
+        annote = getattr(obj, "exemplaires_sortis_count", None)
+        if annote is not None:
+            return annote
+        return obj.exemplaires_sortis()
+
+    def validate_isbn(self, value):
+        nettoye = (value or "").strip()
+        if not nettoye:
+            raise serializers.ValidationError("Renseignez l'ISBN.")
+        return nettoye
+
+    def validate_title(self, value):
+        nettoye = (value or "").strip()
+        if not nettoye:
+            raise serializers.ValidationError("Renseignez le titre.")
+        return nettoye
+
+    def validate(self, attrs):
+        """Le total ne descend pas sous le nombre d'exemplaires dehors.
+
+        Ramener un fonds de cinq a deux exemplaires alors que trois sont
+        chez des eleves donnerait une disponibilite negative -- ecretee a
+        zero, elle ferait disparaitre les retours a venir du compteur.
+        """
+        instance = self.instance
+        if instance is None:
+            return attrs
+
+        total = attrs.get("quantity_total", instance.quantity_total)
+        sortis = instance.exemplaires_sortis()
+        if total < sortis:
+            raise serializers.ValidationError(
+                {
+                    "quantity_total": (
+                        f"{sortis} exemplaire(s) sont actuellement empruntés : "
+                        f"le total ne peut pas descendre en dessous."
+                    )
+                }
+            )
+        return attrs
 
 
 class LibraryCategorySerializer(serializers.ModelSerializer):
@@ -1391,6 +1465,27 @@ class LibraryCategorySerializer(serializers.ModelSerializer):
         fields = ["id", "name", "position", "document_count"]
 
 
+class LibraryCategoryWriteSerializer(serializers.ModelSerializer):
+    """La meme matiere, mais creable: elle porte alors sa serie.
+
+    Distinct du serializer imbrique, qui tait `collection` -- l'ecran lit
+    l'arbre depuis la serie et repeter son identifiant sur chacune de ses
+    matieres n'apprendrait rien.
+    """
+
+    document_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = LibraryCategory
+        fields = ["id", "collection", "name", "position", "document_count"]
+
+    def validate_name(self, value):
+        nettoye = (value or "").strip()
+        if not nettoye:
+            raise serializers.ValidationError("Donnez un nom a la matiere.")
+        return nettoye
+
+
 class LibraryCollectionSerializer(serializers.ModelSerializer):
     """Une serie, ses matieres et ses compteurs en une seule reponse.
 
@@ -1400,6 +1495,10 @@ class LibraryCollectionSerializer(serializers.ModelSerializer):
 
     categories = LibraryCategorySerializer(many=True, read_only=True)
     document_count = serializers.IntegerField(read_only=True)
+    # L'etablissement est pose par la vue, jamais choisi par le client: le
+    # laisser en ecriture permettrait de deposer une etagere chez le voisin.
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    is_commun = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = LibraryCollection
@@ -1411,7 +1510,23 @@ class LibraryCollectionSerializer(serializers.ModelSerializer):
             "position",
             "document_count",
             "categories",
+            "etablissement",
+            "is_commun",
         ]
+
+    def get_is_commun(self, obj):
+        """Vrai pour le fonds partage par toutes les ecoles.
+
+        C'est ce qui dit a l'ecran quelles etageres se modifient et
+        lesquelles se lisent seulement.
+        """
+        return obj.etablissement_id is None
+
+    def validate_code(self, value):
+        nettoye = (value or "").strip()
+        if not nettoye:
+            raise serializers.ValidationError("Donnez un code a la serie.")
+        return nettoye
 
 
 class LibraryDocumentSerializer(serializers.ModelSerializer):
@@ -1420,7 +1535,8 @@ class LibraryDocumentSerializer(serializers.ModelSerializer):
     `file_url` est volontairement absent: le client passe toujours par
     /library-documents/<id>/file/, que le PDF soit deja rapatrie ou encore
     chez la source. Une URL exterieure servie au navigateur echouerait en
-    CORS et ferait dependre l'ecran d'un domaine tiers.
+    CORS et ferait dependre l'ecran d'un domaine tiers. `file` suit la meme
+    logique en sens inverse: il s'ecrit, il ne se lit pas.
     """
 
     category_name = serializers.CharField(source="category.name", read_only=True)
@@ -1430,6 +1546,10 @@ class LibraryDocumentSerializer(serializers.ModelSerializer):
     collection_label = serializers.CharField(
         source="category.collection.label", read_only=True
     )
+    file = serializers.FileField(write_only=True, required=False, allow_null=True)
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    origin = serializers.CharField(read_only=True)
+    uploaded_by_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = LibraryDocument
@@ -1444,13 +1564,134 @@ class LibraryDocumentSerializer(serializers.ModelSerializer):
             "is_downloaded",
             "import_error",
             "source_url",
+            "file",
+            "description",
+            "origin",
+            "etablissement",
+            "uploaded_by_name",
+            "created_at",
         ]
+
+    def get_uploaded_by_name(self, obj):
+        auteur = obj.uploaded_by
+        if auteur is None:
+            return ""
+        return auteur.get_full_name().strip() or auteur.username
+
+    def validate_title(self, value):
+        nettoye = (value or "").strip()
+        if not nettoye:
+            raise serializers.ValidationError("Donnez un titre au document.")
+        return nettoye
+
+    def validate_file(self, value):
+        """Un PDF, et un PDF qui tient dans le stockage.
+
+        L'extension ne prouve rien -- on renomme un .exe en .pdf en deux
+        secondes. La signature du format, elle, est dans les cinq premiers
+        octets du fichier: c'est elle qui fait foi, l'extension n'est qu'un
+        premier filtre pour rendre le refus lisible.
+        """
+        if value is None:
+            return value
+
+        nom = (getattr(value, "name", "") or "").lower()
+        if not nom.endswith(".pdf"):
+            raise serializers.ValidationError(
+                "Seuls les fichiers PDF sont acceptés."
+            )
+
+        limite_mo = getattr(settings, "LIBRARY_UPLOAD_MAX_MB", 50)
+        if value.size > limite_mo * 1024 * 1024:
+            poids = value.size / (1024 * 1024)
+            raise serializers.ValidationError(
+                f"Fichier trop volumineux ({poids:.1f} Mo) : la limite est de "
+                f"{limite_mo} Mo."
+            )
+
+        position = value.tell()
+        value.seek(0)
+        entete = value.read(5)
+        # Remis la ou il etait: le stockage lira le fichier depuis le debut,
+        # et un flux laisse a l'octet 5 enregistrerait un PDF ampute.
+        value.seek(position)
+        if entete != b"%PDF-":
+            raise serializers.ValidationError(
+                "Ce fichier n'est pas un PDF valide."
+            )
+
+        return value
+
+    def validate(self, attrs):
+        """Un document arrive par un fichier ou par une source, jamais nu."""
+        if self.instance is not None:
+            return attrs
+
+        if not attrs.get("file") and not (attrs.get("source_url") or "").strip():
+            raise serializers.ValidationError(
+                {"file": "Choisissez un fichier PDF à téléverser."}
+            )
+        return attrs
 
 
 class BorrowSerializer(serializers.ModelSerializer):
+    """Un pret, et ou il en est.
+
+    L'ecran ne disposait que des dates brutes: savoir si le livre etait
+    rendu, et depuis combien de jours il aurait du l'etre, demandait de
+    recalculer cote client -- ce qu'aucun des deux ecrans ne faisait de la
+    meme facon.
+    """
+
+    book_title = serializers.CharField(source="book.title", read_only=True)
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.CharField(
+        source="student.matricule", read_only=True
+    )
+    is_returned = serializers.SerializerMethodField(read_only=True)
+    days_late = serializers.SerializerMethodField(read_only=True)
+    penalty_due = serializers.SerializerMethodField(read_only=True)
+    # Posee au retour par le serveur, au tarif de l'etablissement: elle etait
+    # saisie a la creation de l'emprunt, c'est-a-dire avant tout retard.
+    penalty_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
+
     class Meta:
         model = Borrow
         fields = "__all__"
+
+    def get_student_full_name(self, obj):
+        student = obj.student
+        user = student.user if student else None
+        if not user:
+            return ""
+        return user.get_full_name().strip() or user.username
+
+    def get_is_returned(self, obj):
+        return obj.est_rendu
+
+    def get_days_late(self, obj):
+        return obj.jours_de_retard()
+
+    def get_penalty_due(self, obj):
+        """Ce que le retard coute aujourd'hui, meme avant le retour.
+
+        Un emprunt en cours et depasse affiche ainsi une dette qui grandit,
+        la ou `penalty_amount` reste a zero jusqu'au retour effectif.
+        """
+        return str(obj.penalite_theorique())
+
+    def validate(self, attrs):
+        borrowed_at = attrs.get(
+            "borrowed_at", getattr(self.instance, "borrowed_at", None)
+        )
+        due_date = attrs.get("due_date", getattr(self.instance, "due_date", None))
+        if borrowed_at and due_date and due_date < borrowed_at:
+            raise serializers.ValidationError(
+                {"due_date": "La date de retour précède la date d'emprunt."}
+            )
+        return attrs
 
 
 class CanteenMenuSerializer(serializers.ModelSerializer):

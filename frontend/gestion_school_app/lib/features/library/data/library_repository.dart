@@ -68,6 +68,108 @@ class LibraryRepository {
     return documents;
   }
 
+  /// Depose un PDF dans une matiere de l'etablissement.
+  ///
+  /// Le fichier part en multipart et non en base64: `file_picker` rend des
+  /// octets sur le web et un chemin ailleurs, les deux se transportent tels
+  /// quels et sans le tiers de volume qu'ajouterait un encodage texte.
+  ///
+  /// [onProgression] recoit une fraction entre 0 et 1: un manuel scanne de
+  /// 40 Mo part en plusieurs dizaines de secondes sur une connexion d'ecole,
+  /// et un rond qui tourne ne dit pas si l'envoi avance.
+  Future<LibraryDocument> uploadDocument({
+    required int categoryId,
+    required String title,
+    required String fileName,
+    Uint8List? bytes,
+    String? filePath,
+    String description = '',
+    void Function(double? fraction)? onProgression,
+  }) async {
+    assert(
+      bytes != null || filePath != null,
+      'Un document part avec ses octets ou avec son chemin.',
+    );
+
+    final fichier = bytes != null
+        ? MultipartFile.fromBytes(bytes, filename: fileName)
+        : await MultipartFile.fromFile(filePath!, filename: fileName);
+
+    final reponse = await dio.post(
+      '/library-documents/',
+      data: FormData.fromMap({
+        'title': title,
+        'category': categoryId,
+        if (description.trim().isNotEmpty) 'description': description.trim(),
+        'file': fichier,
+      }),
+      onSendProgress: onProgression == null
+          ? null
+          : (envoyes, total) {
+              onProgression(total > 0 ? envoyes / total : null);
+            },
+    );
+    return LibraryDocument.fromJson(
+      Map<String, dynamic>.from(reponse.data as Map),
+    );
+  }
+
+  /// Renomme un document depose, ou le range dans une autre matiere.
+  Future<LibraryDocument> updateDocument(
+    int documentId, {
+    String? title,
+    int? categoryId,
+    String? description,
+  }) async {
+    final reponse = await dio.patch(
+      '/library-documents/$documentId/',
+      // Seuls les champs fournis partent: un PATCH qui porterait
+      // `category: null` deracinerait le document au lieu de le renommer.
+      data: {
+        'title': ?title,
+        'category': ?categoryId,
+        'description': ?description,
+      },
+    );
+    return LibraryDocument.fromJson(
+      Map<String, dynamic>.from(reponse.data as Map),
+    );
+  }
+
+  Future<void> deleteDocument(int documentId) async {
+    await dio.delete('/library-documents/$documentId/');
+  }
+
+  /// Cree une etagere propre a l'etablissement.
+  ///
+  /// Le serveur y rattache l'ecole: le client ne choisit pas, sans quoi il
+  /// pourrait deposer une serie chez la voisine.
+  Future<LibraryCollection> createCollection({
+    required String code,
+    required String label,
+  }) async {
+    final reponse = await dio.post(
+      '/library-collections/',
+      data: {'code': code, 'label': label},
+    );
+    return LibraryCollection.fromJson(
+      Map<String, dynamic>.from(reponse.data as Map),
+    );
+  }
+
+  /// Ajoute une matiere a une etagere de l'etablissement.
+  Future<int> createCategory({
+    required int collectionId,
+    required String name,
+  }) async {
+    final reponse = await dio.post(
+      '/library-categories/',
+      data: {'collection': collectionId, 'name': name},
+    );
+    final data = Map<String, dynamic>.from(reponse.data as Map);
+    return (data['id'] as num?)?.toInt() ?? 0;
+  }
+
   /// Le PDF lui-meme.
   ///
   /// Toujours par l'API, jamais par l'URL de la source: c'est elle qui sait

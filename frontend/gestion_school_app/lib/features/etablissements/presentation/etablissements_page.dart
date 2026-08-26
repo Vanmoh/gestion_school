@@ -39,6 +39,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
   );
   final _principalSignatureScaleController = TextEditingController(text: '100');
   final _stampScaleController = TextEditingController(text: '100');
+  /// Penalite de retard du fonds papier, par jour entame. Zero = aucune
+  /// penalite automatique, ce qui reste le cas par defaut.
+  final _libraryPenaltyController = TextEditingController(text: '0');
 
   Uint8List? _logoBytes;
   String? _logoFileName;
@@ -69,6 +72,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     _parentSignatureLabelController.dispose();
     _principalSignatureScaleController.dispose();
     _stampScaleController.dispose();
+    _libraryPenaltyController.dispose();
     super.dispose();
   }
 
@@ -235,6 +239,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     _parentSignatureLabelController.text = 'Signature parent / eleve';
     _principalSignatureScaleController.text = '100';
     _stampScaleController.text = '100';
+    _libraryPenaltyController.text = '0';
     _principalSignaturePosition = 'right';
     _stampPosition = 'right';
     _logoBytes = null;
@@ -264,6 +269,8 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         _principalSignatureScaleController.text =
           (row['principal_signature_scale'] ?? 100).toString();
         _stampScaleController.text = (row['stamp_scale'] ?? 100).toString();
+        _libraryPenaltyController.text =
+          (row['library_penalty_per_day'] ?? 0).toString();
         _principalSignaturePosition =
           (row['principal_signature_position'] ?? 'right').toString();
         _stampPosition = (row['stamp_position'] ?? 'right').toString();
@@ -292,6 +299,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
       _principalSignatureScaleController.text.trim(),
     );
     final stampScale = int.tryParse(_stampScaleController.text.trim());
+    final libraryPenalty = double.tryParse(
+      _libraryPenaltyController.text.trim().replaceAll(',', '.'),
+    );
 
     if (name.isEmpty || address.isEmpty || phone.isEmpty || email.isEmpty) {
       _showMessage(
@@ -306,6 +316,10 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     }
     if (stampScale == null || stampScale < 40 || stampScale > 200) {
       _showMessage('Echelle cachet invalide (40 a 200).');
+      return;
+    }
+    if (libraryPenalty == null || libraryPenalty < 0) {
+      _showMessage('Penalite bibliotheque invalide (0 ou plus).');
       return;
     }
 
@@ -329,6 +343,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         'stamp_position': _stampPosition,
         'principal_signature_scale': principalScale,
         'stamp_scale': stampScale,
+        'library_penalty_per_day': libraryPenalty,
         if (_logoBytes != null)
           'logo': MultipartFile.fromBytes(
             _logoBytes!,
@@ -657,6 +672,19 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
                         labelText: 'Echelle cachet %',
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 220,
+                    child: TextField(
+                      controller: _libraryPenaltyController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Penalite retard / jour',
+                        helperText: 'Bibliotheque. 0 = aucune penalite.',
                       ),
                     ),
                   ),
