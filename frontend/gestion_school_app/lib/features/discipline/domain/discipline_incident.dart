@@ -17,6 +17,15 @@ class DisciplineIncident {
   final bool parentNotified;
   final String reportedByName;
 
+  /// Libelle du motif, calcule par le serveur.
+  ///
+  /// Le referentiel vit dans le modele Django: en recopier les neuf libelles
+  /// ici les aurait fait diverger des la premiere evolution.
+  final String categoryLabel;
+
+  /// Date de cloture, vide tant que l'incident est ouvert.
+  final String resolvedAt;
+
   const DisciplineIncident({
     required this.id,
     required this.studentId,
@@ -30,6 +39,8 @@ class DisciplineIncident {
     this.status = 'open',
     this.parentNotified = false,
     this.reportedByName = '',
+    this.categoryLabel = '',
+    this.resolvedAt = '',
   });
 
   factory DisciplineIncident.fromJson(Map<String, dynamic> json) {
@@ -46,10 +57,25 @@ class DisciplineIncident {
       status: json['status']?.toString() ?? 'open',
       parentNotified: json['parent_notified'] == true,
       reportedByName: json['reported_by_name']?.toString() ?? '',
+      categoryLabel: json['category_label']?.toString() ?? '',
+      resolvedAt: json['resolved_at']?.toString() ?? '',
     );
   }
 
   bool get estOuvert => status != 'resolved';
+
+  /// Motif affichable: le libelle du serveur, a defaut le code brut.
+  String get libelleMotif =>
+      categoryLabel.isNotEmpty ? categoryLabel : (category.isEmpty ? 'Incident' : category);
+
+  /// Jour de cloture, sans l'heure, vide tant que l'incident est ouvert.
+  String get jourDeCloture =>
+      resolvedAt.length >= 10 ? resolvedAt.substring(0, 10) : '';
+
+  /// Date de l'incident pour le tri; une date absente ou illisible est
+  /// repoussee en fin de liste plutot que d'interrompre le classement.
+  DateTime get dateDeTri =>
+      DateTime.tryParse(incidentDate) ?? DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Libelle de l'eleve, avec repli sur l'identifiant.
   ///
@@ -105,5 +131,20 @@ class DisciplineStudentOption {
     final code = matricule.isEmpty ? 'N/A' : matricule;
     final nom = fullName.isEmpty ? 'Élève $id' : fullName;
     return '$code • $nom';
+  }
+}
+
+/// Un motif du referentiel, servi par le serveur.
+class DisciplineCategoryOption {
+  final String value;
+  final String label;
+
+  const DisciplineCategoryOption({required this.value, required this.label});
+
+  factory DisciplineCategoryOption.fromJson(Map<String, dynamic> json) {
+    return DisciplineCategoryOption(
+      value: json['value']?.toString() ?? '',
+      label: json['label']?.toString() ?? '',
+    );
   }
 }

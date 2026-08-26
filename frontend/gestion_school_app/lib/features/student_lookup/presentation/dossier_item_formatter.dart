@@ -71,7 +71,12 @@ DossierLine formatDossierItem(String sectionKey, Map<String, dynamic> item) {
 
     case 'discipline':
       return DossierLine(
-        title: _text(item['category']),
+        // Le libelle servi par le referentiel, a defaut le code brut: depuis
+        // que le motif est une liste fermee, `category` vaut « indiscipline »
+        // la ou le dossier affichait « Indiscipline ».
+        title: _has(item['category_label'])
+            ? _text(item['category_label'])
+            : _text(item['category']),
         subtitle: _join([
           _date(item['incident_date']),
           _text(item['description']),

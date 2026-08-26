@@ -326,6 +326,10 @@ REST_FRAMEWORK = {
         "rest_framework.filters.OrderingFilter",
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Sans ce relais, un `ProtectedError` -- supprimer une classe qui porte
+    # des notes -- sortait en 500 avec une trace, la ou c'est une regle
+    # metier que l'utilisateur doit pouvoir lire.
+    "EXCEPTION_HANDLER": "apps.common.exception_handler.custom_exception_handler",
     # Sans pagination par defaut, /students/, /grades/ ou /payments/ serialisent
     # la table entiere a chaque appel: la charge cote serveur n'est bornee par
     # rien, et le cahier des charges vise 1000+ eleves.

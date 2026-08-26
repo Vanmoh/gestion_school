@@ -940,6 +940,7 @@ class DisciplineIncidentSerializer(serializers.ModelSerializer):
     student_full_name = serializers.SerializerMethodField(read_only=True)
     student_matricule = serializers.SerializerMethodField(read_only=True)
     reported_by_name = serializers.SerializerMethodField(read_only=True)
+    category_label = serializers.SerializerMethodField(read_only=True)
 
     def get_reported_by_name(self, obj):
         """Qui a declare l'incident, en clair.
@@ -965,9 +966,22 @@ class DisciplineIncidentSerializer(serializers.ModelSerializer):
     def get_student_matricule(self, obj):
         return obj.student.matricule if obj.student else ""
 
+    def get_category_label(self, obj):
+        """Libelle du motif, calcule ici plutot que recopie cote client.
+
+        Le referentiel vit dans le modele: en dupliquer les neuf libelles
+        dans l'application aurait recree la divergence que la matrice de
+        droits a deja coute cher a supprimer.
+        """
+        return obj.get_category_display()
+
     class Meta:
         model = DisciplineIncident
         fields = "__all__"
+        # `resolved_at` est pose par le modele au passage a « traite »: laisse
+        # ouvert, un appelant pouvait dater une cloture qui n'avait pas eu
+        # lieu, ou en effacer une qui avait eu lieu.
+        read_only_fields = ["resolved_at"]
 
 
 class StudentFeeSerializer(serializers.ModelSerializer):

@@ -15,7 +15,6 @@ class DisciplinePage extends ConsumerStatefulWidget {
 }
 
 class _DisciplinePageState extends ConsumerState<DisciplinePage> {
-  final _categoryController = TextEditingController(text: 'Indiscipline');
   final _descriptionController = TextEditingController();
   final _sanctionController = TextEditingController();
   final _searchController = TextEditingController();
@@ -26,8 +25,10 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
 
   List<DisciplineStudentOption> _students = const [];
   List<DisciplineIncident> _incidents = const [];
+  List<DisciplineCategoryOption> _categories = const [];
 
   int? _selectedStudentId;
+  String? _selectedCategory;
   DateTime _incidentDate = DateTime.now();
   String _severity = 'medium';
   String _status = 'open';
@@ -63,7 +64,6 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
 
   @override
   void dispose() {
-    _categoryController.dispose();
     _descriptionController.dispose();
     _sanctionController.dispose();
     _searchController.dispose();
@@ -98,19 +98,30 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
           )
         else
           Future.value(const <DisciplineStudentOption>[]),
+        if (peutDeclarer)
+          repository.fetchCategories()
+        else
+          Future.value(const <DisciplineCategoryOption>[]),
       ]);
 
       if (!mounted) return;
       final incidents = resultats[0] as List<DisciplineIncident>;
       final students = resultats[1] as List<DisciplineStudentOption>;
+      final categories = resultats[2] as List<DisciplineCategoryOption>;
 
       setState(() {
         _incidents = incidents;
         _students = students;
+        _categories = categories;
         final idsValides = students.map((row) => row.id).toSet();
         if (_selectedStudentId == null ||
             !idsValides.contains(_selectedStudentId)) {
           _selectedStudentId = students.isEmpty ? null : students.first.id;
+        }
+        final motifsValides = categories.map((row) => row.value).toSet();
+        if (_selectedCategory == null ||
+            !motifsValides.contains(_selectedCategory)) {
+          _selectedCategory = categories.isEmpty ? null : categories.first.value;
         }
         _loading = false;
       });
@@ -130,7 +141,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
     }
 
     final studentId = _selectedStudentId;
-    final category = _categoryController.text.trim();
+    final category = _selectedCategory ?? '';
     final description = _descriptionController.text.trim();
 
     if (studentId == null || category.isEmpty || description.isEmpty) {
@@ -370,9 +381,19 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                 if (picked != null) setState(() => _incidentDate = picked);
               },
             ),
-            TextField(
-              controller: _categoryController,
-              decoration: const InputDecoration(labelText: 'Catégorie'),
+            DropdownButtonFormField<String>(
+              key: const Key('declaration-category'),
+              initialValue: _selectedCategory,
+              decoration: const InputDecoration(labelText: 'Motif'),
+              items: _categories
+                  .map(
+                    (row) => DropdownMenuItem<String>(
+                      value: row.value,
+                      child: Text(row.label),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() => _selectedCategory = value),
             ),
             const SizedBox(height: 10),
             TextField(
@@ -551,12 +572,14 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
       if (incident.reportedByName.isNotEmpty)
         'Déclaré par ${incident.reportedByName}',
       if (incident.parentNotified) 'Parent informé',
+      if (!incident.estOuvert && incident.jourDeCloture.isNotEmpty)
+        'Traité le ${incident.jourDeCloture}',
     ];
 
     return Card(
       child: ListTile(
         title: Text(
-          '${incident.category.isEmpty ? 'Incident' : incident.category} • '
+          '${incident.libelleMotif} • '
           '${DisciplineIncident.libelleGravite(incident.severity)}',
         ),
         subtitle: Text(details.join('\n')),

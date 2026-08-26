@@ -57,6 +57,7 @@ from .models import (
     CanteenService,
     CanteenSubscription,
     ClassRoom,
+    DisciplineCategory,
     DisciplineIncident,
     DisciplineStatus,
     Etablissement,
@@ -72,6 +73,7 @@ from .models import (
     LibraryDocument,
     LibraryDocumentOrigin,
     Notification,
+    NotificationChannel,
     ParentProfile,
     Payment,
     PromotionDecision,
@@ -142,7 +144,88 @@ from .serializers import (
 )
 
 
-class BaseModelViewSet(viewsets.ModelViewSet):
+class EtablissementScopeMixin:
+    """Lecture de l'etablissement vise par la requete.
+
+    Ces methodes etaient recopiees a l'identique dans vingt-six vues, soit
+    plus de neuf cents lignes: lire une vue demandait de traverser ce bloc a
+    chaque fois, et une correction devait etre reportee vingt-six fois sans
+    qu'aucun outil ne le signale. `EtablissementScopedModelViewSet` les
+    portait deja, mais seules six vues en heritent -- et l'une des vues
+    concernees n'est meme pas un `ModelViewSet`, d'ou un mixin plutot qu'une
+    classe de base.
+    """
+
+    def _requested_etablissement_id(self):
+        raw_value = (
+            self.request.headers.get("X-Etablissement-Id")
+            or self.request.query_params.get("etablissement")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_etablissement_name(self):
+        raw_name = (
+            self.request.headers.get("X-Etablissement-Name")
+            or self.request.query_params.get("etablissement_name")
+        )
+        if raw_name is None:
+            return None
+        cleaned = str(raw_name).strip()
+        return cleaned or None
+
+    def _requested_etablissement(self):
+        requested_id = self._requested_etablissement_id()
+        if requested_id:
+            etablissement = Etablissement.objects.filter(id=requested_id).first()
+            if etablissement:
+                return etablissement
+
+        requested_name = self._requested_etablissement_name()
+        if not requested_name:
+            return None
+
+        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
+        if etablissement:
+            return etablissement
+
+        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
+
+    def _has_requested_scope(self):
+        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
+
+    def _resolve_target_etablissement(self):
+        """Etablissement vise par l'ecriture en cours.
+
+        Le repli sur le profil enseignant vient des vues classes et
+        enseignants: un compte d'enseignant dont l'etablissement n'est pas
+        renseigne au niveau utilisateur reste rattache par sa fiche. Les
+        vues qui n'en veulent pas surchargent cette methode.
+        """
+        user = self.request.user
+        requested_etablissement = self._requested_etablissement()
+
+        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
+            return requested_etablissement
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is not None:
+            return user_etablissement
+
+        if getattr(user, "role", None) == UserRole.TEACHER:
+            teacher_profile = Teacher.objects.select_related("etablissement").filter(user=user).first()
+            if teacher_profile:
+                return teacher_profile.etablissement
+
+        return None
+
+
+class BaseModelViewSet(EtablissementScopeMixin, viewsets.ModelViewSet):
     # Sans access_module declare, HasModuleAccess refuse: le defaut precedent
     # (IsReadOnlyForParentStudent) ouvrait au contraire l'ecriture a tout le
     # personnel sur chaque ressource qu'on oubliait de proteger.
@@ -695,6 +778,12 @@ class GradePagination(PageNumberPagination):
 
 class AcademicYearViewSet(BaseModelViewSet):
     access_module = "academics"
+    # Sans ces listes, `?search=` et `?ordering=` etaient acceptes puis
+    # ignores: l'ecran croyait filtrer et recevait tout. Le meme piege que
+    # TeacherViewSet documentait deja, laisse ouvert sur toute la section
+    # academique.
+    search_fields = ["name"]
+    ordering_fields = ["name", "start_date", "end_date", "is_active"]
     queryset = AcademicYear.objects.all().order_by("-id")
     serializer_class = AcademicYearSerializer
 
@@ -717,71 +806,22 @@ class ClassRoomViewSet(BaseModelViewSet):
     access_module = "academics"
     queryset = ClassRoom.objects.all().order_by("name", "id")
     serializer_class = ClassRoomSerializer
+    filterset_fields = ["academic_year", "etablissement"]
+    search_fields = ["name", "academic_year__name"]
+    ordering_fields = ["name", "academic_year__name", "created_at"]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
 
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
-
-    def _resolve_target_etablissement(self):
-        user = self.request.user
-        requested_etablissement = self._requested_etablissement()
-
-        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
-            return requested_etablissement
-
-        user_etablissement = getattr(user, "etablissement", None)
-        if user_etablissement is not None:
-            return user_etablissement
-
-        if getattr(user, "role", None) == UserRole.TEACHER:
-            teacher_profile = Teacher.objects.select_related("etablissement").filter(user=user).first()
-            if teacher_profile:
-                return teacher_profile.etablissement
-
-        return None
 
     def get_queryset(self):
         user = self.request.user
-        qs = ClassRoom.objects.select_related("academic_year")
+        # Ordre explicite: le queryset repart de zero ici et perdait celui du
+        # `queryset` de classe. Django avertissait qu'une liste non ordonnee
+        # pagine de facon instable -- une meme classe pouvant apparaitre sur
+        # deux pages, ou sur aucune. "id" en second departage les homonymes.
+        qs = ClassRoom.objects.select_related("academic_year").order_by("name", "id")
         requested_etablissement = self._requested_etablissement()
 
         if requested_etablissement is not None:
@@ -843,6 +883,11 @@ class SubjectViewSet(BaseModelViewSet):
     access_module = "academics"
     queryset = Subject.objects.all().order_by("name")
     serializer_class = SubjectSerializer
+    # `classroom` n'est pas declare ici: get_queryset le traite deja, avec
+    # une portee plus large que l'egalite simple (une matiere rattachee a la
+    # classe par une affectation ou par des notes).
+    search_fields = ["name", "code", "classroom__name"]
+    ordering_fields = ["name", "code", "coefficient"]
 
     def _requested_classroom_id(self):
         raw_value = self.request.query_params.get("classroom")
@@ -854,48 +899,9 @@ class SubjectViewSet(BaseModelViewSet):
             return None
         return parsed if parsed > 0 else None
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -1039,66 +1045,10 @@ class TeacherViewSet(BaseModelViewSet):
             teacher.updated_at = now
         Teacher.objects.bulk_update(missing_teachers, ["etablissement", "updated_at"])
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
 
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
-
-    def _resolve_target_etablissement(self):
-        user = self.request.user
-        requested_etablissement = self._requested_etablissement()
-
-        if getattr(user, "role", None) == "super_admin" and requested_etablissement:
-            return requested_etablissement
-
-        user_etablissement = getattr(user, "etablissement", None)
-        if user_etablissement is not None:
-            return user_etablissement
-
-        if getattr(user, "role", None) == UserRole.TEACHER:
-            teacher_profile = Teacher.objects.select_related("etablissement").filter(user=user).first()
-            if teacher_profile:
-                return teacher_profile.etablissement
-
-        return None
 
     def get_queryset(self):
         self._backfill_missing_teacher_etablissements()
@@ -1151,48 +1101,9 @@ class TeacherAssignmentViewSet(BaseModelViewSet):
     # refaisait le tri cote client sur cet echantillon.
     filterset_fields = ["teacher", "classroom", "subject"]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -1268,48 +1179,9 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
     filterset_fields = ["teacher", "day_of_week"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -1479,50 +1351,19 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
     ).all()
     serializer_class = TeacherScheduleSlotSerializer
     filterset_fields = ["assignment", "day_of_week"]
+    search_fields = [
+        "room",
+        "assignment__subject__name",
+        "assignment__classroom__name",
+        "assignment__teacher__user__first_name",
+        "assignment__teacher__user__last_name",
+    ]
+    ordering_fields = ["day_of_week", "start_time", "end_time"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -2607,55 +2448,16 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         return response
 
 
-class TimetablePublicationViewSet(viewsets.ReadOnlyModelViewSet):
+class TimetablePublicationViewSet(EtablissementScopeMixin, viewsets.ReadOnlyModelViewSet):
     access_module = "timetable"
     queryset = TimetablePublication.objects.select_related("classroom", "published_by").all().order_by("classroom__name")
     serializer_class = TimetablePublicationSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     filterset_fields = ["classroom", "is_published", "is_locked"]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def get_queryset(self):
         user = self.request.user
@@ -2679,48 +2481,9 @@ class ParentProfileViewSet(BaseModelViewSet):
     queryset = ParentProfile.objects.all().order_by("id")
     serializer_class = ParentProfileSerializer
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _backfill_missing_parent_profiles(self):
         User = get_user_model()
@@ -3238,48 +3001,9 @@ class StudentViewSet(BaseModelViewSet):
         modifies = scoped.update(**changements)
         return Response({"updated": modifies, "ids": sorted(autorises)})
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -3605,49 +3329,16 @@ class StudentAcademicHistoryViewSet(BaseModelViewSet):
     queryset = StudentAcademicHistory.objects.select_related("student", "academic_year", "classroom").all().order_by("-academic_year_id", "rank")
     serializer_class = StudentAcademicHistorySerializer
     filterset_fields = ["student", "academic_year", "classroom"]
+    search_fields = [
+        "student__matricule",
+        "student__user__first_name",
+        "student__user__last_name",
+    ]
+    ordering_fields = ["rank", "average", "academic_year__name"]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -3681,6 +3372,14 @@ class GradeViewSet(BaseModelViewSet):
     serializer_class = GradeSerializer
     pagination_class = GradePagination
     filterset_fields = ["classroom", "academic_year", "term", "subject", "student"]
+    # On cherche une note par l'eleve ou la matiere, jamais par sa valeur.
+    search_fields = [
+        "student__matricule",
+        "student__user__first_name",
+        "student__user__last_name",
+        "subject__name",
+    ]
+    ordering_fields = ["value", "term", "created_at", "student__user__last_name"]
 
     def _teacher_assignment_pairs(self):
         teacher_profile = self._teacher_profile()
@@ -3691,48 +3390,9 @@ class GradeViewSet(BaseModelViewSet):
             .values_list("classroom_id", "subject_id")
         )
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -4295,48 +3955,9 @@ class AttendanceViewSet(BaseModelViewSet):
     filterset_fields = ["date", "student", "is_absent", "is_late"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -5063,48 +4684,9 @@ class TeacherAttendanceViewSet(BaseModelViewSet):
     filterset_fields = ["date", "teacher", "is_absent", "is_late"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -5212,48 +4794,9 @@ class TeacherTimeEntryViewSet(BaseModelViewSet):
     filterset_fields = ["teacher", "entry_date", "etablissement"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -5358,48 +4901,9 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
     ordering_fields = ["incident_date", "severity", "status", "created_at"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -5456,6 +4960,62 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
         if target_etablissement and student.etablissement_id != target_etablissement.id:
             raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
 
+    @action(detail=False, methods=["get"])
+    def categories(self, request):
+        """Referentiel des motifs, servi par le serveur.
+
+        Le frontend proposait un champ de texte libre pre-rempli: recopier
+        les neuf motifs dans l'application les aurait fait diverger du
+        modele des la premiere evolution.
+        """
+        return Response(
+            [
+                {"value": value, "label": label}
+                for value, label in DisciplineCategory.choices
+            ]
+        )
+
+    def _notifier_le_parent(self, incident):
+        """Trace l'information des parents dans le module Communication.
+
+        `parent_notified` etait purement declaratif: une case cochee dans un
+        coin de la fiche, sans trace, sans destinataire, et invisible du
+        module qui gere precisement les envois. La notification est creee
+        non envoyee -- aucune passerelle SMS n'expedie encore quoi que ce
+        soit -- mais elle apparait desormais la ou on la cherche.
+        """
+        student = incident.student
+        parent_profile = getattr(student, "parent", None)
+        destinataire = getattr(parent_profile, "user", None)
+        if destinataire is None:
+            return
+
+        etablissement = getattr(student, "etablissement", None)
+        # SMS des qu'une passerelle est configuree: c'est le canal qui touche
+        # les familles sans smartphone, majoritaires ici.
+        canal = NotificationChannel.PUSH
+        if etablissement is not None and SmsProviderConfig.objects.filter(
+            etablissement=etablissement, is_active=True
+        ).exists():
+            canal = NotificationChannel.SMS
+
+        eleve = ""
+        if student.user:
+            eleve = student.user.get_full_name().strip() or student.user.username
+
+        Notification.objects.create(
+            etablissement=etablissement,
+            recipient=destinataire,
+            channel=canal,
+            title="Incident disciplinaire",
+            message=(
+                f"Un incident disciplinaire du {incident.incident_date} "
+                f"concernant {eleve or 'votre enfant'} vous est signale: "
+                f"{incident.get_category_display()}."
+                + (f" Sanction: {incident.sanction}." if incident.sanction else "")
+            ),
+        )
+
     def perform_create(self, serializer):
         self._validate_scope(serializer)
         if getattr(self.request.user, "role", "") == UserRole.TEACHER:
@@ -5466,11 +5026,21 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
                 parent_notified=False,
             )
             return
-        serializer.save(reported_by=self.request.user)
+        incident = serializer.save(reported_by=self.request.user)
+        if incident.parent_notified:
+            self._notifier_le_parent(incident)
 
     def perform_update(self, serializer):
-        self._validate_scope(serializer, instance=self.get_object())
-        serializer.save()
+        instance = self.get_object()
+        self._validate_scope(serializer, instance=instance)
+        # L'etat d'avant, lu avant la sauvegarde: c'est la transition qui
+        # declenche l'information, pas la case cochee. Sans cette lecture,
+        # chaque modification ulterieure d'un incident deja signale aurait
+        # renvoye un message aux parents.
+        deja_signale = instance.parent_notified
+        incident = serializer.save()
+        if incident.parent_notified and not deja_signale:
+            self._notifier_le_parent(incident)
 
     def update(self, request, *args, **kwargs):
         if getattr(request.user, "role", None) == UserRole.TEACHER:
@@ -5495,48 +5065,9 @@ class StudentFeeViewSet(BaseModelViewSet):
     pagination_class = StandardResultsSetPagination
     filterset_fields = ["student", "academic_year", "fee_type"]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -5629,48 +5160,9 @@ class PaymentViewSet(BaseModelViewSet):
     # apparaitre sur deux pages, ou sur aucune.
     ordering = ["-created_at", "-id"]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -5785,48 +5277,9 @@ class ExpenseViewSet(BaseModelViewSet):
     def _can_validate_level_two(role):
         return role in {UserRole.ACCOUNTANT, UserRole.SUPER_ADMIN}
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -5987,48 +5440,9 @@ class TeacherPayrollViewSet(BaseModelViewSet):
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     filterset_fields = ["teacher", "month"]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -6844,48 +6258,9 @@ class BookViewSet(BaseModelViewSet):
     queryset = Book.objects.all().order_by("title", "id")
     serializer_class = BookSerializer
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -6990,48 +6365,9 @@ class BorrowViewSet(BaseModelViewSet):
     queryset = Borrow.objects.select_related("student", "book").all().order_by("-borrowed_at", "-id")
     serializer_class = BorrowSerializer
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -7206,48 +6542,9 @@ class CanteenMenuViewSet(BaseModelViewSet):
     serializer_class = CanteenMenuSerializer
     filterset_fields = ["menu_date", "is_active"]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -7288,48 +6585,9 @@ class CanteenSubscriptionViewSet(BaseModelViewSet):
     serializer_class = CanteenSubscriptionSerializer
     filterset_fields = ["student", "academic_year", "status"]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -7384,48 +6642,9 @@ class CanteenServiceViewSet(BaseModelViewSet):
     serializer_class = CanteenServiceSerializer
     filterset_fields = ["student", "menu", "served_on", "is_paid"]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -7481,6 +6700,9 @@ class ExamSessionViewSet(BaseModelViewSet):
     access_module = "exams"
     queryset = ExamSession.objects.select_related("academic_year").all().order_by("-id")
     serializer_class = ExamSessionSerializer
+    filterset_fields = ["academic_year", "term"]
+    search_fields = ["title", "academic_year__name"]
+    ordering_fields = ["start_date", "end_date", "title", "term"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
 
@@ -7488,50 +6710,14 @@ class ExamPlanningViewSet(BaseModelViewSet):
     access_module = "exams"
     queryset = ExamPlanning.objects.select_related("session", "classroom", "subject").all().order_by("-id")
     serializer_class = ExamPlanningSerializer
+    filterset_fields = ["session", "classroom", "subject", "exam_date"]
+    search_fields = ["session__title", "classroom__name", "subject__name"]
+    ordering_fields = ["exam_date", "start_time", "classroom__name"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -7582,6 +6768,13 @@ class ExamInvigilationViewSet(BaseModelViewSet):
     queryset = ExamInvigilation.objects.select_related("planning", "planning__session", "planning__classroom", "planning__subject", "supervisor").all().order_by("-created_at")
     serializer_class = ExamInvigilationSerializer
     filterset_fields = ["planning", "supervisor", "planning__session"]
+    search_fields = [
+        "supervisor__first_name",
+        "supervisor__last_name",
+        "planning__classroom__name",
+        "planning__subject__name",
+    ]
+    ordering_fields = ["planning__exam_date", "created_at"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get_queryset(self):
@@ -7627,6 +6820,14 @@ class ExamResultViewSet(BaseModelViewSet):
     access_module = "exams"
     queryset = ExamResult.objects.select_related("session", "student", "subject").all().order_by("-id")
     serializer_class = ExamResultSerializer
+    filterset_fields = ["session", "student", "subject"]
+    search_fields = [
+        "student__matricule",
+        "student__user__first_name",
+        "student__user__last_name",
+        "subject__name",
+    ]
+    ordering_fields = ["score", "session__title", "subject__name"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
     def get_queryset(self):
@@ -7875,48 +7076,9 @@ class StockMovementViewSet(BaseModelViewSet):
     queryset = StockMovement.objects.select_related("item", "item__etablissement").all().order_by("-created_at")
     serializer_class = StockMovementSerializer
 
-    def _requested_etablissement_id(self):
-        raw_value = (
-            self.request.headers.get("X-Etablissement-Id")
-            or self.request.query_params.get("etablissement")
-        )
-        if raw_value in (None, ""):
-            return None
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
 
-    def _requested_etablissement_name(self):
-        raw_name = (
-            self.request.headers.get("X-Etablissement-Name")
-            or self.request.query_params.get("etablissement_name")
-        )
-        if raw_name is None:
-            return None
-        cleaned = str(raw_name).strip()
-        return cleaned or None
 
-    def _requested_etablissement(self):
-        requested_id = self._requested_etablissement_id()
-        if requested_id:
-            etablissement = Etablissement.objects.filter(id=requested_id).first()
-            if etablissement:
-                return etablissement
 
-        requested_name = self._requested_etablissement_name()
-        if not requested_name:
-            return None
-
-        etablissement = Etablissement.objects.filter(name__iexact=requested_name).first()
-        if etablissement:
-            return etablissement
-
-        return Etablissement.objects.filter(name__icontains=requested_name).order_by("name").first()
-
-    def _has_requested_scope(self):
-        return self._requested_etablissement_id() is not None or self._requested_etablissement_name() is not None
 
     def _resolve_target_etablissement(self):
         user = self.request.user
@@ -7992,6 +7154,8 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
         "etablissement",
         "created_at",
     ]
+    search_fields = ["source_academic_year__name", "target_academic_year__name"]
+    ordering_fields = ["created_at", "status", "total_students"]
 
     def get_queryset(self):
         return self._filter_by_scope(super().get_queryset())

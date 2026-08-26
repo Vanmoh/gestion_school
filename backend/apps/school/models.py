@@ -559,15 +559,44 @@ class DisciplineStatus(models.TextChoices):
     RESOLVED = "resolved", "Traité"
 
 
+class DisciplineCategory(models.TextChoices):
+    """Motifs d'incident, en liste fermee.
+
+    Le champ etait un texte libre pre-rempli « Indiscipline »: chaque
+    etablissement inventait ses propres libelles, « Retard » cotoyait
+    « retards » et « Arrivee tardive », et aucun comptage par motif n'etait
+    exploitable. AUTRE reste ouvert pour ce que la liste ne prevoit pas, la
+    description portant alors le detail.
+    """
+
+    INDISCIPLINE = "indiscipline", "Indiscipline"
+    RETARD = "retard", "Retard"
+    ABSENCE = "absence_injustifiee", "Absence injustifiee"
+    VIOLENCE = "violence", "Violence"
+    TRICHE = "triche", "Triche"
+    DEGRADATION = "degradation", "Degradation de materiel"
+    TENUE = "tenue", "Tenue non conforme"
+    INSOLENCE = "insolence", "Insolence"
+    AUTRE = "autre", "Autre"
+
+
 class DisciplineIncident(TimeStampedModel):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="discipline_incidents")
     incident_date = models.DateField()
-    category = models.CharField(max_length=120)
+    category = models.CharField(
+        max_length=120,
+        choices=DisciplineCategory.choices,
+        default=DisciplineCategory.INDISCIPLINE,
+    )
     description = models.TextField()
     severity = models.CharField(max_length=10, choices=DisciplineSeverity.choices, default=DisciplineSeverity.MEDIUM)
     sanction = models.TextField(blank=True)
     status = models.CharField(max_length=10, choices=DisciplineStatus.choices, default=DisciplineStatus.OPEN)
     parent_notified = models.BooleanField(default=False)
+    # Date de cloture, posee par le modele et non par l'appelant: « traite »
+    # ne disait pas quand, et le delai de traitement -- la seule mesure qui
+    # dise si le suivi disciplinaire fonctionne -- etait incalculable.
+    resolved_at = models.DateTimeField(null=True, blank=True)
     reported_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -581,6 +610,16 @@ class DisciplineIncident(TimeStampedModel):
             models.Index(fields=["student", "-incident_date"], name="discipline_student_date_idx"),
             models.Index(fields=["status", "-incident_date"], name="discipline_status_date_idx"),
         ]
+
+    def save(self, *args, **kwargs):
+        # Rouvrir un incident efface sa date de cloture: la laisser en place
+        # aurait fait etat d'un traitement qui n'a plus cours.
+        if self.status == DisciplineStatus.RESOLVED:
+            if self.resolved_at is None:
+                self.resolved_at = timezone.now()
+        else:
+            self.resolved_at = None
+        super().save(*args, **kwargs)
 
 
 class FeeType(models.TextChoices):
