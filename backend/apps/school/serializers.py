@@ -16,6 +16,7 @@ from .models import (
     CanteenMenu,
     CanteenService,
     CanteenSubscription,
+    CanteenSubscriptionStatus,
     ClassRoom,
     DisciplineIncident,
     Etablissement,
@@ -996,9 +997,30 @@ class GradeSerializer(serializers.ModelSerializer):
         academic_year = attrs.get("academic_year") or getattr(self.instance, "academic_year", None)
 
         if student and classroom and student.classroom_id != classroom.id:
-            raise serializers.ValidationError(
-                {"student": "L'élève sélectionné n'appartient pas à la classe choisie."}
+            # L'eleve n'est plus dans cette classe -- mais il a pu y etre.
+            # La comparaison ne portait que sur sa classe du moment: apres
+            # une passation, corriger une note de l'annee precedente
+            # devenait impossible, l'eleve etant passe en classe
+            # superieure. On accepte donc s'il y a ete inscrit cette
+            # annee-la, ou s'il y porte deja des notes.
+            passe_dans_la_classe = StudentAcademicHistory.objects.filter(
+                student=student, classroom=classroom
             )
+            if academic_year is not None:
+                passe_dans_la_classe = passe_dans_la_classe.filter(
+                    academic_year=academic_year
+                )
+
+            if not passe_dans_la_classe.exists() and not Grade.objects.filter(
+                student=student, classroom=classroom
+            ).exists():
+                raise serializers.ValidationError(
+                    {
+                        "student": (
+                            "L'élève sélectionné n'appartient pas à la classe choisie."
+                        )
+                    }
+                )
 
         if classroom and academic_year and classroom.academic_year_id != academic_year.id:
             raise serializers.ValidationError(
@@ -2078,6 +2100,73 @@ class CanteenServiceSerializer(serializers.ModelSerializer):
 
     def get_student_matricule(self, obj):
         return obj.student.matricule if obj.student else ""
+
+    def validate(self, attrs):
+        """Servir un repas suppose un abonnement, et le respecte.
+
+        `CanteenSubscription` portait une periode, un statut et une limite
+        quotidienne que rien ne consultait: on servait trois fois un eleve
+        limite a un repas, un eleve dont l'abonnement etait termine, ou un
+        eleve qui n'en avait jamais eu. La fiche existait, elle ne pilotait
+        rien.
+        """
+        eleve = attrs.get("student") or getattr(self.instance, "student", None)
+        jour = attrs.get("served_on") or getattr(self.instance, "served_on", None)
+        quantite = attrs.get("quantity")
+        if quantite is None:
+            quantite = getattr(self.instance, "quantity", 1)
+
+        if eleve is None or jour is None:
+            return attrs
+
+        abonnement = self._abonnement_couvrant(eleve, jour)
+        if abonnement is None:
+            raise serializers.ValidationError(
+                {
+                    "student": (
+                        "Aucun abonnement cantine actif pour cet élève à cette "
+                        "date."
+                    )
+                }
+            )
+
+        deja = self._repas_du_jour(eleve, jour)
+        limite = abonnement.daily_limit or 0
+        if limite and (deja + quantite) > limite:
+            reste = max(limite - deja, 0)
+            raise serializers.ValidationError(
+                {
+                    "quantity": (
+                        f"Limite de {limite} repas par jour atteinte : "
+                        f"{deja} déjà servi(s), {reste} restant(s)."
+                    )
+                }
+            )
+        return attrs
+
+    @staticmethod
+    def _abonnement_couvrant(eleve, jour):
+        """L'abonnement actif de l'eleve a cette date, ou None.
+
+        La periode compte autant que le statut: un abonnement actif qui ne
+        commence qu'en janvier ne couvre pas un repas de novembre.
+        """
+        return (
+            CanteenSubscription.objects.filter(
+                student=eleve,
+                status=CanteenSubscriptionStatus.ACTIVE,
+                start_date__lte=jour,
+            )
+            .filter(models.Q(end_date__isnull=True) | models.Q(end_date__gte=jour))
+            .order_by("-start_date")
+            .first()
+        )
+
+    def _repas_du_jour(self, eleve, jour):
+        deja = CanteenService.objects.filter(student=eleve, served_on=jour)
+        if self.instance is not None:
+            deja = deja.exclude(pk=self.instance.pk)
+        return sum(service.quantity for service in deja)
 
     class Meta:
         model = CanteenService
