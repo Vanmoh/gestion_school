@@ -3,6 +3,7 @@ import unicodedata
 from decimal import Decimal
 from datetime import date, timedelta
 from django.conf import settings
+from django.db import models
 from django.utils import timezone
 from rest_framework import serializers
 from .term_utils import normalize_term
