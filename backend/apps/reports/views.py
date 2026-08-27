@@ -404,12 +404,21 @@ def _school_identity_for_student(student: Student) -> dict[str, str]:
     }
 
 
-def _active_academic_year():
-    """Annee scolaire active, ou la plus recente a defaut."""
-    return (
-        AcademicYear.objects.filter(is_active=True).order_by("-start_date", "-id").first()
-        or AcademicYear.objects.order_by("-start_date", "-id").first()
-    )
+def _active_academic_year(etablissement=None):
+    """Annee scolaire active, ou la plus recente a defaut.
+
+    La resolution vit desormais sur le modele: trois endroits la faisaient
+    chacun a sa facon -- `.first()`, `-id`, `-start_date` -- et rien ne
+    garantissait qu'ils designent la meme annee le meme jour.
+    """
+    courante = AcademicYear.courante(etablissement)
+    if courante is not None:
+        return courante
+
+    repli = AcademicYear.objects.all()
+    if etablissement is not None:
+        repli = repli.filter(etablissement=etablissement)
+    return repli.order_by("-start_date", "-id").first()
 
 
 def _active_academic_year_label() -> str:

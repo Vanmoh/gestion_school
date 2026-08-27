@@ -1,6 +1,6 @@
 from datetime import date, time, timedelta
 from decimal import Decimal
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 from apps.accounts.models import User, UserRole
@@ -62,8 +62,52 @@ class Command(BaseCommand):
             coefficient=coefficient,
         )
 
+    # Classes que cette commande cree elle-meme: leur presence ne prouve pas
+    # que la base contient une vraie ecole, seulement qu'elle a deja ete
+    # semee.
+    CLASSES_DE_DEMONSTRATION = {"6A"}
+
+    def _refuser_si_base_peuplee(self, forcer):
+        """Refuse de semer par-dessus une ecole reelle.
+
+        `bootstrap.sh` appelle cette commande a chaque montage de
+        l'environnement. Sur une base locale synchronisee depuis la
+        production, elle ajoutait sa classe « 6A », ses deux eleves de
+        demonstration et leurs comptes au milieu des inscrits -- sans un mot,
+        et sans moyen de distinguer ensuite les uns des autres.
+
+        Le critere n'est pas DEBUG, vrai en developpement precisement quand
+        le risque existe, mais la presence de classes que cette commande
+        n'a pas creees.
+        """
+        if forcer:
+            return
+
+        reelles = (
+            ClassRoom.objects.exclude(name__in=self.CLASSES_DE_DEMONSTRATION)
+            .values_list("name", flat=True)[:5]
+        )
+        reelles = list(reelles)
+        if not reelles:
+            return
+
+        raise CommandError(
+            "Refus: cette base contient deja des classes reelles "
+            f"({', '.join(reelles)}...). La commande y ajouterait des eleves "
+            "de demonstration et leurs comptes au mot de passe connu. "
+            "Relancer avec --forcer si la base est bien jetable."
+        )
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--forcer",
+            action="store_true",
+            help="Semer malgre la presence de donnees reelles.",
+        )
+
     @transaction.atomic
     def handle(self, *args, **options):
+        self._refuser_si_base_peuplee(options.get("forcer", False))
         today = timezone.now().date()
 
         admin_user, created = User.objects.get_or_create(
@@ -196,8 +240,12 @@ class Command(BaseCommand):
                 demo_user.etablissement = demo_etablissement
                 demo_user.save(update_fields=["etablissement"])
 
+        # Rattachee a l'etablissement de demonstration: les annees sont
+        # desormais propres a chaque ecole, et une annee sans etablissement
+        # n'apparaitrait dans le selecteur d'aucune.
         academic_year, _ = AcademicYear.objects.get_or_create(
             name="2025-2026",
+            etablissement=demo_etablissement,
             defaults={
                 "start_date": date(2025, 9, 1),
                 "end_date": date(2026, 7, 31),

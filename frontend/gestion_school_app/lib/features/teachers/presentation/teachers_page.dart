@@ -2628,23 +2628,31 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                 final user = matches[index];
                 final profile = _findTeacherProfileByUserId(_asInt(user['id']));
                 final nom = _fullNameFromUser(user);
-                return ListTile(
-                  dense: true,
-                  leading: CircleAvatar(
-                    backgroundColor: colorScheme.primaryContainer,
-                    child: Text(
-                      nom.isEmpty ? '?' : nom.characters.first.toUpperCase(),
-                      style: TextStyle(color: colorScheme.onPrimaryContainer),
+                // Le panneau qui contient cette liste pose sa propre
+                // decoration: le ListTile peignait son fond et son onde de
+                // clic sur le Material situe derriere, donc invisibles. Un
+                // Material transparent lui rend une surface a lui, sans
+                // ajouter de couleur.
+                return Material(
+                  type: MaterialType.transparency,
+                  child: ListTile(
+                    dense: true,
+                    leading: CircleAvatar(
+                      backgroundColor: colorScheme.primaryContainer,
+                      child: Text(
+                        nom.isEmpty ? '?' : nom.characters.first.toUpperCase(),
+                        style: TextStyle(color: colorScheme.onPrimaryContainer),
+                      ),
                     ),
+                    title: Text(nom),
+                    subtitle: Text(
+                      profile == null
+                          ? TeacherPaletteCard.sansProfil
+                          : (profile['employee_code'] ?? '').toString(),
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _selectTeacherUser(user),
                   ),
-                  title: Text(nom),
-                  subtitle: Text(
-                    profile == null
-                        ? TeacherPaletteCard.sansProfil
-                        : (profile['employee_code'] ?? '').toString(),
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _selectTeacherUser(user),
                 );
               },
             ),

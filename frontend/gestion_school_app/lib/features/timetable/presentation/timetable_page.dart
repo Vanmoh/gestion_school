@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -14,6 +15,8 @@ import '../../../core/widgets/foreground_notice.dart';
 import '../../../core/widgets/frozen_column_table.dart';
 import '../../../models/etablissement.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../attendance/data/timesheet_repository.dart';
+import '../../attendance/domain/timesheet_concordance.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import 'timetable_workload.dart';
 
@@ -105,6 +108,56 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     } catch (_) {
       failures.add(path);
       return <Map<String, dynamic>>[];
+    }
+  }
+
+  /// Les creneaux qu'aucun pointage n'a couverts sur la semaine affichee.
+  ///
+  /// L'emploi du temps disait ce qui devait avoir lieu, l'emargement ce qui
+  /// avait eu lieu, et personne ne confrontait les deux: une classe restee
+  /// sans professeur ne se voyait sur aucun des deux ecrans.
+  Set<int> _slotsNonAssures = <int>{};
+
+  /// Lundi de la semaine dont on regarde le rapprochement.
+  ///
+  /// La grille est hebdomadaire et sans date: il faut bien en choisir une,
+  /// et c'est la semaine en cours qui interesse ici -- une seance manquee
+  /// se rattrape tant qu'elle est fraiche. Le recul sur d'autres periodes se
+  /// prend depuis l'emargement, dont le rapprochement porte les dates.
+  final DateTime _semaineDuRapprochement = _lundiDe(DateTime.now());
+
+  static DateTime _lundiDe(DateTime jour) {
+    final sansHeure = DateTime(jour.year, jour.month, jour.day);
+    return sansHeure.subtract(Duration(days: sansHeure.weekday - 1));
+  }
+
+  Future<void> _chargerLesSeancesNonAssurees() async {
+    try {
+      final concordance = await ref
+          .read(timesheetRepositoryProvider)
+          .fetchConcordance(
+            from: _semaineDuRapprochement,
+            // Lundi au samedi: le dimanche ne porte aucun cours.
+            to: _semaineDuRapprochement.add(const Duration(days: 5)),
+          );
+      if (!mounted) return;
+
+      final manquees = <int>{};
+      for (final enseignant in concordance.teachers) {
+        for (final jour in enseignant.days) {
+          for (final seance in jour.sessions) {
+            if (seance.status == ConcordanceStatus.missed) {
+              manquees.add(seance.slotId);
+            }
+          }
+        }
+      }
+      setState(() => _slotsNonAssures = manquees);
+    } catch (_) {
+      // Silencieux et volontairement: l'emargement peut etre ferme au profil
+      // qui consulte l'emploi du temps, et l'absence de marquage ne doit pas
+      // se lire comme une panne de la grille.
+      if (mounted) setState(() => _slotsNonAssures = <int>{});
     }
   }
 
@@ -235,6 +288,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               : null;
         }
       });
+
+      // Le rapprochement de la semaine, une fois la grille en place: il
+      // marque les cours que personne n'a assures. Charge a part et sans
+      // bloquer -- l'emploi du temps reste consultable si l'emargement est
+      // indisponible.
+      unawaited(_chargerLesSeancesNonAssurees());
 
       final allEndpoints404 =
           failures.length >= 6 &&
@@ -504,7 +563,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     try {
       final selectedEtablissement = ref.read(etablissementProvider).selected;
       final scopedQueryParameters = <String, dynamic>{
-        if (queryParameters != null) ...queryParameters,
+        ...?queryParameters,
         if (selectedEtablissement?.id != null)
           'etablissement': selectedEtablissement!.id,
         if ((selectedEtablissement?.name ?? '').trim().isNotEmpty)
@@ -2973,12 +3032,21 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   }) {
     final colorScheme = Theme.of(context).colorScheme;
     final classLocked = _isClassLockedById(classId);
+    // Aucun pointage n'a couvert ce cours cette semaine: la classe est
+    // restee sans professeur, et la grille est le premier endroit ou on
+    // vient le chercher.
+    final nonAssuree = _slotsNonAssures.contains(
+      _asInt(slot['slotId'] ?? slot['id']),
+    );
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: colorScheme.outlineVariant),
+        border: Border.all(
+          color: nonAssuree ? colorScheme.error : colorScheme.outlineVariant,
+          width: nonAssuree ? 1.5 : 1,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3011,6 +3079,23 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           ),
           if ((slot['room'] ?? '').toString().trim().isNotEmpty)
             Text('Salle: ${slot['room']}'),
+          if (nonAssuree) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Icon(Icons.cancel_outlined, size: 15, color: colorScheme.error),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    'Non assurée (semaine du ${_jourCourt(_semaineDuRapprochement)})',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: colorScheme.error,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 6),
           Wrap(
             spacing: 6,
@@ -3037,6 +3122,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         ],
       ),
     );
+  }
+
+  /// « 12/03 »: la semaine de reference, sans son annee.
+  String _jourCourt(DateTime valeur) {
+    final j = valeur.day.toString().padLeft(2, '0');
+    final m = valeur.month.toString().padLeft(2, '0');
+    return '$j/$m';
   }
 
   Color _dayAccent(String dayCode) {

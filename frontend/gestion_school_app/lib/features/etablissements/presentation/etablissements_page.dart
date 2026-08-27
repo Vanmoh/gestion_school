@@ -25,6 +25,10 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
   int? _selectedId;
 
   final _nameController = TextEditingController();
+  /// Prefixe des matricules eleves (« RC15 » dans RC15CG25E3566F). Stable:
+  /// il etait auparavant derive du nom, et renommer l'ecole changeait le
+  /// prefixe de tous ses futurs matricules.
+  final _codeController = TextEditingController();
   final _addressController = TextEditingController();
   final _phoneController = TextEditingController();
   final _emailController = TextEditingController();
@@ -64,6 +68,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
   @override
   void dispose() {
     _nameController.dispose();
+    _codeController.dispose();
     _addressController.dispose();
     _phoneController.dispose();
     _emailController.dispose();
@@ -231,6 +236,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
 
   void _clearForm() {
     _nameController.clear();
+    _codeController.clear();
     _addressController.clear();
     _phoneController.clear();
     _emailController.clear();
@@ -257,6 +263,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     setState(() {
       _selectedId = _asInt(row['id']);
       _nameController.text = (row['name'] ?? '').toString();
+      _codeController.text = (row['code'] ?? '').toString();
       _addressController.text = (row['address'] ?? '').toString();
       _phoneController.text = (row['phone'] ?? '').toString();
       _emailController.text = (row['email'] ?? '').toString();
@@ -292,6 +299,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     }
 
     final name = _nameController.text.trim();
+    final code = _codeController.text.trim().toUpperCase();
     final address = _addressController.text.trim();
     final phone = _phoneController.text.trim();
     final email = _emailController.text.trim();
@@ -333,6 +341,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
 
       final data = FormData.fromMap({
         'name': name,
+        'code': code,
         'address': address,
         'phone': phone,
         'email': email,
@@ -527,6 +536,18 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                     child: TextField(
                       controller: _nameController,
                       decoration: const InputDecoration(labelText: 'Nom *'),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 190,
+                    child: TextField(
+                      controller: _codeController,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: const InputDecoration(
+                        labelText: 'Code établissement',
+                        hintText: 'RC15',
+                        helperText: 'Début des matricules élèves.',
+                      ),
                     ),
                   ),
                   SizedBox(
