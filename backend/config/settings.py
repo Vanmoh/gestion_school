@@ -412,6 +412,19 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.school.tasks.import_library_catalogue",
         "schedule": crontab(hour=3, minute=15),
     },
+    # Le lendemain matin, avant l'ouverture: la direction apprend qu'une
+    # classe est restee sans professeur pendant qu'elle peut encore
+    # organiser un remplacement, et non en fin de mois sur une fiche de paie.
+    "seances-non-assurees": {
+        "task": "apps.school.tasks.signaler_les_seances_non_assurees",
+        "schedule": crontab(hour=6, minute=30),
+    },
+    # Le lundi matin: un reapprovisionnement se prepare en debut de semaine,
+    # et une alerte quotidienne sur un stock qui bouge peu ne serait plus lue.
+    "stock-bas": {
+        "task": "apps.school.tasks.signaler_le_stock_bas",
+        "schedule": crontab(hour=7, minute=0, day_of_week=1),
+    },
 }
 
 CHANNEL_REDIS_URL = config(

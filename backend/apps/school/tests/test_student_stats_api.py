@@ -18,11 +18,15 @@ class StudentStatsTests(APITestCase):
     @classmethod
     def setUpTestData(cls):
         cls.etablissement = Etablissement.objects.create(name="LTOB")
+        # L'annee appartient a son etablissement: les stats resolvent
+        # desormais « l'annee courante » par ecole, et une annee sans
+        # etablissement n'est celle de personne.
         cls.year = AcademicYear.objects.create(
             name="2025-2026",
             start_date=date(2025, 9, 1),
             end_date=date(2026, 7, 31),
             is_active=True,
+            etablissement=cls.etablissement,
         )
         cls.classroom = ClassRoom.objects.create(
             name="10eme CT", academic_year=cls.year, etablissement=cls.etablissement

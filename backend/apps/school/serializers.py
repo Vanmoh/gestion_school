@@ -35,6 +35,7 @@ from .models import (
     PromotionDecision,
     PromotionRun,
     StockItem,
+    StockMovementType,
     StockMovement,
     Student,
     StudentAcademicHistory,
@@ -45,18 +46,77 @@ from .models import (
     Teacher,
     TeacherAttendance,
     TeacherAssignment,
+    AvailabilityCampaign,
+    AvailabilityKind,
+    TeacherAvailabilityResponse,
     TeacherAvailabilitySlot,
     TeacherScheduleSlot,
     TeacherTimeEntry,
+    TeacherTimeEntryCoverage,
     TimetablePublication,
     TeacherPayroll,
 )
 
 
 class AcademicYearSerializer(serializers.ModelSerializer):
+    etablissement_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_etablissement_name(self, obj):
+        return obj.etablissement.name if obj.etablissement_id else ""
+
+    def validate(self, attrs):
+        """Les regles du modele, appliquees a l'API.
+
+        Le serializer acceptait n'importe quoi -- une fin avant le debut, ou
+        deux annees qui se chevauchent -- et la base n'avait aucune
+        contrainte pour l'en empecher. Une absence datee de l'intersection
+        de deux annees devenait alors impossible a rattacher.
+        """
+        instance = self.instance
+        debut = attrs.get("start_date", getattr(instance, "start_date", None))
+        fin = attrs.get("end_date", getattr(instance, "end_date", None))
+        # L'etablissement est en lecture seule -- la vue le pose -- donc il
+        # n'arrive jamais par `attrs`. Sans ce relais par le contexte, la
+        # recherche de chevauchement portait sur `etablissement=None` et ne
+        # trouvait jamais rien.
+        etablissement = (
+            getattr(instance, "etablissement", None)
+            or self.context.get("etablissement_cible")
+        )
+
+        if debut and fin and fin <= debut:
+            raise serializers.ValidationError(
+                {"end_date": "La fin de l'annee doit suivre son debut."}
+            )
+
+        if debut and fin:
+            voisines = AcademicYear.objects.filter(
+                etablissement=etablissement,
+                start_date__lte=fin,
+                end_date__gte=debut,
+            )
+            if instance is not None:
+                voisines = voisines.exclude(pk=instance.pk)
+            chevauchee = voisines.first()
+            if chevauchee is not None:
+                raise serializers.ValidationError(
+                    {
+                        "start_date": (
+                            f"Cette periode chevauche l'annee « {chevauchee.name} » "
+                            f"({chevauchee.start_date} - {chevauchee.end_date})."
+                        )
+                    }
+                )
+
+        return attrs
+
     class Meta:
         model = AcademicYear
         fields = "__all__"
+        # L'etablissement est pose par la vue, d'apres le perimetre actif:
+        # le laisser au client aurait permis d'ouvrir une annee chez la
+        # voisine.
+        read_only_fields = ["etablissement"]
 
 
 class EtablissementSerializer(serializers.ModelSerializer):
@@ -70,6 +130,9 @@ class EtablissementSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'name',
+            # Prefixe des matricules eleves. Sans lui dans l'API, il ne se
+            # reglerait que depuis l'admin Django -- autant dire jamais.
+            'code',
             'address',
             'phone',
             'email',
@@ -89,6 +152,17 @@ class EtablissementSerializer(serializers.ModelSerializer):
             # l'admin Django -- autant dire jamais, pour une ecole.
             'library_penalty_per_day',
         ]
+
+    def validate_code(self, value):
+        nettoye = (value or "").strip().upper()
+        if not nettoye:
+            return ""
+        if not re.fullmatch(r"[A-Z0-9]{2,8}", nettoye):
+            raise serializers.ValidationError(
+                "De 2 à 8 lettres ou chiffres, sans espace ni accent — il "
+                "ouvre les matricules des élèves."
+            )
+        return nettoye
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
@@ -419,16 +493,174 @@ class TeacherScheduleSlotSerializer(serializers.ModelSerializer):
         if errors:
             raise serializers.ValidationError({"non_field_errors": errors})
 
+        self._verifier_la_disponibilite(assignment, day_of_week, start_time, end_time, attrs)
+
         return attrs
+
+    def _verifier_la_disponibilite(self, assignment, day_of_week, start_time, end_time, attrs):
+        """Place-t-on ce cours en dehors de ce que l'enseignant a declare ?
+
+        Les disponibilites etaient collectees puis oubliees: celui qui
+        construisait l'emploi du temps ne les voyait nulle part. Le
+        placement reste sa decision -- il arbitre entre vingt contraintes
+        que l'enseignant ne connait pas --, mais il ne peut plus se faire
+        sans le savoir.
+
+        Le motif n'est exige que si l'enseignant a effectivement declare
+        quelque chose ce jour-la. Rien exiger de celui qui s'est tu evite
+        de bloquer tout l'emploi du temps d'une ecole qui n'a pas encore
+        lance sa collecte.
+        """
+        teacher = assignment.teacher if assignment else None
+        if teacher is None:
+            return
+
+        declarations = list(
+            TeacherAvailabilitySlot.objects.filter(
+                teacher=teacher, day_of_week=day_of_week
+            )
+        )
+        if not declarations:
+            return
+
+        couvrantes = [
+            declaration
+            for declaration in declarations
+            if declaration.couvre(start_time, end_time)
+        ]
+        if any(declaration.est_ouverte for declaration in couvrantes):
+            return
+
+        motif = attrs.get("off_availability_reason")
+        if motif is None and self.instance is not None:
+            motif = self.instance.off_availability_reason
+        if (motif or "").strip():
+            return
+
+        nom = ""
+        if teacher.user:
+            nom = teacher.user.get_full_name().strip() or teacher.user.username
+
+        refus = next(
+            (d for d in couvrantes if d.kind == AvailabilityKind.UNAVAILABLE), None
+        )
+        if refus is not None:
+            detail = f"{nom or 'Cet enseignant'} s'est déclaré indisponible sur ce créneau"
+            if refus.note:
+                detail = f"{detail} ({refus.note})"
+        else:
+            plages = ", ".join(
+                f"{d.start_time.strftime('%H:%M')}–{d.end_time.strftime('%H:%M')}"
+                for d in sorted(declarations, key=lambda d: d.start_time)[:4]
+            )
+            detail = (
+                f"{nom or 'Cet enseignant'} n'a pas déclaré ce créneau. "
+                f"Déclaré ce jour-là : {plages}"
+            )
+
+        raise serializers.ValidationError(
+            {
+                "off_availability_reason": [
+                    f"{detail}.",
+                    "Indiquez le motif du placement pour confirmer.",
+                ]
+            }
+        )
 
     class Meta:
         model = TeacherScheduleSlot
         fields = "__all__"
 
 
+class AvailabilityCampaignSerializer(serializers.ModelSerializer):
+    """Une campagne de collecte, avec l'etat de ses reponses.
+
+    Les compteurs viennent d'annotations posees par la vue: les calculer ici
+    ferait une requete par campagne affichee.
+    """
+
+    etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    academic_year_name = serializers.CharField(
+        source="academic_year.name", read_only=True
+    )
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    is_open = serializers.BooleanField(source="est_ouverte", read_only=True)
+    teachers_total = serializers.IntegerField(read_only=True)
+    teachers_answered = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = AvailabilityCampaign
+        fields = [
+            "id",
+            "etablissement",
+            "academic_year",
+            "academic_year_name",
+            "label",
+            "opens_on",
+            "closes_on",
+            "status",
+            "status_label",
+            "is_open",
+            "instructions",
+            "teachers_total",
+            "teachers_answered",
+        ]
+
+    def validate_label(self, value):
+        nettoye = (value or "").strip()
+        if not nettoye:
+            raise serializers.ValidationError("Donnez un intitulé à la campagne.")
+        return nettoye
+
+    def validate(self, attrs):
+        ouverture = attrs.get("opens_on") or getattr(self.instance, "opens_on", None)
+        fermeture = attrs.get("closes_on") or getattr(self.instance, "closes_on", None)
+        if ouverture and fermeture and fermeture < ouverture:
+            raise serializers.ValidationError(
+                {"closes_on": "La fermeture précède l'ouverture."}
+            )
+        return attrs
+
+
+class TeacherAvailabilityResponseSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.SerializerMethodField(read_only=True)
+    teacher_employee_code = serializers.CharField(
+        source="teacher.employee_code", read_only=True
+    )
+    is_submitted = serializers.BooleanField(source="est_rendue", read_only=True)
+
+    class Meta:
+        model = TeacherAvailabilityResponse
+        fields = [
+            "id",
+            "campaign",
+            "teacher",
+            "teacher_name",
+            "teacher_employee_code",
+            "submitted_at",
+            "reminded_at",
+            "reminder_count",
+            "is_submitted",
+        ]
+
+    def get_teacher_name(self, obj):
+        teacher = obj.teacher
+        user = teacher.user if teacher else None
+        if not user:
+            return ""
+        return user.get_full_name().strip() or user.username
+
+
 class TeacherAvailabilitySlotSerializer(serializers.ModelSerializer):
     teacher_name = serializers.SerializerMethodField(read_only=True)
     etablissement_name = serializers.SerializerMethodField(read_only=True)
+    kind_label = serializers.CharField(source="get_kind_display", read_only=True)
+    # Facultatif: un enseignant qui declare ses propres creneaux n'a pas a
+    # connaitre son identifiant, la vue le deduit de son compte. Il restait
+    # exige, ce qui rendait la saisie impossible depuis l'ecran enseignant.
+    teacher = serializers.PrimaryKeyRelatedField(
+        queryset=Teacher.objects.all(), required=False
+    )
 
     def get_teacher_name(self, obj):
         teacher = obj.teacher
@@ -466,8 +698,13 @@ class TeacherAvailabilitySlotSerializer(serializers.ModelSerializer):
                 {"teacher": "Cet enseignant n'appartient pas à l'établissement sélectionné."}
             )
 
+        # Le chevauchement se juge chez le seul declarant. Il se jugeait
+        # auparavant sur tout l'etablissement, ce qui faisait du premier
+        # enseignant a saisir « lundi 8h-10h » le proprietaire exclusif de
+        # ce creneau: tous les suivants recevaient « deja reserve ». Une
+        # disponibilite se partage, c'est meme sa raison d'etre.
         overlap_qs = TeacherAvailabilitySlot.objects.filter(
-            etablissement=etablissement,
+            teacher=teacher,
             day_of_week=day_of_week,
             start_time__lt=end_time,
             end_time__gt=start_time,
@@ -476,17 +713,13 @@ class TeacherAvailabilitySlotSerializer(serializers.ModelSerializer):
             overlap_qs = overlap_qs.exclude(pk=self.instance.pk)
 
         if overlap_qs.exists():
-            taken_slot = overlap_qs.select_related("teacher", "teacher__user").first()
-            taken_label = "un autre enseignant"
-            if taken_slot and taken_slot.teacher and taken_slot.teacher.user:
-                full_name = taken_slot.teacher.user.get_full_name().strip()
-                taken_label = full_name or taken_slot.teacher.user.username
-
+            existant = overlap_qs.first()
             raise serializers.ValidationError(
                 {
                     "non_field_errors": [
-                        "Ce créneau est déjà réservé et n'est plus disponible.",
-                        f"Réservé par: {taken_label}.",
+                        "Vous avez déjà déclaré une disponibilité sur ce créneau "
+                        f"({existant.start_time.strftime('%H:%M')}–"
+                        f"{existant.end_time.strftime('%H:%M')}).",
                     ]
                 }
             )
@@ -496,6 +729,13 @@ class TeacherAvailabilitySlotSerializer(serializers.ModelSerializer):
     class Meta:
         model = TeacherAvailabilitySlot
         fields = "__all__"
+        # Le validateur d'unicite genere par DRF rendait « les champs
+        # teacher, day_of_week, start_time, end_time doivent former un
+        # ensemble unique », que personne ne peut interpreter. Le controle de
+        # chevauchement ci-dessus couvre le meme cas -- l'egalite est un
+        # chevauchement -- et le dit en francais. La contrainte en base reste
+        # le filet contre deux requetes simultanees.
+        validators = []
 
 
 class TimetablePublicationSerializer(serializers.ModelSerializer):
@@ -566,6 +806,27 @@ class StudentSerializer(serializers.ModelSerializer):
     classroom_name = serializers.SerializerMethodField(read_only=True)
     parent_name = serializers.SerializerMethodField(read_only=True)
     parent_phone = serializers.SerializerMethodField(read_only=True)
+
+    def validate_matricule(self, value):
+        """Un matricule saisi a la main doit suivre le format de l'ecole.
+
+        Laisse vide, il est produit par le modele. Saisi, il passait jusqu'ici
+        tel quel: n'importe quelle chaine devenait l'identifiant d'un eleve,
+        celui-la meme qui sert a le retrouver sur un bulletin ou une liste
+        d'appel.
+        """
+        from apps.school import matricule as service
+
+        nettoye = (value or "").strip().upper()
+        if not nettoye:
+            return ""
+        if not service.est_conforme(nettoye):
+            raise serializers.ValidationError(
+                "Format attendu : code école, classe, année, type, séquence et "
+                "genre — par exemple RC15CG25E3566F. Laissez vide pour qu'il "
+                "soit attribué automatiquement."
+            )
+        return nettoye
 
     def get_user_full_name(self, obj):
         full_name = obj.user.get_full_name().strip() if obj.user else ""
@@ -879,10 +1140,56 @@ class TeacherAttendanceSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class TeacherTimeEntryCoverageSerializer(serializers.ModelSerializer):
+    """Un cours couvert par un pointage, tel que l'ecran le nomme."""
+
+    subject_name = serializers.CharField(
+        source="schedule_slot.assignment.subject.name", read_only=True
+    )
+    classroom_name = serializers.CharField(
+        source="schedule_slot.assignment.classroom.name", read_only=True
+    )
+    start_time = serializers.TimeField(source="schedule_slot.start_time", read_only=True)
+    end_time = serializers.TimeField(source="schedule_slot.end_time", read_only=True)
+    room = serializers.CharField(source="schedule_slot.room", read_only=True)
+    is_complete = serializers.BooleanField(source="est_complete", read_only=True)
+
+    class Meta:
+        model = TeacherTimeEntryCoverage
+        fields = [
+            "id",
+            "schedule_slot",
+            "subject_name",
+            "classroom_name",
+            "start_time",
+            "end_time",
+            "room",
+            "planned_minutes",
+            "covered_minutes",
+            "late_minutes",
+            "tolerated_late_minutes",
+            "is_complete",
+        ]
+
+
 class TeacherTimeEntrySerializer(serializers.ModelSerializer):
     teacher_full_name = serializers.SerializerMethodField(read_only=True)
     teacher_employee_code = serializers.SerializerMethodField(read_only=True)
     check_out_time = serializers.TimeField(required=False, allow_null=True)
+    # Les cours que ce pointage a effectivement couverts. Le tableau
+    # n'affichait qu'un nombre d'heures, sans dire a quoi il correspondait.
+    slot_coverages = TeacherTimeEntryCoverageSerializer(many=True, read_only=True)
+    is_off_schedule = serializers.SerializerMethodField(read_only=True)
+    planned_minutes = serializers.IntegerField(read_only=True)
+    covered_minutes = serializers.IntegerField(read_only=True)
+
+    def get_is_off_schedule(self, obj):
+        """Vrai quand la presence ne recoupe aucun cours planifie.
+
+        Ce n'est pas une anomalie en soi -- un remplacement ou une reunion
+        en sont --, mais cela doit se voir et porter un motif.
+        """
+        return obj.covered_minutes == 0
 
     def get_teacher_full_name(self, obj):
         teacher = obj.teacher
@@ -903,6 +1210,12 @@ class TeacherTimeEntrySerializer(serializers.ModelSerializer):
         check_in_time = attrs.get("check_in_time") or getattr(self.instance, "check_in_time", None)
         check_out_time = attrs.get("check_out_time") or getattr(self.instance, "check_out_time", None)
 
+        motif = (
+            attrs.get("off_schedule_reason")
+            if "off_schedule_reason" in attrs
+            else getattr(self.instance, "off_schedule_reason", "")
+        )
+
         if teacher and entry_date:
             day_code = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][entry_date.weekday()]
             if day_code == "SUN":
@@ -910,16 +1223,32 @@ class TeacherTimeEntrySerializer(serializers.ModelSerializer):
                     {"entry_date": "Le pointage enseignant est interdit le dimanche."}
                 )
 
-            has_slot = TeacherScheduleSlot.objects.filter(
-                assignment__teacher=teacher,
-                day_of_week=day_code,
-            ).exists()
-            if not has_slot:
+            # Les creneaux de l'annee scolaire qui couvre cette date: ceux de
+            # l'an dernier ne disent rien de ce qui devait etre assure.
+            creneaux = list(
+                TeacherScheduleSlot.objects.filter(
+                    assignment__teacher=teacher,
+                    day_of_week=day_code,
+                    assignment__classroom__academic_year__start_date__lte=entry_date,
+                    assignment__classroom__academic_year__end_date__gte=entry_date,
+                ).values_list("start_time", "end_time")
+            )
+
+            # Hors planning: soit aucun cours ce jour-la, soit tous termines
+            # avant l'arrivee. Le pointage reste possible -- un remplacement
+            # ou une reunion sont legitimes -- mais il doit dire pourquoi.
+            # Le refuser d'office poussait a saisir de faux horaires pour
+            # faire passer une presence reelle.
+            hors_planning = not creneaux
+            if creneaux and check_in_time:
+                hors_planning = all(fin <= check_in_time for _, fin in creneaux)
+
+            if hors_planning and not (motif or "").strip():
                 raise serializers.ValidationError(
                     {
-                        "entry_date": (
-                            "Aucun creneau d'emploi du temps pour cet enseignant ce jour. "
-                            "Le pointage est bloque."
+                        "off_schedule_reason": (
+                            "Ce pointage ne correspond à aucun cours planifié : "
+                            "indiquez le motif (remplacement, réunion, rattrapage…)."
                         )
                     }
                 )
@@ -1844,18 +2173,110 @@ class SupplierSerializer(serializers.ModelSerializer):
 
 
 class StockItemSerializer(serializers.ModelSerializer):
+    """Un article et son stock reel.
+
+    `quantity` ne s'ecrit plus directement: elle se deduit des mouvements.
+    A la creation, la quantite annoncee ouvre l'historique par un mouvement
+    d'entree -- sans quoi le stock de depart serait un chiffre sans origine,
+    que rien ne justifierait le jour d'un inventaire.
+    """
+
     is_low_stock = serializers.BooleanField(read_only=True)
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    quantity = serializers.IntegerField(read_only=True)
+    # Uniquement a la creation: elle devient le premier mouvement d'entree.
+    initial_quantity = serializers.IntegerField(
+        write_only=True, required=False, min_value=0
+    )
 
     class Meta:
         model = StockItem
         fields = "__all__"
 
+    def validate_name(self, value):
+        nettoye = (value or "").strip()
+        if not nettoye:
+            raise serializers.ValidationError("Donnez un nom à l'article.")
+        return nettoye
+
+    def create(self, validated_data):
+        """La quantite de depart devient le premier mouvement d'entree.
+
+        Retiree ici et non dans la vue: elle n'appartient pas au modele, et
+        `ModelSerializer.create` la passerait telle quelle au constructeur.
+        """
+        depart = validated_data.pop("initial_quantity", 0)
+        article = super().create(validated_data)
+        if depart:
+            StockMovement.objects.create(
+                item=article,
+                movement_type=StockMovementType.IN,
+                quantity=depart,
+                reason="Stock initial",
+            )
+            article.refresh_from_db()
+        return article
+
+    def update(self, instance, validated_data):
+        # Une correction de stock passe par un mouvement, qui porte sa trace
+        # et son motif -- pas par le champ d'ouverture.
+        validated_data.pop("initial_quantity", None)
+        return super().update(instance, validated_data)
+
 
 class StockMovementSerializer(serializers.ModelSerializer):
+    item_name = serializers.CharField(source="item.name", read_only=True)
+    item_unit = serializers.CharField(source="item.unit", read_only=True)
+    movement_type_label = serializers.CharField(
+        source="get_movement_type_display", read_only=True
+    )
+
     class Meta:
         model = StockMovement
         fields = "__all__"
+
+    def validate_quantity(self, value):
+        if value <= 0:
+            raise serializers.ValidationError(
+                "La quantité d'un mouvement doit être supérieure à zéro."
+            )
+        return value
+
+    def validate(self, attrs):
+        """Une sortie ne descend pas sous ce qui est en magasin.
+
+        Le controle manquait entierement: une sortie de cent sur un stock de
+        cinq passait, et le magasin affichait -95. Un stock negatif n'est
+        pas une alerte, c'est une donnee fausse -- il masque autant un vol
+        qu'une erreur de saisie.
+        """
+        article = attrs.get("item") or getattr(self.instance, "item", None)
+        genre = attrs.get("movement_type") or getattr(
+            self.instance, "movement_type", None
+        )
+        quantite = attrs.get("quantity")
+        if quantite is None:
+            quantite = getattr(self.instance, "quantity", 0)
+
+        if article is None or genre != StockMovementType.OUT:
+            return attrs
+
+        disponible = article.quantite_derivee()
+        # Une sortie corrigee libere d'abord ce qu'elle retenait, sinon on
+        # comparerait la nouvelle quantite a un stock qui l'inclut deja.
+        if self.instance is not None and self.instance.movement_type == StockMovementType.OUT:
+            disponible += self.instance.quantity
+
+        if quantite > disponible:
+            raise serializers.ValidationError(
+                {
+                    "quantity": (
+                        f"Sortie impossible : {disponible} "
+                        f"{article.unit} seulement en magasin."
+                    )
+                }
+            )
+        return attrs
 
 
 class PromotionDecisionSerializer(serializers.ModelSerializer):

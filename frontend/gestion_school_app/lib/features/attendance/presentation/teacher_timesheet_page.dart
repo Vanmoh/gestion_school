@@ -18,6 +18,10 @@ import '../../../core/permissions/module_permissions.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../core/providers/navigation_intents.dart';
 import '../../payments/presentation/payments_controller.dart';
+import '../data/timesheet_repository.dart';
+import '../domain/timesheet_concordance.dart';
+import 'widgets/concordance_panel.dart';
+import 'widgets/concordance_report_dialog.dart';
 
 enum _SummaryPeriod { day, week, month }
 
@@ -52,9 +56,17 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
 
   final _notesController = TextEditingController();
   final _dateController = TextEditingController();
+  /// Motif d'un pointage qui ne recoupe aucun cours: le serveur l'exige, et
+  /// le formulaire ne le proposait nulle part.
+  final _offScheduleController = TextEditingController();
 
   List<Map<String, dynamic>> _teachers = [];
   List<Map<String, dynamic>> _timeEntries = [];
+
+  /// Le rapprochement du jour affiche: ce qui devait etre assure, ce qui
+  /// l'a ete. Il vient du serveur, seul a connaitre les creneaux couverts.
+  TimesheetConcordance _concordance = TimesheetConcordance.vide;
+  bool _chargementConcordance = false;
 
   @override
   void initState() {
@@ -67,7 +79,101 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
   void dispose() {
     _notesController.dispose();
     _dateController.dispose();
+    _offScheduleController.dispose();
     super.dispose();
+  }
+
+  /// Les cours couverts par un pointage, ou son motif hors planning.
+  ///
+  /// Le serveur les renvoie desormais sur chaque ligne (`slot_coverages`):
+  /// c'est ce qui permet de lire « Maths 6èA 8h-10h » la ou il n'y avait
+  /// qu'un nombre d'heures sans origine.
+  Widget _cellulesSeances(Map<String, dynamic> row) {
+    final brutes = row['slot_coverages'];
+    final couvertures = brutes is List
+        ? brutes.whereType<Map>().map((c) => Map<String, dynamic>.from(c)).toList()
+        : const <Map<String, dynamic>>[];
+
+    if (couvertures.isEmpty) {
+      final motif = row['off_schedule_reason']?.toString() ?? '';
+      return Text(
+        motif.isEmpty ? 'Hors planning' : 'Hors planning · $motif',
+        style: TextStyle(color: Theme.of(context).colorScheme.tertiary),
+      );
+    }
+
+    final libelles = couvertures.map((couverture) {
+      final matiere = couverture['subject_name']?.toString() ?? '';
+      final classe = couverture['classroom_name']?.toString() ?? '';
+      final debut = couverture['start_time']?.toString() ?? '';
+      final fin = couverture['end_time']?.toString() ?? '';
+      final complet = couverture['is_complete'] == true;
+      return '$matiere $classe ${_hhmm(debut)}-${_hhmm(fin)}${complet ? '' : ' (partiel)'}';
+    });
+
+    return Text(libelles.join('\n'));
+  }
+
+  /// « 08:00:00 » -> « 08:00 ». Les secondes n'apprennent rien sur un cours.
+  String _hhmm(String valeur) {
+    final morceaux = valeur.split(':');
+    if (morceaux.length < 2) return valeur;
+    return '${morceaux[0]}:${morceaux[1]}';
+  }
+
+  /// Vrai quand l'heure saisie ne tombe sur aucun cours planifie.
+  ///
+  /// Meme regle que le serveur -- tous les cours du jour termines avant
+  /// l'arrivee, ou aucun cours du tout --, calculee sur le rapprochement
+  /// deja charge. Elle ne remplace pas le controle du serveur: elle evite
+  /// seulement de decouvrir le refus apres avoir tout saisi.
+  bool get _horsPlanning {
+    final jours = _concordance.teachers.expand((ligne) => ligne.days);
+    final seances = jours.expand((jour) => jour.sessions).toList();
+    if (seances.isEmpty) return true;
+
+    final arrivee = _toMinutes(_checkIn);
+    return seances.every((seance) {
+      final fin = _minutesDepuisTexte(seance.endTime);
+      return fin != null && fin <= arrivee;
+    });
+  }
+
+  /// « 10:00 » en minutes depuis minuit, null si la chaine est illisible.
+  int? _minutesDepuisTexte(String valeur) {
+    final morceaux = valeur.split(':');
+    if (morceaux.length < 2) return null;
+    final heures = int.tryParse(morceaux[0]);
+    final minutes = int.tryParse(morceaux[1]);
+    if (heures == null || minutes == null) return null;
+    return heures * 60 + minutes;
+  }
+
+  /// Recharge le rapprochement du jour affiche.
+  ///
+  /// Separe du chargement principal: il suit la date du formulaire, qui
+  /// change bien plus souvent que la liste des enseignants, et une panne de
+  /// ce cote ne doit pas vider l'ecran de pointage.
+  Future<void> _chargerConcordance() async {
+    setState(() => _chargementConcordance = true);
+    try {
+      final concordance = await ref
+          .read(timesheetRepositoryProvider)
+          .fetchConcordance(
+            from: _entryDate,
+            to: _entryDate,
+            teacherId: _selectedTeacherId,
+          );
+      if (!mounted) return;
+      setState(() => _concordance = concordance);
+    } catch (error) {
+      if (!mounted) return;
+      // Silencieux: le pointage reste utilisable sans son rapprochement, et
+      // une bannière rouge a chaque changement de date serait du bruit.
+      setState(() => _concordance = TimesheetConcordance.vide);
+    } finally {
+      if (mounted) setState(() => _chargementConcordance = false);
+    }
   }
 
   bool _canAccess(String? role) {
@@ -251,6 +357,7 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
         ? _asInt(_teachers.first['id'])
             : null;
       });
+      await _chargerConcordance();
     } catch (error) {
       _showMessage('Erreur chargement emargement: ${_extractApiErrorMessage(error)}');
     } finally {
@@ -290,10 +397,12 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
             checkInTime: _toApiTime(_checkIn),
             checkOutTime: _forgotCheckout ? null : _toApiTime(_checkOut),
             notes: _notesController.text.trim(),
+            offScheduleReason: _offScheduleController.text.trim(),
           );
 
       if (!mounted) return;
       _notesController.clear();
+      _offScheduleController.clear();
       setState(() => _forgotCheckout = false);
       _showMessage('Pointage enregistre avec succes.', isSuccess: true);
       await _loadData();
@@ -448,6 +557,7 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                             ? null
                             : (value) {
                                 setState(() => _selectedTeacherId = value);
+                                _chargerConcordance();
                               },
                       ),
                     ),
@@ -471,6 +581,10 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                               _entryDate = picked;
                               _dateController.text = _toApiDate(_entryDate);
                             });
+                            // Le rapprochement porte sur le jour affiche:
+                            // le laisser sur la date precedente ferait
+                            // pointer sur des cours qui ne sont pas ceux-la.
+                            await _chargerConcordance();
                           }
                         },
                       ),
@@ -533,6 +647,25 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: 420,
+                  child: TextField(
+                    controller: _offScheduleController,
+                    decoration: InputDecoration(
+                      labelText: _horsPlanning
+                          ? 'Motif hors planning (obligatoire)'
+                          : 'Motif hors planning (si aucun cours prévu)',
+                      hintText: 'Remplacement, réunion, rattrapage…',
+                      // Le champ se signale de lui-meme quand le serveur va
+                      // l'exiger, plutot que de laisser decouvrir le refus
+                      // apres avoir tout saisi.
+                      helperText: _horsPlanning
+                          ? 'Aucun cours planifié ne correspond à cette heure.'
+                          : null,
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 10),
                 FilledButton.icon(
                   onPressed: _saving ? null : _createTimeEntry,
@@ -544,6 +677,58 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                         )
                       : const Icon(Icons.access_time_filled_outlined),
                   label: const Text('Enregistrer pointage'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Concordance emploi du temps',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => showDialog<void>(
+                        context: context,
+                        builder: (_) => ConcordanceReportDialog(
+                          // L'enseignant ne voit que son propre suivi; la
+                          // direction ouvre l'etablissement entier.
+                          teacherId: isTeacherRole ? _selectedTeacherId : null,
+                          titre: isTeacherRole
+                              ? 'Mon rapprochement'
+                              : 'Rapprochement de l’établissement',
+                        ),
+                      ),
+                      icon: const Icon(Icons.calendar_month_outlined),
+                      label: const Text('Sur une période'),
+                    ),
+                    IconButton(
+                      tooltip: 'Actualiser le rapprochement',
+                      onPressed: _chargementConcordance ? null : _chargerConcordance,
+                      icon: const Icon(Icons.refresh),
+                    ),
+                  ],
+                ),
+                Text(
+                  'Cours prévus le ${_uiDate(_toApiDate(_entryDate))} et ce qui a été assuré.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                ConcordancePanel(
+                  concordance: _concordance,
+                  chargement: _chargementConcordance,
+                  // L'enseignant ne voit que son propre suivi: son nom en
+                  // tete de chaque bloc n'apprendrait rien.
+                  masquerEnseignant: isTeacherRole,
                 ),
               ],
             ),
@@ -574,6 +759,9 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                         DataColumn(label: Text('Sortie')),
                         DataColumn(label: Text('Auto')),
                         DataColumn(label: Text('Heures')),
+                        // Le tableau n'affichait qu'un nombre d'heures, sans
+                        // dire a quels cours elles correspondaient.
+                        DataColumn(label: Text('Séances')),
                       ],
                       rows: _timeEntries.take(40).map((row) {
                         return DataRow(
@@ -584,6 +772,7 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                             DataCell(Text(row['check_out_time']?.toString() ?? '-')),
                             DataCell(Text(row['is_auto_closed'] == true ? 'Oui' : 'Non')),
                             DataCell(Text(row['worked_hours']?.toString() ?? '0')),
+                            DataCell(_cellulesSeances(row)),
                           ],
                         );
                       }).toList(growable: false),

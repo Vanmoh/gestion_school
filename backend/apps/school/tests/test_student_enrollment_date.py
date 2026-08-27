@@ -20,13 +20,17 @@ from apps.school.models import AcademicYear, ClassRoom, Etablissement, Student
 class StudentEnrollmentDateTests(APITestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.etablissement = Etablissement.objects.create(name="LTOB")
+        # L'annee appartient a son ecole: la resolution de « l'annee
+        # courante » se fait par etablissement, et une annee sans
+        # etablissement n'est celle de personne.
         cls.year = AcademicYear.objects.create(
             name="2025-2026",
             start_date=date(2025, 9, 1),
             end_date=date(2026, 7, 31),
             is_active=True,
+            etablissement=cls.etablissement,
         )
-        cls.etablissement = Etablissement.objects.create(name="LTOB")
         cls.classroom = ClassRoom.objects.create(
             name="10eme A", academic_year=cls.year, etablissement=cls.etablissement
         )

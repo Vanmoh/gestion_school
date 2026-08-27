@@ -19,7 +19,7 @@ from django.http import (
     StreamingHttpResponse,
 )
 from django.utils import timezone
-from django.utils.dateparse import parse_date
+from django.utils.dateparse import parse_date, parse_time
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
@@ -39,7 +39,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
-from apps.accounts.access import can_read, can_write, is_scoped
+from apps.accounts.access import can_delete, can_read, can_write, is_scoped
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import HasModuleAccess, IsSuperAdmin
 from apps.common.pagination import StandardResultsSetPagination
@@ -81,6 +81,7 @@ from .models import (
     PromotionRun,
     PromotionRunStatus,
     StockItem,
+    StockMovementType,
     StockMovement,
     Student,
     StudentAcademicHistory,
@@ -91,6 +92,9 @@ from .models import (
     Teacher,
     TeacherAttendance,
     TeacherAssignment,
+    AvailabilityCampaign,
+    AvailabilityKind,
+    TeacherAvailabilityResponse,
     TeacherAvailabilitySlot,
     TeacherTimeEntry,
     TeacherScheduleSlot,
@@ -135,6 +139,7 @@ from .serializers import (
     SmsProviderConfigSerializer,
     TeacherAttendanceSerializer,
     TeacherAssignmentSerializer,
+    AvailabilityCampaignSerializer,
     TeacherAvailabilitySlotSerializer,
     TeacherTimeEntrySerializer,
     TeacherScheduleSlotSerializer,
@@ -223,6 +228,169 @@ class EtablissementScopeMixin:
                 return teacher_profile.etablissement
 
         return None
+
+    # --- Annee scolaire visee ------------------------------------------
+    #
+    # Meme mecanique que l'etablissement, et pour la meme raison: l'ecran
+    # choisit une annee, toutes ses requetes doivent porter dessus. Sans
+    # cela, chaque page gerait la sienne dans son coin -- ce qu'elles
+    # faisaient, avec des selecteurs qui ne s'accordaient jamais entre
+    # « Notes », « Examens » et « Academique ».
+
+    def _requested_academic_year_id(self):
+        raw_value = (
+            self.request.headers.get("X-Academic-Year-Id")
+            or self.request.query_params.get("academic_year_scope")
+        )
+        if raw_value in (None, ""):
+            return None
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _requested_academic_year(self):
+        """L'annee demandee, si elle appartient bien a l'etablissement actif.
+
+        Le controle d'appartenance est ici et non chez l'appelant: une annee
+        d'une autre ecole, passee en en-tete, aurait ouvert ses classes et
+        ses notes a qui la designait.
+        """
+        annee_id = self._requested_academic_year_id()
+        if annee_id is None:
+            return None
+
+        queryset = AcademicYear.objects.filter(id=annee_id)
+        etablissement = self._resolve_target_etablissement()
+        if etablissement is not None:
+            queryset = queryset.filter(etablissement=etablissement)
+        return queryset.first()
+
+    def _scoped_academic_year(self):
+        """Annee de travail: celle demandee, a defaut celle en cours."""
+        return self._requested_academic_year() or AcademicYear.courante(
+            self._resolve_target_etablissement()
+        )
+
+
+
+def journaliser_ecriture_annee_close(request, annee, module):
+    """Garde trace d'une correction apportee apres cloture.
+
+    C'est ce qui rend l'ouverture acceptable: la direction peut corriger une
+    erreur d'apres-coup, mais l'ecriture ne passe pas inapercue -- un
+    bulletin deja remis ne se modifie pas en silence.
+    """
+    utilisateur = getattr(request, "user", None)
+    if utilisateur is not None and not utilisateur.is_authenticated:
+        utilisateur = None
+
+    ActivityLog.objects.create(
+        user=utilisateur,
+        etablissement=getattr(annee, "etablissement", None),
+        role=getattr(utilisateur, "role", "") or "",
+        action="Ecriture sur une annee scolaire cloturee",
+        method=request.method,
+        path=str(request.path)[:255],
+        module=module or "",
+        target=f"AcademicYear #{annee.pk} ({annee.name})"[:120],
+        success=True,
+    )
+
+
+class AnneeScolaireScopeMixin:
+    """Restreint une vue a l'annee scolaire choisie, et protege les annees closes.
+
+    Le filtrage ne s'applique que si l'ecran demande une annee: sans
+    en-tete, la vue rend ce qu'elle rendait avant. C'est ce qui permet a la
+    bascule d'arriver ecran par ecran sans casser les autres.
+
+    Une annee cloturee reste consultable. L'ecriture y est reservee a la
+    direction -- une note corrigee apres remise des bulletins n'est pas un
+    geste ordinaire -- et chaque correction laisse une trace.
+    """
+
+    # Chemin vers l'annee depuis l'objet de la vue. Les vues qui portent
+    # `academic_year` directement n'ont rien a declarer.
+    academic_year_field = "academic_year"
+
+    def filter_queryset(self, queryset):
+        """Branche le filtre d'annee sur la chaine de filtrage de DRF.
+
+        Et non sur `get_queryset`: ces vues en ont des versions longues, a
+        douze points de retour pour les notes, qu'il aurait fallu modifier
+        une par une. `filter_queryset` est appele aussi bien pour la liste
+        que pour le detail, et aucune de ces vues ne le surcharge.
+        """
+        return self._filtrer_par_annee(super().filter_queryset(queryset))
+
+    def _filtrer_par_annee(self, queryset):
+        annee = self._requested_academic_year()
+        if annee is None:
+            return queryset
+        return queryset.filter(**{self.academic_year_field: annee})
+
+    def _annee_de_l_objet(self, instance):
+        objet = instance
+        for partie in self.academic_year_field.split("__"):
+            objet = getattr(objet, partie, None)
+            if objet is None:
+                return None
+        return objet
+
+    def _refuser_si_annee_close(self, annee):
+        """Seule la direction ecrit sur une annee cloturee, et c'est trace."""
+        if annee is None or not getattr(annee, "is_closed", False):
+            return
+
+        # Le niveau administration, celui qui distingue deja « peut saisir »
+        # de « peut supprimer » dans la matrice.
+        if not can_delete(getattr(self.request.user, "role", ""), self.access_module):
+            raise PermissionDenied(
+                f"L'annee « {annee.name} » est cloturee: sa modification est "
+                "reservee a la direction."
+            )
+
+        journaliser_ecriture_annee_close(self.request, annee, self.access_module)
+
+    # Vues dont le modele ne porte pas l'annee dans sa charge utile: elle
+    # est deduite de l'annee de travail. Sans cela, chaque nouvelle absence
+    # repartirait sans annee et le melange des exercices reviendrait aussitot.
+    renseigne_annee_a_la_creation = False
+
+    def create(self, request, *args, **kwargs):
+        """Complete la charge utile avec l'annee de travail.
+
+        Et non dans `perform_create`: les cinq vues concernees definissent
+        la leur -- pour poser le declarant d'un incident, ou brider
+        l'enseignant -- et la leur masque celle du mixin. `create` reste
+        libre chez toutes.
+        """
+        if self.renseigne_annee_a_la_creation and not request.data.get(
+            "academic_year"
+        ):
+            annee = self._scoped_academic_year()
+            if annee is not None:
+                donnees = request.data.copy()
+                donnees["academic_year"] = annee.pk
+                request._full_data = donnees
+        return super().create(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        self._refuser_si_annee_close(
+            serializer.validated_data.get("academic_year")
+        )
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        annee = self._annee_de_l_objet(serializer.instance)
+        self._refuser_si_annee_close(annee)
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._refuser_si_annee_close(self._annee_de_l_objet(instance))
+        super().perform_destroy(instance)
 
 
 class BaseModelViewSet(EtablissementScopeMixin, viewsets.ModelViewSet):
@@ -784,8 +952,88 @@ class AcademicYearViewSet(BaseModelViewSet):
     # academique.
     search_fields = ["name"]
     ordering_fields = ["name", "start_date", "end_date", "is_active"]
-    queryset = AcademicYear.objects.all().order_by("-id")
+    filterset_fields = ["is_active", "is_closed"]
+    queryset = AcademicYear.objects.select_related("etablissement").all()
     serializer_class = AcademicYearSerializer
+
+    def get_queryset(self):
+        """Les annees de l'etablissement actif, et elles seules.
+
+        La vue ne filtrait rien: chaque ecole voyait les annees des autres,
+        ce qui n'avait pas d'importance tant qu'il n'en existait qu'une,
+        partagee par tout le monde.
+        """
+        queryset = super().get_queryset()
+        etablissement = self._resolve_target_etablissement()
+        if etablissement is not None:
+            return queryset.filter(etablissement=etablissement)
+
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN:
+            return queryset
+        return queryset.none()
+
+    def get_serializer_context(self):
+        # Le serializer valide le chevauchement des periodes: il lui faut
+        # l'etablissement vise, que le client n'a pas le droit d'envoyer.
+        contexte = super().get_serializer_context()
+        contexte["etablissement_cible"] = self._resolve_target_etablissement()
+        return contexte
+
+    def _etablissement_cible(self):
+        etablissement = self._resolve_target_etablissement()
+        if etablissement is None:
+            raise ValidationError(
+                {"etablissement": "Selectionnez un etablissement actif."}
+            )
+        return etablissement
+
+    def perform_create(self, serializer):
+        serializer.save(etablissement=self._etablissement_cible())
+
+    def perform_update(self, serializer):
+        serializer.save(etablissement=self._etablissement_cible())
+
+    @action(detail=True, methods=["post"], url_path="activer")
+    def activer(self, request, pk=None):
+        """Designe l'annee de saisie de l'etablissement.
+
+        Une seule a la fois: la base le garantit desormais, encore
+        faut-il desactiver la precedente dans le meme mouvement.
+        """
+        annee = self.get_object()
+        if annee.is_closed:
+            raise ValidationError(
+                {"is_active": "Une annee cloturee ne peut pas redevenir l'annee de saisie."}
+            )
+
+        with transaction.atomic():
+            AcademicYear.objects.filter(
+                etablissement=annee.etablissement, is_active=True
+            ).exclude(pk=annee.pk).update(is_active=False)
+            annee.is_active = True
+            annee.save(update_fields=["is_active", "updated_at"])
+
+        return Response(self.get_serializer(annee).data)
+
+    @action(detail=True, methods=["post"], url_path="cloturer")
+    def cloturer(self, request, pk=None):
+        """Ferme l'annee a la saisie courante.
+
+        Elle reste consultable, et la direction garde la main pour corriger
+        une erreur d'apres-coup -- chaque correction etant tracee.
+        """
+        annee = self.get_object()
+        annee.is_closed = True
+        annee.is_active = False
+        annee.save(update_fields=["is_closed", "is_active", "updated_at"])
+        return Response(self.get_serializer(annee).data)
+
+    @action(detail=True, methods=["post"], url_path="rouvrir")
+    def rouvrir(self, request, pk=None):
+        annee = self.get_object()
+        annee.is_closed = False
+        annee.save(update_fields=["is_closed", "updated_at"])
+        return Response(self.get_serializer(annee).data)
 
 
 class EtablissementViewSet(viewsets.ModelViewSet):
@@ -802,7 +1050,7 @@ class EtablissementViewSet(viewsets.ModelViewSet):
         return [permissions.IsAuthenticated(), HasModuleAccess()]
 
 
-class ClassRoomViewSet(BaseModelViewSet):
+class ClassRoomViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "academics"
     queryset = ClassRoom.objects.all().order_by("name", "id")
     serializer_class = ClassRoomSerializer
@@ -1158,6 +1406,249 @@ class TeacherAssignmentViewSet(BaseModelViewSet):
         serializer.save()
 
 
+class AvailabilityCampaignViewSet(BaseModelViewSet):
+    """Les campagnes de collecte des disponibilites.
+
+    Meme module de droits que les disponibilites elles-memes: qui les lit
+    voit la campagne qui les encadre. L'ouverture et la fermeture, en
+    revanche, relevent de l'ecriture -- un enseignant ne decide pas de la
+    date a laquelle on cesse de l'attendre.
+    """
+
+    access_module = "teacher_availability"
+    serializer_class = AvailabilityCampaignSerializer
+    queryset = AvailabilityCampaign.objects.select_related(
+        "etablissement", "academic_year"
+    ).all()
+
+    def get_queryset(self):
+        queryset = (
+            super()
+            .get_queryset()
+            .annotate(
+                teachers_answered=Count(
+                    "responses", filter=Q(responses__submitted_at__isnull=False)
+                )
+            )
+            # Explicite: l'annotation fait perdre l'ordre du Meta, et la
+            # pagination sur une liste non ordonnee rend des pages instables.
+            .order_by("-opens_on", "-id")
+        )
+        etablissement = self._resolve_effective_etablissement_for_create()
+        if etablissement is not None:
+            return queryset.filter(etablissement=etablissement)
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN:
+            return queryset
+        return queryset.none()
+
+    def get_serializer_context(self):
+        return super().get_serializer_context()
+
+    def _effectif_enseignant(self, etablissement):
+        return Teacher.objects.filter(etablissement=etablissement).count()
+
+    def list(self, request, *args, **kwargs):
+        reponse = super().list(request, *args, **kwargs)
+        self._completer_effectifs(reponse)
+        return reponse
+
+    def retrieve(self, request, *args, **kwargs):
+        reponse = super().retrieve(request, *args, **kwargs)
+        self._completer_effectifs(reponse)
+        return reponse
+
+    def _completer_effectifs(self, reponse):
+        """Le denominateur du taux de reponse: l'effectif enseignant du jour.
+
+        Il n'est pas fige dans la campagne a dessein -- un enseignant recrute
+        en cours d'annee doit entrer dans le compte, sans quoi le taux
+        resterait a 100 % en l'ignorant.
+        """
+        lignes = reponse.data
+        if isinstance(lignes, dict) and "results" in lignes:
+            lignes = lignes["results"]
+        if isinstance(lignes, dict):
+            lignes = [lignes]
+        if not isinstance(lignes, list):
+            return
+
+        effectifs = {}
+        for ligne in lignes:
+            if not isinstance(ligne, dict):
+                continue
+            etablissement_id = ligne.get("etablissement")
+            if etablissement_id not in effectifs:
+                effectifs[etablissement_id] = Teacher.objects.filter(
+                    etablissement_id=etablissement_id
+                ).count()
+            ligne["teachers_total"] = effectifs[etablissement_id]
+
+    def perform_create(self, serializer):
+        etablissement = self._resolve_effective_etablissement_for_create()
+        if etablissement is None:
+            raise ValidationError(
+                {"etablissement": "Sélectionnez un établissement actif."}
+            )
+
+        annee = serializer.validated_data.get("academic_year")
+        # Controle avant la base: sa contrainte remonterait une erreur
+        # d'integrite en 500, la ou l'utilisateur a simplement voulu ouvrir
+        # une seconde collecte sur une annee qui en a deja une.
+        if annee is not None and AvailabilityCampaign.objects.filter(
+            etablissement=etablissement, academic_year=annee
+        ).exists():
+            raise ValidationError(
+                {
+                    "academic_year": "Une campagne existe déjà pour cette année "
+                                     "scolaire. Modifiez-la plutôt que d'en ouvrir "
+                                     "une seconde."
+                }
+            )
+
+        serializer.save(etablissement=etablissement)
+
+    @action(detail=True, methods=["get"])
+    def responses(self, request, pk=None):
+        """Qui a répondu, qui n'a pas — la liste complète, silencieux compris.
+
+        Les seuls repondants ne diraient rien: c'est la liste des manquants
+        qui sert a relancer, et elle n'existe qu'en partant de l'effectif.
+        """
+        campagne = self.get_object()
+        deja = {
+            reponse.teacher_id: reponse
+            for reponse in TeacherAvailabilityResponse.objects.filter(
+                campaign=campagne
+            ).select_related("teacher", "teacher__user")
+        }
+
+        lignes = []
+        for enseignant in Teacher.objects.filter(
+            etablissement=campagne.etablissement
+        ).select_related("user"):
+            reponse = deja.get(enseignant.id)
+            user = enseignant.user
+            lignes.append(
+                {
+                    "teacher": enseignant.id,
+                    "teacher_name": (user.get_full_name().strip() or user.username)
+                    if user
+                    else "",
+                    "teacher_employee_code": enseignant.employee_code or "",
+                    "submitted_at": reponse.submitted_at if reponse else None,
+                    "is_submitted": bool(reponse and reponse.submitted_at),
+                    "reminder_count": reponse.reminder_count if reponse else 0,
+                    "slots_declared": TeacherAvailabilitySlot.objects.filter(
+                        campaign=campagne, teacher=enseignant
+                    ).count(),
+                }
+            )
+
+        lignes.sort(key=lambda ligne: (ligne["is_submitted"], ligne["teacher_name"].lower()))
+        rendus = sum(1 for ligne in lignes if ligne["is_submitted"])
+
+        return Response(
+            {
+                "campaign": campagne.id,
+                "teachers_total": len(lignes),
+                "teachers_answered": rendus,
+                "teachers_missing": len(lignes) - rendus,
+                "results": lignes,
+            }
+        )
+
+    @action(detail=True, methods=["post"], url_path="remind")
+    def remind(self, request, pk=None):
+        """Relance les enseignants qui n'ont pas encore rendu leurs créneaux."""
+        campagne = self.get_object()
+        # La matrice ouvre l'ecriture a l'enseignant pour ses propres
+        # creneaux; elle ne lui donne pas le droit de relancer ses collegues.
+        if getattr(request.user, "role", None) == UserRole.TEACHER:
+            raise PermissionDenied(
+                "Accès refusé : la relance est réservée à l'administration."
+            )
+        if campagne.status == AvailabilityCampaign.Status.CLOSED:
+            raise ValidationError(
+                {"detail": "Cette campagne est close : plus personne n'est attendu."}
+            )
+
+        rendus = set(
+            TeacherAvailabilityResponse.objects.filter(
+                campaign=campagne, submitted_at__isnull=False
+            ).values_list("teacher_id", flat=True)
+        )
+        manquants = Teacher.objects.filter(
+            etablissement=campagne.etablissement
+        ).exclude(id__in=rendus).select_related("user")
+
+        envoyees = 0
+        maintenant = timezone.now()
+        for enseignant in manquants:
+            if enseignant.user is None:
+                continue
+            Notification.objects.create(
+                etablissement=campagne.etablissement,
+                recipient=enseignant.user,
+                channel=NotificationChannel.PUSH,
+                title="Disponibilités attendues",
+                message=(
+                    f"« {campagne.label} » se termine le "
+                    f"{campagne.closes_on.strftime('%d/%m/%Y')}. "
+                    "Déclarez vos disponibilités depuis l'application."
+                ),
+            )
+            reponse, _ = TeacherAvailabilityResponse.objects.get_or_create(
+                campaign=campagne, teacher=enseignant
+            )
+            reponse.reminded_at = maintenant
+            reponse.reminder_count = reponse.reminder_count + 1
+            reponse.save(update_fields=["reminded_at", "reminder_count", "updated_at"])
+            envoyees += 1
+
+        return Response({"reminded": envoyees})
+
+    @action(detail=True, methods=["post"])
+    def submit(self, request, pk=None):
+        """« J'ai terminé » : l'enseignant rend ses disponibilités.
+
+        C'est ce geste qui separe le silence de l'indisponibilite. Sans lui,
+        une grille vide pouvait aussi bien vouloir dire « je ne peux jamais »
+        que « je n'ai pas encore ouvert l'ecran », et l'administration
+        relançait a l'aveugle.
+        """
+        campagne = self.get_object()
+        enseignant = Teacher.objects.filter(user=request.user).first()
+        if enseignant is None:
+            raise ValidationError(
+                {"detail": "Seul un enseignant rend ses propres disponibilités."}
+            )
+        if enseignant.etablissement_id != campagne.etablissement_id:
+            raise ValidationError(
+                {"detail": "Cette campagne ne concerne pas votre établissement."}
+            )
+        if not campagne.est_ouverte:
+            raise ValidationError(
+                {"detail": "La collecte n'est pas ouverte."}
+            )
+
+        reponse, _ = TeacherAvailabilityResponse.objects.get_or_create(
+            campaign=campagne, teacher=enseignant
+        )
+        reponse.submitted_at = timezone.now()
+        reponse.save(update_fields=["submitted_at", "updated_at"])
+
+        return Response(
+            {
+                "campaign": campagne.id,
+                "teacher": enseignant.id,
+                "submitted_at": reponse.submitted_at,
+                "slots_declared": TeacherAvailabilitySlot.objects.filter(
+                    campaign=campagne, teacher=enseignant
+                ).count(),
+            }
+        )
+
+
 class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
     access_module = "teacher_availability"
     DAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT"]
@@ -1213,6 +1704,14 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
         teacher_id = self.request.query_params.get("teacher")
         if teacher_id:
             qs = qs.filter(teacher_id=teacher_id)
+
+        campagne = self.request.query_params.get("campaign")
+        if campagne not in (None, "") and str(campagne).isdigit():
+            qs = qs.filter(campaign_id=campagne)
+
+        genre = (self.request.query_params.get("kind") or "").strip()
+        if genre in AvailabilityKind.values:
+            qs = qs.filter(kind=genre)
         return qs
 
     def _resolve_teacher_for_request(self, serializer):
@@ -1230,6 +1729,46 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
 
         raise ValidationError({"teacher": "teacher est requis."})
 
+    def _campagne_active(self, etablissement):
+        """La campagne en cours pour cet etablissement, ou None.
+
+        Une seule peut exister par annee scolaire; on retient celle qui est
+        ouverte aujourd'hui, faute de quoi le rattachement serait arbitraire.
+        """
+        if etablissement is None:
+            return None
+        for campagne in AvailabilityCampaign.objects.filter(
+            etablissement=etablissement, status=AvailabilityCampaign.Status.OPEN
+        ).order_by("-opens_on"):
+            if campagne.est_ouverte:
+                return campagne
+        return None
+
+    def _verifier_la_collecte(self, etablissement):
+        """L'enseignant ne declare que pendant la collecte; l'ecole, toujours.
+
+        La contrainte de calendrier n'a de sens que pour celui a qui on
+        demande de repondre. L'administration corrige une declaration bien
+        apres la cloture -- c'est son travail d'arbitre, et le lui interdire
+        la renverrait vers la base de donnees.
+        """
+        if getattr(self.request.user, "role", None) != UserRole.TEACHER:
+            return self._campagne_active(etablissement)
+
+        campagne = self._campagne_active(etablissement)
+        if campagne is None:
+            # Aucune campagne ouverte: on ne bloque pas pour autant. Une
+            # ecole qui n'a pas encore adopte les campagnes doit continuer a
+            # recueillir les disponibilites comme avant.
+            if AvailabilityCampaign.objects.filter(etablissement=etablissement).exists():
+                raise ValidationError(
+                    {
+                        "detail": "La collecte des disponibilités n'est pas ouverte "
+                                  "en ce moment."
+                    }
+                )
+        return campagne
+
     def perform_create(self, serializer):
         target_etablissement = self._resolve_target_etablissement()
         teacher = self._resolve_teacher_for_request(serializer)
@@ -1237,7 +1776,16 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
         if target_etablissement and teacher.etablissement_id != target_etablissement.id:
             raise ValidationError({"teacher": "Cet enseignant n'appartient pas à l'établissement actif."})
 
-        serializer.save(teacher=teacher, etablissement=target_etablissement or teacher.etablissement)
+        etablissement = target_etablissement or teacher.etablissement
+        campagne = self._verifier_la_collecte(etablissement)
+        serializer.save(
+            teacher=teacher,
+            etablissement=etablissement,
+            # Rattachee a la collecte en cours, donc a son annee scolaire:
+            # sans cela, les declarations de l'an dernier restent melees a
+            # celles de la rentree.
+            campaign=campagne,
+        )
 
     def perform_update(self, serializer):
         if getattr(self.request.user, "role", None) == UserRole.TEACHER:
@@ -1255,6 +1803,18 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
 
     @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
     def grid(self, request):
+        """La semaine type: qui est disponible, et combien, sur chaque case.
+
+        La grille disait auparavant « disponible » ou « indisponible » pour
+        l'etablissement entier, et nommait celui qui avait « reserve » la
+        case. Elle decrivait une reservation exclusive, pas une collecte de
+        disponibilites: il n'y avait de place que pour un declarant par
+        creneau.
+
+        Elle rend desormais deux choses a la fois, parce que deux ecrans la
+        lisent: le compte par etat -- ce dont l'administration a besoin pour
+        arbitrer -- et ce que l'enseignant vise a declare sur cette case.
+        """
         try:
             start_hour = int(request.query_params.get("start_hour", 7))
             end_hour = int(request.query_params.get("end_hour", 18))
@@ -1269,47 +1829,75 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
 
         from datetime import time
 
-        slots = []
-        minute_cursor = start_hour * 60
-        end_minutes = end_hour * 60
-        while minute_cursor + slot_minutes <= end_minutes:
-            slot_start = time(hour=minute_cursor // 60, minute=minute_cursor % 60)
-            slot_end_minutes = minute_cursor + slot_minutes
-            slot_end = time(hour=slot_end_minutes // 60, minute=slot_end_minutes % 60)
-            slots.append((slot_start, slot_end))
-            minute_cursor += slot_minutes
+        cases = []
+        curseur = start_hour * 60
+        fin_minutes = end_hour * 60
+        while curseur + slot_minutes <= fin_minutes:
+            debut_case = time(hour=curseur // 60, minute=curseur % 60)
+            fin_case_minutes = curseur + slot_minutes
+            fin_case = time(hour=fin_case_minutes // 60, minute=fin_case_minutes % 60)
+            cases.append((debut_case, fin_case))
+            curseur += slot_minutes
 
-        declarations = list(self.get_queryset())
-        response_rows = []
-        for day_code in self.DAY_ORDER:
-            day_cells = []
-            day_declarations = [row for row in declarations if row.day_of_week == day_code]
-            for slot_start, slot_end in slots:
-                taken = None
-                for declaration in day_declarations:
-                    overlaps = declaration.start_time < slot_end and declaration.end_time > slot_start
-                    if overlaps:
-                        taken = declaration
-                        break
+        declarations = list(self._declarations_du_perimetre())
 
-                day_cells.append(
+        vise = request.query_params.get("teacher")
+        teacher_vise = int(vise) if vise not in (None, "") and str(vise).isdigit() else None
+
+        jours = []
+        for code in self.DAY_ORDER:
+            du_jour = [row for row in declarations if row.day_of_week == code]
+            lignes = []
+            for debut_case, fin_case in cases:
+                # Une declaration compte pour la case si elle la contient
+                # entierement: une heure declaree ne rend pas disponible sur
+                # deux heures.
+                couvrantes = [
+                    row for row in du_jour if row.couvre(debut_case, fin_case)
+                ]
+                mienne = next(
+                    (row for row in couvrantes if row.teacher_id == teacher_vise), None
+                )
+                lignes.append(
                     {
-                        "day_of_week": day_code,
-                        "day_label": self.DAY_LABELS.get(day_code, day_code),
-                        "start_time": slot_start.strftime("%H:%M:%S"),
-                        "end_time": slot_end.strftime("%H:%M:%S"),
-                        "status": "indisponible" if taken else "disponible",
-                        "availability_id": taken.id if taken else None,
-                        "teacher": taken.teacher_id if taken else None,
-                        "teacher_name": self._teacher_name(taken.teacher) if taken else "",
+                        "day_of_week": code,
+                        "day_label": self.DAY_LABELS.get(code, code),
+                        "start_time": debut_case.strftime("%H:%M:%S"),
+                        "end_time": fin_case.strftime("%H:%M:%S"),
+                        "preferred_count": sum(
+                            1 for row in couvrantes
+                            if row.kind == AvailabilityKind.PREFERRED
+                        ),
+                        "possible_count": sum(
+                            1 for row in couvrantes
+                            if row.kind == AvailabilityKind.POSSIBLE
+                        ),
+                        "unavailable_count": sum(
+                            1 for row in couvrantes
+                            if row.kind == AvailabilityKind.UNAVAILABLE
+                        ),
+                        "teachers": [
+                            {
+                                "teacher": row.teacher_id,
+                                "teacher_name": self._teacher_name(row.teacher),
+                                "kind": row.kind,
+                            }
+                            for row in couvrantes
+                        ],
+                        "mine": mienne.kind if mienne else None,
+                        "mine_id": mienne.id if mienne else None,
+                        "mine_exact": bool(
+                            mienne
+                            and mienne.start_time == debut_case
+                            and mienne.end_time == fin_case
+                        ),
                     }
                 )
-
-            response_rows.append(
+            jours.append(
                 {
-                    "day_of_week": day_code,
-                    "day_label": self.DAY_LABELS.get(day_code, day_code),
-                    "cells": day_cells,
+                    "day_of_week": code,
+                    "day_label": self.DAY_LABELS.get(code, code),
+                    "cells": lignes,
                 }
             )
 
@@ -1318,9 +1906,27 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
                 "start_hour": start_hour,
                 "end_hour": end_hour,
                 "slot_minutes": slot_minutes,
-                "days": response_rows,
+                "teacher": teacher_vise,
+                "days": jours,
             }
         )
+
+    def _declarations_du_perimetre(self):
+        """Toutes les declarations de l'etablissement, collegues compris.
+
+        Distinct de `get_queryset`, qui honore le filtre `teacher` de l'URL:
+        la grille a besoin de compter tout le monde, et n'en isole un qu'a
+        l'affichage.
+        """
+        base = TeacherAvailabilitySlot.objects.select_related(
+            "teacher", "teacher__user"
+        )
+        etablissement = self._resolve_target_etablissement()
+        if etablissement is not None:
+            return base.filter(etablissement=etablissement)
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN:
+            return base
+        return base.none()
 
     @staticmethod
     def _teacher_name(teacher):
@@ -1329,6 +1935,124 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
             return ""
         full_name = user.get_full_name().strip()
         return full_name or user.username
+
+    # --- Ce qui sert a construire le planning -------------------------------
+
+    @action(detail=False, methods=["get"], url_path="for-planning")
+    def for_planning(self, request):
+        """Qui peut prendre ce créneau, du plus volontaire au moins disponible.
+
+        La collecte s'arretait a elle-meme: les declarations etaient
+        enregistrees, puis oubliees. Celui qui construisait l'emploi du temps
+        ne les voyait nulle part et placait ses cours a l'aveugle.
+
+        Quatre groupes, dans l'ordre ou l'administration les regarde:
+        preferes, possibles, ceux qui n'ont rien dit, et ceux qui se sont
+        declares indisponibles.
+        """
+        jour = (request.query_params.get("day") or "").strip().upper()
+        if jour not in self.DAY_LABELS:
+            raise ValidationError({"day": "Jour attendu: MON, TUE, WED, THU, FRI ou SAT."})
+
+        debut = self._heure_demandee(request, "start")
+        fin = self._heure_demandee(request, "end")
+        if fin <= debut:
+            raise ValidationError({"end": "L'heure de fin doit être après l'heure de début."})
+
+        declarations = list(
+            self.get_queryset().filter(day_of_week=jour).select_related(
+                "teacher", "teacher__user"
+            )
+        )
+
+        # Une declaration ne vaut que si elle contient tout le creneau vise:
+        # une heure declaree ne couvre pas un cours de deux heures.
+        par_enseignant = {}
+        for declaration in declarations:
+            if not declaration.couvre(debut, fin):
+                continue
+            actuelle = par_enseignant.get(declaration.teacher_id)
+            # Une indisponibilite l'emporte sur tout: elle est ce que
+            # l'enseignant a pris la peine d'ecrire pour dire non.
+            if actuelle is None or self._prime_sur(declaration, actuelle):
+                par_enseignant[declaration.teacher_id] = declaration
+
+        groupes = {
+            AvailabilityKind.PREFERRED: [],
+            AvailabilityKind.POSSIBLE: [],
+            AvailabilityKind.UNAVAILABLE: [],
+        }
+        for declaration in par_enseignant.values():
+            groupes[declaration.kind].append(
+                {
+                    "teacher": declaration.teacher_id,
+                    "teacher_name": self._teacher_name(declaration.teacher),
+                    "note": declaration.note,
+                    "declared_start": declaration.start_time.strftime("%H:%M"),
+                    "declared_end": declaration.end_time.strftime("%H:%M"),
+                }
+            )
+
+        for lignes in groupes.values():
+            lignes.sort(key=lambda ligne: ligne["teacher_name"].lower())
+
+        silencieux = [
+            {
+                "teacher": enseignant.id,
+                "teacher_name": self._teacher_name(enseignant),
+                "note": "",
+                "declared_start": None,
+                "declared_end": None,
+            }
+            for enseignant in self._enseignants_du_perimetre()
+            if enseignant.id not in par_enseignant
+        ]
+        silencieux.sort(key=lambda ligne: ligne["teacher_name"].lower())
+
+        return Response(
+            {
+                "day_of_week": jour,
+                "day_label": self.DAY_LABELS[jour],
+                "start_time": debut.strftime("%H:%M"),
+                "end_time": fin.strftime("%H:%M"),
+                "preferred": groupes[AvailabilityKind.PREFERRED],
+                "possible": groupes[AvailabilityKind.POSSIBLE],
+                # Ni disponibles ni indisponibles: ils n'ont rien declare, et
+                # c'est une information a part entiere.
+                "undeclared": silencieux,
+                "unavailable": groupes[AvailabilityKind.UNAVAILABLE],
+            }
+        )
+
+    @staticmethod
+    def _prime_sur(candidate, actuelle):
+        """Quelle declaration retenir quand deux couvrent le meme creneau."""
+        rang = {
+            AvailabilityKind.UNAVAILABLE: 3,
+            AvailabilityKind.PREFERRED: 2,
+            AvailabilityKind.POSSIBLE: 1,
+        }
+        return rang.get(candidate.kind, 0) > rang.get(actuelle.kind, 0)
+
+    @staticmethod
+    def _heure_demandee(request, cle):
+        brut = (request.query_params.get(cle) or "").strip()
+        if not brut:
+            raise ValidationError({cle: "Heure attendue au format HH:MM."})
+        valeur = parse_time(brut)
+        if valeur is None:
+            raise ValidationError({cle: "Heure illisible. Format attendu: HH:MM."})
+        return valeur
+
+    def _enseignants_du_perimetre(self):
+        """Tous les enseignants de l'etablissement actif, declarants ou non."""
+        base = Teacher.objects.select_related("user", "etablissement")
+        etablissement = self._resolve_target_etablissement()
+        if etablissement is not None:
+            return base.filter(etablissement=etablissement)
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN:
+            return base
+        return base.none()
 
 
 class TeacherScheduleSlotViewSet(BaseModelViewSet):
@@ -2621,7 +3345,10 @@ class StudentViewSet(BaseModelViewSet):
         """
         queryset = self.get_queryset()
 
-        active_year = AcademicYear.objects.filter(is_active=True).first()
+        # L'annee de l'etablissement consulte, et non la premiere active
+        # venue: depuis que chaque ecole a les siennes, `filter(is_active=True)`
+        # sans portee rendait l'annee d'une autre.
+        active_year = AcademicYear.courante(self._resolve_target_etablissement())
         if active_year is not None:
             enrolled_this_year = Q(
                 enrollment_date__gte=active_year.start_date,
@@ -2729,8 +3456,19 @@ class StudentViewSet(BaseModelViewSet):
         student = self.get_object()
         role = getattr(request.user, "role", "")
 
+        # Le dossier suit l'annee consultee. Sans ce filtre, il affichait
+        # toutes les annees melangees: les absences de sixieme au milieu de
+        # celles de cinquieme, sans rien pour les distinguer une fois
+        # l'eleve passe en classe superieure.
+        annee = self._requested_academic_year()
+
+        def _par_annee(queryset):
+            if annee is None:
+                return queryset
+            return queryset.filter(academic_year=annee)
+
         fees = StudentFeeViewSet._with_financial_annotations(
-            StudentFee.objects.filter(student=student)
+            _par_annee(StudentFee.objects.filter(student=student))
             .select_related("academic_year", "student", "student__user", "student__classroom")
             .order_by("-due_date", "-id")
         )
@@ -2741,7 +3479,7 @@ class StudentViewSet(BaseModelViewSet):
                 label="Historique académique",
                 module="students",
                 role=role,
-                queryset=StudentAcademicHistory.objects.filter(student=student)
+                queryset=_par_annee(StudentAcademicHistory.objects.filter(student=student))
                 .select_related("academic_year", "classroom")
                 .order_by("-academic_year__start_date", "-id"),
                 serializer_class=StudentAcademicHistorySerializer,
@@ -2779,7 +3517,7 @@ class StudentViewSet(BaseModelViewSet):
                 label="Notes",
                 module="grades",
                 role=role,
-                queryset=Grade.objects.filter(student=student)
+                queryset=_par_annee(Grade.objects.filter(student=student))
                 .select_related("subject", "classroom", "academic_year")
                 .order_by("-academic_year__start_date", "-term", "-id"),
                 serializer_class=GradeSerializer,
@@ -2795,7 +3533,9 @@ class StudentViewSet(BaseModelViewSet):
                 label="Absences & retards",
                 module="attendance",
                 role=role,
-                queryset=Attendance.objects.filter(student=student).order_by("-date", "-id"),
+                queryset=_par_annee(
+                    Attendance.objects.filter(student=student)
+                ).order_by("-date", "-id"),
                 serializer_class=AttendanceSerializer,
                 aggregates={
                     "absences": Count("id", filter=Q(is_absent=True)),
@@ -2807,7 +3547,7 @@ class StudentViewSet(BaseModelViewSet):
                 label="Discipline",
                 module="discipline",
                 role=role,
-                queryset=DisciplineIncident.objects.filter(student=student)
+                queryset=_par_annee(DisciplineIncident.objects.filter(student=student))
                 .select_related("reported_by")
                 .order_by("-incident_date", "-id"),
                 serializer_class=DisciplineIncidentSerializer,
@@ -2824,7 +3564,7 @@ class StudentViewSet(BaseModelViewSet):
                 serializer_class=StudentFeeSerializer,
                 # Agrege sur une requete sans la jointure paiements, sinon
                 # amount_due est compte une fois par paiement.
-                count_queryset=StudentFee.objects.filter(student=student),
+                count_queryset=_par_annee(StudentFee.objects.filter(student=student)),
                 aggregates={"total_du": Sum("amount_due")},
                 labeller=lambda obj: {
                     "annee": self._name_of(obj, "academic_year"),
@@ -3324,7 +4064,7 @@ class StudentViewSet(BaseModelViewSet):
         return Response(serializer.data)
 
 
-class StudentAcademicHistoryViewSet(BaseModelViewSet):
+class StudentAcademicHistoryViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "students"
     queryset = StudentAcademicHistory.objects.select_related("student", "academic_year", "classroom").all().order_by("-academic_year_id", "rank")
     serializer_class = StudentAcademicHistorySerializer
@@ -3366,7 +4106,7 @@ class StudentAcademicHistoryViewSet(BaseModelViewSet):
         return queryset.filter(classroom__etablissement=user_etablissement)
 
 
-class GradeViewSet(BaseModelViewSet):
+class GradeViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "grades"
     queryset = Grade.objects.select_related("student", "subject", "classroom", "academic_year").all().order_by("-id")
     serializer_class = GradeSerializer
@@ -3948,7 +4688,8 @@ class GradeViewSet(BaseModelViewSet):
         )
 
 
-class AttendanceViewSet(BaseModelViewSet):
+class AttendanceViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
+    renseigne_annee_a_la_creation = True
     access_module = "attendance"
     queryset = Attendance.objects.select_related("student", "student__user").all().order_by("-date", "-id")
     serializer_class = AttendanceSerializer
@@ -4677,7 +5418,8 @@ class AttendanceViewSet(BaseModelViewSet):
         )
 
 
-class TeacherAttendanceViewSet(BaseModelViewSet):
+class TeacherAttendanceViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
+    renseigne_annee_a_la_creation = True
     access_module = "teacher_timesheet"
     queryset = TeacherAttendance.objects.select_related("teacher", "teacher__user").all().order_by("-date", "-id")
     serializer_class = TeacherAttendanceSerializer
@@ -4882,8 +5624,304 @@ class TeacherTimeEntryViewSet(BaseModelViewSet):
             )
         return super().destroy(request, *args, **kwargs)
 
+    # --- Concordance planning / emargement ----------------------------------
 
-class DisciplineIncidentViewSet(BaseModelViewSet):
+    # Deux mois: au-dela, la reponse porte des milliers de seances et l'ecran
+    # ne sait rien en faire. Un rapprochement se lit par semaine ou par mois.
+    CONCORDANCE_MAX_JOURS = 62
+    DAY_CODES = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+
+    @staticmethod
+    def _minutes_de(valeur):
+        return valeur.hour * 60 + valeur.minute
+
+    def _plage_de_concordance(self):
+        aujourd_hui = timezone.localdate()
+        debut_brut = self.request.query_params.get("from")
+        fin_brute = self.request.query_params.get("to")
+
+        debut = parse_date(str(debut_brut).strip()) if debut_brut else aujourd_hui
+        fin = parse_date(str(fin_brute).strip()) if fin_brute else debut
+
+        if debut is None or fin is None:
+            raise ValidationError({"from": "Dates illisibles. Utilisez AAAA-MM-JJ."})
+        if fin < debut:
+            raise ValidationError({"to": "La fin de période précède son début."})
+        if (fin - debut).days + 1 > self.CONCORDANCE_MAX_JOURS:
+            raise ValidationError(
+                {
+                    "to": f"Période trop large : {self.CONCORDANCE_MAX_JOURS} jours au maximum."
+                }
+            )
+        return debut, fin
+
+    def _enseignants_de_concordance(self):
+        """Les enseignants a rapprocher: ceux demandes, ou tous ceux du perimetre.
+
+        Pas seulement ceux qui ont pointe: un enseignant absent toute la
+        semaine n'a aucun pointage, et c'est precisement lui qu'il faut voir.
+        """
+        demande = self.request.query_params.get("teacher")
+        base = Teacher.objects.select_related("user", "etablissement")
+
+        if demande not in (None, "") and str(demande).isdigit():
+            base = base.filter(id=demande)
+
+        profil = self._request_teacher_profile()
+        if profil is not None:
+            return base.filter(id=profil.id)
+
+        etablissement = self._requested_etablissement()
+        if etablissement is not None:
+            return base.filter(etablissement=etablissement)
+        if self._has_requested_scope():
+            return base.none()
+        if getattr(self.request.user, "role", None) == UserRole.SUPER_ADMIN:
+            return base
+        return base.filter(etablissement=getattr(self.request.user, "etablissement", None))
+
+    @action(detail=False, methods=["get"], url_path="concordance")
+    def concordance(self, request):
+        """Ce qui devait être assuré, ce qui l'a été, et l'écart.
+
+        L'emploi du temps et l'emargement vivaient cote a cote sans jamais
+        se regarder: une seance que personne n'assurait ne remontait nulle
+        part, et un pointage n'indiquait pas a quel cours il correspondait.
+        """
+        debut, fin = self._plage_de_concordance()
+
+        enseignants = list(self._enseignants_de_concordance())
+        if not enseignants:
+            return Response(
+                {
+                    "from": debut.isoformat(),
+                    "to": fin.isoformat(),
+                    "totals": self._totaux_vides(),
+                    "teachers": [],
+                }
+            )
+
+        identifiants = [enseignant.id for enseignant in enseignants]
+
+        # Trois requetes pour toute la periode, et non trois par jour et par
+        # enseignant: un mois pour vingt enseignants ferait plus de mille
+        # allers-retours.
+        creneaux_par_enseignant = {}
+        for creneau in TeacherScheduleSlot.objects.select_related(
+            "assignment",
+            "assignment__subject",
+            "assignment__classroom",
+            "assignment__classroom__academic_year",
+        ).filter(
+            assignment__teacher_id__in=identifiants,
+            assignment__classroom__academic_year__start_date__lte=fin,
+            assignment__classroom__academic_year__end_date__gte=debut,
+        ):
+            creneaux_par_enseignant.setdefault(
+                creneau.assignment.teacher_id, []
+            ).append(creneau)
+
+        pointages_par_cle = {}
+        for pointage in (
+            TeacherTimeEntry.objects.filter(
+                teacher_id__in=identifiants,
+                entry_date__gte=debut,
+                entry_date__lte=fin,
+            )
+            .prefetch_related("slot_coverages")
+            .order_by("entry_date", "check_in_time", "id")
+        ):
+            pointages_par_cle.setdefault(
+                (pointage.teacher_id, pointage.entry_date), []
+            ).append(pointage)
+
+        lignes = [
+            self._concordance_d_un_enseignant(
+                enseignant,
+                debut,
+                fin,
+                creneaux_par_enseignant.get(enseignant.id, []),
+                pointages_par_cle,
+            )
+            for enseignant in enseignants
+        ]
+        # Les ecarts les plus lourds en tete: c'est ce qu'on ouvre l'ecran
+        # pour voir, et non l'ordre alphabetique.
+        lignes.sort(key=lambda ligne: (-ligne["totals"]["sessions_missed"], ligne["teacher_full_name"]))
+
+        return Response(
+            {
+                "from": debut.isoformat(),
+                "to": fin.isoformat(),
+                "totals": self._cumuler(ligne["totals"] for ligne in lignes),
+                "teachers": lignes,
+            }
+        )
+
+    def _totaux_vides(self):
+        return {
+            "planned_minutes": 0,
+            "covered_minutes": 0,
+            "gap_minutes": 0,
+            "sessions_planned": 0,
+            "sessions_assured": 0,
+            "sessions_partial": 0,
+            "sessions_missed": 0,
+            "off_schedule_entries": 0,
+        }
+
+    def _cumuler(self, totaux):
+        cumul = self._totaux_vides()
+        for total in totaux:
+            for cle, valeur in total.items():
+                cumul[cle] += valeur
+        return cumul
+
+    def _concordance_d_un_enseignant(self, enseignant, debut, fin, creneaux, pointages_par_cle):
+        creneaux_par_jour = {}
+        for creneau in creneaux:
+            creneaux_par_jour.setdefault(creneau.day_of_week, []).append(creneau)
+        for liste in creneaux_par_jour.values():
+            liste.sort(key=lambda creneau: (creneau.start_time, creneau.end_time, creneau.id))
+
+        jours = []
+        totaux = self._totaux_vides()
+
+        jour = debut
+        while jour <= fin:
+            code = self.DAY_CODES[jour.weekday()]
+            du_jour = creneaux_par_jour.get(code, [])
+            pointages = pointages_par_cle.get((enseignant.id, jour), [])
+
+            if du_jour or pointages:
+                # L'annee scolaire de la classe doit couvrir cette date: un
+                # creneau de l'an prochain n'est pas une seance manquee.
+                du_jour = [
+                    creneau
+                    for creneau in du_jour
+                    if self._annee_couvre(creneau, jour)
+                ]
+                ligne = self._concordance_d_un_jour(jour, du_jour, pointages)
+                if ligne["sessions"] or ligne["entries"]:
+                    jours.append(ligne)
+                    for cle, valeur in ligne["totals"].items():
+                        totaux[cle] += valeur
+            jour += timedelta(days=1)
+
+        user = enseignant.user
+        nom = user.get_full_name().strip() if user else ""
+        return {
+            "teacher": enseignant.id,
+            "teacher_full_name": nom or (user.username if user else ""),
+            "teacher_employee_code": enseignant.employee_code or "",
+            "totals": totaux,
+            "days": jours,
+        }
+
+    @staticmethod
+    def _annee_couvre(creneau, jour):
+        annee = getattr(creneau.assignment.classroom, "academic_year", None)
+        if annee is None:
+            return True
+        if annee.start_date and annee.start_date > jour:
+            return False
+        if annee.end_date and annee.end_date < jour:
+            return False
+        return True
+
+    def _concordance_d_un_jour(self, jour, creneaux, pointages):
+        couvertures_par_creneau = {}
+        for pointage in pointages:
+            for couverture in pointage.slot_coverages.all():
+                cumul = couvertures_par_creneau.get(couverture.schedule_slot_id)
+                if cumul is None:
+                    couvertures_par_creneau[couverture.schedule_slot_id] = {
+                        "covered_minutes": couverture.covered_minutes,
+                        "planned_minutes": couverture.planned_minutes,
+                        "late_minutes": couverture.late_minutes,
+                    }
+                    continue
+                # Deux pointages sur le meme cours: l'enseignant est sorti
+                # puis revenu. Les minutes s'ajoutent, mais le retard reste
+                # celui de la premiere arrivee -- la plus petite valeur.
+                cumul["covered_minutes"] += couverture.covered_minutes
+                cumul["planned_minutes"] = couverture.planned_minutes
+                cumul["late_minutes"] = min(
+                    cumul["late_minutes"], couverture.late_minutes
+                )
+
+        seances = []
+        totaux = self._totaux_vides()
+
+        for creneau in creneaux:
+            planifie = max(
+                self._minutes_de(creneau.end_time) - self._minutes_de(creneau.start_time),
+                0,
+            )
+            couvert = couvertures_par_creneau.get(creneau.id)
+            minutes_couvertes = couvert["covered_minutes"] if couvert else 0
+
+            if minutes_couvertes <= 0:
+                statut = "missed"
+                totaux["sessions_missed"] += 1
+            elif minutes_couvertes >= planifie:
+                statut = "assured"
+                totaux["sessions_assured"] += 1
+            else:
+                statut = "partial"
+                totaux["sessions_partial"] += 1
+
+            totaux["sessions_planned"] += 1
+            totaux["planned_minutes"] += planifie
+            totaux["covered_minutes"] += min(minutes_couvertes, planifie)
+
+            seances.append(
+                {
+                    "slot": creneau.id,
+                    "subject_name": creneau.assignment.subject.name,
+                    "classroom_name": creneau.assignment.classroom.name,
+                    "room": creneau.room,
+                    "start_time": creneau.start_time.strftime("%H:%M"),
+                    "end_time": creneau.end_time.strftime("%H:%M"),
+                    "planned_minutes": planifie,
+                    "covered_minutes": minutes_couvertes,
+                    "late_minutes": couvert["late_minutes"] if couvert else 0,
+                    "status": statut,
+                }
+            )
+
+        entrees = []
+        for pointage in pointages:
+            hors_planning = pointage.covered_minutes == 0
+            if hors_planning:
+                totaux["off_schedule_entries"] += 1
+            entrees.append(
+                {
+                    "id": pointage.id,
+                    "check_in_time": pointage.check_in_time.strftime("%H:%M"),
+                    "check_out_time": pointage.check_out_time.strftime("%H:%M")
+                    if pointage.check_out_time
+                    else None,
+                    "is_auto_closed": pointage.is_auto_closed,
+                    "is_off_schedule": hors_planning,
+                    "off_schedule_reason": pointage.off_schedule_reason,
+                    "worked_hours": str(pointage.worked_hours),
+                }
+            )
+
+        totaux["gap_minutes"] = totaux["planned_minutes"] - totaux["covered_minutes"]
+
+        return {
+            "date": jour.isoformat(),
+            "weekday": self.DAY_CODES[jour.weekday()],
+            "sessions": seances,
+            "entries": entrees,
+            "totals": totaux,
+        }
+
+
+class DisciplineIncidentViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
+    renseigne_annee_a_la_creation = True
     access_module = "discipline"
     queryset = DisciplineIncident.objects.select_related("student", "student__user", "reported_by").all().order_by("-incident_date", "-id")
     serializer_class = DisciplineIncidentSerializer
@@ -5057,7 +6095,7 @@ class DisciplineIncidentViewSet(BaseModelViewSet):
         return super().partial_update(request, *args, **kwargs)
 
 
-class StudentFeeViewSet(BaseModelViewSet):
+class StudentFeeViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "finance"
     queryset = StudentFee.objects.select_related("student", "student__user", "academic_year").all().order_by("-due_date", "-id")
     serializer_class = StudentFeeSerializer
@@ -5254,7 +6292,8 @@ class PaymentViewSet(BaseModelViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class ExpenseViewSet(BaseModelViewSet):
+class ExpenseViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
+    renseigne_annee_a_la_creation = True
     access_module = "finance"
     queryset = Expense.objects.select_related(
         "paid_by",
@@ -5427,7 +6466,8 @@ class ExpenseViewSet(BaseModelViewSet):
         )
 
 
-class TeacherPayrollViewSet(BaseModelViewSet):
+class TeacherPayrollViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
+    renseigne_annee_a_la_creation = True
     access_module = "payroll"
     queryset = TeacherPayroll.objects.select_related(
         "teacher",
@@ -5565,6 +6605,80 @@ class TeacherPayrollViewSet(BaseModelViewSet):
         )
         return Decimal(str(total)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+    def _teacher_concordance_hours(self, teacher, month_start, month_end):
+        """Ce que l'ecart entre attribue et travaille cache vraiment.
+
+        Deux causes bien distinctes, qui ne se pilotent pas de la meme
+        facon: des seances planifiees que personne n'a assurees, et des
+        heures faites hors planning -- remplacement, reunion. Additionnees
+        dans un ecart unique, elles ne disaient rien.
+        """
+        entrees = list(
+            TeacherTimeEntry.objects.filter(
+                teacher=teacher,
+                entry_date__gte=month_start,
+                entry_date__lte=month_end,
+            ).prefetch_related("slot_coverages")
+        )
+
+        minutes_planifiees = 0
+        minutes_couvertes = 0
+        minutes_hors_planning = 0
+        jours_pointes = set()
+
+        for entree in entrees:
+            jours_pointes.add(entree.entry_date)
+            minutes_couvertes += entree.covered_minutes
+            if entree.covered_minutes == 0 and entree.check_out_time:
+                minutes_hors_planning += max(
+                    (entree.check_out_time.hour * 60 + entree.check_out_time.minute)
+                    - (entree.check_in_time.hour * 60 + entree.check_in_time.minute),
+                    0,
+                )
+
+        # Les jours planifies sans le moindre pointage comptent aussi: c'est
+        # meme le cas le plus grave, et aucune ligne de pointage ne le porte.
+        for entree in entrees:
+            minutes_planifiees += entree.planned_minutes
+
+        minutes_planifiees += self._minutes_planifiees_sans_pointage(
+            teacher, month_start, month_end, jours_pointes
+        )
+
+        manquees = max(minutes_planifiees - minutes_couvertes, 0)
+        return (
+            Decimal(str(manquees / 60)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            Decimal(str(minutes_hors_planning / 60)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            ),
+        )
+
+    def _minutes_planifiees_sans_pointage(self, teacher, month_start, month_end, jours_pointes):
+        """Les cours des journees ou l'enseignant n'a pas pointe du tout."""
+        day_codes = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+        creneaux_par_jour = {}
+        for creneau in TeacherScheduleSlot.objects.filter(
+            assignment__teacher=teacher,
+            assignment__classroom__academic_year__start_date__lte=month_end,
+            assignment__classroom__academic_year__end_date__gte=month_start,
+        ):
+            duree = max(
+                (creneau.end_time.hour * 60 + creneau.end_time.minute)
+                - (creneau.start_time.hour * 60 + creneau.start_time.minute),
+                0,
+            )
+            creneaux_par_jour[creneau.day_of_week] = (
+                creneaux_par_jour.get(creneau.day_of_week, 0) + duree
+            )
+
+        total = 0
+        jour = month_start
+        while jour <= month_end:
+            if jour not in jours_pointes:
+                total += creneaux_par_jour.get(day_codes[jour.weekday()], 0)
+            jour += timedelta(days=1)
+        return total
+
     def _auto_close_missing_entries(self, teacher, month_start, month_end):
         open_entries = TeacherTimeEntry.objects.filter(
             teacher=teacher,
@@ -5623,6 +6737,9 @@ class TeacherPayrollViewSet(BaseModelViewSet):
 
             hours_attributed = self._teacher_hours_attributed(teacher, month_start, month_end)
             hours_worked = self._teacher_hours_worked(teacher, month_start, month_end)
+            hours_missed, hours_off_schedule = self._teacher_concordance_hours(
+                teacher, month_start, month_end
+            )
             hourly_rate = Decimal(str(teacher.hourly_rate or teacher.salary_base or 0)).quantize(
                 Decimal("0.01"),
                 rounding=ROUND_HALF_UP,
@@ -5655,6 +6772,8 @@ class TeacherPayrollViewSet(BaseModelViewSet):
                 defaults={
                     "hours_attributed": hours_attributed,
                     "hours_worked": hours_worked,
+                    "hours_missed": hours_missed,
+                    "hours_off_schedule": hours_off_schedule,
                     "hourly_rate": hourly_rate,
                     "amount": amount,
                     "paid_by": request.user,
@@ -6696,7 +7815,7 @@ class CanteenServiceViewSet(BaseModelViewSet):
         serializer.save()
 
 
-class ExamSessionViewSet(BaseModelViewSet):
+class ExamSessionViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "exams"
     queryset = ExamSession.objects.select_related("academic_year").all().order_by("-id")
     serializer_class = ExamSessionSerializer
@@ -7066,9 +8185,26 @@ class StockItemViewSet(EtablissementScopedModelViewSet):
 
     @action(detail=False, methods=["get"])
     def low_stock(self, request):
-        queryset = self.get_queryset().filter(quantity__lte=F("minimum_threshold"))
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+        """Les articles sous leur seuil, du plus critique au moins.
+
+        Le tri est ce qui manquait: la liste arrivait dans l'ordre du
+        catalogue, et l'article tombe a zero se lisait apres celui a qui il
+        manque une unite. L'ecart au seuil dit lequel appelle un bon de
+        commande aujourd'hui.
+        """
+        articles = sorted(
+            self.get_queryset().filter(quantity__lte=F("minimum_threshold")),
+            key=lambda article: (
+                article.quantity - article.minimum_threshold,
+                article.name,
+            ),
+        )
+        return Response(
+            {
+                "count": len(articles),
+                "results": self.get_serializer(articles, many=True).data,
+            }
+        )
 
 
 class StockMovementViewSet(BaseModelViewSet):
@@ -7169,7 +8305,7 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
     def _resolve_source_year(self, payload):
         source_year_id = payload.get("source_academic_year")
         if source_year_id in (None, ""):
-            active_year = AcademicYear.objects.filter(is_active=True).order_by("-id").first()
+            active_year = AcademicYear.courante(self._resolve_target_etablissement())
             if active_year:
                 return active_year
             raise ValidationError({"source_academic_year": "Aucune annee scolaire active n'est disponible."})

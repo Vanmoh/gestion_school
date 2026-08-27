@@ -38,6 +38,7 @@ class ProtectedDeletionApiTests(APITestCase):
             start_date=date(2025, 9, 1),
             end_date=date(2026, 6, 30),
             is_active=True,
+            etablissement=self.etablissement,
         )
         self.classe = ClassRoom.objects.create(
             name="6A",

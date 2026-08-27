@@ -270,6 +270,7 @@ class PaymentsRepository {
     required String checkInTime,
     String? checkOutTime,
     String notes = '',
+    String offScheduleReason = '',
   }) async {
     await dio.post(
       '/teacher-time-entries/',
@@ -280,6 +281,10 @@ class PaymentsRepository {
         if (checkOutTime?.trim().isNotEmpty ?? false)
           'check_out_time': checkOutTime,
         'notes': notes,
+        // Exige par le serveur quand la presence ne recoupe aucun cours
+        // planifie: un remplacement ou une reunion sont legitimes, mais ils
+        // doivent dire leur nom.
+        'off_schedule_reason': offScheduleReason,
       },
     );
   }

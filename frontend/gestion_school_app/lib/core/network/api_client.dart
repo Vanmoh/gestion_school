@@ -88,6 +88,7 @@ final dioProvider = Provider<Dio>((ref) {
           tokenStorage.apiBaseUrl(),
           tokenStorage.accessToken(),
           tokenStorage.selectedEtablissement(),
+          tokenStorage.selectedAcademicYear(),
         ]);
 
         final storedBaseUrl = values[0];
@@ -123,6 +124,26 @@ final dioProvider = Provider<Dio>((ref) {
             }
           } catch (_) {
             // Ignore malformed cached establishment payload.
+          }
+        }
+
+        // L'annee de travail, portee par la meme mecanique que
+        // l'etablissement: le serveur restreint alors classes, notes,
+        // frais et sessions a cette annee-la. Sans en-tete, il rend ce
+        // qu'il rendait avant -- la bascule arrive ecran par ecran.
+        final selectedAcademicYearRaw = values[3];
+        if (selectedAcademicYearRaw != null &&
+            selectedAcademicYearRaw.isNotEmpty) {
+          try {
+            final decoded =
+                jsonDecode(selectedAcademicYearRaw) as Map<String, dynamic>;
+            final academicYearId = decoded['id'];
+            if (academicYearId != null) {
+              options.headers['X-Academic-Year-Id'] = academicYearId.toString();
+            }
+          } catch (_) {
+            // Annee en cache illisible: le serveur retombe sur l'annee
+            // courante de l'etablissement.
           }
         }
 

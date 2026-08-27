@@ -22,6 +22,12 @@ class Etablissement(TimeStampedModel):
     ]
 
     name = models.CharField(max_length=255, unique=True)
+    # Prefixe des matricules eleves (« RC15 » dans RC15CG25E3566F). Il etait
+    # jusqu'ici derive des initiales du nom a chaque generation: renommer une
+    # ecole changeait le prefixe de tous ses futurs matricules, et deux noms
+    # aux memes initiales produisaient le meme prefixe. Saisi une fois, il ne
+    # bouge plus.
+    code = models.CharField(max_length=8, blank=True)
     address = models.CharField(max_length=255, blank=True)
     phone = models.CharField(max_length=30, blank=True)
     email = models.EmailField(blank=True)
@@ -50,6 +56,14 @@ class Etablissement(TimeStampedModel):
         default=100,
         validators=[MinValueValidator(40), MaxValueValidator(200)],
     )
+    # Minutes de retard tolerees sur un debut de cours avant qu'elles ne
+    # soient retenues sur les heures payables. La valeur etait figee a 15
+    # dans le code, la meme pour toutes les ecoles: un lycee du centre-ville
+    # et un etablissement ou l'on vient de loin n'ont pas la meme.
+    timesheet_late_tolerance_minutes = models.PositiveSmallIntegerField(
+        default=15,
+        validators=[MaxValueValidator(120)],
+    )
     # Penalite de retard appliquee a un emprunt rendu hors delai, par jour
     # entame. Zero par defaut: c'est le comportement d'avant, ou la penalite
     # etait saisie a la main -- une ecole qui n'en applique pas ne doit pas
@@ -58,18 +72,116 @@ class Etablissement(TimeStampedModel):
         max_digits=10, decimal_places=2, default=0
     )
 
+    class Meta:
+        constraints = [
+            # Deux ecoles au meme code produiraient des matricules
+            # identiques. La condition laisse passer les fiches encore sans
+            # code -- plusieurs chaines vides ne s'excluent pas entre elles.
+            models.UniqueConstraint(
+                fields=["code"],
+                condition=~models.Q(code=""),
+                name="etablissement_code_unique",
+            ),
+        ]
+
     def __str__(self):
         return self.name
 
 
 class AcademicYear(TimeStampedModel):
-    name = models.CharField(max_length=20, unique=True)
+    """Une annee scolaire, propre a un etablissement.
+
+    Elle etait globale: une seule « 2025-2026 » pour les quatre ecoles, dont
+    le nom etait unique a l'echelle de la plateforme. Aucune ne pouvait donc
+    avoir son propre calendrier, ni cloturer avant les autres.
+    """
+
+    etablissement = models.ForeignKey(
+        'Etablissement',
+        on_delete=models.PROTECT,
+        related_name="academic_years",
+        null=True,
+        blank=True,
+    )
+    name = models.CharField(max_length=20)
     start_date = models.DateField()
     end_date = models.DateField()
+
+    # L'annee sur laquelle on saisit. Une seule par etablissement: trois
+    # endroits du code resolvaient « l'annee courante » avec trois tris
+    # differents, et deux annees actives leur auraient fait designer des
+    # annees differentes le meme jour.
     is_active = models.BooleanField(default=False)
 
+    # Une annee cloturee ne se saisit plus. La direction garde la main pour
+    # corriger une erreur d'apres-coup, et chaque correction est tracee.
+    is_closed = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = ("name", "etablissement")
+        ordering = ["-start_date", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["etablissement"],
+                condition=models.Q(is_active=True),
+                name="une_seule_annee_active_par_etablissement",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(end_date__gt=models.F("start_date")),
+                name="annee_scolaire_fin_apres_debut",
+            ),
+        ]
+
     def __str__(self):
+        if self.etablissement_id:
+            return f"{self.name} - {self.etablissement}"
         return self.name
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if self.start_date and self.end_date and self.end_date <= self.start_date:
+            raise ValidationError(
+                {"end_date": "La fin de l'annee doit suivre son debut."}
+            )
+
+        if not (self.start_date and self.end_date):
+            return
+
+        # Deux annees d'un meme etablissement qui se chevauchent rendraient
+        # indecidable l'annee a laquelle rattacher une absence ou une note
+        # datee de l'intersection.
+        voisines = AcademicYear.objects.filter(
+            etablissement_id=self.etablissement_id,
+            start_date__lte=self.end_date,
+            end_date__gte=self.start_date,
+        )
+        if self.pk:
+            voisines = voisines.exclude(pk=self.pk)
+        chevauchee = voisines.first()
+        if chevauchee is not None:
+            raise ValidationError(
+                {
+                    "start_date": (
+                        f"Cette periode chevauche l'annee « {chevauchee.name} » "
+                        f"({chevauchee.start_date} - {chevauchee.end_date})."
+                    )
+                }
+            )
+
+    @classmethod
+    def courante(cls, etablissement=None):
+        """L'annee de saisie d'un etablissement.
+
+        Point unique de resolution: `filter(is_active=True).first()`,
+        `.order_by("-id").first()` et `.order_by("-start_date", "-id").first()`
+        coexistaient dans trois vues, et rien ne garantissait qu'ils rendent
+        la meme annee.
+        """
+        queryset = cls.objects.filter(is_active=True)
+        if etablissement is not None:
+            queryset = queryset.filter(etablissement=etablissement)
+        return queryset.order_by("-start_date", "-id").first()
 
 
 class ClassRoom(TimeStampedModel):
@@ -145,6 +257,11 @@ class TeacherScheduleSlot(TimeStampedModel):
     start_time = models.TimeField()
     end_time = models.TimeField()
     room = models.CharField(max_length=60, blank=True)
+    # Renseigne quand le cours est place en dehors de ce que l'enseignant
+    # avait declare. Le placement reste possible -- l'administration arbitre,
+    # pas l'enseignant -- mais la raison est conservee, et c'est elle qui
+    # permet d'en rediscuter a la rentree suivante.
+    off_availability_reason = models.CharField(max_length=255, blank=True)
 
     class Meta:
         unique_together = ("assignment", "day_of_week", "start_time", "end_time")
@@ -157,7 +274,128 @@ class TeacherScheduleSlot(TimeStampedModel):
         )
 
 
+class AvailabilityCampaign(TimeStampedModel):
+    """La periode pendant laquelle une ecole recueille les disponibilites.
+
+    La collecte n'avait ni debut, ni fin, ni annee: les declarations de l'an
+    dernier se melaient a celles de la rentree, et personne ne savait qui
+    avait repondu. Une campagne donne a la collecte ce qu'il lui manquait --
+    un cadre dans le temps, et un compte des repondants.
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Préparée"
+        OPEN = "open", "Ouverte"
+        CLOSED = "closed", "Close"
+
+    etablissement = models.ForeignKey(
+        "Etablissement",
+        on_delete=models.CASCADE,
+        related_name="availability_campaigns",
+    )
+    academic_year = models.ForeignKey(
+        "AcademicYear",
+        on_delete=models.PROTECT,
+        related_name="availability_campaigns",
+    )
+    label = models.CharField(max_length=150)
+    opens_on = models.DateField()
+    closes_on = models.DateField()
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.DRAFT
+    )
+    instructions = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-opens_on", "-id"]
+        constraints = [
+            # Une seule collecte a la fois par annee et par ecole: deux
+            # campagnes ouvertes en parallele rendraient indecidable celle a
+            # laquelle rattacher une declaration.
+            models.UniqueConstraint(
+                fields=["etablissement", "academic_year"],
+                name="availability_campaign_unique_par_annee",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.label} ({self.etablissement})"
+
+    @property
+    def est_ouverte(self):
+        """Ouverte au sens des enseignants: le statut, puis les dates.
+
+        Le statut prime: une direction qui ferme sa campagne avant terme
+        doit voir la saisie s'arreter le jour meme, sans attendre la date
+        annoncee.
+        """
+        if self.status != self.Status.OPEN:
+            return False
+        aujourd_hui = timezone.localdate()
+        return self.opens_on <= aujourd_hui <= self.closes_on
+
+
+class TeacherAvailabilityResponse(TimeStampedModel):
+    """« J'ai fini de declarer »: la reponse d'un enseignant a une campagne.
+
+    Sans elle, rien ne distinguait l'enseignant qui n'avait rien a declarer
+    de celui qui n'avait pas encore ouvert l'ecran -- or c'est la premiere
+    question que se pose l'administration quand elle relance.
+    """
+
+    campaign = models.ForeignKey(
+        AvailabilityCampaign, on_delete=models.CASCADE, related_name="responses"
+    )
+    teacher = models.ForeignKey(
+        Teacher, on_delete=models.CASCADE, related_name="availability_responses"
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    reminded_at = models.DateTimeField(null=True, blank=True)
+    reminder_count = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["teacher_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["campaign", "teacher"],
+                name="availability_response_unique",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.teacher} → {self.campaign}"
+
+    @property
+    def est_rendue(self):
+        return self.submitted_at is not None
+
+
+class AvailabilityKind(models.TextChoices):
+    """Ce que l'enseignant dit d'un creneau.
+
+    Trois etats et non deux: une collecte sert justement a recueillir la
+    nuance. « Je peux, mais j'aimerais autant pas » n'est ni un refus ni un
+    volontariat, et l'ecraser dans un booleen fait perdre a l'administration
+    ce qui lui permet d'arbitrer entre deux enseignants egalement
+    disponibles.
+    """
+
+    PREFERRED = "preferred", "Préférée"
+    POSSIBLE = "possible", "Possible"
+    UNAVAILABLE = "unavailable", "Indisponible"
+
+
 class TeacherAvailabilitySlot(TimeStampedModel):
+    """Ce qu'un enseignant declare pouvoir assurer, avant que le planning existe.
+
+    Une disponibilite se partage: dix enseignants sont disponibles le lundi a
+    huit heures, et c'est precisement ce que l'administration a besoin de
+    savoir pour arbitrer. L'unicite porte donc sur l'enseignant et son
+    creneau -- elle portait sur l'etablissement et le creneau seuls, ce qui
+    faisait du premier declarant le proprietaire exclusif de son horaire et
+    refusait tous les suivants sur une erreur d'integrite.
+    """
+
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="availability_slots")
     etablissement = models.ForeignKey(
         "Etablissement",
@@ -166,12 +404,30 @@ class TeacherAvailabilitySlot(TimeStampedModel):
         null=True,
         blank=True,
     )
+    # La campagne porte l'annee scolaire: sans elle, les declarations de
+    # l'an dernier restaient melees a celles de la rentree.
+    campaign = models.ForeignKey(
+        AvailabilityCampaign,
+        on_delete=models.CASCADE,
+        related_name="slots",
+        null=True,
+        blank=True,
+    )
     day_of_week = models.CharField(max_length=3, choices=WeekDay.choices)
     start_time = models.TimeField()
     end_time = models.TimeField()
+    kind = models.CharField(
+        max_length=12,
+        choices=AvailabilityKind.choices,
+        default=AvailabilityKind.POSSIBLE,
+    )
+    # Ce que l'enseignant tient a faire savoir sur ce creneau: « cours a
+    # l'autre etablissement », « je termine tard la veille ». Sans lui, une
+    # indisponibilite arrive sans sa raison et se discute mal.
+    note = models.CharField(max_length=255, blank=True)
 
     class Meta:
-        unique_together = ("etablissement", "day_of_week", "start_time", "end_time")
+        unique_together = ("teacher", "day_of_week", "start_time", "end_time")
         ordering = ("day_of_week", "start_time", "end_time", "id")
         indexes = [
             models.Index(
@@ -186,8 +442,23 @@ class TeacherAvailabilitySlot(TimeStampedModel):
         teacher_label = teacher_name or (self.teacher.employee_code if self.teacher else "Enseignant")
         return (
             f"{teacher_label} | {self.get_day_of_week_display()} "
-            f"{self.start_time.strftime('%H:%M')}-{self.end_time.strftime('%H:%M')}"
+            f"{self.start_time.strftime('%H:%M')}-{self.end_time.strftime('%H:%M')} "
+            f"({self.get_kind_display()})"
         )
+
+    @property
+    def est_ouverte(self):
+        """Vrai quand l'enseignant se dit prenable sur ce creneau."""
+        return self.kind in (AvailabilityKind.PREFERRED, AvailabilityKind.POSSIBLE)
+
+    def couvre(self, debut, fin):
+        """Ce creneau contient-il entierement la plage demandee.
+
+        Contient, et non recoupe: un cours de deux heures place sur une
+        disponibilite d'une heure n'est pas couvert, meme si les deux se
+        chevauchent -- l'enseignant n'a jamais dit pouvoir la seconde heure.
+        """
+        return self.start_time <= debut and self.end_time >= fin
 
 
 class TimetablePublication(TimeStampedModel):
@@ -276,62 +547,17 @@ class Student(TimeStampedModel):
             raise ValidationError({'conduite': 'Conduite doit être entre 0 et 20'})
 
     def _build_matricule(self):
-        target_etablissement = self.etablissement or (self.classroom.etablissement if self.classroom else None)
-        etablissement_name = getattr(target_etablissement, "name", "") or ""
-        etablissement_code = self._normalize_etablissement_code(etablissement_name)
+        """Le matricule, produit par le service qui en porte le format.
 
-        class_name = self.classroom.name if self.classroom else ""
-        class_code = self._normalize_class_code(class_name)
+        La regle vivait ici en trois methodes, et une quatrieme copie servait
+        dans la commande de seed. Les deux ont diverge: celle-ci retombait
+        sur « GS-2025-00001 » -- une forme etrangere au format -- des que le
+        genre manquait, et derivait le code de l'ecole de son nom plutot que
+        du champ prevu pour.
+        """
+        from apps.school import matricule as service
 
-        if self.classroom and getattr(self.classroom, "academic_year", None):
-            entry_year = self.classroom.academic_year.start_date.year
-        else:
-            entry_year = self.enrollment_date.year if self.enrollment_date else date.today().year
-
-        entry_year_code = str(entry_year)[-2:]
-
-        if self.gender in {self.Gender.MALE, self.Gender.FEMALE}:
-            gender_code = self.gender
-            prefix = f"{etablissement_code}{class_code}{entry_year_code}E"
-        else:
-            gender_code = None
-            prefix = f"GS-{entry_year}"
-
-        last_student = Student.objects.filter(matricule__startswith=prefix).order_by("-id").first()
-        next_number = 1
-        if last_student and last_student.matricule:
-            digits = re.findall(r"(\d+)", last_student.matricule)
-            if digits:
-                try:
-                    next_number = int(digits[-1]) + 1
-                except (ValueError, IndexError):
-                    next_number = last_student.id + 1 if last_student.id else 1
-            else:
-                next_number = last_student.id + 1 if last_student.id else 1
-
-        if gender_code:
-            return f"{prefix}{next_number:04d}{gender_code}"
-        return f"{prefix}-{next_number:05d}"
-
-    @staticmethod
-    def _normalize_etablissement_code(name: str) -> str:
-        if not name:
-            return "GS"
-        normalized = re.findall(r"[A-Z0-9]+", name.upper())
-        if len(normalized) >= 2:
-            return "".join(part[0] for part in normalized[:2])
-        code = normalized[0] if normalized else "GS"
-        return code[:2]
-
-    @staticmethod
-    def _normalize_class_code(name: str) -> str:
-        if not name:
-            return "CL"
-        normalized = name.upper()
-        normalized = normalized.replace("ÈME", "").replace("EME", "")
-        normalized = normalized.replace("É", "E").replace("È", "E").replace("Ô", "O").replace("À", "A")
-        normalized = re.sub(r"[^A-Z0-9]", "", normalized)
-        return normalized[:4] if len(normalized) >= 2 else normalized.ljust(2, "X")
+        return service.generer(self)
 
     def __str__(self):
         return f"{self.matricule} - {self.user.get_full_name()}"
@@ -496,6 +722,18 @@ class GradeValidation(TimeStampedModel):
 class Attendance(TimeStampedModel):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="attendances")
     date = models.DateField()
+    # Rattachement a l'annee scolaire, pour ne plus melanger les exercices.
+    # Ce modele ne portait qu'une date: le dossier d'un eleve affichait donc
+    # ses absences de toutes les annees confondues, et rien ne permettait de
+    # les separer une fois l'eleve passe en classe superieure.
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name="%(class)ss",
+        null=True,
+        blank=True,
+    )
+
     is_absent = models.BooleanField(default=False)
     is_late = models.BooleanField(default=False)
     reason = models.CharField(max_length=255, blank=True)
@@ -536,6 +774,18 @@ class AttendanceSheetValidation(TimeStampedModel):
 class TeacherAttendance(TimeStampedModel):
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="attendances")
     date = models.DateField()
+    # Rattachement a l'annee scolaire, pour ne plus melanger les exercices.
+    # Ce modele ne portait qu'une date: le dossier d'un eleve affichait donc
+    # ses absences de toutes les annees confondues, et rien ne permettait de
+    # les separer une fois l'eleve passe en classe superieure.
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name="%(class)ss",
+        null=True,
+        blank=True,
+    )
+
     is_absent = models.BooleanField(default=False)
     is_late = models.BooleanField(default=False)
     reason = models.CharField(max_length=255, blank=True)
@@ -583,6 +833,18 @@ class DisciplineCategory(models.TextChoices):
 class DisciplineIncident(TimeStampedModel):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="discipline_incidents")
     incident_date = models.DateField()
+    # Rattachement a l'annee scolaire, pour ne plus melanger les exercices.
+    # Ce modele ne portait qu'une date: le dossier d'un eleve affichait donc
+    # ses absences de toutes les annees confondues, et rien ne permettait de
+    # les separer une fois l'eleve passe en classe superieure.
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name="%(class)ss",
+        null=True,
+        blank=True,
+    )
+
     category = models.CharField(
         max_length=120,
         choices=DisciplineCategory.choices,
@@ -690,6 +952,18 @@ class Expense(TimeStampedModel):
     label = models.CharField(max_length=120)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     date = models.DateField()
+
+    # Rattachement a l'annee scolaire, pour ne plus melanger les exercices.
+    # Ce modele ne portait qu'une date: le dossier d'un eleve affichait donc
+    # ses absences de toutes les annees confondues, et rien ne permettait de
+    # les separer une fois l'eleve passe en classe superieure.
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name="%(class)ss",
+        null=True,
+        blank=True,
+    )
     category = models.CharField(max_length=100)
     notes = models.TextField(blank=True)
     paid_on = models.DateField(null=True, blank=True)
@@ -739,8 +1013,26 @@ class Expense(TimeStampedModel):
 class TeacherPayroll(TimeStampedModel):
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="payrolls")
     month = models.DateField()
+    # Rattachement a l'annee scolaire, pour ne plus melanger les exercices.
+    # Ce modele ne portait qu'une date: le dossier d'un eleve affichait donc
+    # ses absences de toutes les annees confondues, et rien ne permettait de
+    # les separer une fois l'eleve passe en classe superieure.
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name="%(class)ss",
+        null=True,
+        blank=True,
+    )
+
     hours_attributed = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     hours_worked = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    # L'ecart entre attribue et travaille etait subi: on le lisait sans
+    # savoir s'il venait de seances non assurees ou d'heures faites en
+    # dehors du planning. Ces deux colonnes le decomposent, figees au moment
+    # de la generation comme le reste de la fiche.
+    hours_missed = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    hours_off_schedule = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     hourly_rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     paid_on = models.DateField(null=True, blank=True)
@@ -777,6 +1069,17 @@ class TeacherPayroll(TimeStampedModel):
 
 
 class TeacherTimeEntry(TimeStampedModel):
+    """Le pointage d'un enseignant sur une journee.
+
+    Il ne vit pas seul: l'emploi du temps dit ce qui devait etre assure, et
+    c'est la confrontation des deux qui fait la concordance. Les creneaux
+    reellement couverts sont enregistres un a un dans
+    `TeacherTimeEntryCoverage` -- ils etaient auparavant devines a la volee
+    au moment du calcul, sans jamais laisser de trace.
+    """
+
+    # Repli quand l'etablissement n'est pas connu. La valeur vit desormais
+    # sur la fiche etablissement (`timesheet_late_tolerance_minutes`).
     LATE_TOLERANCE_MINUTES = 15
 
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="time_entries")
@@ -795,6 +1098,16 @@ class TeacherTimeEntry(TimeStampedModel):
     is_auto_closed = models.BooleanField(default=False)
     auto_closed_reason = models.CharField(max_length=255, blank=True)
     worked_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    # Minutes reellement planifiees ce jour-la, tous creneaux confondus:
+    # c'est la moitie « prevue » de la concordance, figee au moment du
+    # pointage. La recalculer a la lecture ferait varier un ecart d'il y a
+    # trois mois au gre des corrections d'emploi du temps.
+    planned_minutes = models.PositiveIntegerField(default=0)
+    covered_minutes = models.PositiveIntegerField(default=0)
+    # Renseigne quand le pointage ne recoupe aucun creneau: remplacement,
+    # reunion, rattrapage. Le bloquer purement et simplement pousserait a
+    # saisir de faux horaires pour faire passer une presence reelle.
+    off_schedule_reason = models.CharField(max_length=255, blank=True)
     notes = models.CharField(max_length=255, blank=True)
     recorded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -819,37 +1132,119 @@ class TeacherTimeEntry(TimeStampedModel):
         return day_map[self.entry_date.weekday()]
 
     def _schedule_slots_for_day(self):
+        """Les creneaux de l'enseignant ce jour de la semaine.
+
+        Bornes a l'annee scolaire couvrant la date du pointage: l'emploi du
+        temps de l'an dernier ne dit rien de ce qui devait etre assure
+        aujourd'hui, et le compter gonflerait les heures prevues.
+        """
         day_code = self._weekday_code()
         if day_code == "SUN":
             return TeacherScheduleSlot.objects.none()
 
-        return TeacherScheduleSlot.objects.select_related("assignment", "assignment__teacher").filter(
-            assignment__teacher=self.teacher,
-            day_of_week=day_code,
+        return (
+            TeacherScheduleSlot.objects.select_related(
+                "assignment",
+                "assignment__teacher",
+                "assignment__subject",
+                "assignment__classroom",
+            )
+            .filter(
+                assignment__teacher=self.teacher,
+                day_of_week=day_code,
+                assignment__classroom__academic_year__start_date__lte=self.entry_date,
+                assignment__classroom__academic_year__end_date__gte=self.entry_date,
+            )
+            .order_by("start_time", "end_time", "id")
         )
 
     @staticmethod
     def _time_to_minutes(value):
         return value.hour * 60 + value.minute
 
+    def _tolerance_minutes(self):
+        """La tolerance de l'etablissement, ou le repli historique."""
+        etablissement = self.etablissement or getattr(self.teacher, "etablissement", None)
+        valeur = getattr(etablissement, "timesheet_late_tolerance_minutes", None)
+        if valeur is None:
+            return self.LATE_TOLERANCE_MINUTES
+        return int(valeur)
+
     def _pick_schedule_slot(self):
+        """Le cours sur lequel refermer une sortie oubliee.
+
+        Sert au seul cas de l'auto-fermeture, ou la sortie est inconnue et
+        ou aucune couverture ne peut donc etre calculee: on retient le cours
+        qui commence au plus pres de l'arrivee. Presumer que l'enseignant
+        est reste jusqu'a son dernier cours de la journee lui paierait des
+        heures que rien n'atteste.
+
+        Quand une sortie est connue, la couverture prend le relais et ce
+        choix ne sert plus a rien: c'est elle qui compte les cours, tous.
+        """
+        couvertures = self._couvertures_calculees()
+        if couvertures:
+            return couvertures[-1]["slot"]
+
         slots = list(self._schedule_slots_for_day())
         if not slots:
             return None
 
         check_in_minutes = self._time_to_minutes(self.check_in_time)
-        check_out_minutes = self._time_to_minutes(self.check_out_time) if self.check_out_time else None
+        return min(
+            slots,
+            key=lambda slot: abs(self._time_to_minutes(slot.start_time) - check_in_minutes),
+        )
 
-        def slot_score(slot):
-            start_minutes = self._time_to_minutes(slot.start_time)
-            end_minutes = self._time_to_minutes(slot.end_time)
-            overlap = 0
-            if check_out_minutes is not None:
-                overlap = max(0, min(end_minutes, check_out_minutes) - max(start_minutes, check_in_minutes))
-            distance = abs(start_minutes - check_in_minutes)
-            return (overlap, -distance)
+    def _couvertures_calculees(self):
+        """Chaque creneau du jour reellement recoupe par la presence.
 
-        return max(slots, key=slot_score)
+        C'est le coeur de la correction: le calcul precedent ne retenait
+        qu'un seul creneau et plafonnait la journee a sa duree. Un enseignant
+        qui assurait 8h-10h puis 14h-16h et pointait de 8h a 16h etait paye
+        deux heures au lieu de quatre.
+
+        La tolerance ne s'applique qu'au debut de chaque cours: arriver cinq
+        minutes en retard ne doit pas amputer l'heure, mais partir vingt
+        minutes plus tot n'est pas la meme chose qu'avoir assure le cours.
+        """
+        if self.check_out_time is None or self.check_out_time <= self.check_in_time:
+            return []
+
+        presence_debut = self._time_to_minutes(self.check_in_time)
+        presence_fin = self._time_to_minutes(self.check_out_time)
+        tolerance = self._tolerance_minutes()
+
+        couvertures = []
+        for slot in self._schedule_slots_for_day():
+            debut = self._time_to_minutes(slot.start_time)
+            fin = self._time_to_minutes(slot.end_time)
+            duree = max(fin - debut, 0)
+            if duree <= 0:
+                continue
+
+            chevauchement = min(fin, presence_fin) - max(debut, presence_debut)
+            if chevauchement <= 0:
+                continue
+
+            retard = max(presence_debut - debut, 0)
+            tolere = min(retard, tolerance)
+            # Le retard tolere est rendu, sans jamais depasser la duree
+            # planifiee: la tolerance excuse un retard, elle ne paie pas des
+            # minutes qui n'existaient pas au planning.
+            minutes = min(chevauchement + tolere, duree)
+
+            couvertures.append(
+                {
+                    "slot": slot,
+                    "planned_minutes": duree,
+                    "covered_minutes": max(minutes, 0),
+                    "late_minutes": retard,
+                    "tolerated_late_minutes": tolere,
+                }
+            )
+
+        return couvertures
 
     def _resolve_auto_checkout(self, schedule_slot):
         if schedule_slot and schedule_slot.end_time and schedule_slot.end_time > self.check_in_time:
@@ -866,46 +1261,89 @@ class TeacherTimeEntry(TimeStampedModel):
             fallback_dt = max_dt
         return fallback_dt.time(), "auto_close_plus_one_hour"
 
-    def _compute_payable_minutes(self, schedule_slot):
+    def _compute_payable_minutes(self, couvertures):
+        """Ce qui est du: la somme des cours couverts, chacun a sa mesure.
+
+        Hors de tout creneau -- remplacement, reunion --, c'est la duree de
+        presence qui fait foi: il n'y a rien au planning a quoi la comparer.
+        """
         if self.check_out_time is None or self.check_out_time <= self.check_in_time:
             return 0, 0, 0
 
-        start_minutes = self._time_to_minutes(self.check_in_time)
-        end_minutes = self._time_to_minutes(self.check_out_time)
-        actual_minutes = max(end_minutes - start_minutes, 0)
+        if not couvertures:
+            presence = max(
+                self._time_to_minutes(self.check_out_time)
+                - self._time_to_minutes(self.check_in_time),
+                0,
+            )
+            return presence, 0, 0
 
-        if not schedule_slot:
-            return actual_minutes, 0, 0
+        payable = sum(couverture["covered_minutes"] for couverture in couvertures)
+        # Le retard est celui du premier cours de la journee: c'est le seul
+        # que l'enseignant subit vraiment, les suivants s'enchainent.
+        premier = couvertures[0]
+        return (
+            max(payable, 0),
+            premier["late_minutes"],
+            premier["tolerated_late_minutes"],
+        )
 
-        planned_start = self._time_to_minutes(schedule_slot.start_time)
-        planned_end = self._time_to_minutes(schedule_slot.end_time)
-        planned_duration = max(planned_end - planned_start, 0)
+    def _minutes_planifiees_du_jour(self):
+        total = 0
+        for slot in self._schedule_slots_for_day():
+            total += max(
+                self._time_to_minutes(slot.end_time)
+                - self._time_to_minutes(slot.start_time),
+                0,
+            )
+        return total
 
-        late_minutes = max(start_minutes - planned_start, 0)
-        tolerated_late = min(late_minutes, self.LATE_TOLERANCE_MINUTES)
+    def calcul_fige(self):
+        """Vrai quand la paie du mois est validee jusqu'au bout.
 
-        payable_minutes = actual_minutes + tolerated_late
-        if planned_duration > 0:
-            payable_minutes = min(payable_minutes, planned_duration)
+        Sans ce verrou, corriger l'emploi du temps en decembre modifierait
+        les heures payables d'octobre -- y compris sur un bulletin deja
+        valide par la comptabilite et paye.
+        """
+        if self.pk is None or not self.teacher_id:
+            return False
 
-        return max(payable_minutes, 0), late_minutes, tolerated_late
+        debut_du_mois = self.entry_date.replace(day=1)
+        return TeacherPayroll.objects.filter(
+            teacher_id=self.teacher_id,
+            month__year=debut_du_mois.year,
+            month__month=debut_du_mois.month,
+            level_two_validated_at__isnull=False,
+        ).exists()
 
     def save(self, *args, **kwargs):
         if self.teacher and self.etablissement_id is None:
             self.etablissement = self.teacher.etablissement
 
-        schedule_slot = self._pick_schedule_slot() if self.teacher_id else None
+        if self.calcul_fige():
+            # La ligne reste telle qu'elle a ete payee: seules les colonnes
+            # libres (note, motif) suivent la modification.
+            super().save(*args, **kwargs)
+            return
+
+        couvertures = self._couvertures_calculees() if self.teacher_id else []
 
         if self.check_out_time is None:
-            auto_checkout, reason = self._resolve_auto_checkout(schedule_slot)
+            auto_checkout, reason = self._resolve_auto_checkout(
+                self._pick_schedule_slot() if self.teacher_id else None
+            )
             self.check_out_time = auto_checkout
             self.is_auto_closed = True
             self.auto_closed_reason = reason
+            # La sortie vient de changer: les creneaux couverts avec.
+            couvertures = self._couvertures_calculees() if self.teacher_id else []
         else:
             self.is_auto_closed = False
             self.auto_closed_reason = ""
 
-        payable_minutes, late_minutes, tolerated_late = self._compute_payable_minutes(schedule_slot)
+        payable_minutes, late_minutes, tolerated_late = self._compute_payable_minutes(
+            couvertures
+        )
         duration_hours = Decimal(str(max(payable_minutes, 0) / 60)).quantize(
             Decimal("0.01"),
             rounding=ROUND_HALF_UP,
@@ -913,7 +1351,84 @@ class TeacherTimeEntry(TimeStampedModel):
         self.late_minutes = late_minutes
         self.tolerated_late_minutes = tolerated_late
         self.worked_hours = duration_hours
+        self.planned_minutes = self._minutes_planifiees_du_jour() if self.teacher_id else 0
+        self.covered_minutes = sum(
+            couverture["covered_minutes"] for couverture in couvertures
+        )
         super().save(*args, **kwargs)
+        self._enregistrer_les_couvertures(couvertures)
+
+    def _enregistrer_les_couvertures(self, couvertures):
+        """Reecrit la liste des cours couverts par ce pointage.
+
+        Effacee puis reecrite plutot que mise a jour ligne a ligne: un
+        horaire corrige peut faire disparaitre un creneau de la couverture,
+        et une mise a jour selective y laisserait l'ancienne ligne.
+        """
+        self.slot_coverages.all().delete()
+        if not couvertures:
+            return
+        TeacherTimeEntryCoverage.objects.bulk_create(
+            [
+                TeacherTimeEntryCoverage(
+                    time_entry=self,
+                    schedule_slot=couverture["slot"],
+                    planned_minutes=couverture["planned_minutes"],
+                    covered_minutes=couverture["covered_minutes"],
+                    late_minutes=couverture["late_minutes"],
+                    tolerated_late_minutes=couverture["tolerated_late_minutes"],
+                )
+                for couverture in couvertures
+            ]
+        )
+
+
+class TeacherTimeEntryCoverage(TimeStampedModel):
+    """Un cours de l'emploi du temps, couvert par un pointage.
+
+    La trace manquait entierement: le creneau retenu etait devine a chaque
+    calcul et jamais conserve. On ne pouvait donc ni dire a quel cours
+    correspondait un pointage, ni reperer une seance planifiee que personne
+    n'avait assuree.
+    """
+
+    time_entry = models.ForeignKey(
+        TeacherTimeEntry, on_delete=models.CASCADE, related_name="slot_coverages"
+    )
+    schedule_slot = models.ForeignKey(
+        TeacherScheduleSlot, on_delete=models.CASCADE, related_name="time_coverages"
+    )
+    planned_minutes = models.PositiveIntegerField(default=0)
+    covered_minutes = models.PositiveIntegerField(default=0)
+    late_minutes = models.PositiveIntegerField(default=0)
+    tolerated_late_minutes = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["schedule_slot__start_time", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["time_entry", "schedule_slot"],
+                name="teacher_time_entry_coverage_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["schedule_slot"], name="ttcoverage_slot_idx"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.time_entry_id} → {self.schedule_slot_id}"
+
+    @property
+    def est_complete(self):
+        """Le cours a-t-il ete assure d'un bout a l'autre.
+
+        La tolerance est deja incluse dans `covered_minutes`: un enseignant
+        arrive avec cinq minutes de retard, dans la limite accordee par son
+        etablissement, a bien assure sa seance.
+        """
+        return self.planned_minutes > 0 and self.covered_minutes >= self.planned_minutes
 
 
 class Announcement(TimeStampedModel):
@@ -1300,6 +1815,14 @@ class Supplier(TimeStampedModel):
 
 
 class StockItem(TimeStampedModel):
+    """Un article du magasin, compte par ses mouvements.
+
+    `quantity` est derive et non saisi: il valait ce qu'un increment avait
+    laisse, et cet increment ne jouait qu'a la creation d'un mouvement.
+    Supprimer une entree de cinquante laissait donc les cinquante au stock,
+    et corriger un mouvement ne changeait rien du tout.
+    """
+
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="stock_items", null=True, blank=True)
     name = models.CharField(max_length=120)
     quantity = models.IntegerField(default=0)
@@ -1310,6 +1833,32 @@ class StockItem(TimeStampedModel):
     @property
     def is_low_stock(self):
         return self.quantity <= self.minimum_threshold
+
+    def quantite_derivee(self):
+        """Ce que disent les mouvements: les entrees moins les sorties."""
+        totaux = self.movements.aggregate(
+            entrees=models.Sum(
+                "quantity", filter=models.Q(movement_type=StockMovementType.IN)
+            ),
+            sorties=models.Sum(
+                "quantity", filter=models.Q(movement_type=StockMovementType.OUT)
+            ),
+        )
+        return (totaux["entrees"] or 0) - (totaux["sorties"] or 0)
+
+    def recalculer_quantite(self, sauvegarder=True):
+        """Remet le compteur d'accord avec l'historique des mouvements.
+
+        Recalcul complet plutot qu'un increment: l'increment derive au
+        premier mouvement supprime ou corrige, et rien ne le rattrape.
+        """
+        quantite = self.quantite_derivee()
+        if quantite == self.quantity:
+            return quantite
+        self.quantity = quantite
+        if sauvegarder:
+            self.save(update_fields=["quantity", "updated_at"])
+        return quantite
 
 
 class StockMovementType(models.TextChoices):
@@ -1324,13 +1873,16 @@ class StockMovement(TimeStampedModel):
     reason = models.CharField(max_length=150, blank=True)
 
     def save(self, *args, **kwargs):
-        if self._state.adding:
-            if self.movement_type == StockMovementType.IN:
-                self.item.quantity += self.quantity
-            else:
-                self.item.quantity -= self.quantity
-            self.item.save(update_fields=["quantity", "updated_at"])
         super().save(*args, **kwargs)
+        # Apres l'enregistrement, et par recalcul complet: le mouvement doit
+        # etre en base pour compter, et l'increment d'avant ne survivait ni a
+        # une correction ni a une suppression.
+        self.item.recalculer_quantite()
+
+    def delete(self, *args, **kwargs):
+        article = self.item
+        super().delete(*args, **kwargs)
+        article.recalculer_quantite()
 
 
 def recalculate_term_ranking(classroom: ClassRoom, academic_year: AcademicYear, term: str):
