@@ -9,6 +9,10 @@ class TokenStorage {
   static const _userKey = 'cached_user';
   static const _apiBaseUrlKey = 'api_base_url';
   static const _selectedEtablissementKey = 'selected_etablissement';
+  // L'annee de travail voyage comme l'etablissement: choisie une fois,
+  // portee par toutes les requetes. Chaque ecran gerait la sienne avant,
+  // avec des selecteurs qui ne s'accordaient jamais.
+  static const _selectedAcademicYearKey = 'selected_academic_year';
   static const _reminderHistoryKey = 'finance_reminder_history';
 
   Future<void> _safeWrite(String key, String value) async {
@@ -63,6 +67,8 @@ class TokenStorage {
   Future<String?> apiBaseUrl() => _safeRead(_apiBaseUrlKey);
   Future<String?> selectedEtablissement() =>
       _safeRead(_selectedEtablissementKey);
+  Future<String?> selectedAcademicYear() =>
+      _safeRead(_selectedAcademicYearKey);
   Future<String?> reminderHistory() => _safeRead(_reminderHistoryKey);
 
   Future<void> saveCachedUser(String userJson) async {
@@ -77,6 +83,10 @@ class TokenStorage {
     await _safeWrite(_selectedEtablissementKey, value);
   }
 
+  Future<void> saveSelectedAcademicYear(String value) async {
+    await _safeWrite(_selectedAcademicYearKey, value);
+  }
+
   Future<void> saveReminderHistory(String value) async {
     await _safeWrite(_reminderHistoryKey, value);
   }
@@ -87,6 +97,10 @@ class TokenStorage {
 
   Future<void> clearSelectedEtablissement() async {
     await _safeDelete(_selectedEtablissementKey);
+  }
+
+  Future<void> clearSelectedAcademicYear() async {
+    await _safeDelete(_selectedAcademicYearKey);
   }
 
   Future<void> clearReminderHistory() async {

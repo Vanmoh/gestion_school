@@ -37,6 +37,7 @@ from .views import (
     SmsProviderConfigViewSet,
     TeacherAttendanceViewSet,
     TeacherAssignmentViewSet,
+    AvailabilityCampaignViewSet,
     TeacherAvailabilitySlotViewSet,
     TeacherTimeEntryViewSet,
     TimetablePublicationViewSet,
@@ -54,6 +55,9 @@ router.register(r"subjects", SubjectViewSet)
 router.register(r"teachers", TeacherViewSet)
 router.register(r"teacher-assignments", TeacherAssignmentViewSet)
 router.register(r"teacher-availability-slots", TeacherAvailabilitySlotViewSet, basename="teacher-availability-slots")
+# La campagne encadre la collecte des disponibilites: meme module de droits,
+# route distincte -- on ouvre une collecte, on ne declare pas un creneau.
+router.register(r"availability-campaigns", AvailabilityCampaignViewSet, basename="availability-campaigns")
 router.register(r"teacher-schedule-slots", TeacherScheduleSlotViewSet)
 router.register(r"timetable-publications", TimetablePublicationViewSet, basename="timetable-publications")
 router.register(r"parents", ParentProfileViewSet)

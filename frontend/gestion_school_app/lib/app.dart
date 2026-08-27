@@ -32,6 +32,8 @@ import 'features/dashboard/presentation/role_dashboards.dart';
 import 'features/exams/presentation/exams_controller.dart';
 import 'features/exams/presentation/exams_page.dart';
 import 'features/communication/presentation/communication_page.dart';
+import 'features/academics/presentation/annee_scolaire_controller.dart';
+import 'features/academics/presentation/widgets/selecteur_annee_scolaire.dart';
 import 'features/discipline/presentation/discipline_page.dart';
 import 'features/discipline/presentation/parent_discipline_page.dart';
 import 'features/etablissements/presentation/etablissements_page.dart';
@@ -255,6 +257,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   static const Duration _chatWsHeartbeatInterval = Duration(seconds: 20);
 
   String _selectedKey = 'dashboard';
+  // Etablissement pour lequel les annees ont ete chargees: en changer doit
+  // recharger la liste, une annee n'ayant de sens que dans son ecole.
+  int? _anneesChargeesPour;
   final Map<String, bool> _expandedGroups = {};
   bool _sidebarCollapsed = false;
   String? _hoveredKey;
@@ -1244,6 +1249,21 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       });
     }
 
+    // Les annees suivent l'etablissement actif: celles d'une ecole n'ont
+    // aucun sens dans une autre. Recharger a chaque changement d'etablissement
+    // evite de proposer une annee que le serveur refusera.
+    final anneeControleur = ref.watch(anneeScolaireProvider);
+    final etablissementCourantId = selectedEtablissement?.id;
+    if (_anneesChargeesPour != etablissementCourantId) {
+      _anneesChargeesPour = etablissementCourantId;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await anneeControleur.hydrater();
+        if (!mounted) return;
+        await anneeControleur.charger();
+      });
+    }
+
     final screenWidth = MediaQuery.sizeOf(context).width;
     final isMobile = screenWidth < 900;
 
@@ -1294,6 +1314,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
               },
               icon: const Icon(Icons.dark_mode_outlined),
             ),
+            const SelecteurAnneeScolaire(),
             IconButton(
               tooltip: 'Informations session',
               onPressed: () => _showConnectionInfo(user, selectedEtablissement),
@@ -1345,9 +1366,16 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
           ),
         ),
         body: SafeArea(
-          child: _GlobalFeatureRefreshHost(
-            key: ValueKey('admin-mobile-${selectedItem.keyName}'),
-            child: selectedView,
+          child: Column(
+            children: [
+              const BandeauAnneeCloturee(),
+              Expanded(
+                child: _GlobalFeatureRefreshHost(
+                  key: ValueKey('admin-mobile-${selectedItem.keyName}'),
+                  child: selectedView,
+                ),
+              ),
+            ],
           ),
         ),
       );
@@ -1571,6 +1599,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                 SafeArea(
                   child: Column(
                     children: [
+                      const BandeauAnneeCloturee(),
                       Padding(
                         padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
                         child: ClipRRect(

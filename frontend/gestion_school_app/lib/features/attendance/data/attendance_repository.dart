@@ -78,7 +78,7 @@ class AttendanceRepository {
     final response = await dio.get(
       '/attendances/sheet-journal/',
       queryParameters: {
-        if (classroomId != null) 'classroom': classroomId,
+        'classroom': ?classroomId,
         if (from != null && from.isNotEmpty) 'from': from,
         if (to != null && to.isNotEmpty) 'to': to,
       },

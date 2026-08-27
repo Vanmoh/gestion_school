@@ -165,7 +165,13 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("entry_date", response.data)
 
-    def test_pointage_without_schedule_slot_for_day_is_forbidden(self):
+    def test_pointage_without_schedule_slot_for_day_requires_a_reason(self):
+        """Un jour sans cours n'est plus un refus sec, mais une explication.
+
+        Le refus portait sur `entry_date` et fermait la porte a un
+        remplacement ou une reunion, pourtant legitimes -- ce qui poussait a
+        saisir de faux horaires un jour ou l'enseignant avait cours.
+        """
         response = self._create_time_entry(
             {
                 "teacher": self.teacher.id,
@@ -176,7 +182,21 @@ class TeacherPayrollWorkflowApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("entry_date", response.data)
+        self.assertIn("off_schedule_reason", response.data)
+
+    def test_pointage_without_schedule_slot_passes_with_a_reason(self):
+        response = self._create_time_entry(
+            {
+                "teacher": self.teacher.id,
+                "entry_date": "2026-04-07",  # Tuesday (no slot configured)
+                "check_in_time": "08:10:00",
+                "check_out_time": "10:00:00",
+                "off_schedule_reason": "Remplacement de M. Diarra",
+            }
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertTrue(response.data["is_off_schedule"])
 
     def test_director_has_read_only_access_on_teacher_time_entries(self):
         self._create_time_entry(

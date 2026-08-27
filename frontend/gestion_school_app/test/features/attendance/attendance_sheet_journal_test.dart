@@ -71,7 +71,14 @@ Future<_Appels> _pump(
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  if (loading) {
+    // Le rond de chargement tourne sans fin: `pumpAndSettle` attend une
+    // stabilisation qui ne vient jamais et finit en timeout. Une seule
+    // image suffit pour observer l'etat de chargement.
+    await tester.pump();
+  } else {
+    await tester.pumpAndSettle();
+  }
   return appels;
 }
 
