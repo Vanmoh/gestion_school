@@ -95,6 +95,10 @@ class Command(BaseCommand):
                     user=user,
                     classroom=classroom,
                     etablissement=etab,
+                    # Alterne d'un eleve a l'autre: le genre entre dans le
+                    # matricule, et un peuplement sans genre produisait des
+                    # identifiants hors du format de l'ecole.
+                    gender=Student.Gender.FEMALE if rank % 2 else Student.Gender.MALE,
                     is_archived=False,
                 )
 

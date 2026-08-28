@@ -58,12 +58,27 @@ def code_etablissement(etablissement) -> str:
     return "GS"
 
 
-def code_classe(classroom) -> str:
-    """« 11ème CG » devient « 11CG ».
+# Mots qui n'apprennent rien sur la classe: ce qui la distingue de sa voisine
+# est son rang et sa filiere, pas le mot « annee ».
+MOTS_GENERIQUES = {"ANNEE", "ANNEES", "CLASSE", "CLASSES", "NIVEAU"}
 
-    Le rang et la filiere, sans l'ordinal ni les espaces: c'est la forme
-    qu'utilisait deja la table de la commande de seed, retrouvee par une
-    regle plutot que recopiee a la main.
+# Huit caracteres: « 12TSECO1 » tient, et c'est le plus long des libelles
+# reels. Tronquer plus court confondait « 12eme TSECO1 » et « 12eme TSECO2 ».
+LONGUEUR_CODE_CLASSE = 8
+
+
+def code_classe(classroom) -> str:
+    """« 11ème CG » devient « 11CG », « 1ère Année DB1 » devient « 1DB1 ».
+
+    Le code doit distinguer deux classes voisines, c'est sa seule raison
+    d'etre. La regle precedente gardait le mot generique et tronquait a six
+    caracteres: les cinq classes de premiere annee d'une ecole -- DB1, DB2,
+    EM1, EM2, TC -- recevaient toutes « 1ANNEE », et « 12eme TSECO1 » ne se
+    distinguait plus de « 12eme TSECO2 ».
+
+    Le mot generique n'est ecarte que s'il reste autre chose: une classe qui
+    s'appelle « 3eme Annee » tout court garde « 3AN », faute de quoi son code
+    se reduirait au seul chiffre du rang.
     """
     if classroom is None:
         return "XX"
@@ -72,8 +87,18 @@ def code_classe(classroom) -> str:
     # « 11EME CG » -> « 11 CG ». Les ordinaux francais d'abord, sinon le
     # « E » de « EME » se retrouverait dans le code.
     brut = re.sub(r"(?<=\d)\s*(EME|ERE|ER|E)\b", " ", brut)
-    code = re.sub(r"[^A-Z0-9]", "", brut)
-    return code[:6] or "XX"
+
+    mots = re.findall(r"[A-Z0-9]+", brut)
+    utiles = [mot for mot in mots if mot not in MOTS_GENERIQUES]
+    # Rien d'autre que le generique et un rang: on l'abrege plutot que de le
+    # perdre, sinon « 3eme Annee » se reduirait a « 3 ».
+    if not any(re.search(r"[A-Z]", mot) for mot in utiles):
+        utiles = [
+            mot[:2] if mot in MOTS_GENERIQUES else mot for mot in mots
+        ]
+
+    code = "".join(utiles)
+    return code[:LONGUEUR_CODE_CLASSE] or "XX"
 
 
 def code_genre(genre) -> str:
