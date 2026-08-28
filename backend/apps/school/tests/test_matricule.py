@@ -73,12 +73,21 @@ class FormatDuMatriculeTests(_EcoleMixin, TestCase):
         self.assertTrue(suivant.matricule.startswith("RC15"))
 
     def test_le_genre_manquant_ne_casse_plus_le_format(self):
-        """Il produisait « GS-2025-00001 », etranger au format."""
-        eleve = self._eleve("m4", self.classe, self.ecole, genre=None)
+        """Il produisait « GS-2025-00001 », etranger au format.
 
-        self.assertTrue(service.est_conforme(eleve.matricule), eleve.matricule)
-        self.assertTrue(eleve.matricule.endswith("N"))
-        self.assertTrue(eleve.matricule.startswith("RC1511CG25E"))
+        L'inscription exige desormais le genre, mais des fiches anciennes en
+        manquent encore: le service doit leur produire un matricule conforme
+        -- c'est ce dont la migration de regularisation se sert.
+        """
+        eleve = self._eleve("m4", self.classe, self.ecole, genre="M")
+        Student.objects.filter(pk=eleve.pk).update(gender=None)
+        eleve.refresh_from_db()
+
+        produit = service.generer(eleve)
+
+        self.assertTrue(service.est_conforme(produit), produit)
+        self.assertTrue(produit.endswith("N"))
+        self.assertTrue(produit.startswith("RC1511CG25E"))
 
     def test_le_genre_termine_le_matricule(self):
         garcon = self._eleve("m5", self.classe, self.ecole, genre="M")
@@ -141,7 +150,7 @@ class CodeDeClasseTests(TestCase):
             ("11ème CG", "11CG"),
             ("10ème CT", "10CT"),
             ("6e A", "6A"),
-            ("Terminale S", "TERMIN"),
+            ("Terminale S", "TERMINAL"),
             ("", "XX"),
         ):
             with self.subTest(nom=nom):
@@ -149,6 +158,49 @@ class CodeDeClasseTests(TestCase):
 
     def test_une_classe_absente_ne_fait_pas_echouer_la_generation(self):
         self.assertEqual(service.code_classe(None), "XX")
+
+    def test_le_mot_generique_cede_la_place_a_la_filiere(self):
+        """Cinq classes de premiere annee recevaient toutes « 1ANNEE »."""
+        class _Classe:
+            def __init__(self, name):
+                self.name = name
+
+        codes = {
+            service.code_classe(_Classe(nom))
+            for nom in (
+                "1ère Année DB1",
+                "1ère Année DB2",
+                "1ère Année EM1",
+                "1ère Année EM2",
+                "1ère Année TC",
+            )
+        }
+
+        self.assertEqual(codes, {"1DB1", "1DB2", "1EM1", "1EM2", "1TC"})
+
+    def test_une_classe_sans_filiere_garde_le_generique_abrege(self):
+        """« 3ème Année » ne peut pas se reduire au seul chiffre du rang."""
+        class _Classe:
+            name = "3ème Année"
+
+        self.assertEqual(service.code_classe(_Classe()), "3AN")
+
+    def test_deux_filieres_proches_ne_se_confondent_plus(self):
+        """La troncature a six caracteres les rendait identiques."""
+        class _Classe:
+            def __init__(self, name):
+                self.name = name
+
+        self.assertNotEqual(
+            service.code_classe(_Classe("12ème TSECO1")),
+            service.code_classe(_Classe("12ème TSECO2")),
+        )
+
+    def test_la_parenthese_ne_rentre_pas_dans_le_code(self):
+        class _Classe:
+            name = "9ème Année (DEF)"
+
+        self.assertEqual(service.code_classe(_Classe()), "9DEF")
 
 
 class ConformiteTests(TestCase):
@@ -218,3 +270,100 @@ class MatriculeApiTests(_EcoleMixin, APITestCase):
 
         self.assertEqual(reponse.status_code, status.HTTP_201_CREATED, reponse.data)
         self.assertEqual(reponse.data["matricule"], "RC1511CG25E7777F")
+
+
+class GenreObligatoireTests(_EcoleMixin, TestCase):
+    """Le genre entre dans le matricule: sans lui, il prenait une autre forme.
+
+    L'API l'exigeait deja a l'inscription, mais l'import academique et les
+    commandes de peuplement creaient des eleves sans genre -- et c'est de la
+    que venaient les « GS-2025-00001 ».
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.ecole, cls.annee, cls.classe = cls._ecole("École Genre", code="EG")
+
+    def _creer(self, username, **champs):
+        user = User.objects.create_user(
+            username=username,
+            password="Pass1234!",
+            role=UserRole.STUDENT,
+            etablissement=self.ecole,
+        )
+        return Student.objects.create(
+            user=user, classroom=self.classe, etablissement=self.ecole, **champs
+        )
+
+    def test_une_inscription_avec_genre_porte_sa_lettre(self):
+        eleve = self._creer("avec_genre", gender="F")
+
+        self.assertTrue(eleve.matricule.endswith("F"))
+
+    def test_une_fiche_sans_genre_recoit_quand_meme_un_matricule_conforme(self):
+        """Le format tient sans le genre: c'est ce qui ferme la porte aux « GS- ».
+
+        Le genre est exige aux deux portes d'inscription -- l'ecran et
+        l'import --, pas au modele: l'y mettre bloquerait tout chargement de
+        sauvegarde et toute reprise de donnees.
+        """
+        eleve = self._creer("sans_genre", gender=None)
+
+        self.assertTrue(service.est_conforme(eleve.matricule), eleve.matricule)
+        self.assertTrue(eleve.matricule.endswith("N"))
+
+
+class RegularisationTests(_EcoleMixin, TestCase):
+    """Ce que la migration 0051 fait aux fiches deja en base."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.ecole, cls.annee, cls.classe = cls._ecole("École Reprise", code="ER")
+
+    def _eleve_ancien(self, username, matricule, genre=None):
+        """Une fiche telle que l'ancien generateur pouvait la laisser."""
+        user = User.objects.create_user(
+            username=username,
+            password="Pass1234!",
+            role=UserRole.STUDENT,
+            etablissement=self.ecole,
+        )
+        eleve = Student.objects.create(
+            user=user,
+            classroom=self.classe,
+            etablissement=self.ecole,
+            gender="M",
+            matricule="ER11CG25E9999M",
+        )
+        Student.objects.filter(pk=eleve.pk).update(matricule=matricule, gender=genre)
+        eleve.refresh_from_db()
+        return eleve
+
+    def test_un_matricule_hors_format_est_reconnu(self):
+        ancien = self._eleve_ancien("gs_ancien", "GS-2025-00001", genre=None)
+
+        self.assertFalse(service.est_conforme(ancien.matricule))
+
+    def test_le_tirage_du_genre_est_reproductible(self):
+        """Deux copies de la meme base doivent se correspondre.
+
+        Un tirage franc donnerait des matricules differents a chaque
+        execution de la migration.
+        """
+        import random
+
+        premier = [random.Random(pk).choice(["M", "F"]) for pk in range(1, 30)]
+        second = [random.Random(pk).choice(["M", "F"]) for pk in range(1, 30)]
+
+        self.assertEqual(premier, second)
+        # Et le tirage repartit les deux genres plutot que d'en choisir un.
+        self.assertEqual(set(premier), {"M", "F"})
+
+    def test_la_regeneration_produit_un_matricule_conforme(self):
+        ancien = self._eleve_ancien("gs_regen", "GS-2025-00002", genre="F")
+
+        ancien.matricule = service.generer(ancien)
+
+        self.assertTrue(service.est_conforme(ancien.matricule), ancien.matricule)
+        self.assertTrue(ancien.matricule.startswith("ER11CG25E"))
+        self.assertTrue(ancien.matricule.endswith("F"))

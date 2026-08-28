@@ -537,6 +537,13 @@ class Student(TimeStampedModel):
 
     def clean(self):
         from django.core.exceptions import ValidationError
+        # Le genre est exige aux deux portes d'inscription -- l'ecran
+        # (StudentSerializer) et l'import academique -- et non ici. La
+        # contrainte au modele bloquait tout chargement de sauvegarde, toute
+        # reprise de donnees et tout script legitime, sans rien ajouter au
+        # format du matricule: celui-ci reste conforme meme sans genre, avec
+        # un « N » final, ce qui suffit a ce qu'aucun « GS-2025-00001 » ne
+        # puisse renaitre.
         if self.birth_date and self.birth_date > date.today():
             raise ValidationError({'birth_date': 'Date de naissance ne peut pas être dans le futur'})
         # Antidater est le cas d'usage; postdater fausserait les effectifs de

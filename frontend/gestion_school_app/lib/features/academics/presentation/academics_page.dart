@@ -6,6 +6,7 @@ import '../../auth/presentation/auth_controller.dart';
 import '../../../models/etablissement.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/permissions/module_permissions.dart';
+import 'widgets/assistant_ouverture_annee.dart';
 
 class AcademicsPage extends ConsumerStatefulWidget {
   const AcademicsPage({super.key});
@@ -1200,6 +1201,23 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                                   icon: const Icon(Icons.calendar_month_outlined),
                                   label: const Text('Créer année'),
                                 ),
+                                // Ouvrir une annee reprend toute la
+                                // structure de la precedente: c'est
+                                // l'operation de rentree, au meme niveau
+                                // que la passation.
+                                if (peutSupprimer)
+                                  FilledButton.icon(
+                                    key: const Key('ouvrir-annee'),
+                                    onPressed: _saving
+                                        ? null
+                                        : () => showDialog<void>(
+                                            context: context,
+                                            builder: (_) =>
+                                                const AssistantOuvertureAnnee(),
+                                          ).then((_) => _loadData()),
+                                    icon: const Icon(Icons.auto_awesome_outlined),
+                                    label: const Text('Ouvrir une année'),
+                                  ),
                                 FilledButton.tonalIcon(
                                   key: const Key('creer-matiere'),
                                   onPressed: _saving ? null : _openSubjectForm,
