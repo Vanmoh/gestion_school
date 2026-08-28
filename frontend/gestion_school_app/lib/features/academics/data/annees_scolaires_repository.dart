@@ -46,6 +46,41 @@ class AnneesScolairesRepository {
     );
   }
 
+  /// Ouvre une annee en reprenant la structure de la precedente.
+  ///
+  /// Rend le compte-rendu de ce qui a ete repris: c'est ce que l'ecran
+  /// affiche ensuite, plutot qu'un « operation reussie » qui ne dirait pas
+  /// si les quinze classes attendues sont bien la.
+  Future<Map<String, dynamic>> ouvrirAnnee({
+    required String nom,
+    required String debut,
+    required String fin,
+    int? sourceId,
+    bool dupliquerClasses = true,
+    bool dupliquerMatieres = true,
+    bool dupliquerAffectations = true,
+    bool dupliquerEmploiDuTemps = true,
+    bool activer = false,
+    bool cloturerSource = false,
+  }) async {
+    final response = await dio.post(
+      '/academic-years/ouvrir/',
+      data: {
+        'name': nom,
+        'start_date': debut,
+        'end_date': fin,
+        'source_academic_year': ?sourceId,
+        'dupliquer_classes': dupliquerClasses,
+        'dupliquer_matieres': dupliquerMatieres,
+        'dupliquer_affectations': dupliquerAffectations,
+        'dupliquer_emploi_du_temps': dupliquerEmploiDuTemps,
+        'activer': activer,
+        'cloturer_source': cloturerSource,
+      },
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   /// Designe l'annee de saisie. Le serveur retire la precedente dans le
   /// meme mouvement: une seule peut etre ouverte par etablissement.
   Future<AnneeScolaire> activer(int id) => _action(id, 'activer');

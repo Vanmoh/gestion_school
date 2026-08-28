@@ -1035,6 +1035,178 @@ class AcademicYearViewSet(BaseModelViewSet):
         annee.save(update_fields=["is_closed", "updated_at"])
         return Response(self.get_serializer(annee).data)
 
+    @action(detail=False, methods=["post"], url_path="ouvrir")
+    def ouvrir(self, request):
+        """Ouvre une annee scolaire en reprenant la structure de la precedente.
+
+        Sans cela, preparer une rentree demandait de ressaisir a la main les
+        classes, leurs matieres, les affectations d'enseignants et tout
+        l'emploi du temps -- plusieurs centaines de lignes, alors que la
+        structure change peu d'une annee sur l'autre.
+
+        Ce qui est repris est la structure, jamais les eleves: leur passage
+        d'une classe a l'autre releve de la passation, qui decide au cas par
+        cas et laisse une trace.
+        """
+        # Meme exigence que la passation: ouvrir une annee et faire passer
+        # les eleves sont les deux faces de la rentree.
+        if not can_delete(getattr(request.user, "role", ""), self.access_module):
+            raise PermissionDenied(
+                "L'ouverture d'une annee scolaire est reservee a la direction."
+            )
+
+        etablissement = self._etablissement_cible()
+        charge = request.data
+
+        source = self._annee_source(charge, etablissement)
+        reprises = {
+            "classes": self._to_bool(charge.get("dupliquer_classes"), True),
+            "matieres": self._to_bool(charge.get("dupliquer_matieres"), True),
+            "affectations": self._to_bool(charge.get("dupliquer_affectations"), True),
+            "emploi_du_temps": self._to_bool(
+                charge.get("dupliquer_emploi_du_temps"), True
+            ),
+        }
+
+        serializer = self.get_serializer(
+            data={
+                "name": charge.get("name"),
+                "start_date": charge.get("start_date"),
+                "end_date": charge.get("end_date"),
+            }
+        )
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            nouvelle = serializer.save(etablissement=etablissement)
+            compte_rendu = self._reprendre_la_structure(source, nouvelle, reprises)
+
+            if self._to_bool(charge.get("activer"), False):
+                AcademicYear.objects.filter(
+                    etablissement=etablissement, is_active=True
+                ).exclude(pk=nouvelle.pk).update(is_active=False)
+                nouvelle.is_active = True
+                nouvelle.save(update_fields=["is_active", "updated_at"])
+
+            if self._to_bool(charge.get("cloturer_source"), False) and source:
+                source.is_closed = True
+                source.is_active = False
+                source.save(update_fields=["is_closed", "is_active", "updated_at"])
+
+        donnees = self.get_serializer(nouvelle).data
+        donnees["reprise"] = compte_rendu
+        donnees["source_academic_year"] = source.id if source else None
+        return Response(donnees, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _to_bool(valeur, defaut):
+        if valeur in (None, ""):
+            return defaut
+        if isinstance(valeur, bool):
+            return valeur
+        return str(valeur).strip().lower() in {"1", "true", "vrai", "oui", "yes"}
+
+    def _annee_source(self, charge, etablissement):
+        """L'annee dont on reprend la structure: celle demandee, ou la courante."""
+        source_id = charge.get("source_academic_year")
+        if source_id in (None, ""):
+            return AcademicYear.courante(etablissement)
+
+        source = AcademicYear.objects.filter(
+            id=source_id, etablissement=etablissement
+        ).first()
+        if source is None:
+            raise ValidationError(
+                {"source_academic_year": "Annee source introuvable dans cet etablissement."}
+            )
+        return source
+
+    def _reprendre_la_structure(self, source, cible, reprises):
+        """Recopie classes, matieres, affectations et creneaux vers la cible.
+
+        L'ordre suit les dependances: une matiere tient a sa classe, une
+        affectation a sa matiere, un creneau a son affectation. Decocher un
+        niveau prive donc les suivants de leur support -- ils sont ignores
+        plutot que rattaches a l'ancienne annee.
+        """
+        compte_rendu = {
+            "classes": 0,
+            "matieres": 0,
+            "affectations": 0,
+            "creneaux": 0,
+        }
+        if source is None or not reprises["classes"]:
+            return compte_rendu
+
+        classes_par_source = {}
+        for classe in ClassRoom.objects.filter(academic_year=source).order_by("name", "id"):
+            copie, creee = ClassRoom.objects.get_or_create(
+                name=classe.name,
+                academic_year=cible,
+                etablissement=classe.etablissement,
+            )
+            classes_par_source[classe.id] = copie
+            if creee:
+                compte_rendu["classes"] += 1
+
+        if not reprises["matieres"]:
+            return compte_rendu
+
+        matieres_par_source = {}
+        for matiere in Subject.objects.filter(classroom__academic_year=source):
+            classe_cible = classes_par_source.get(matiere.classroom_id)
+            if classe_cible is None:
+                continue
+            copie, creee = Subject.objects.get_or_create(
+                classroom=classe_cible,
+                code=matiere.code,
+                defaults={"name": matiere.name, "coefficient": matiere.coefficient},
+            )
+            matieres_par_source[matiere.id] = copie
+            if creee:
+                compte_rendu["matieres"] += 1
+
+        if not reprises["affectations"]:
+            return compte_rendu
+
+        affectations_par_source = {}
+        for affectation in TeacherAssignment.objects.filter(
+            classroom__academic_year=source
+        ).select_related("teacher", "subject", "classroom"):
+            classe_cible = classes_par_source.get(affectation.classroom_id)
+            matiere_cible = matieres_par_source.get(affectation.subject_id)
+            if classe_cible is None or matiere_cible is None:
+                continue
+            copie, creee = TeacherAssignment.objects.get_or_create(
+                teacher=affectation.teacher,
+                subject=matiere_cible,
+                classroom=classe_cible,
+            )
+            affectations_par_source[affectation.id] = copie
+            if creee:
+                compte_rendu["affectations"] += 1
+
+        if not reprises["emploi_du_temps"]:
+            return compte_rendu
+
+        for creneau in TeacherScheduleSlot.objects.filter(
+            assignment__classroom__academic_year=source
+        ):
+            affectation_cible = affectations_par_source.get(creneau.assignment_id)
+            if affectation_cible is None:
+                continue
+            _, creee = TeacherScheduleSlot.objects.get_or_create(
+                assignment=affectation_cible,
+                day_of_week=creneau.day_of_week,
+                start_time=creneau.start_time,
+                end_time=creneau.end_time,
+                defaults={"room": creneau.room},
+            )
+            if creee:
+                compte_rendu["creneaux"] += 1
+
+        return compte_rendu
+
 
 class EtablissementViewSet(viewsets.ModelViewSet):
     access_module = "etablissements"
@@ -3839,6 +4011,23 @@ class StudentViewSet(BaseModelViewSet):
         return qs.filter(etablissement=getattr(user, "etablissement", None))
 
     @staticmethod
+    def _genre_importe(valeur):
+        """« M », « F », « garcon », « fille »: ce que les fichiers ecrivent.
+
+        Une colonne libre remplie par une secretaire ne contient pas toujours
+        la lettre attendue; refuser « Masculin » parce qu'on esperait « M »
+        renverrait tout un fichier pour rien.
+        """
+        brut = str(valeur or "").strip().lower()
+        if not brut:
+            return ""
+        if brut[0] in ("m", "g", "h"):  # masculin, garcon, homme
+            return "M"
+        if brut[0] == "f":  # feminin, fille
+            return "F"
+        return ""
+
+    @staticmethod
     def _default_student_username(matricule, first_name, last_name):
         base = _as_text(matricule).lower().replace(" ", "")
         if base:
@@ -3889,12 +4078,26 @@ class StudentViewSet(BaseModelViewSet):
             email = _as_text(row.get("email"))
             phone = _as_text(row.get("phone") or row.get("telephone"))
             birth_date = _as_date(row.get("birth_date") or row.get("date_naissance"))
+            gender = self._genre_importe(
+                row.get("gender") or row.get("genre") or row.get("sexe")
+            )
 
             if not matricule:
                 row_errors.append({"row": index, "error": "Matricule obligatoire."})
                 continue
             if not first_name or not last_name:
                 row_errors.append({"row": index, "error": "Prenom et nom obligatoires."})
+                continue
+            if not gender:
+                # L'import creait des eleves sans genre, et c'est de la que
+                # venaient les matricules « GS-2025-00001 »: le format en a
+                # besoin pour sa derniere lettre.
+                row_errors.append(
+                    {
+                        "row": index,
+                        "error": "Genre obligatoire (M ou F, colonne « genre »).",
+                    }
+                )
                 continue
             if matricule in seen_matricules:
                 row_errors.append({"row": index, "error": "Matricule dupliqué dans le fichier."})
@@ -3909,6 +4112,7 @@ class StudentViewSet(BaseModelViewSet):
                 {
                     "row": index,
                     "matricule": matricule,
+                    "gender": gender,
                     "first_name": first_name,
                     "last_name": last_name,
                     "username": username,
@@ -4007,6 +4211,7 @@ class StudentViewSet(BaseModelViewSet):
                         matricule=item["matricule"],
                         classroom=classroom,
                         birth_date=item["birth_date"],
+                        gender=item["gender"],
                         etablissement=classroom.etablissement,
                     )
                     created += 1
@@ -7719,11 +7924,9 @@ class CanteenSubscriptionViewSet(BaseModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = self._filtrer_par_etat(super().get_queryset())
+        qs = super().get_queryset()
         role = getattr(user, "role", "")
 
-        # L'eleve et le parent ne voient que leurs propres prets: c'est
-        # l'ecran « Mes emprunts », servi par la meme route.
         if role == UserRole.STUDENT:
             return qs.filter(student__user_id=user.id)
         if role == UserRole.PARENT:
@@ -7776,11 +7979,9 @@ class CanteenServiceViewSet(BaseModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = self._filtrer_par_etat(super().get_queryset())
+        qs = super().get_queryset()
         role = getattr(user, "role", "")
 
-        # L'eleve et le parent ne voient que leurs propres prets: c'est
-        # l'ecran « Mes emprunts », servi par la meme route.
         if role == UserRole.STUDENT:
             return qs.filter(student__user_id=user.id)
         if role == UserRole.PARENT:
