@@ -1,13 +1,19 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/constants/etablissement_api.dart';
 import '../core/network/api_client.dart';
+import '../core/network/paged_response.dart';
 import '../core/network/token_storage.dart';
 
 final etablissementProvider = ChangeNotifierProvider<EtablissementProvider>(
-  (ref) => EtablissementProvider(ref.read(tokenStorageProvider)),
+  (ref) => EtablissementProvider(
+    ref.read(tokenStorageProvider),
+    ref.read(dioProvider),
+  ),
 );
 
 // Changes once per app run to invalidate stale browser-cached logo URLs.
@@ -123,16 +129,50 @@ class Etablissement {
 }
 
 class EtablissementProvider extends ChangeNotifier {
-  EtablissementProvider(this._tokenStorage);
+  EtablissementProvider(this._tokenStorage, this._dio);
 
   final TokenStorage _tokenStorage;
+  final Dio _dio;
   Etablissement? _selected;
   List<Etablissement> _etablissements = [];
   bool _hydrated = false;
+  Future<void>? _chargementEnCours;
 
   Etablissement? get selected => _selected;
   List<Etablissement> get etablissements => _etablissements;
   bool get hydrated => _hydrated;
+
+  /// Charge la liste depuis l'API, une fois pour toute l'application.
+  ///
+  /// Deux ecrans la demandaient chacun de son cote, avec deux gestions
+  /// d'erreur differentes: l'un affichait la raison de l'echec et proposait
+  /// de reessayer, l'autre l'avalait en silence et posait un verrou qu'il ne
+  /// relachait jamais. Le meme serveur momentanement absent laissait donc
+  /// l'un des deux ecrans utilisable et figeait l'autre.
+  ///
+  /// [forcer] relance l'appel meme si la liste est deja garnie: c'est ce que
+  /// fait le bouton « Reessayer ».
+  Future<void> charger({bool forcer = false}) {
+    if (!forcer && _etablissements.isNotEmpty) {
+      return Future.value();
+    }
+    // Deux ecrans montes en meme temps ne doivent pas lancer deux appels:
+    // le second attend le premier.
+    final enCours = _chargementEnCours;
+    if (enCours != null) {
+      return enCours;
+    }
+
+    final futur = _charger();
+    _chargementEnCours = futur;
+    return futur.whenComplete(() => _chargementEnCours = null);
+  }
+
+  Future<void> _charger() async {
+    final reponse = await _dio.get(EtablissementApi.etablissements);
+    final data = rowsOf(reponse.data).map(Etablissement.fromJson).toList();
+    setEtablissements(data);
+  }
 
   void setEtablissements(List<Etablissement> etablissements) {
     final deduped = <Etablissement>[];

@@ -40,6 +40,7 @@ List<Map<String, dynamic>> _fiches() => [
 /// test verifie non seulement qu'on a clique, mais sur quelle ligne.
 class _Appels {
   final List<String> voir = [];
+  final List<String> modifier = [];
   final List<String> pdf = [];
   final List<String> excel = [];
 }
@@ -64,6 +65,7 @@ Future<_Appels> _pump(
             fiches: fiches ?? _fiches(),
             loading: loading,
             onVoir: (c, d) => appels.voir.add('$c|$d'),
+            onModifier: (c, d) => appels.modifier.add('$c|$d'),
             onExporterPdf: (c, d) => appels.pdf.add('$c|$d'),
             onExporterExcel: (c, d) => appels.excel.add('$c|$d'),
           ),
@@ -170,8 +172,37 @@ void main() {
 
       // La ligne du haut est la plus recente: 6e A du 12 mars.
       expect(appels.voir, ['7|2026-03-12']);
+      expect(appels.modifier, isEmpty);
       expect(appels.pdf, isEmpty);
       expect(appels.excel, isEmpty);
+    });
+
+    testWidgets('consulter et reprendre en saisie sont deux gestes distincts', (
+      tester,
+    ) async {
+      // « Voir » ouvrait la fiche en saisie tout en haut de la page: le clic
+      // paraissait sans effet et aucune vue n'existait. Les deux intentions
+      // ont desormais chacune leur bouton.
+      final appels = await _pump(tester);
+
+      await tester.tap(find.byTooltip('Modifier dans la feuille d\'appel').first);
+      await tester.pump();
+
+      expect(appels.modifier, ['8|2026-03-11']);
+      expect(appels.voir, isEmpty);
+    });
+
+    testWidgets('une fiche validee annonce sa lecture seule avant le clic', (
+      tester,
+    ) async {
+      await _pump(tester);
+
+      // 6e A est validee: la rouvrir ne permettra pas d'ecrire, et l'infobulle
+      // le dit plutot que de laisser decouvrir un formulaire grise.
+      expect(
+        find.byTooltip('Ouvrir dans la feuille (validée, lecture seule)'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('les exports visent la bonne ligne, pas la premiere', (

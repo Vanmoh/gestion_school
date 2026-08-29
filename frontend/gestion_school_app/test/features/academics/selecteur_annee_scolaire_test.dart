@@ -25,6 +25,15 @@ const _courante = AnneeScolaire(
   estCourante: true,
 );
 
+/// Une annee passee mais encore ouverte: ni active, ni close. C'est le cas
+/// que rien ne signalait -- on y saisissait sans le savoir.
+const _consultee = AnneeScolaire(
+  id: 3,
+  nom: '2023-2024',
+  debut: '2023-09-01',
+  fin: '2024-06-30',
+);
+
 const _passee = AnneeScolaire(
   id: 1,
   nom: '2024-2025',
@@ -115,9 +124,11 @@ void main() {
       await tester.pumpAndSettle();
 
       // L'etat de chaque annee se lit dans la liste: on ne bascule pas sur
-      // une annee close sans le savoir.
-      expect(find.text('2024-2025 (clôturée)'), findsOneWidget);
-      expect(find.text('2025-2026 (en cours)'), findsOneWidget);
+      // une annee close sans le savoir. Il se lit desormais sur une
+      // pastille et non plus entre parentheses dans le libelle.
+      expect(find.text('2024-2025'), findsWidgets);
+      expect(find.text('Clôturée'), findsOneWidget);
+      expect(find.text('Active'), findsWidgets);
     });
 
     testWidgets('choisir une annee la retient', (tester) async {
@@ -126,10 +137,48 @@ void main() {
 
       await tester.tap(find.byKey(const Key('selecteur-annee')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('2024-2025 (clôturée)'));
+      await tester.tap(find.text('Clôturée'));
       await tester.pumpAndSettle();
 
       expect(controleur.selectionnee?.id, _passee.id);
+    });
+
+    testWidgets('sans aucune annee, il le dit au lieu de disparaitre', (
+      tester,
+    ) async {
+      // Il rendait un `SizedBox.shrink()`: l'utilisateur ne savait alors pas
+      // s'il travaillait sur une annee, ni laquelle.
+      final controleur = await _controleur([]);
+      await _monter(tester, controleur, const SelecteurAnneeScolaire());
+
+      expect(find.byKey(const Key('annee-absente')), findsOneWidget);
+      expect(find.text('Aucune année'), findsOneWidget);
+    });
+
+    testWidgets('en version etendue, il montre la periode', (tester) async {
+      final controleur = await _controleur([_courante]);
+      await _monter(
+        tester,
+        controleur,
+        const SelecteurAnneeScolaire(etendu: true),
+      );
+
+      expect(find.text('1 sept. 2025 → 30 juin 2026'), findsOneWidget);
+    });
+
+    testWidgets('la pastille nomme l_etat de l_annee affichee', (tester) async {
+      final controleur = await _controleur([_courante]);
+      await _monter(tester, controleur, const SelecteurAnneeScolaire());
+
+      expect(find.text('Active'), findsOneWidget);
+    });
+
+    testWidgets('une annee consultee porte sa propre pastille', (tester) async {
+      final controleur = await _controleur([_consultee, _courante]);
+      controleur.selectionner(_consultee);
+      await _monter(tester, controleur, const SelecteurAnneeScolaire());
+
+      expect(find.text('Consultée'), findsWidgets);
     });
 
     testWidgets('une seule annee s_affiche sans menu', (tester) async {
@@ -154,6 +203,43 @@ void main() {
       expect(find.byKey(const Key('bandeau-annee-cloturee')), findsOneWidget);
       expect(find.textContaining('clôturée'), findsOneWidget);
       expect(find.textContaining('direction'), findsOneWidget);
+    });
+
+    testWidgets('il previent aussi sur une annee passee non close', (
+      tester,
+    ) async {
+      // Le bandeau ne se levait que sur une annee cloturee: consulter une
+      // annee passee mais ouverte ne declenchait rien, et la saisie y
+      // partait sans que rien ne le signale.
+      final controleur = await _controleur([_consultee, _courante]);
+      controleur.selectionner(_consultee);
+      await _monter(tester, controleur, const BandeauAnneeCloturee());
+
+      expect(
+        find.byKey(const Key('bandeau-annee-cloturee')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('n’est pas l’année en cours'), findsOneWidget);
+    });
+
+    testWidgets('il offre de revenir a l_annee en cours', (tester) async {
+      final controleur = await _controleur([_consultee, _courante]);
+      controleur.selectionner(_consultee);
+      await _monter(tester, controleur, const BandeauAnneeCloturee());
+
+      await tester.tap(find.byKey(const Key('retour-annee-courante')));
+      await tester.pumpAndSettle();
+
+      expect(controleur.selectionnee?.id, _courante.id);
+    });
+
+    testWidgets('sans annee en cours, il n_offre pas de retour', (
+      tester,
+    ) async {
+      final controleur = await _controleur([_passee]);
+      await _monter(tester, controleur, const BandeauAnneeCloturee());
+
+      expect(find.byKey(const Key('retour-annee-courante')), findsNothing);
     });
 
     testWidgets('il se tait sur l_annee en cours', (tester) async {

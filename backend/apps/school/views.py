@@ -1224,7 +1224,17 @@ class EtablissementViewSet(viewsets.ModelViewSet):
 
 class ClassRoomViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "academics"
-    queryset = ClassRoom.objects.all().order_by("name", "id")
+    # L'effectif vient d'une annotation: le calculer par classe ferait une
+    # requete de comptage par ligne de la liste.
+    queryset = (
+        ClassRoom.objects.annotate(
+            student_count_annote=Count(
+                "students", filter=Q(students__is_archived=False)
+            )
+        )
+        .all()
+        .order_by("name", "id")
+    )
     serializer_class = ClassRoomSerializer
     filterset_fields = ["academic_year", "etablissement"]
     search_fields = ["name", "academic_year__name"]
@@ -5485,6 +5495,71 @@ class AttendanceViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
             }
         )
 
+    # Colonnes de la fiche imprimee: largeurs en mm, pour une page A4 portrait.
+    _COLONNES_FICHE_PDF = (
+        ("Eleve", 65, 42, "L"),
+        ("Matricule", 30, 18, "L"),
+        ("Absent", 18, None, "C"),
+        ("Retard", 18, None, "C"),
+        ("Motif", 59, 40, "L"),
+    )
+
+    def _entetes_fiche_pdf(self, pdf):
+        pdf.set_font("Helvetica", "B", 9)
+        for titre, largeur, _, alignement in self._COLONNES_FICHE_PDF:
+            pdf.cell(largeur, 7, self._pdf_safe_text(titre), border=1, align=alignement)
+        pdf.ln(7)
+        pdf.set_font("Helvetica", "", 8)
+
+    def _ecrire_fiche_pdf(self, pdf, classroom, selected_date, items):
+        """Ecrit une fiche de classe sur sa propre page du document.
+
+        Partage entre l'export d'une fiche et celui de la journee entiere: deux
+        rendus separes finiraient par diverger, et c'est le meme papier qui est
+        archive dans les deux cas.
+        """
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.cell(0, 8, self._pdf_safe_text("Fiche de presence par classe"), ln=1)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 6, self._pdf_safe_text(f"Classe: {classroom.name}"), ln=1)
+        pdf.cell(0, 6, self._pdf_safe_text(f"Date: {selected_date.isoformat()}"), ln=1)
+
+        absents = sum(1 for row in items if row.get("is_absent"))
+        retards = sum(1 for row in items if row.get("is_late"))
+        pdf.cell(
+            0,
+            6,
+            self._pdf_safe_text(
+                f"Effectif: {len(items)}  -  Absents: {absents}  -  Retards: {retards}"
+            ),
+            ln=1,
+        )
+        pdf.ln(2)
+
+        self._entetes_fiche_pdf(pdf)
+        for row in items:
+            valeurs = (
+                self._pdf_safe_text(str(row.get("student_full_name", ""))),
+                self._pdf_safe_text(str(row.get("student_matricule", ""))),
+                "Oui" if row.get("is_absent") else "Non",
+                "Oui" if row.get("is_late") else "Non",
+                self._pdf_safe_text(str(row.get("reason", ""))),
+            )
+
+            # Une classe de plus de trente eleves deborde la page: on repart
+            # sur une nouvelle en reposant les en-tetes de colonnes.
+            if pdf.get_y() > 275:
+                pdf.add_page()
+                self._entetes_fiche_pdf(pdf)
+
+            for valeur, (_, largeur, coupe, alignement) in zip(
+                valeurs, self._COLONNES_FICHE_PDF
+            ):
+                texte = valeur[:coupe] if coupe else valeur
+                pdf.cell(largeur, 6, texte, border=1, align=alignement)
+            pdf.ln(6)
+
     @action(detail=False, methods=["get"], url_path="class-sheet-export")
     def class_sheet_export(self, request):
         self._assert_sheet_scope()
@@ -5525,52 +5600,68 @@ class AttendanceViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
             return response
 
         pdf = FPDF(orientation="P", unit="mm", format="A4")
-        pdf.add_page()
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(0, 8, self._pdf_safe_text("Fiche de presence par classe"), ln=1)
-        pdf.set_font("Helvetica", "", 10)
-        pdf.cell(0, 6, self._pdf_safe_text(f"Classe: {classroom.name}"), ln=1)
-        pdf.cell(0, 6, self._pdf_safe_text(f"Date: {selected_date.isoformat()}"), ln=1)
-        pdf.ln(2)
+        self._ecrire_fiche_pdf(pdf, classroom, selected_date, items)
 
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(65, 7, self._pdf_safe_text("Eleve"), border=1)
-        pdf.cell(30, 7, self._pdf_safe_text("Matricule"), border=1)
-        pdf.cell(18, 7, self._pdf_safe_text("Absent"), border=1, align="C")
-        pdf.cell(18, 7, self._pdf_safe_text("Retard"), border=1, align="C")
-        pdf.cell(59, 7, self._pdf_safe_text("Motif"), border=1)
-        pdf.ln(7)
-
-        pdf.set_font("Helvetica", "", 8)
-        for row in items:
-            name = self._pdf_safe_text(str(row.get("student_full_name", "")))
-            matricule = self._pdf_safe_text(str(row.get("student_matricule", "")))
-            absent = "Oui" if row.get("is_absent") else "Non"
-            late = "Oui" if row.get("is_late") else "Non"
-            reason = self._pdf_safe_text(str(row.get("reason", "")))
-
-            if pdf.get_y() > 275:
-                pdf.add_page()
-                pdf.set_font("Helvetica", "B", 9)
-                pdf.cell(65, 7, self._pdf_safe_text("Eleve"), border=1)
-                pdf.cell(30, 7, self._pdf_safe_text("Matricule"), border=1)
-                pdf.cell(18, 7, self._pdf_safe_text("Absent"), border=1, align="C")
-                pdf.cell(18, 7, self._pdf_safe_text("Retard"), border=1, align="C")
-                pdf.cell(59, 7, self._pdf_safe_text("Motif"), border=1)
-                pdf.ln(7)
-                pdf.set_font("Helvetica", "", 8)
-
-            pdf.cell(65, 6, name[:42], border=1)
-            pdf.cell(30, 6, matricule[:18], border=1)
-            pdf.cell(18, 6, absent, border=1, align="C")
-            pdf.cell(18, 6, late, border=1, align="C")
-            pdf.cell(59, 6, reason[:40], border=1)
-            pdf.ln(6)
-
-        content = pdf.output(dest="S").encode("latin-1")
+        # `bytes(pdf.output())`, comme partout ailleurs dans le projet: fpdf2
+        # rend un bytearray, et l'ancien `.output(dest="S").encode("latin-1")`
+        # -- l'interface de fpdf 1.x -- levait un AttributeError. L'export PDF
+        # de la fiche repondait donc 500 a chaque appel.
+        content = bytes(pdf.output())
         response = HttpResponse(content, content_type="application/pdf")
         file_name = f"presence_{classroom.name}_{selected_date.isoformat()}.pdf".replace(" ", "_")
         response["Content-Disposition"] = f'attachment; filename="{file_name}"'
+        return response
+
+    @action(detail=False, methods=["get"], url_path="day-export")
+    def class_sheet_day_export(self, request):
+        """Toutes les fiches d'un jour, en un seul PDF.
+
+        C'est le geste reel de fin de journee: l'administration archive et
+        signe l'appel de l'etablissement entier, pas d'une classe. Il fallait
+        auparavant exporter classe par classe puis recoller les fichiers.
+
+        Seules les classes ayant une fiche ce jour-la sont imprimees: sortir
+        trente pages vides pour un mercredi apres-midi ferait du papier et
+        laisserait croire a trente classes non faites.
+        """
+        self._assert_sheet_scope()
+        selected_date = self._parse_sheet_date(request.query_params.get("date"))
+
+        classrooms = self._sheet_classrooms_queryset()
+        classroom_ids = list(classrooms.values_list("id", flat=True))
+        avec_fiche = set(
+            Attendance.objects.filter(
+                student__classroom_id__in=classroom_ids, date=selected_date
+            ).values_list("student__classroom_id", flat=True)
+        )
+        a_imprimer = [
+            classroom for classroom in classrooms if classroom.id in avec_fiche
+        ]
+
+        if not a_imprimer:
+            # 400 plutot que 404: la route existe, c'est la journee qui est
+            # vide. Le client affiche ce message tel quel.
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Aucune fiche enregistree le "
+                        f"{selected_date.isoformat()}."
+                    )
+                }
+            )
+
+        pdf = FPDF(orientation="P", unit="mm", format="A4")
+        for classroom in a_imprimer:
+            payload = self._build_class_sheet_payload(classroom, selected_date)
+            self._ecrire_fiche_pdf(
+                pdf, classroom, selected_date, payload["items"]
+            )
+
+        response = HttpResponse(bytes(pdf.output()), content_type="application/pdf")
+        file_name = f"presences_{selected_date.isoformat()}.pdf"
+        response["Content-Disposition"] = f'attachment; filename="{file_name}"'
+        # Le client affiche « 12 classes » sans avoir a ouvrir le document.
+        response["X-Fiches-Count"] = str(len(a_imprimer))
         return response
 
     @action(detail=False, methods=["get"])

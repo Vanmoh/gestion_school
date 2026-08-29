@@ -10,9 +10,15 @@ class AttendanceSheetJournal extends StatelessWidget {
   final List<Map<String, dynamic>> fiches;
   final bool loading;
 
-  /// Recharge la fiche dans le formulaire au-dessus, plutot que d'ouvrir un
-  /// second ecran a maintenir.
+  /// Ouvre la fiche en lecture, telle qu'elle sera imprimee.
   final void Function(int classroomId, String date) onVoir;
+
+  /// Ramene la fiche dans la feuille d'appel, pour la corriger.
+  ///
+  /// C'etait autrefois le seul geste offert, sous l'etiquette « Voir »: on
+  /// croyait consulter et on rouvrait la saisie -- sans rien voir, la feuille
+  /// etant hors de l'ecran.
+  final void Function(int classroomId, String date) onModifier;
   final void Function(int classroomId, String date) onExporterPdf;
   final void Function(int classroomId, String date) onExporterExcel;
 
@@ -21,6 +27,7 @@ class AttendanceSheetJournal extends StatelessWidget {
     required this.fiches,
     required this.loading,
     required this.onVoir,
+    required this.onModifier,
     required this.onExporterPdf,
     required this.onExporterExcel,
   });
@@ -62,6 +69,7 @@ class AttendanceSheetJournal extends StatelessWidget {
                 fiche: fiche,
                 compact: compact,
                 onVoir: onVoir,
+                onModifier: onModifier,
                 onExporterPdf: onExporterPdf,
                 onExporterExcel: onExporterExcel,
               ),
@@ -93,7 +101,7 @@ class _EnTete extends StatelessWidget {
           SizedBox(width: 62, child: Text('ABSENTS', style: style)),
           SizedBox(width: 62, child: Text('RETARDS', style: style)),
           SizedBox(width: 96, child: Text('ÉTAT', style: style)),
-          SizedBox(width: 132, child: Text('', style: style)),
+          SizedBox(width: 176, child: Text('', style: style)),
         ],
       ),
     );
@@ -104,6 +112,7 @@ class _LigneFiche extends StatelessWidget {
   final Map<String, dynamic> fiche;
   final bool compact;
   final void Function(int, String) onVoir;
+  final void Function(int, String) onModifier;
   final void Function(int, String) onExporterPdf;
   final void Function(int, String) onExporterExcel;
 
@@ -111,6 +120,7 @@ class _LigneFiche extends StatelessWidget {
     required this.fiche,
     required this.compact,
     required this.onVoir,
+    required this.onModifier,
     required this.onExporterPdf,
     required this.onExporterExcel,
   });
@@ -173,7 +183,7 @@ class _LigneFiche extends StatelessWidget {
         SizedBox(width: 62, child: _compteAbsents(scheme)),
         SizedBox(width: 62, child: Text('${fiche['retards'] ?? 0}')),
         SizedBox(width: 96, child: _etat(scheme, textTheme)),
-        SizedBox(width: 132, child: _actions(scheme)),
+        SizedBox(width: 176, child: _actions(scheme)),
       ],
     );
   }
@@ -280,6 +290,18 @@ class _LigneFiche extends StatelessWidget {
           visualDensity: VisualDensity.compact,
           onPressed: () => onVoir(_classroomId, _date),
           icon: const Icon(Icons.visibility_outlined, size: 19),
+        ),
+        IconButton(
+          // Une fiche validee se charge aussi, mais en lecture seule: la
+          // reprendre sans pouvoir l'ecrire reste utile pour verifier un nom.
+          tooltip: _verrouillee
+              ? 'Ouvrir dans la feuille (validée, lecture seule)'
+              : 'Modifier dans la feuille d\'appel',
+          visualDensity: VisualDensity.compact,
+          onPressed: () => onModifier(_classroomId, _date),
+          // Pas `edit_note`: c'est deja l'icone de l'etat « Brouillon », deux
+          // lignes plus loin. Deux sens pour un meme dessin sur la meme ligne.
+          icon: const Icon(Icons.edit_outlined, size: 19),
         ),
         IconButton(
           tooltip: 'Export PDF',

@@ -8,6 +8,9 @@ import '../../../core/network/api_client.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../models/etablissement.dart';
 import '../domain/user_account.dart';
+import 'widgets/dialogue_reinitialisation.dart';
+import 'widgets/dialogue_suppression.dart';
+import 'widgets/pastille_compte.dart';
 import 'users_controller.dart';
 
 class UsersPage extends ConsumerStatefulWidget {
@@ -31,6 +34,9 @@ class _UsersPageState extends ConsumerState<UsersPage> {
 
   String _selectedRole = 'teacher';
   String _roleFilter = 'all';
+  /// « all », « actifs » ou « desactives ». C'est le filtre qui sort les
+  /// comptes restes ouverts apres un depart.
+  String _etatFilter = 'all';
   int? _selectedUserId;
   int? _selectedCreateEtablissementId;
   int? _selectedCreateClassroomId;
@@ -84,6 +90,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       pageSize: _pageSize,
       search: _searchTerm,
       role: _roleFilter == 'all' ? null : _roleFilter,
+      actif: switch (_etatFilter) {
+        'actifs' => true,
+        'desactives' => false,
+        _ => null,
+      },
     );
     ref.invalidate(usersPaginatedProvider(query));
     try {
@@ -740,35 +751,48 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     }
   }
 
+  /// La suppression dit d'abord ce qu'elle emporte.
+  ///
+  /// Elle demandait « Voulez-vous supprimer ce compte ? » sans dire que
+  /// `Student.user` et `Teacher.user` sont en CASCADE: le compte d'un
+  /// enseignant partait avec sa fiche, ses affectations, ses creneaux et ses
+  /// pointages, sans que rien ne l'annonce.
   Future<void> _deleteUser(UserAccount user) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Supprimer utilisateur'),
-          content: Text('Voulez-vous supprimer le compte "${user.fullName}" ?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Annuler'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFB42318),
-              ),
-              child: const Text('Supprimer'),
-            ),
-          ],
-        );
-      },
-    );
+    final controleur = ref.read(userMutationProvider.notifier);
 
-    if (confirmed != true) {
+    Map<String, int> lie;
+    try {
+      lie = await controleur.donneesLiees(user.id) ?? const {};
+    } catch (erreur) {
+      _showMessage('Erreur suppression utilisateur: ${_errorText(erreur)}');
       return;
     }
 
-    await ref.read(userMutationProvider.notifier).deleteUser(userId: user.id);
+    // L'inventaire est vide et le serveur a deja supprime le compte: rien de
+    // plus a demander.
+    if (lie.isEmpty) {
+      ref.invalidate(usersProvider);
+      ref.invalidate(usersPaginatedProvider);
+      if (_selectedUserId == user.id) {
+        setState(() => _selectedUserId = null);
+      }
+      _showMessage('Compte supprimé.', isSuccess: true);
+      return;
+    }
+
+    if (!mounted) return;
+    final choix = await showDialog<ChoixSuppression>(
+      context: context,
+      builder: (_) => DialogueSuppression(compte: user, donneesLiees: lie),
+    );
+    if (choix == null) return;
+
+    if (choix == ChoixSuppression.desactiver) {
+      await _setActive(user, false);
+      return;
+    }
+
+    await controleur.deleteUser(userId: user.id, confirme: true);
 
     final mutation = ref.read(userMutationProvider);
     if (mutation.hasError) {
@@ -781,7 +805,49 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     if (_selectedUserId == user.id) {
       setState(() => _selectedUserId = null);
     }
-    _showMessage('Utilisateur supprime avec succes.', isSuccess: true);
+    _showMessage('Compte supprimé avec ses données liées.', isSuccess: true);
+  }
+
+  /// Retire ou rend l'acces sans effacer ce que la personne a produit.
+  ///
+  /// C'etait impossible: l'ecran n'offrait pas l'action, et l'API repondait
+  /// 200 a une demande de desactivation sans rien changer.
+  Future<void> _setActive(UserAccount user, bool actif) async {
+    await ref
+        .read(userMutationProvider.notifier)
+        .setActive(userId: user.id, actif: actif);
+
+    final mutation = ref.read(userMutationProvider);
+    if (mutation.hasError) {
+      _showMessage(_errorText(mutation.error));
+      return;
+    }
+    _showMessage(
+      actif
+          ? 'Compte réactivé : ${user.fullName} peut se reconnecter.'
+          : 'Compte désactivé : ${user.fullName} ne peut plus se connecter.',
+      isSuccess: true,
+    );
+  }
+
+  /// L'administration fixe un mot de passe provisoire, qu'elle communique.
+  Future<void> _resetPassword(UserAccount user) async {
+    final motDePasse = await showDialog<String>(
+      context: context,
+      builder: (_) => DialogueReinitialisation(compte: user),
+    );
+    if (motDePasse == null || !mounted) return;
+
+    final message = await ref
+        .read(userMutationProvider.notifier)
+        .resetPassword(userId: user.id, motDePasse: motDePasse);
+
+    final mutation = ref.read(userMutationProvider);
+    if (mutation.hasError) {
+      _showMessage(_errorText(mutation.error));
+      return;
+    }
+    _showMessage(message ?? 'Mot de passe réinitialisé.', isSuccess: true);
   }
 
   Widget _detailRow(String label, String value) {
@@ -874,6 +940,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       pageSize: _pageSize,
       search: _searchTerm,
       role: _roleFilter == 'all' ? null : _roleFilter,
+      actif: switch (_etatFilter) {
+        'actifs' => true,
+        'desactives' => false,
+        _ => null,
+      },
     );
     final usersAsync = ref.watch(usersPaginatedProvider(query));
     final mutationState = ref.watch(userMutationProvider);
@@ -1058,6 +1129,36 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                         },
                       ),
                     ),
+                    SizedBox(
+                      width: 210,
+                      child: DropdownButtonFormField<String>(
+                        key: const Key('filtre-etat-compte'),
+                        initialValue: _etatFilter,
+                        decoration: const InputDecoration(
+                          labelText: 'État du compte',
+                        ),
+                        items: const [
+                          DropdownMenuItem<String>(
+                            value: 'all',
+                            child: Text('Tous les états'),
+                          ),
+                          DropdownMenuItem<String>(
+                            value: 'actifs',
+                            child: Text('Actifs'),
+                          ),
+                          DropdownMenuItem<String>(
+                            value: 'desactives',
+                            child: Text('Désactivés'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() {
+                            _etatFilter = value ?? 'all';
+                            _currentPage = 1;
+                          });
+                        },
+                      ),
+                    ),
                     OutlinedButton.icon(
                       onPressed: isMutating
                           ? null
@@ -1149,13 +1250,26 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.start,
                                             children: [
-                                              Text(
-                                                user.fullName,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: Theme.of(
-                                                  context,
-                                                ).textTheme.titleSmall,
+                                              // L'etat du compte au plus pres
+                                              // du nom: la liste ne disait pas
+                                              // qui gardait un acces apres son
+                                              // depart.
+                                              Row(
+                                                children: [
+                                                  Flexible(
+                                                    child: Text(
+                                                      user.fullName,
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow
+                                                          .ellipsis,
+                                                      style: Theme.of(context)
+                                                          .textTheme
+                                                          .titleSmall,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  PastilleCompte(compte: user),
+                                                ],
                                               ),
                                               const SizedBox(height: 2),
                                               Text(
@@ -1195,20 +1309,45 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                               await _openEditDialog(user);
                                               return;
                                             }
+                                            if (value == 'password') {
+                                              await _resetPassword(user);
+                                              return;
+                                            }
+                                            if (value == 'toggle') {
+                                              await _setActive(
+                                                user,
+                                                !user.isActive,
+                                              );
+                                              return;
+                                            }
                                             if (value == 'delete') {
                                               await _deleteUser(user);
                                             }
                                           },
-                                          itemBuilder: (_) => const [
-                                            PopupMenuItem<String>(
+                                          itemBuilder: (_) => [
+                                            const PopupMenuItem<String>(
                                               value: 'view',
                                               child: Text('Afficher'),
                                             ),
-                                            PopupMenuItem<String>(
+                                            const PopupMenuItem<String>(
                                               value: 'edit',
                                               child: Text('Modifier'),
                                             ),
+                                            const PopupMenuItem<String>(
+                                              value: 'password',
+                                              child: Text(
+                                                'Réinitialiser le mot de passe',
+                                              ),
+                                            ),
                                             PopupMenuItem<String>(
+                                              value: 'toggle',
+                                              child: Text(
+                                                user.isActive
+                                                    ? 'Désactiver le compte'
+                                                    : 'Réactiver le compte',
+                                              ),
+                                            ),
+                                            const PopupMenuItem<String>(
                                               value: 'delete',
                                               child: Text('Supprimer'),
                                             ),

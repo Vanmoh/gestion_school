@@ -9,12 +9,29 @@ User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
+    """Un compte, tel que l'administration le voit et le modifie.
+
+    `is_active` etait absent des champs: l'API acceptait pourtant la requete
+    qui le demandait, repondait 200, et ne desactivait rien. L'administration
+    croyait avoir coupe un acces, et l'employe parti gardait le sien.
+
+    `last_login` et `date_joined` manquaient aussi, et avec eux le moyen de
+    reperer les comptes crees puis jamais utilises.
+    """
+
     etablissement = serializers.PrimaryKeyRelatedField(
         queryset=Etablissement.objects.all(),
         required=False,
         allow_null=True,
     )
     etablissement_name = serializers.CharField(source="etablissement.name", read_only=True)
+    full_name = serializers.SerializerMethodField(read_only=True)
+    role_label = serializers.CharField(source="get_role_display", read_only=True)
+    # Lecture seule: la connexion et l'inscription ne se corrigent pas a la
+    # main, elles se constatent.
+    last_login = serializers.DateTimeField(read_only=True)
+    date_joined = serializers.DateTimeField(read_only=True)
+    has_never_logged_in = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
@@ -23,13 +40,44 @@ class UserSerializer(serializers.ModelSerializer):
             "username",
             "first_name",
             "last_name",
+            "full_name",
             "email",
             "role",
+            "role_label",
             "phone",
             "profile_photo",
             "etablissement",
             "etablissement_name",
+            "is_active",
+            "last_login",
+            "date_joined",
+            "has_never_logged_in",
         ]
+
+    def get_full_name(self, obj):
+        return obj.get_full_name().strip() or obj.username
+
+    def get_has_never_logged_in(self, obj):
+        """Un compte cree puis oublie: c'est ce qu'on cherche en faisant le menage."""
+        return obj.last_login is None
+
+    def validate(self, attrs):
+        """Un mot de passe glisse dans une modification n'est pas ignore en silence.
+
+        DRF ecarte les champs qu'il ne connait pas: l'API repondait 200 a une
+        demande de changement de mot de passe sans rien changer, et l'ecran
+        offrait pourtant le champ. Le refus explicite vaut mieux que
+        l'acquiescement muet -- il indique la porte a prendre.
+        """
+        brut = self.initial_data if isinstance(self.initial_data, dict) else {}
+        if brut.get("password"):
+            raise serializers.ValidationError(
+                {
+                    "password": "Le mot de passe ne se modifie pas ici. "
+                                "Utilisez l'action « Réinitialiser le mot de passe »."
+                }
+            )
+        return attrs
 
 
 class RegisterSerializer(serializers.ModelSerializer):
