@@ -1,25 +1,34 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/permissions/module_permissions.dart';
+import '../../../core/widgets/roster_pdf_preview_dialog.dart';
 import '../../auth/domain/auth_user.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/attendance_stats.dart';
 import '../domain/attendance_student.dart';
 import 'attendance_controller.dart';
 import 'widgets/attendance_dashboard_card.dart';
+import 'widgets/attendance_journal_filters.dart';
 import 'widgets/attendance_sheet_journal.dart';
 import 'widgets/attendance_sheet_list.dart';
 
 /// Ce qu'on fait d'un justificatif deja joint.
 enum _ActionJustificatif { remplacer, retirer }
+
+/// Plafond de lignes rendu par `sheet-journal`, cote serveur.
+///
+/// Duplique ici pour signaler une liste coupee plutot que de la faire passer
+/// pour complete. `test_attendance_sheet_journal.py` verrouille la valeur cote
+/// serveur: les deux ne peuvent pas diverger en silence.
+const int _plafondJournal = 400;
 
 class AttendancePage extends ConsumerStatefulWidget {
   const AttendancePage({super.key});
@@ -31,6 +40,13 @@ class AttendancePage extends ConsumerStatefulWidget {
 class _AttendancePageState extends ConsumerState<AttendancePage> {
   final _conduiteController = TextEditingController(text: '18');
   final _rechercheEleveController = TextEditingController();
+
+  /// Le journal des fiches vit tout en bas de la page, la feuille d'appel tout
+  /// en haut. Charger une fiche depuis le journal ne montrait donc rien: la
+  /// page ne bougeait pas d'un pixel. Ces deux references servent a ramener
+  /// l'ecran sur la feuille qui vient d'etre chargee.
+  final _scrollController = ScrollController();
+  final _ficheKey = GlobalKey();
 
   int? _selectedStudentId;
   String _rechercheEleve = '';
@@ -49,6 +65,13 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
 
   List<Map<String, dynamic>> _journalFiches = const [];
   bool _journalLoading = false;
+
+  /// Filtres du journal. Le serveur les acceptait deja; aucun n'etait offert a
+  /// l'ecran, et sa reponse est plafonnee: les fiches anciennes devenaient
+  /// inatteignables des que l'annee avancait.
+  int? _journalClasseId;
+  DateTime? _journalDu;
+  DateTime? _journalAu;
 
   /// Horodatage du dernier chargement de la fiche, affiche en en-tete comme
   /// sur les deux autres modules: une page sans indication de fraicheur se
@@ -83,6 +106,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   void dispose() {
     _conduiteController.dispose();
     _rechercheEleveController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -145,16 +169,21 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     }
   }
 
-  /// Fiches deja enregistrees, toutes classes accessibles confondues.
+  /// Fiches deja enregistrees, selon les filtres du journal.
   ///
-  /// Volontairement non filtre sur la classe selectionnee: on vient ici pour
-  /// retrouver une fiche, souvent d'une autre classe que celle affichee.
+  /// Ces filtres sont les siens, independants de la classe affichee dans la
+  /// feuille au-dessus: on vient ici pour retrouver une fiche, souvent d'une
+  /// autre classe que celle qu'on est en train de saisir.
   Future<void> _loadSheetJournal() async {
     setState(() => _journalLoading = true);
     try {
       final fiches = await ref
           .read(attendanceRepositoryProvider)
-          .fetchSheetJournal();
+          .fetchSheetJournal(
+            classroomId: _journalClasseId,
+            from: _journalDu == null ? null : _apiDate(_journalDu!),
+            to: _journalAu == null ? null : _apiDate(_journalAu!),
+          );
       if (!mounted) return;
       setState(() => _journalFiches = fiches);
     } catch (error) {
@@ -189,6 +218,78 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     } else {
       await _exportClassSheetPdf();
     }
+  }
+
+  /// Ouvre la fiche enregistree telle qu'elle sera imprimee.
+  ///
+  /// « Voir » se contentait de recharger la fiche dans le formulaire du haut
+  /// de page. Depuis le journal, qui est tout en bas, l'ecran ne bougeait pas:
+  /// le clic paraissait sans effet, et il n'existait aucun moyen de consulter
+  /// une fiche passee sans la rouvrir en saisie. L'apercu porte aussi le
+  /// telechargement et l'impression: le document consulte est celui qui sort.
+  Future<void> _ouvrirApercuFiche(int classroomId, String date) async {
+    final classe = _journalFiches.firstWhere(
+      (fiche) =>
+          _asInt(fiche['classroom']) == classroomId &&
+          (fiche['date'] ?? '').toString() == date,
+      orElse: () => const <String, dynamic>{},
+    );
+    final libelleClasse = (classe['classroom_name'] ?? '').toString().trim();
+    final titre = libelleClasse.isEmpty
+        ? 'Fiche de présence — $date'
+        : 'Fiche de présence — $libelleClasse · $date';
+    final slug = libelleClasse.isEmpty
+        ? 'classe_$classroomId'
+        : libelleClasse.replaceAll(RegExp(r'[^\w\-]+'), '_');
+
+    await showDialog<void>(
+      context: context,
+      builder: (_) => RosterPdfPreviewDialog(
+        titre: titre,
+        nomFichier: 'presence_${slug}_$date.pdf',
+        charger: () async {
+          final bytes = await ref
+              .read(attendanceRepositoryProvider)
+              .exportClassSheet(
+                classroomId: classroomId,
+                date: date,
+                format: 'pdf',
+              );
+          return Uint8List.fromList(bytes);
+        },
+      ),
+    );
+  }
+
+  /// Ramene une fiche du journal dans la feuille d'appel, pour la modifier.
+  ///
+  /// Le defilement fait partie de la correction: sans lui, la feuille se
+  /// rechargeait hors de l'ecran et l'action restait invisible.
+  Future<void> _chargerFicheDansFormulaire(int classroomId, String date) async {
+    setState(() {
+      _sheetSelectedClassroomId = classroomId;
+      _sheetSelectedDate = DateTime.tryParse(date) ?? _sheetSelectedDate;
+    });
+    await _loadClassSheet();
+    if (!mounted) return;
+
+    final contexteFiche = _ficheKey.currentContext;
+    if (contexteFiche != null && contexteFiche.mounted) {
+      await Scrollable.ensureVisible(
+        contexteFiche,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+        alignment: 0.05,
+      );
+    }
+    if (!mounted) return;
+
+    _showMessage(
+      _sheetLocked
+          ? 'Fiche validée du $date chargée : consultation seule.'
+          : 'Fiche du $date chargée dans la feuille d\'appel.',
+      isSuccess: true,
+    );
   }
 
   Future<void> _loadClassSheet() async {
@@ -341,12 +442,37 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
         _showMessage('Export PDF vide.');
         return;
       }
-      await Printing.layoutPdf(
-        onLayout: (_) async => Uint8List.fromList(bytes),
+      // `sharePdf` et non `layoutPdf`: le bouton dit « Export », et un export
+      // doit produire un fichier. `layoutPdf` ouvrait la boite d'impression du
+      // navigateur -- sur le web, sans imprimante configuree, elle se referme
+      // sur rien et l'utilisateur repart les mains vides. L'impression reste
+      // accessible depuis l'apercu de la fiche.
+      await Printing.sharePdf(
+        bytes: Uint8List.fromList(bytes),
+        filename: _nomFichierFiche('pdf'),
       );
+      _showMessage('Fiche PDF exportée.', isSuccess: true);
     } catch (error) {
       _showMessage(_sheetErrorMessage(error, fallback: 'Erreur export PDF.'));
     }
+  }
+
+  /// Nom du fichier exporte, classe et date comprises.
+  ///
+  /// L'ancien nom portait l'identifiant technique de la classe
+  /// (`presence_classe_37_...`): un dossier de fins de mois devenait
+  /// indechiffrable des la troisieme fiche.
+  String _nomFichierFiche(String extension) {
+    final classe = _sheetClassrooms
+        .firstWhere(
+          (row) => _asInt(row['id']) == _sheetSelectedClassroomId,
+          orElse: () => const <String, dynamic>{},
+        )['name']
+        ?.toString();
+    final libelle = (classe == null || classe.trim().isEmpty)
+        ? 'classe_$_sheetSelectedClassroomId'
+        : classe.trim().replaceAll(RegExp(r'[^\w\-]+'), '_');
+    return 'presence_${libelle}_${_apiDate(_sheetSelectedDate)}.$extension';
   }
 
   Future<void> _exportClassSheetExcel() async {
@@ -368,27 +494,31 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
         return;
       }
 
-      final fileName =
-          'presence_classe_${_sheetSelectedClassroomId}_${_apiDate(_sheetSelectedDate)}.xlsx';
+      final fileName = _nomFichierFiche('xlsx');
+      // `bytes:` est ce qui ecrit reellement le fichier. Sans lui, l'appel ne
+      // faisait qu'ouvrir un selecteur d'emplacement: sur le web il n'y avait
+      // rien a telecharger et la page annoncait pourtant « Export prêt » en
+      // vert. Le fichier n'a jamais existe. C'est aussi ce parametre qui
+      // remplace l'ecriture via `dart:io`, dont le `File` n'a rien a faire
+      // dans une application qui tourne d'abord dans un navigateur.
       final savePath = await FilePicker.platform.saveFile(
         dialogTitle: 'Enregistrer la fiche Excel',
         fileName: fileName,
+        bytes: Uint8List.fromList(bytes),
       );
 
-      if (savePath == null) {
-        if (!mounted) {
-          return;
-        }
-        _showMessage('Export Excel prêt (${bytes.length} octets).', isSuccess: true);
-        return;
-      }
-
-      final file = File(savePath);
-      await file.writeAsBytes(bytes, flush: true);
       if (!mounted) {
         return;
       }
-      _showMessage('Fichier Excel exporté.', isSuccess: true);
+
+      // Sur le web, le telechargement part et `saveFile` rend null: seul un
+      // null hors web signale une annulation.
+      if (savePath == null && !kIsWeb) {
+        _showMessage('Export Excel annulé.');
+        return;
+      }
+
+      _showMessage('Fichier Excel exporté : $fileName', isSuccess: true);
     } catch (error) {
       _showMessage(_sheetErrorMessage(error, fallback: 'Erreur export Excel.'));
     }
@@ -603,6 +733,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
       // une barre de plus repeterait ce que la navigation dit deja.
       appBar: null,
       body: ListView(
+        controller: _scrollController,
         padding: const EdgeInsets.all(16),
         children: [
           AttendanceDashboardCard(
@@ -630,6 +761,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
           const SizedBox(height: 16),
           if (canUseSheet)
             Card(
+              key: _ficheKey,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -921,19 +1053,45 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 10),
+          AttendanceJournalFilters(
+            classes: _sheetClassrooms,
+            classeSelectionnee: _journalClasseId,
+            du: _journalDu,
+            au: _journalAu,
+            nombreFiches: _journalFiches.length,
+            // Le serveur coupe a 400 lignes: atteindre ce nombre signale une
+            // liste incomplete, pas un journal complet de 400 fiches.
+            listeTronquee: _journalFiches.length >= _plafondJournal,
+            actif: !_journalLoading,
+            onClasseChangee: (valeur) {
+              setState(() => _journalClasseId = valeur);
+              _loadSheetJournal();
+            },
+            onDuChange: (valeur) {
+              setState(() => _journalDu = valeur);
+              _loadSheetJournal();
+            },
+            onAuChange: (valeur) {
+              setState(() => _journalAu = valeur);
+              _loadSheetJournal();
+            },
+            onReinitialiser: () {
+              setState(() {
+                _journalClasseId = null;
+                _journalDu = null;
+                _journalAu = null;
+              });
+              _loadSheetJournal();
+            },
+          ),
+          const SizedBox(height: 10),
           AttendanceSheetJournal(
             fiches: _journalFiches,
             loading: _journalLoading,
-            onVoir: (classroomId, date) {
-              // Recharger dans le formulaire au-dessus plutot que d'ouvrir un
-              // second ecran: c'est le meme document, verrouille ou non.
-              setState(() {
-                _sheetSelectedClassroomId = classroomId;
-                _sheetSelectedDate =
-                    DateTime.tryParse(date) ?? _sheetSelectedDate;
-              });
-              _loadClassSheet();
-            },
+            // Consulter et reprendre sont deux gestes differents: l'un ouvre
+            // le document, l'autre ramene la fiche en saisie.
+            onVoir: _ouvrirApercuFiche,
+            onModifier: _chargerFicheDansFormulaire,
             onExporterPdf: (classroomId, date) =>
                 _exportSheetAt(classroomId, date, excel: false),
             onExporterExcel: (classroomId, date) =>

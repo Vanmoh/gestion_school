@@ -7,6 +7,7 @@ import '../../../models/etablissement.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/permissions/module_permissions.dart';
 import 'widgets/assistant_ouverture_annee.dart';
+import 'widgets/carte_annee_active.dart';
 
 class AcademicsPage extends ConsumerStatefulWidget {
   const AcademicsPage({super.key});
@@ -1047,9 +1048,36 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     final pagedClassrooms = filteredClassrooms.skip(classStart).take(_rowsPerPage).toList();
     final pagedSubjects = filteredSubjects.skip(subjectStart).take(_rowsPerPage).toList();
 
+    // Les eleves rattaches a l'annee affichee, comptes depuis les classes
+    // deja chargees: un appel de plus pour ce seul chiffre ne se justifie
+    // pas, et l'ecran les a sous la main.
+    final classesDeLAnnee = _classrooms.where((row) {
+      final anneeDeLaClasse = _asInt(row['academic_year']);
+      return anneeDeLaClasse == 0 ||
+          anneeDeLaClasse == _asInt(activeYearRow['id']);
+    }).toList();
+    final elevesDeLAnnee = classesDeLAnnee.fold<int>(
+      0,
+      (somme, row) => somme + _asInt(row['student_count']),
+    );
+
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
+        // Le repere de l'annee de travail, en tete: c'est cet ecran qui
+        // ouvre, ferme et bascule les annees, et l'information y arrivait
+        // noyee au milieu d'un bandeau, sans dates ni avancement.
+        CarteAnneeActive(
+          classes: classesDeLAnnee.length,
+          eleves: elevesDeLAnnee,
+          onOuvrirAnnee: peutSupprimer && !_saving
+              ? () => showDialog<void>(
+                  context: context,
+                  builder: (_) => const AssistantOuvertureAnnee(),
+                ).then((_) => _loadData())
+              : null,
+        ),
+        const SizedBox(height: 14),
         Card(
           clipBehavior: Clip.antiAlias,
           child: Container(

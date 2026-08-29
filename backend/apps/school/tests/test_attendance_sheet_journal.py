@@ -242,3 +242,25 @@ class AttendanceSheetJournalTests(APITestCase):
         response = self.client.get(URL)
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_the_answer_is_capped_at_four_hundred_lines(self):
+        """Le plafond est une valeur d'interface, pas un detail interne.
+
+        Le client s'en sert pour dire « liste tronquee, affinez les filtres »
+        plutot que de faire passer une liste coupee pour complete. Il porte
+        donc la meme valeur en dur: la changer d'un seul cote ferait mentir
+        l'ecran sans qu'aucun test ne bronche.
+        """
+        eleve = self._eleve("plafond", self.cinquieme)
+        # Une date distincte par fiche: le journal agrege par (classe, date).
+        depart = date.today() - timedelta(days=500)
+        Attendance.objects.bulk_create(
+            [
+                Attendance(student=eleve, date=depart + timedelta(days=index))
+                for index in range(420)
+            ]
+        )
+
+        journal = self._journal(self.validateur)
+
+        self.assertEqual(len(journal), 400)

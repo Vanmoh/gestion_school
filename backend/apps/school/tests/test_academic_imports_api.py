@@ -171,9 +171,12 @@ class AcademicImportsApiTests(APITestCase):
     def test_students_import_by_class_preview_and_confirm(self):
         preview_file = self._csv_upload(
             "students.csv",
-            "matricule,first_name,last_name,email,phone,birth_date\n"
-            "MAT001,Updated,Student,updated@example.com,770111111,2012-05-01\n"
-            "MAT003,New,Learner,new@example.com,770222222,2013-03-10\n",
+            # Le genre est obligatoire depuis que le matricule le porte en
+            # derniere lettre: sans lui, la ligne est rejetee et l'eleve
+            # n'est pas cree.
+            "matricule,first_name,last_name,email,phone,birth_date,genre\n"
+            "MAT001,Updated,Student,updated@example.com,770111111,2012-05-01,M\n"
+            "MAT003,New,Learner,new@example.com,770222222,2013-03-10,F\n",
         )
         preview_response = self.client.post(
             "/api/students/import-by-class/",
@@ -188,9 +191,12 @@ class AcademicImportsApiTests(APITestCase):
 
         confirm_file = self._csv_upload(
             "students.csv",
-            "matricule,first_name,last_name,email,phone,birth_date\n"
-            "MAT001,Updated,Student,updated@example.com,770111111,2012-05-01\n"
-            "MAT003,New,Learner,new@example.com,770222222,2013-03-10\n",
+            # Le genre est obligatoire depuis que le matricule le porte en
+            # derniere lettre: sans lui, la ligne est rejetee et l'eleve
+            # n'est pas cree.
+            "matricule,first_name,last_name,email,phone,birth_date,genre\n"
+            "MAT001,Updated,Student,updated@example.com,770111111,2012-05-01,M\n"
+            "MAT003,New,Learner,new@example.com,770222222,2013-03-10,F\n",
         )
         confirm_response = self.client.post(
             "/api/students/import-by-class/",

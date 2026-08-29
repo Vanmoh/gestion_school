@@ -78,32 +78,29 @@ class UsersRepository {
     int pageSize = 25,
     String search = '',
     String? role,
+    bool? actif,
   }) async {
     final query = <String, dynamic>{
       'page': page,
       'page_size': pageSize,
       if (search.trim().isNotEmpty) 'search': search.trim(),
       if (role != null && role.trim().isNotEmpty) 'role': role,
+      // Le filtre par etat: c'est lui qui sort les comptes restes ouverts
+      // apres un depart.
+      'is_active': ?actif,
       'ordering': '-id',
     };
 
     final response = await dio.get('/auth/users/', queryParameters: query);
     final rows = _extractRows(response.data);
 
-    final mapped = rows.map((row) {
-      final map = row as Map<String, dynamic>;
-      return UserAccount(
-        id: map['id'] as int,
-        username: map['username']?.toString() ?? '',
-        firstName: map['first_name']?.toString() ?? '',
-        lastName: map['last_name']?.toString() ?? '',
-        email: map['email']?.toString() ?? '',
-        role: map['role']?.toString() ?? '',
-        phone: map['phone']?.toString() ?? '',
-        etablissementId: (map['etablissement'] as num?)?.toInt(),
-        etablissementName: map['etablissement_name']?.toString() ?? '',
-      );
-    }).toList();
+    // Le mapping vit dans le modele: recopie ici a la main, il oubliait
+    // silencieusement tout champ ajoute cote serveur -- l'etat du compte et
+    // sa derniere connexion arrivaient sans que rien ne les lise.
+    final mapped = rows
+        .whereType<Map<String, dynamic>>()
+        .map(UserAccount.fromJson)
+        .toList();
 
     final payload = response.data;
     if (payload is Map<String, dynamic>) {
@@ -189,10 +186,65 @@ class UsersRepository {
     }
   }
 
-  Future<void> deleteUser(int userId) async {
+  /// Retire ou rend l'acces sans effacer ce que la personne a produit.
+  ///
+  /// C'est la bonne facon de traiter un depart: la suppression emporterait
+  /// la fiche, les notes ou les pointages avec le compte.
+  Future<void> setActive(int userId, bool actif) async {
+    try {
+      await dio.patch('/auth/users/$userId/', data: {'is_active': actif});
+    } on DioException catch (error) {
+      throw Exception(_extractApiErrorMessage(error));
+    }
+  }
+
+  /// L'administration fixe un mot de passe provisoire, qu'elle communique.
+  Future<String> resetPassword(int userId, String motDePasse) async {
+    try {
+      final reponse = await dio.post(
+        '/auth/users/$userId/reset-password/',
+        data: {'password': motDePasse},
+      );
+      final data = reponse.data;
+      return data is Map && data['detail'] != null
+          ? data['detail'].toString()
+          : 'Mot de passe réinitialisé.';
+    } on DioException catch (error) {
+      throw Exception(_extractApiErrorMessage(error));
+    }
+  }
+
+  /// Supprime un compte. Sans [confirme], le serveur refuse et rend
+  /// l'inventaire de ce que la suppression emporterait: c'est ce qu'on
+  /// montre avant de demander confirmation.
+  Future<void> deleteUser(int userId, {bool confirme = false}) async {
+    try {
+      await dio.delete(
+        '/auth/users/$userId/',
+        queryParameters: confirme ? {'confirm': 'true'} : null,
+      );
+    } on DioException catch (error) {
+      throw Exception(_extractApiErrorMessage(error));
+    }
+  }
+
+  /// Ce que la suppression emporterait, ou null si elle ne casse rien.
+  ///
+  /// Lu depuis le refus du serveur: lui seul sait ce qui pend au compte, et
+  /// le recalculer cote client donnerait un inventaire qui pourrait mentir.
+  Future<Map<String, int>?> donneesLiees(int userId) async {
     try {
       await dio.delete('/auth/users/$userId/');
+      // Aucune donnee liee: la suppression a eu lieu. Le cas est traite par
+      // l'appelant, qui ne demande cet inventaire qu'avant de confirmer.
+      return null;
     } on DioException catch (error) {
+      final payload = error.response?.data;
+      if (payload is Map && payload['linked_data'] is Map) {
+        return (payload['linked_data'] as Map).map(
+          (cle, valeur) => MapEntry(cle.toString(), (valeur as num).toInt()),
+        );
+      }
       throw Exception(_extractApiErrorMessage(error));
     }
   }

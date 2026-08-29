@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
@@ -102,7 +103,9 @@ class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all().order_by("-id")
     serializer_class = UserSerializer
     pagination_class = StandardResultsSetPagination
-    filterset_fields = ["role", "etablissement"]
+    # `is_active` fait partie des filtres et non de la seule lecture: c'est
+    # lui qui sort la liste des comptes restes ouverts apres un depart.
+    filterset_fields = ["role", "etablissement", "is_active"]
     search_fields = ["username", "first_name", "last_name", "email"]
 
     def _requested_etablissement_id(self):
@@ -174,6 +177,7 @@ class UserViewSet(viewsets.ModelViewSet):
         self._sync_parent_profile(user)
 
     def perform_update(self, serializer):
+        self._verifier_la_desactivation(serializer)
         target_etablissement = self._resolve_target_etablissement()
         if getattr(self.request.user, "role", None) == "super_admin":
             user = serializer.save()
@@ -181,6 +185,134 @@ class UserViewSet(viewsets.ModelViewSet):
             return
         user = serializer.save(etablissement=target_etablissement)
         self._sync_parent_profile(user)
+
+    def _verifier_la_desactivation(self, serializer):
+        """Deux comptes ne doivent jamais pouvoir etre coupes.
+
+        Le sien -- on se retrouverait dehors sans pouvoir revenir -- et le
+        dernier super-administrateur actif, sans lequel plus personne ne
+        pourrait reactiver quoi que ce soit.
+        """
+        if serializer.validated_data.get("is_active") is not False:
+            return
+
+        cible = serializer.instance
+        if cible is None:
+            return
+
+        if cible.pk == self.request.user.pk:
+            raise ValidationError(
+                {"is_active": "Vous ne pouvez pas désactiver votre propre compte."}
+            )
+
+        if cible.role == UserRole.SUPER_ADMIN:
+            restants = (
+                User.objects.filter(role=UserRole.SUPER_ADMIN, is_active=True)
+                .exclude(pk=cible.pk)
+                .count()
+            )
+            if restants == 0:
+                raise ValidationError(
+                    {
+                        "is_active": "C'est le dernier super-administrateur actif : "
+                                     "le désactiver fermerait la porte à tout le monde."
+                    }
+                )
+
+    def _donnees_liees(self, user):
+        """Ce qu'une suppression de compte emporterait avec elle.
+
+        `Student.user` et `Teacher.user` sont en CASCADE: supprimer le compte
+        d'un enseignant efface sa fiche, ses affectations, ses creneaux
+        d'emploi du temps et ses pointages. Rien ne le disait avant de le
+        faire.
+        """
+        from apps.school.models import Student, Teacher
+
+        inventaire = {}
+
+        eleve = Student.objects.filter(user=user).first()
+        if eleve is not None:
+            inventaire["fiche élève"] = 1
+            inventaire["notes"] = eleve.grades.count() if hasattr(eleve, "grades") else 0
+            inventaire["paiements"] = sum(
+                frais.payments.count() for frais in eleve.fees.all()
+            )
+
+        enseignant = Teacher.objects.filter(user=user).first()
+        if enseignant is not None:
+            inventaire["fiche enseignant"] = 1
+            inventaire["affectations"] = enseignant.assignments.count()
+            inventaire["pointages"] = enseignant.time_entries.count()
+            inventaire["créneaux d'emploi du temps"] = sum(
+                affectation.schedule_slots.count()
+                for affectation in enseignant.assignments.all()
+            )
+
+        return {nom: compte for nom, compte in inventaire.items() if compte}
+
+    def destroy(self, request, *args, **kwargs):
+        """La suppression dit d'abord ce qu'elle emporte.
+
+        Elle reste possible -- c'est une decision d'administration --, mais
+        plus a l'aveugle: le premier appel rend l'inventaire, et il faut le
+        confirmer explicitement pour qu'elle ait lieu. Desactiver reste
+        preferable dans presque tous les cas, et le message le rappelle.
+        """
+        cible = self.get_object()
+
+        if cible.pk == request.user.pk:
+            raise ValidationError(
+                {"detail": "Vous ne pouvez pas supprimer votre propre compte."}
+            )
+
+        lie = self._donnees_liees(cible)
+        confirme = str(
+            request.query_params.get("confirm")
+            or (request.data.get("confirm") if isinstance(request.data, dict) else "")
+        ).lower() in ("1", "true", "oui")
+
+        if lie and not confirme:
+            detail = ", ".join(f"{compte} {nom}" for nom, compte in lie.items())
+            raise ValidationError(
+                {
+                    "detail": f"Ce compte porte des données liées : {detail}. "
+                              "Elles seront définitivement supprimées avec lui. "
+                              "Désactivez-le plutôt, ou confirmez avec « confirm ».",
+                    "linked_data": lie,
+                }
+            )
+
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"], url_path="reset-password")
+    def reset_password(self, request, pk=None):
+        """L'administration fixe un mot de passe provisoire, qu'elle communique.
+
+        L'ecran offrait un champ « Mot de passe » a la modification, et le
+        serializer ne le connaissait pas: l'API repondait 200 sans rien
+        changer. Personne ne pouvait donc depanner un compte dont le mot de
+        passe etait perdu.
+        """
+        cible = self.get_object()
+        nouveau = str(request.data.get("password") or "")
+
+        if len(nouveau) < 8:
+            raise ValidationError(
+                {"password": "Le mot de passe provisoire doit faire 8 caractères au moins."}
+            )
+
+        cible.set_password(nouveau)
+        cible.save(update_fields=["password"])
+
+        return Response(
+            {
+                "detail": f"Mot de passe réinitialisé pour {cible.username}. "
+                          "Communiquez-le à la personne concernée : elle devrait "
+                          "le changer à sa prochaine connexion.",
+                "user": cible.id,
+            }
+        )
 
     def _sync_parent_profile(self, user):
         if not user:

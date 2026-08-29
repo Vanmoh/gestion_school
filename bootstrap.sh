@@ -317,8 +317,33 @@ fi
 
 rm -f "$migrate_log_file"
 
+# Le jeu de demonstration ne s'injecte que dans une base jetable: la commande
+# refuse d'elle-meme d'ajouter des eleves fictifs et des comptes au mot de
+# passe connu a une base qui porte de vraies classes. Ce refus est un
+# garde-fou, pas une panne -- et `set -e` faisait pourtant echouer tout le
+# bootstrap dessus, privant l'utilisateur de la verification HTTP et du
+# recapitulatif final.
 log "Injection des données de démonstration..."
-docker_compose exec -T backend python manage.py seed_demo_data
+seed_log_file="$(mktemp)"
+# `set +e` plutot qu'un `|| true` en fin de pipeline: ce dernier fait de
+# `true` la derniere commande executee, et PIPESTATUS ne rapporte plus le
+# code du seed mais celui de `true` -- un refus passait alors pour un succes.
+set +e
+docker_compose exec -T backend python manage.py seed_demo_data 2>&1 | tee "$seed_log_file"
+seed_rc=${PIPESTATUS[0]}
+set -e
+
+DEMO_DATA_INJECTED=0
+if [[ "$seed_rc" -eq 0 ]]; then
+  DEMO_DATA_INJECTED=1
+elif grep -q "Refus:" "$seed_log_file"; then
+  log "Base réelle détectée: jeu de démonstration ignoré (c'est voulu)."
+else
+  echo "Erreur: échec de l'injection des données de démonstration."
+  rm -f "$seed_log_file"
+  exit 1
+fi
+rm -f "$seed_log_file"
 
 if command -v curl >/dev/null 2>&1; then
   log "Vérification HTTP de l'API..."
@@ -332,10 +357,18 @@ fi
 
 log "Bootstrap terminé ✅"
 printf "\nAccès API docs: http://localhost:8000/api/docs/\n"
-printf "Comptes de test:\n"
-printf '%s\n' "- superadmin / Admin@12345"
-printf '%s\n' "- directeur / Password@123"
-printf '%s\n' "- comptable / Password@123"
-printf '%s\n' "- enseignant1 / Password@123"
-printf '%s\n' "- parent1 / Password@123"
-printf '%s\n' "- eleve1 / Password@123"
+
+# Les comptes de demonstration n'existent que si le jeu a ete injecte. Les
+# annoncer sur une base reelle envoyait l'utilisateur essayer des mots de
+# passe qui n'ouvrent rien.
+if [[ "$DEMO_DATA_INJECTED" -eq 1 ]]; then
+  printf "Comptes de test:\n"
+  printf '%s\n' "- superadmin / Admin@12345"
+  printf '%s\n' "- directeur / Password@123"
+  printf '%s\n' "- comptable / Password@123"
+  printf '%s\n' "- enseignant1 / Password@123"
+  printf '%s\n' "- parent1 / Password@123"
+  printf '%s\n' "- eleve1 / Password@123"
+else
+  printf "Base réelle: utilisez vos comptes habituels.\n"
+fi
