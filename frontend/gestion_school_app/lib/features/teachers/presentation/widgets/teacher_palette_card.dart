@@ -23,6 +23,13 @@ class TeacherPaletteCard extends StatelessWidget {
   final List<Widget> actions;
   final VoidCallback? onClear;
 
+  /// Ce qui se passe au clic sur chaque indicateur. Absent, la tuile reste
+  /// l'affichage inerte qu'elle etait: c'est ce qui permet de la montrer sans
+  /// detail quand il n'y a rien derriere.
+  final VoidCallback? onVoirAffectations;
+  final VoidCallback? onVoirEmploiDuTemps;
+  final VoidCallback? onVoirEmargement;
+
   const TeacherPaletteCard({
     super.key,
     required this.user,
@@ -33,6 +40,9 @@ class TeacherPaletteCard extends StatelessWidget {
     this.loading = false,
     this.actions = const [],
     this.onClear,
+    this.onVoirAffectations,
+    this.onVoirEmploiDuTemps,
+    this.onVoirEmargement,
   });
 
   static const nonRenseigne = 'Non renseigné';
@@ -238,6 +248,7 @@ class TeacherPaletteCard extends StatelessWidget {
               ? null
               : '${classes.length} classe${classes.length > 1 ? 's' : ''}',
           alerte: assignments.isEmpty,
+          onTap: assignments.isEmpty ? null : onVoirAffectations,
         ),
         _indicateur(
           scheme,
@@ -249,6 +260,7 @@ class TeacherPaletteCard extends StatelessWidget {
               : '${scheduleSlots.length} créneau${scheduleSlots.length > 1 ? 'x' : ''}',
           detail: minutes == 0 ? null : '${_heures(minutes)} par semaine',
           alerte: scheduleSlots.isEmpty,
+          onTap: scheduleSlots.isEmpty ? null : onVoirEmploiDuTemps,
         ),
         _indicateur(
           scheme,
@@ -262,6 +274,7 @@ class TeacherPaletteCard extends StatelessWidget {
               ? null
               : '$retards retard${retards > 1 ? 's' : ''}',
           alerte: retards > 0,
+          onTap: timeEntries.isEmpty ? null : onVoirEmargement,
         ),
       ],
     );
@@ -275,8 +288,9 @@ class TeacherPaletteCard extends StatelessWidget {
     required String valeur,
     String? detail,
     bool alerte = false,
+    VoidCallback? onTap,
   }) {
-    return Container(
+    final contenu = Container(
       width: 230,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
@@ -322,7 +336,32 @@ class TeacherPaletteCard extends StatelessWidget {
               ],
             ),
           ),
+          // Le chevron n'apparait que s'il y a quelque chose derriere: une
+          // tuile qui invite au clic sans rien a montrer est une promesse
+          // vide.
+          if (onTap != null)
+            Icon(
+              Icons.chevron_right,
+              size: 20,
+              color: scheme.onSurfaceVariant,
+            ),
         ],
+      ),
+    );
+
+    if (onTap == null) return contenu;
+
+    return Semantics(
+      button: true,
+      label: '$titre : $valeur',
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: contenu,
+        ),
       ),
     );
   }
