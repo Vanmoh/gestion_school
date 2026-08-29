@@ -193,10 +193,21 @@ class EtablissementSerializer(serializers.ModelSerializer):
 
 class ClassRoomSerializer(serializers.ModelSerializer):
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    # L'effectif de la classe, hors eleves archives. Chaque ecran qui voulait
+    # le montrer chargeait la liste entiere des eleves pour la compter.
+    student_count = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClassRoom
         fields = "__all__"
+
+    def get_student_count(self, obj):
+        # Servi par l'annotation de la vue quand elle existe: sans elle, une
+        # liste de trente classes ferait trente requetes de comptage.
+        annote = getattr(obj, "student_count_annote", None)
+        if annote is not None:
+            return annote
+        return obj.students.filter(is_archived=False).count()
 
 
 class SubjectSerializer(serializers.ModelSerializer):

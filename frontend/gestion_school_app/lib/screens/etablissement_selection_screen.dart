@@ -5,9 +5,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../core/constants/etablissement_api.dart';
-import '../core/network/api_client.dart';
-import '../core/network/paged_response.dart';
 import '../models/etablissement.dart';
 import '../widgets/etablissement_identity.dart';
 import 'etablissement_details_screen.dart';
@@ -43,14 +40,10 @@ class _PublicEtablissementEntryPageState
     try {
       final provider = ref.read(etablissementProvider);
       await provider.hydrate();
-
-      final response = await ref
-          .read(dioProvider)
-          .get(EtablissementApi.etablissements);
-      final etablissements = rowsOf(
-        response.data,
-      ).map(Etablissement.fromJson).toList();
-      provider.setEtablissements(etablissements);
+      // Le chargement vit dans le provider: les deux ecrans qui en ont
+      // besoin le demandaient chacun de son cote, avec deux gestions
+      // d'erreur qui ont fini par diverger.
+      await provider.charger(forcer: true);
       if (mounted) {
         setState(() => _erreur = null);
       }
@@ -130,7 +123,6 @@ class RequireEtablissementSelection extends ConsumerStatefulWidget {
 class _RequireEtablissementSelectionState
     extends ConsumerState<RequireEtablissementSelection> {
   bool _loadingEtablissements = false;
-  bool _didTryLoad = false;
   bool _checking = false;
 
   @override
@@ -143,29 +135,24 @@ class _RequireEtablissementSelectionState
 
   Future<void> _loadEtablissementsIfNeeded() async {
     final etabProvider = ref.read(etablissementProvider);
-    if (_loadingEtablissements ||
-        _didTryLoad ||
-        etabProvider.etablissements.isNotEmpty) {
+    if (_loadingEtablissements || etabProvider.etablissements.isNotEmpty) {
       return;
     }
 
     if (mounted) {
-      setState(() {
-        _didTryLoad = true;
-        _loadingEtablissements = true;
-      });
+      setState(() => _loadingEtablissements = true);
     } else {
-      _didTryLoad = true;
       _loadingEtablissements = true;
     }
     try {
-      final response = await ref
-          .read(dioProvider)
-          .get(EtablissementApi.etablissements);
-      final data = rowsOf(response.data).map(Etablissement.fromJson).toList();
-      etabProvider.setEtablissements(data);
+      await etabProvider.charger();
     } catch (_) {
-      // Keep navigation usable even if API is temporarily unavailable.
+      // La navigation reste utilisable si l'API est momentanement absente.
+      // Le seul verrou est desormais `_loadingEtablissements`, relache dans
+      // le `finally`: un echec ne ferme plus la porte a la tentative
+      // suivante. Un verrou pose avant l'appel et jamais repris figeait
+      // l'ecran jusqu'au rechargement complet de la page, alors qu'un
+      // backend encore en train de demarrer revient en une minute.
     } finally {
       if (mounted) {
         setState(() {
@@ -186,18 +173,6 @@ class _RequireEtablissementSelectionState
     try {
       await ref.read(etablissementProvider).hydrate();
       await _loadEtablissementsIfNeeded();
-
-      if (!mounted) {
-        return;
-      }
-
-      final etabProvider = ref.read(etablissementProvider);
-      if (etabProvider.selected == null &&
-          etabProvider.etablissements.isEmpty &&
-          !_loadingEtablissements &&
-          !_didTryLoad) {
-        _didTryLoad = true;
-      }
     } finally {
       _checking = false;
     }

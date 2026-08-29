@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -34,7 +35,9 @@ Future<void> _pumpPortal(
   Future<void> Function()? onRetry,
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
-  final provider = EtablissementProvider(TokenStorage());
+  // Le provider porte desormais le chargement: il lui faut son transport,
+  // qu'aucun test du portail n'exerce -- l'ecran recoit sa liste toute faite.
+  final provider = EtablissementProvider(TokenStorage(), Dio());
   provider.setEtablissements(etablissements ?? _etablissements);
   if (resume != null) {
     await provider.selectEtablissement(resume);

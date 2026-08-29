@@ -275,10 +275,27 @@ if not DEBUG and not CORS_ALLOW_ALL_ORIGINS and not CORS_ALLOWED_ORIGINS:
     CORS_ALLOWED_ORIGINS = [
         config("WEB_APP_ORIGIN", default="https://gestion-school-web.onrender.com")
     ]
+# Tout en-tete que l'application ajoute a ses requetes doit figurer ici, sinon
+# le navigateur refuse la reponse au preflight et l'appel n'a jamais lieu. Sur
+# Android et sur le poste, le CORS n'existe pas: un oubli ne se voit que sur le
+# web, ou il coupe d'un coup tous les modules -- l'annee de travail a manque
+# ici et rendait l'application entierement muette des qu'une annee etait
+# choisie. Regle: un `options.headers['X-...']` cote client, une ligne ici.
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-etablissement-id",
     "x-etablissement-name",
+    "x-academic-year-id",
 ]
+# Symetrique de CORS_ALLOW_HEADERS, pour le sens retour: un navigateur ne
+# laisse lire au client que les en-tetes nommes ici. `Content-Disposition`
+# porte le nom du fichier telecharge -- sans lui, chaque export arrivait sous
+# un nom de repli invente par le client -- et `X-Fiches-Count` dit combien de
+# fiches contient l'export d'une journee, sans avoir a ouvrir le PDF.
+CORS_EXPOSE_HEADERS = [
+    "content-disposition",
+    "x-fiches-count",
+]
+
 CSRF_TRUSTED_ORIGINS = _csv_setting("CSRF_TRUSTED_ORIGINS")
 
 USE_X_FORWARDED_HOST = config("USE_X_FORWARDED_HOST", cast=bool, default=True)
@@ -326,6 +343,14 @@ REST_FRAMEWORK = {
         "rest_framework.filters.OrderingFilter",
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # `format` est un parametre metier ici: quatre routes d'export le lisent
+    # pour choisir entre PDF, XLSX et CSV. DRF se l'reservait pour negocier le
+    # type de reponse, cherchait un renderer nomme « pdf », n'en trouvait pas
+    # et repondait 404 « Pas trouve » avant meme d'entrer dans la vue: aucun
+    # export ne pouvait aboutir. Le projet ne route sur aucun suffixe de
+    # format (pas de `format_suffix_patterns`), rien d'autre n'en depend --
+    # seul `?format=json` de l'API navigable de developpement disparait.
+    "URL_FORMAT_OVERRIDE": None,
     # Sans ce relais, un `ProtectedError` -- supprimer une classe qui porte
     # des notes -- sortait en 500 avec une trace, la ou c'est une regle
     # metier que l'utilisateur doit pouvoir lire.

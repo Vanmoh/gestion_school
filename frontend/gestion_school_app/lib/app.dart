@@ -1629,9 +1629,17 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                               ),
                               child: Row(
                                 children: [
-                                  Expanded(
+                                  // L'etablissement et l'annee, cote a cote:
+                                  // ce sont les deux dimensions qui decident
+                                  // de ce que chaque ecran montre. L'annee
+                                  // n'apparaissait qu'en version mobile --
+                                  // sur grand ecran, rien ne disait sur
+                                  // laquelle on travaillait.
+                                  Flexible(
                                     child: Text(
-                                      '${_activeEtablissementLabel(selectedEtablissement?.name)}  |  ${_welcomeConnectedUser(user)}',
+                                      _activeEtablissementLabel(
+                                        selectedEtablissement?.name,
+                                      ),
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: Theme.of(context)
@@ -1641,9 +1649,32 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                                             color: Colors.white.withValues(
                                               alpha: 0.9,
                                             ),
+                                            fontWeight: FontWeight.w600,
                                           ),
                                     ),
                                   ),
+                                  const SizedBox(width: 12),
+                                  const SelecteurAnneeScolaire(
+                                    etendu: true,
+                                    surFondSombre: true,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Flexible(
+                                    child: Text(
+                                      _welcomeConnectedUser(user),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium
+                                          ?.copyWith(
+                                            color: Colors.white.withValues(
+                                              alpha: 0.7,
+                                            ),
+                                          ),
+                                    ),
+                                  ),
+                                  const Spacer(),
                                   const SizedBox(width: 8),
                                   _TopBarIconBubble(
                                     icon: Icons.notifications_none_rounded,
