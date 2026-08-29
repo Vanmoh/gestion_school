@@ -28,6 +28,9 @@ Future<void> _pump(
   List<Map<String, dynamic>> timeEntries = const [],
   List<Widget> actions = const [],
   VoidCallback? onClear,
+  VoidCallback? onVoirAffectations,
+  VoidCallback? onVoirEmploiDuTemps,
+  VoidCallback? onVoirEmargement,
 }) async {
   tester.view.physicalSize = const Size(1280, 900);
   tester.view.devicePixelRatio = 1.0;
@@ -45,6 +48,9 @@ Future<void> _pump(
             timeEntries: timeEntries,
             actions: actions,
             onClear: onClear,
+            onVoirAffectations: onVoirAffectations,
+            onVoirEmploiDuTemps: onVoirEmploiDuTemps,
+            onVoirEmargement: onVoirEmargement,
           ),
         ),
       ),
@@ -241,5 +247,86 @@ void main() {
 
     await _pump(tester, onClear: () {});
     expect(find.text('Résultats'), findsOneWidget);
+  });
+
+  group('indicateurs cliquables', () {
+    const affectations = [
+      {'subject_name': 'Mathématiques', 'classroom_name': '6e A'},
+    ];
+    const creneaux = [
+      {'day_of_week': 'MON', 'start_time': '08:00:00', 'end_time': '10:00:00'},
+    ];
+    const pointages = [
+      {'entry_date': '2026-03-12', 'check_in_time': '08:00:00'},
+    ];
+
+    testWidgets('chaque tuile ouvre son propre detail', (tester) async {
+      final ouverts = <String>[];
+      await _pump(
+        tester,
+        assignments: affectations,
+        scheduleSlots: creneaux,
+        timeEntries: pointages,
+        onVoirAffectations: () => ouverts.add('affectations'),
+        onVoirEmploiDuTemps: () => ouverts.add('emploi'),
+        onVoirEmargement: () => ouverts.add('emargement'),
+      );
+
+      await tester.tap(find.text('AFFECTATIONS'));
+      await tester.pump();
+      await tester.tap(find.text('EMPLOI DU TEMPS'));
+      await tester.pump();
+      await tester.tap(find.text('ÉMARGEMENT'));
+      await tester.pump();
+
+      expect(ouverts, ['affectations', 'emploi', 'emargement']);
+    });
+
+    testWidgets('une tuile vide n_invite pas au clic', (tester) async {
+      // Une tuile qui promet un detail inexistant fait douter de l_ecran.
+      var ouvertures = 0;
+      await _pump(
+        tester,
+        assignments: const [],
+        scheduleSlots: creneaux,
+        timeEntries: pointages,
+        onVoirAffectations: () => ouvertures++,
+      );
+
+      await tester.tap(find.text('AFFECTATIONS'));
+      await tester.pump();
+
+      expect(ouvertures, 0);
+    });
+
+    testWidgets('le chevron ne parait que sur une tuile qui mene quelque part', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        assignments: affectations,
+        scheduleSlots: creneaux,
+        timeEntries: pointages,
+        onVoirAffectations: () {},
+      );
+
+      expect(find.byIcon(Icons.chevron_right), findsOneWidget);
+    });
+
+    testWidgets('sans rappel fourni, les tuiles restent inertes', (
+      tester,
+    ) async {
+      // C_est l_etat d_avant: la palette doit continuer de s_afficher sans
+      // qu_aucun detail ne soit branche.
+      await _pump(
+        tester,
+        assignments: affectations,
+        scheduleSlots: creneaux,
+        timeEntries: pointages,
+      );
+
+      expect(find.byIcon(Icons.chevron_right), findsNothing);
+      expect(find.byType(InkWell), findsNothing);
+    });
   });
 }

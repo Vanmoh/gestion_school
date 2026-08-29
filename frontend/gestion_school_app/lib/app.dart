@@ -33,6 +33,7 @@ import 'features/exams/presentation/exams_controller.dart';
 import 'features/exams/presentation/exams_page.dart';
 import 'features/communication/presentation/communication_page.dart';
 import 'features/academics/presentation/annee_scolaire_controller.dart';
+import 'core/widgets/bandeau_contexte.dart';
 import 'features/academics/presentation/widgets/selecteur_annee_scolaire.dart';
 import 'features/discipline/presentation/discipline_page.dart';
 import 'features/discipline/presentation/parent_discipline_page.dart';
@@ -1314,7 +1315,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
               },
               icon: const Icon(Icons.dark_mode_outlined),
             ),
-            const SelecteurAnneeScolaire(),
             IconButton(
               tooltip: 'Informations session',
               onPressed: () => _showConnectionInfo(user, selectedEtablissement),
@@ -1325,6 +1325,22 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
               icon: const Icon(Icons.logout),
             ),
           ],
+          // Une barre secondaire plutot que deux cartouches de plus dans la
+          // rangee d'actions: elle en porte deja quatre, et le nom d'une
+          // ecole n'y tiendrait pas.
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(46),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: BandeauContexte(),
+                ),
+              ),
+            ),
+          ),
         ),
         drawer: Drawer(
           child: SafeArea(
@@ -1629,36 +1645,18 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                               ),
                               child: Row(
                                 children: [
-                                  // L'etablissement et l'annee, cote a cote:
-                                  // ce sont les deux dimensions qui decident
-                                  // de ce que chaque ecran montre. L'annee
-                                  // n'apparaissait qu'en version mobile --
-                                  // sur grand ecran, rien ne disait sur
-                                  // laquelle on travaillait.
-                                  Flexible(
-                                    child: Text(
-                                      _activeEtablissementLabel(
-                                        selectedEtablissement?.name,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium
-                                          ?.copyWith(
-                                            color: Colors.white.withValues(
-                                              alpha: 0.9,
-                                            ),
-                                            fontWeight: FontWeight.w600,
-                                          ),
+                                  // Ou je travaille -- etablissement et
+                                  // annee --, puis qui je suis, puis les
+                                  // actions. L'etablissement n'etait qu'un
+                                  // texte: en changer demandait de repasser
+                                  // par le portail d'accueil.
+                                  const Flexible(
+                                    child: BandeauContexte(
+                                      etendu: true,
+                                      surFondSombre: true,
                                     ),
                                   ),
-                                  const SizedBox(width: 12),
-                                  const SelecteurAnneeScolaire(
-                                    etendu: true,
-                                    surFondSombre: true,
-                                  ),
-                                  const SizedBox(width: 12),
+                                  const SizedBox(width: 14),
                                   Flexible(
                                     child: Text(
                                       _welcomeConnectedUser(user),

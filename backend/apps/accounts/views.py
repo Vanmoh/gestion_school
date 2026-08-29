@@ -106,7 +106,10 @@ class UserViewSet(viewsets.ModelViewSet):
     # `is_active` fait partie des filtres et non de la seule lecture: c'est
     # lui qui sort la liste des comptes restes ouverts apres un depart.
     filterset_fields = ["role", "etablissement", "is_active"]
-    search_fields = ["username", "first_name", "last_name", "email"]
+    # `phone` y figure comme chez les eleves: l'ecran annonce le telephone
+    # parmi les criteres de recherche, et le champ existe depuis l'origine --
+    # il ne manquait qu'ici pour qu'un numero ramene son titulaire.
+    search_fields = ["username", "first_name", "last_name", "email", "phone"]
 
     def _requested_etablissement_id(self):
         raw_value = (

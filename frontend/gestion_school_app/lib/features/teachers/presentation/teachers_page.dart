@@ -9,6 +9,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../core/widgets/roster_pdf_preview_dialog.dart';
+import 'widgets/detail_indicateur_dialog.dart';
 import 'widgets/teacher_palette_card.dart';
 
 /// Motif affiche sur les actions grisees.
@@ -2556,6 +2557,71 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     );
   }
 
+  /// Le detail derriere les indicateurs de la palette.
+  ///
+  /// Les donnees sont deja en memoire, deja filtrees sur cet enseignant par
+  /// `_loadTeacherLinkedData`: ces trois vues n'appellent rien.
+  Future<void> _voirAffectations(
+    Map<String, dynamic> user,
+    List<Map<String, dynamic>> affectations,
+  ) {
+    final matieres = affectations
+        .map((ligne) => (ligne['subject_name'] ?? '').toString().trim())
+        .where((nom) => nom.isNotEmpty)
+        .toSet();
+
+    return DetailIndicateurDialog.ouvrir(
+      context,
+      icone: Icons.menu_book_outlined,
+      titre: 'Affectations · ${_fullNameFromUser(user)}',
+      resume:
+          '${matieres.length} matière${matieres.length > 1 ? 's' : ''} '
+          'sur ${affectations.length} affectation'
+          '${affectations.length > 1 ? 's' : ''}',
+      corps: DetailAffectations(affectations: affectations),
+    );
+  }
+
+  Future<void> _voirEmploiDuTemps(
+    Map<String, dynamic> user,
+    List<Map<String, dynamic>> creneaux,
+    List<Map<String, dynamic>> affectations,
+  ) {
+    final minutes = DetailEmploiDuTemps.minutesTotales(creneaux);
+
+    return DetailIndicateurDialog.ouvrir(
+      context,
+      icone: Icons.calendar_month_outlined,
+      titre: 'Emploi du temps · ${_fullNameFromUser(user)}',
+      resume:
+          '${creneaux.length} créneau${creneaux.length > 1 ? 'x' : ''}'
+          '${minutes > 0 ? ' · ${dureeLisible(minutes)} par semaine' : ''}',
+      corps: DetailEmploiDuTemps(
+        creneaux: creneaux,
+        affectations: affectations,
+      ),
+    );
+  }
+
+  Future<void> _voirEmargement(
+    Map<String, dynamic> user,
+    List<Map<String, dynamic>> pointages,
+  ) {
+    final retards = pointages
+        .where((row) => _asInt(row['late_minutes']) > 0)
+        .length;
+
+    return DetailIndicateurDialog.ouvrir(
+      context,
+      icone: Icons.how_to_reg_outlined,
+      titre: 'Émargement · ${_fullNameFromUser(user)}',
+      resume:
+          '${pointages.length} pointage${pointages.length > 1 ? 's' : ''}'
+          '${retards > 0 ? ' · $retards retard${retards > 1 ? 's' : ''}' : ''}',
+      corps: DetailEmargement(pointages: pointages),
+    );
+  }
+
   Widget _buildTeacherSearchCard(ColorScheme colorScheme, TextTheme textTheme) {
     return _panelSurface(
       context,
@@ -2894,6 +2960,22 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                       _selectedTeacherId = null;
                     })
                   : null,
+              // Les trois indicateurs annoncaient des nombres sans jamais dire
+              // de quoi ils etaient faits. Tout est deja charge et filtre sur
+              // cet enseignant: il n'y a qu'a le montrer.
+              onVoirAffectations: () => _voirAffectations(
+                selectedUser,
+                selectedTeacherAssignments,
+              ),
+              onVoirEmploiDuTemps: () => _voirEmploiDuTemps(
+                selectedUser,
+                _scheduleSlotsOf(selectedProfile),
+                selectedTeacherAssignments,
+              ),
+              onVoirEmargement: () => _voirEmargement(
+                selectedUser,
+                _timeEntriesOf(selectedProfile),
+              ),
             )
           else if (matches.length > 1)
             _buildTeacherResultsCard(matches, colorScheme, textTheme)

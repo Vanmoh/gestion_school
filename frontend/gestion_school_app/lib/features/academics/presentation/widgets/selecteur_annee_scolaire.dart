@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/providers/saisie_en_cours.dart';
+import '../../../../core/widgets/cartouche_contexte.dart';
 import '../../domain/annee_scolaire.dart';
 import '../annee_scolaire_controller.dart';
 
@@ -108,26 +110,29 @@ class SelecteurAnneeScolaire extends ConsumerWidget {
     // `SizedBox.shrink()` -- et l'utilisateur ne savait alors pas s'il
     // travaillait sur une annee, ni laquelle.
     if (selectionnee == null) {
-      return _Cartouche(
+      return CartoucheContexte(
         key: const Key('annee-absente'),
-        etat: null,
+        icone: Icons.event_note_outlined,
         titre: 'Aucune année',
         sousTitre: etendu ? 'Ouvrez une année scolaire' : null,
         etendu: etendu,
         surFondSombre: surFondSombre,
+        teinte: Theme.of(context).colorScheme.error,
       );
     }
 
     // Une seule annee ne se choisit pas: un menu deroulant promettrait une
     // bascule qui n'existe pas. Elle reste affichee, avec son etat.
     if (annees.length <= 1) {
-      return _Cartouche(
+      return CartoucheContexte(
         key: const Key('annee-unique'),
-        etat: selectionnee.etat,
+        icone: Icons.event_note_outlined,
         titre: selectionnee.nom,
         sousTitre: etendu ? selectionnee.periode : null,
+        marque: PastilleEtatAnnee(etat: selectionnee.etat, compacte: !etendu),
         etendu: etendu,
         surFondSombre: surFondSombre,
+        teinte: _tons(context, selectionnee.etat).trait,
       );
     }
 
@@ -135,8 +140,18 @@ class SelecteurAnneeScolaire extends ConsumerWidget {
       key: const Key('selecteur-annee'),
       tooltip: 'Année scolaire',
       position: PopupMenuPosition.under,
-      onSelected: (id) {
+      onSelected: (id) async {
         final choisie = annees.firstWhere((annee) => annee.id == id);
+        if (choisie.id == selectionnee.id) return;
+
+        // Changer d'annee recharge l'ecran: une saisie en cours partirait
+        // sur une annee qui n'est plus celle affichee.
+        final feuVert = await confirmerChangementDeContexte(
+          context,
+          ref,
+          quoi: 'd’année scolaire',
+        );
+        if (!feuVert) return;
         controleur.selectionner(choisie);
       },
       itemBuilder: (context) => [
@@ -149,108 +164,16 @@ class SelecteurAnneeScolaire extends ConsumerWidget {
             ),
           ),
       ],
-      child: _Cartouche(
-        etat: selectionnee.etat,
+      child: CartoucheContexte(
+        icone: Icons.event_note_outlined,
         titre: selectionnee.nom,
         sousTitre: etendu ? selectionnee.periode : null,
+        marque: PastilleEtatAnnee(etat: selectionnee.etat, compacte: !etendu),
         etendu: etendu,
         surFondSombre: surFondSombre,
         deroulant: true,
-      ),
-    );
-  }
-}
-
-/// Le bloc cliquable: l'année, son état, et sa période sur grand écran.
-class _Cartouche extends StatelessWidget {
-  final EtatAnnee? etat;
-  final String titre;
-  final String? sousTitre;
-  final bool etendu;
-  final bool deroulant;
-  final bool surFondSombre;
-
-  const _Cartouche({
-    super.key,
-    required this.etat,
-    required this.titre,
-    required this.etendu,
-    this.sousTitre,
-    this.deroulant = false,
-    this.surFondSombre = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final etatCourant = etat;
-    final trait = etatCourant == null
-        ? scheme.error
-        : _tons(context, etatCourant).trait;
-
-    // Sur le fond sombre de l'en-tete, le cartouche reprend le vocabulaire
-    // des autres bulles -- blanc translucide -- pour ne pas y faire tache.
-    // La pastille, elle, garde sa couleur d'etat: c'est la seule chose qu'on
-    // vient y lire.
-    final bordure = surFondSombre
-        ? Colors.white.withValues(alpha: 0.16)
-        : trait.withValues(alpha: 0.35);
-    final fond = surFondSombre
-        ? Colors.white.withValues(alpha: 0.1)
-        : trait.withValues(alpha: 0.06);
-    final encre = surFondSombre ? Colors.white : null;
-    final encreDouce = surFondSombre
-        ? Colors.white.withValues(alpha: 0.72)
-        : scheme.onSurfaceVariant;
-
-    return Container(
-      padding: EdgeInsets.fromLTRB(etendu ? 12 : 10, 6, deroulant ? 4 : 10, 6),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(surFondSombre ? 999 : 10),
-        border: Border.all(color: bordure),
-        color: fond,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.event_note_outlined,
-            size: etendu ? 18 : 16,
-            color: encre ?? trait,
-          ),
-          SizedBox(width: etendu ? 10 : 6),
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    titre,
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: encre,
-                    ),
-                  ),
-                  if (etatCourant != null) ...[
-                    const SizedBox(width: 8),
-                    PastilleEtatAnnee(etat: etatCourant, compacte: !etendu),
-                  ],
-                ],
-              ),
-              if (sousTitre != null && sousTitre!.isNotEmpty)
-                Text(
-                  sousTitre!,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: encreDouce,
-                  ),
-                ),
-            ],
-          ),
-          if (deroulant)
-            Icon(Icons.arrow_drop_down, color: encre ?? trait),
-        ],
+        teinte: _tons(context, selectionnee.etat).trait,
+        infobulle: 'Changer d’année scolaire',
       ),
     );
   }
