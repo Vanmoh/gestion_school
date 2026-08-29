@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/providers/saisie_en_cours.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../../models/etablissement.dart';
 import '../../auth/presentation/auth_controller.dart';
@@ -292,6 +293,18 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     });
   }
 
+  /// Vrai des qu'un champ de la fiche porte quelque chose.
+  ///
+  /// Le formulaire est saisi directement dans la page, sans dialogue: rien
+  /// n'empeche donc de basculer d'etablissement en plein milieu, et la
+  /// saisie se retrouverait a decrire une autre ecole.
+  bool get _saisieCommencee =>
+      _nameController.text.trim().isNotEmpty ||
+      _codeController.text.trim().isNotEmpty ||
+      _addressController.text.trim().isNotEmpty ||
+      _phoneController.text.trim().isNotEmpty ||
+      _emailController.text.trim().isNotEmpty;
+
   Future<void> _save() async {
     if (!ref.read(currentPermissionsProvider).canWrite('etablissements')) {
       _showMessage('Modification des etablissements reservee au super admin.');
@@ -509,7 +522,11 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         ? (selected.first['name'] ?? '').toString()
         : '-';
 
-    return RefreshIndicator(
+    return SaisieEnCours(
+      // Declare la saisie tant qu'un champ porte quelque chose: basculer
+      // d'etablissement en plein milieu ferait decrire une autre ecole.
+      active: _saisieCommencee,
+      child: RefreshIndicator(
       onRefresh: _loadData,
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -836,6 +853,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
               ),
             ),
         ],
+      ),
       ),
     );
   }

@@ -164,6 +164,37 @@ class AttendanceRepository {
     return const <int>[];
   }
 
+  /// Toutes les fiches d'un jour, en un seul PDF.
+  ///
+  /// C'est le geste de fin de journee: l'administration archive l'appel de
+  /// l'etablissement entier. Il fallait auparavant exporter classe par classe
+  /// puis recoller les fichiers a la main.
+  ///
+  /// Le serveur annonce dans `X-Fiches-Count` combien de fiches le document
+  /// rassemble: l'ecran peut le dire sans ouvrir le PDF.
+  Future<({List<int> bytes, int nombreFiches})> exportDaySheets({
+    required String date,
+  }) async {
+    final response = await dio.get(
+      '/attendances/day-export/',
+      queryParameters: {'date': date},
+      options: Options(responseType: ResponseType.bytes),
+    );
+
+    final data = response.data;
+    final bytes = data is List<int>
+        ? data
+        : data is List<dynamic>
+        ? data.whereType<int>().toList(growable: false)
+        : const <int>[];
+
+    final annonce = response.headers.value('x-fiches-count');
+    return (
+      bytes: bytes,
+      nombreFiches: int.tryParse(annonce ?? '') ?? 0,
+    );
+  }
+
   /// Depose ou remplace le justificatif d'une absence deja enregistree.
   ///
   /// Accepte sur une fiche verrouillee: le mot d'excuse arrive le lendemain,

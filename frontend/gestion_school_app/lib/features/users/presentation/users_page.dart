@@ -5,12 +5,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/widgets/barre_recherche_module.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../models/etablissement.dart';
 import '../domain/user_account.dart';
+import 'widgets/dialogue_liste_utilisateurs.dart';
 import 'widgets/dialogue_reinitialisation.dart';
 import 'widgets/dialogue_suppression.dart';
 import 'widgets/pastille_compte.dart';
+import 'widgets/user_palette_card.dart';
 import 'users_controller.dart';
 
 class UsersPage extends ConsumerStatefulWidget {
@@ -21,7 +24,6 @@ class UsersPage extends ConsumerStatefulWidget {
 }
 
 class _UsersPageState extends ConsumerState<UsersPage> {
-  static const List<int> _pageSizeOptions = [15, 25, 50, 100];
 
   final _formKey = GlobalKey<FormState>();
   final _searchController = TextEditingController();
@@ -46,7 +48,9 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   bool _loadingCreationRefs = false;
   int? _loadedCreationRefsEtablissementId;
   int _currentPage = 1;
-  int _pageSize = 25;
+  /// Taille de page de la recherche. Fixe depuis que l'annuaire paginé a
+  /// quitte l'ecran: on cherche un compte, on n'en feuillette plus des pages.
+  static const int _pageSize = 25;
   String _searchTerm = '';
   Timer? _searchDebounce;
 
@@ -153,25 +157,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     return role;
   }
 
-  Color _roleColor(String role) {
-    switch (role) {
-      case 'super_admin':
-      case 'director':
-      case 'promoter':
-        return const Color(0xFF2D6FD6);
-      case 'accountant':
-        return const Color(0xFF2A8E58);
-      case 'teacher':
-      case 'censor':
-      case 'supervisor':
-        return const Color(0xFF8B5CF6);
-      case 'parent':
-      case 'student':
-        return const Color(0xFFB9721B);
-      default:
-        return const Color(0xFF546172);
-    }
-  }
 
   String _userInitials(UserAccount user) {
     final parts = user.fullName
@@ -199,6 +184,13 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     return rows;
   }
 
+  /// Garde la selection tant qu'elle existe, et ouvre d'office la palette
+  /// quand la recherche ne laisse qu'un seul compte.
+  ///
+  /// L'ecran retombait auparavant sur le premier de la liste: la page
+  /// s'ouvrait donc sur la fiche de quelqu'un qu'on n'avait pas demande, et
+  /// l'invitation a chercher n'apparaissait jamais. Meme regle que le module
+  /// eleve, ou une correspondance unique evite un clic pour rien.
   void _syncSelectedUser(List<UserAccount> rows) {
     if (rows.isEmpty) {
       if (_selectedUserId != null) {
@@ -211,13 +203,16 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     }
 
     final exists = rows.any((user) => user.id == _selectedUserId);
-    if (!exists) {
-      final fallbackId = rows.first.id;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        setState(() => _selectedUserId = fallbackId);
-      });
-    }
+    if (exists) return;
+
+    final ouvertureDirecte =
+        rows.length == 1 && _searchTerm.trim().isNotEmpty ? rows.first.id : null;
+    if (_selectedUserId == ouvertureDirecte) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _selectedUserId = ouvertureDirecte);
+    });
   }
 
   UserAccount? _currentSelectedUser(List<UserAccount> rows) {
@@ -226,7 +221,8 @@ class _UsersPageState extends ConsumerState<UsersPage> {
         return user;
       }
     }
-    return rows.isEmpty ? null : rows.first;
+    // Aucun repli sur le premier: sans choix, la page invite a chercher.
+    return null;
   }
 
   void _resetCreateForm() {
@@ -897,23 +893,126 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     );
   }
 
-  Widget _roleTag(BuildContext context, String role) {
-    final color = _roleColor(role);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
-      ),
-      child: Text(
-        _roleLabel(role),
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: color,
-          fontWeight: FontWeight.w700,
+  /// Ouvre l'annuaire complet et ramene le compte choisi dans la palette.
+  ///
+  /// La page s'ouvre sur une recherche; parcourir tous les comptes reste
+  /// pourtant necessaire -- reperer un acces reste ouvert, par exemple --
+  /// et se fait desormais ici.
+  Future<void> _ouvrirListeUtilisateurs() async {
+    final choisi = await DialogueListeUtilisateurs.ouvrir(
+      context,
+      roleFiltre: _roleFilter,
+      etatFiltre: _etatFilter,
+      libelleRole: _roleLabel,
+    );
+    if (!mounted || choisi == null) return;
+
+    // La recherche est cadree sur l'identifiant du compte choisi: sans cela
+    // il ne ferait pas partie de la page courante et la palette resterait
+    // vide.
+    _searchDebounce?.cancel();
+    _searchController.text = choisi.username;
+    setState(() {
+      _searchTerm = choisi.username;
+      _currentPage = 1;
+      _selectedUserId = choisi.id;
+    });
+  }
+
+  /// Les correspondances a departager, quand la recherche en laisse plusieurs.
+  Widget _carteCorrespondances(List<UserAccount> comptes) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${comptes.length} comptes correspondent',
+              style: textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Choisissez celui dont vous voulez ouvrir la palette.',
+              style: textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            for (final compte in comptes)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                leading: CircleAvatar(child: Text(_userInitials(compte))),
+                title: Text(
+                  compte.fullName.trim().isEmpty
+                      ? compte.username
+                      : compte.fullName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  '${compte.username} · ${_roleLabel(compte.role)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: PastilleCompte(compte: compte),
+                onTap: () => setState(() => _selectedUserId = compte.id),
+              ),
+          ],
         ),
       ),
     );
+  }
+
+  /// Les boutons d'ecriture de la palette, dans l'ordre du quotidien:
+  /// consulter, corriger, puis les gestes qui engagent.
+  List<Widget> _actionsPalette(UserAccount compte, bool enCours) {
+    return [
+      FilledButton.tonalIcon(
+        onPressed: () => _openUserDetails(compte),
+        icon: const Icon(Icons.visibility_outlined),
+        label: const Text('Afficher'),
+      ),
+      FilledButton.tonalIcon(
+        onPressed: enCours ? null : () => _openEditDialog(compte),
+        icon: const Icon(Icons.edit_outlined),
+        label: const Text('Modifier'),
+      ),
+      // Ces deux-la vivaient dans le menu contextuel de l'annuaire, qui a
+      // quitte la page: sans elles, retirer un acces ou depanner quelqu'un
+      // n'aurait plus eu de porte d'entree.
+      OutlinedButton.icon(
+        onPressed: enCours ? null : () => _resetPassword(compte),
+        icon: const Icon(Icons.password_outlined),
+        label: const Text('Réinitialiser le mot de passe'),
+      ),
+      OutlinedButton.icon(
+        onPressed: enCours
+            ? null
+            : () => _setActive(compte, !compte.isActive),
+        icon: Icon(
+          compte.isActive ? Icons.lock_outline : Icons.lock_open_outlined,
+        ),
+        label: Text(
+          compte.isActive ? 'Désactiver le compte' : 'Réactiver le compte',
+        ),
+      ),
+      FilledButton.icon(
+        onPressed: enCours
+            ? null
+            : () => _deleteUser(compte),
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFFB42318),
+        ),
+        icon: const Icon(Icons.delete_outline),
+        label: const Text('Supprimer'),
+      ),
+    ];
   }
 
   @override
@@ -1064,6 +1163,34 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                 ),
               ),
               const SizedBox(height: 12),
+              // Le point d'entree du module, comme chez les eleves et les
+              // enseignants: on arrive avec un nom en tete. Les filtres role
+              // et etat restent dessous, ils cadrent la recherche sans la
+              // remplacer.
+              BarreRechercheModule(
+                controller: _searchController,
+                indication:
+                    'Rechercher un utilisateur : nom, identifiant, e-mail, téléphone…',
+                onChanged: _onSearchChanged,
+                onEffacer: () {
+                  _searchDebounce?.cancel();
+                  _searchController.clear();
+                  setState(() {
+                    _searchTerm = '';
+                    _currentPage = 1;
+                    _selectedUserId = null;
+                  });
+                },
+                compact: MediaQuery.sizeOf(context).width < 720,
+                actions: [
+                  OutlinedButton.icon(
+                    onPressed: _ouvrirListeUtilisateurs,
+                    icon: const Icon(Icons.groups_2_outlined),
+                    label: const Text('Liste des utilisateurs'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
               Container(
                 padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
                 decoration: BoxDecoration(
@@ -1078,30 +1205,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                   runSpacing: 10,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    SizedBox(
-                      width: 290,
-                      child: TextField(
-                        controller: _searchController,
-                        onChanged: _onSearchChanged,
-                        decoration: InputDecoration(
-                          labelText: 'Recherche utilisateur',
-                          prefixIcon: const Icon(Icons.search),
-                          suffixIcon: _searchController.text.trim().isEmpty
-                              ? null
-                              : IconButton(
-                                  onPressed: () {
-                                    _searchDebounce?.cancel();
-                                    _searchController.clear();
-                                    setState(() {
-                                      _searchTerm = '';
-                                      _currentPage = 1;
-                                    });
-                                  },
-                                  icon: const Icon(Icons.clear),
-                                ),
-                        ),
-                      ),
-                    ),
                     SizedBox(
                       width: 240,
                       child: DropdownButtonFormField<String>(
@@ -1180,9 +1283,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
               const SizedBox(height: 12),
               LayoutBuilder(
                 builder: (context, constraints) {
-                  final isWide = constraints.maxWidth >= 1120;
 
-                  final directoryPanel = Container(
+
+                  // Le panneau ne porte plus que la creation: l'identite et
+                  // les actions d'un compte vivent desormais dans sa palette,
+                  // au-dessus.
+                  final panneauCreation = Container(
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
                     decoration: BoxDecoration(
                       color: colorScheme.surfaceContainerLowest,
@@ -1196,317 +1302,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Annuaire utilisateurs (${filteredUsers.length})',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 8),
-                        if (filteredUsers.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 18),
-                            child: Center(
-                              child: Text('Aucun utilisateur correspondant.'),
-                            ),
-                          )
-                        else
-                          ListView.separated(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: filteredUsers.length,
-                            separatorBuilder: (_, _) =>
-                                const SizedBox(height: 8),
-                            itemBuilder: (context, index) {
-                              final user = filteredUsers[index];
-                              final selected = user.id == _selectedUserId;
-
-                              return Material(
-                                color: selected
-                                    ? colorScheme.primary.withValues(
-                                        alpha: 0.12,
-                                      )
-                                    : colorScheme.surface,
-                                borderRadius: BorderRadius.circular(10),
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(10),
-                                  onTap: () {
-                                    setState(() => _selectedUserId = user.id);
-                                  },
-                                  child: Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      10,
-                                      8,
-                                      10,
-                                      8,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        CircleAvatar(
-                                          radius: 18,
-                                          child: Text(_userInitials(user)),
-                                        ),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              // L'etat du compte au plus pres
-                                              // du nom: la liste ne disait pas
-                                              // qui gardait un acces apres son
-                                              // depart.
-                                              Row(
-                                                children: [
-                                                  Flexible(
-                                                    child: Text(
-                                                      user.fullName,
-                                                      maxLines: 1,
-                                                      overflow: TextOverflow
-                                                          .ellipsis,
-                                                      style: Theme.of(context)
-                                                          .textTheme
-                                                          .titleSmall,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  PastilleCompte(compte: user),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 2),
-                                              Text(
-                                                '@${user.username}',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: Theme.of(
-                                                  context,
-                                                ).textTheme.bodySmall,
-                                              ),
-                                              if (user.etablissementName
-                                                  .trim()
-                                                  .isNotEmpty)
-                                                Text(
-                                                  user.etablissementName,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: Theme.of(
-                                                    context,
-                                                  ).textTheme.labelSmall,
-                                                ),
-                                            ],
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        _roleTag(context, user.role),
-                                        const SizedBox(width: 4),
-                                        PopupMenuButton<String>(
-                                          tooltip: 'Actions utilisateur',
-                                          onSelected: (value) async {
-                                            if (value == 'view') {
-                                              await _openUserDetails(user);
-                                              return;
-                                            }
-                                            if (value == 'edit') {
-                                              await _openEditDialog(user);
-                                              return;
-                                            }
-                                            if (value == 'password') {
-                                              await _resetPassword(user);
-                                              return;
-                                            }
-                                            if (value == 'toggle') {
-                                              await _setActive(
-                                                user,
-                                                !user.isActive,
-                                              );
-                                              return;
-                                            }
-                                            if (value == 'delete') {
-                                              await _deleteUser(user);
-                                            }
-                                          },
-                                          itemBuilder: (_) => [
-                                            const PopupMenuItem<String>(
-                                              value: 'view',
-                                              child: Text('Afficher'),
-                                            ),
-                                            const PopupMenuItem<String>(
-                                              value: 'edit',
-                                              child: Text('Modifier'),
-                                            ),
-                                            const PopupMenuItem<String>(
-                                              value: 'password',
-                                              child: Text(
-                                                'Réinitialiser le mot de passe',
-                                              ),
-                                            ),
-                                            PopupMenuItem<String>(
-                                              value: 'toggle',
-                                              child: Text(
-                                                user.isActive
-                                                    ? 'Désactiver le compte'
-                                                    : 'Réactiver le compte',
-                                              ),
-                                            ),
-                                            const PopupMenuItem<String>(
-                                              value: 'delete',
-                                              child: Text('Supprimer'),
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          alignment: WrapAlignment.spaceBetween,
-                          runSpacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            Text(
-                              totalUsers == 0
-                                  ? 'Aucun utilisateur'
-                                  : 'Page $_currentPage • ${users.length} résultat(s) sur $totalUsers',
-                            ),
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                const Text('Lignes/page:'),
-                                DropdownButton<int>(
-                                  value: _pageSize,
-                                  items: _pageSizeOptions
-                                      .map(
-                                        (rows) => DropdownMenuItem<int>(
-                                          value: rows,
-                                          child: Text('$rows'),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (value) {
-                                    if (value == null || value == _pageSize) {
-                                      return;
-                                    }
-                                    setState(() {
-                                      _pageSize = value;
-                                      _currentPage = 1;
-                                    });
-                                  },
-                                ),
-                                IconButton(
-                                  tooltip: 'Page précédente',
-                                  onPressed: pageData.hasPrevious
-                                      ? () => setState(() => _currentPage -= 1)
-                                      : null,
-                                  icon: const Icon(Icons.chevron_left),
-                                ),
-                                IconButton(
-                                  tooltip: 'Page suivante',
-                                  onPressed: pageData.hasNext
-                                      ? () => setState(() => _currentPage += 1)
-                                      : null,
-                                  icon: const Icon(Icons.chevron_right),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  );
-
-                  final detailsPanel = Container(
-                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surfaceContainerLowest,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: colorScheme.outlineVariant.withValues(
-                          alpha: 0.5,
-                        ),
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Fiche utilisateur',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 8),
-                        if (selectedUser == null)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 18),
-                            child: Text(
-                              'Selectionnez un utilisateur a gauche.',
-                            ),
-                          )
-                        else ...[
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 8,
-                            children: [
-                              _metricChip('Nom', selectedUser.fullName),
-                              _metricChip('Username', selectedUser.username),
-                              _metricChip(
-                                'Role',
-                                _roleLabel(selectedUser.role),
-                              ),
-                              _metricChip(
-                                'Email',
-                                selectedUser.email.isEmpty
-                                    ? '-'
-                                    : selectedUser.email,
-                              ),
-                              _metricChip(
-                                'Telephone',
-                                selectedUser.phone.isEmpty
-                                    ? '-'
-                                    : selectedUser.phone,
-                              ),
-                              _metricChip(
-                                'Etablissement',
-                                selectedUser.etablissementName.trim().isEmpty
-                                    ? '-'
-                                    : selectedUser.etablissementName,
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            children: [
-                              FilledButton.tonalIcon(
-                                onPressed: () => _openUserDetails(selectedUser),
-                                icon: const Icon(Icons.visibility_outlined),
-                                label: const Text('Afficher'),
-                              ),
-                              FilledButton.tonalIcon(
-                                onPressed: isMutating
-                                    ? null
-                                    : () => _openEditDialog(selectedUser),
-                                icon: const Icon(Icons.edit_outlined),
-                                label: const Text('Modifier'),
-                              ),
-                              FilledButton.icon(
-                                onPressed: isMutating
-                                    ? null
-                                    : () => _deleteUser(selectedUser),
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: const Color(0xFFB42318),
-                                ),
-                                icon: const Icon(Icons.delete_outline),
-                                label: const Text('Supprimer'),
-                              ),
-                            ],
-                          ),
-                        ],
-                        const SizedBox(height: 12),
                         Divider(color: colorScheme.outlineVariant),
                         const SizedBox(height: 10),
                         Text(
@@ -1845,22 +1640,37 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                     ),
                   );
 
-                  if (isWide) {
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(flex: 6, child: directoryPanel),
-                        const SizedBox(width: 12),
-                        Expanded(flex: 5, child: detailsPanel),
-                      ],
+                  // Trois etats, comme chez les eleves: le compte choisi,
+                  // les correspondances a departager, ou l'invitation a
+                  // chercher. La creation suit, elle ne depend d'aucun choix.
+                  final Widget zoneResultat;
+                  if (selectedUser != null) {
+                    zoneResultat = UserPaletteCard(
+                      compte: selectedUser,
+                      actions: _actionsPalette(selectedUser, isMutating),
+                      onClear: filteredUsers.length > 1
+                          ? () => setState(() => _selectedUserId = null)
+                          : null,
+                    );
+                  } else if (_searchTerm.trim().isNotEmpty &&
+                      filteredUsers.length > 1) {
+                    zoneResultat = _carteCorrespondances(filteredUsers);
+                  } else {
+                    zoneResultat = EtatVideRecherche(
+                      recherche: _searchTerm,
+                      invitation:
+                          'Recherchez un utilisateur pour ouvrir sa palette.',
+                      precision: 'Nom, identifiant, e-mail ou téléphone.',
+                      motAucun: 'Aucun utilisateur ne correspond à',
                     );
                   }
 
                   return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      directoryPanel,
+                      zoneResultat,
                       const SizedBox(height: 12),
-                      detailsPanel,
+                      panneauCreation,
                     ],
                   );
                 },

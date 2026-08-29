@@ -66,6 +66,11 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   List<Map<String, dynamic>> _journalFiches = const [];
   bool _journalLoading = false;
 
+  /// Vrai pendant la fabrication du PDF de la journee: le document est monte
+  /// classe par classe cote serveur, et relancer l'export pendant ce temps
+  /// referait tout le travail pour rien.
+  bool _exportJourneeEnCours = false;
+
   /// Filtres du journal. Le serveur les acceptait deja; aucun n'etait offert a
   /// l'ecran, et sa reponse est plafonnee: les fiches anciennes devenaient
   /// inatteignables des que l'annee avancait.
@@ -134,7 +139,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
       _sheetLoading = true;
     });
     try {
-      final rows = await ref.read(attendanceRepositoryProvider).fetchSheetClassrooms();
+      final rows = await ref
+          .read(attendanceRepositoryProvider)
+          .fetchSheetClassrooms();
       if (!mounted) {
         return;
       }
@@ -159,7 +166,12 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
         await _loadClassSheet();
       }
     } catch (error) {
-      _showMessage(_sheetErrorMessage(error, fallback: 'Erreur chargement classes (fiche).'));
+      _showMessage(
+        _sheetErrorMessage(
+          error,
+          fallback: 'Erreur chargement classes (fiche).',
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -325,7 +337,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
         _dernierChargement = DateTime.now();
       });
     } catch (error) {
-      _showMessage(_sheetErrorMessage(error, fallback: 'Erreur chargement fiche.'));
+      _showMessage(
+        _sheetErrorMessage(error, fallback: 'Erreur chargement fiche.'),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -375,7 +389,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
       // La fiche qu'on vient d'enregistrer doit apparaitre au journal.
       await _loadSheetJournal();
     } catch (error) {
-      _showMessage(_sheetErrorMessage(error, fallback: 'Erreur enregistrement fiche.'));
+      _showMessage(
+        _sheetErrorMessage(error, fallback: 'Erreur enregistrement fiche.'),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -414,7 +430,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
       );
       await _loadClassSheet();
     } catch (error) {
-      _showMessage(_sheetErrorMessage(error, fallback: 'Erreur validation fiche.'));
+      _showMessage(
+        _sheetErrorMessage(error, fallback: 'Erreur validation fiche.'),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -454,6 +472,48 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
       _showMessage('Fiche PDF exportée.', isSuccess: true);
     } catch (error) {
       _showMessage(_sheetErrorMessage(error, fallback: 'Erreur export PDF.'));
+    }
+  }
+
+  /// Exporte en un seul PDF toutes les fiches d'un jour.
+  ///
+  /// La journee choisie est celle du filtre « Du » du journal, sinon celle de
+  /// la feuille affichee: on exporte le jour qu'on est en train de regarder,
+  /// sans avoir a le ressaisir.
+  Future<void> _exporterLaJournee() async {
+    final jour = _journalDu ?? _sheetSelectedDate;
+    setState(() => _exportJourneeEnCours = true);
+    try {
+      final resultat = await ref
+          .read(attendanceRepositoryProvider)
+          .exportDaySheets(date: _apiDate(jour));
+
+      if (resultat.bytes.isEmpty) {
+        _showMessage('Export de la journée vide.');
+        return;
+      }
+
+      await Printing.sharePdf(
+        bytes: Uint8List.fromList(resultat.bytes),
+        filename: 'presences_${_apiDate(jour)}.pdf',
+      );
+      if (!mounted) return;
+
+      final nombre = resultat.nombreFiches;
+      _showMessage(
+        nombre > 0
+            ? 'Journée exportée : $nombre fiche${nombre > 1 ? 's' : ''}.'
+            : 'Journée exportée.',
+        isSuccess: true,
+      );
+    } catch (error) {
+      // Une journee sans fiche revient en 400 avec son propre message: le
+      // serveur nomme la date, on le laisse parler plutot que de le reecrire.
+      _showMessage(
+        _sheetErrorMessage(error, fallback: 'Erreur export de la journée.'),
+      );
+    } finally {
+      if (mounted) setState(() => _exportJourneeEnCours = false);
     }
   }
 
@@ -778,15 +838,11 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .tertiaryContainer
+                          color: Theme.of(context).colorScheme.tertiaryContainer
                               .withValues(alpha: 0.55),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .outlineVariant,
+                            color: Theme.of(context).colorScheme.outlineVariant,
                           ),
                         ),
                         child: Row(
@@ -903,12 +959,16 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                           runSpacing: 8,
                           children: [
                             OutlinedButton.icon(
-                              onPressed: _sheetLoading ? null : _exportClassSheetPdf,
+                              onPressed: _sheetLoading
+                                  ? null
+                                  : _exportClassSheetPdf,
                               icon: const Icon(Icons.picture_as_pdf_outlined),
                               label: const Text('Export PDF'),
                             ),
                             OutlinedButton.icon(
-                              onPressed: _sheetLoading ? null : _exportClassSheetExcel,
+                              onPressed: _sheetLoading
+                                  ? null
+                                  : _exportClassSheetExcel,
                               icon: const Icon(Icons.table_view_outlined),
                               label: const Text('Export Excel'),
                             ),
@@ -929,7 +989,8 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                                 ),
                               ),
                             FilledButton.icon(
-                              onPressed: (!canWriteSheet ||
+                              onPressed:
+                                  (!canWriteSheet ||
                                       _sheetSaving ||
                                       _sheetLoading ||
                                       _sheetLocked)
@@ -1010,10 +1071,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                           width: 150,
                           child: TextFormField(
                             controller: _conduiteController,
-                            keyboardType:
-                                const TextInputType.numberWithOptions(
-                                  decimal: true,
-                                ),
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
                             decoration: const InputDecoration(
                               labelText: 'Conduite (/20)',
                               isDense: true,
@@ -1022,7 +1082,8 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                           ),
                         ),
                         FilledButton.icon(
-                          onPressed: (_conduiteSaving || _selectedStudentId == null)
+                          onPressed:
+                              (_conduiteSaving || _selectedStudentId == null)
                               ? null
                               : _enregistrerConduite,
                           icon: _conduiteSaving
@@ -1042,61 +1103,110 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                 ),
               ),
             ),
-          const SizedBox(height: 16),
-          const Text(
-            'Fiches enregistrées',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Les fiches déjà saisies, par classe et par date.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 10),
-          AttendanceJournalFilters(
-            classes: _sheetClassrooms,
-            classeSelectionnee: _journalClasseId,
-            du: _journalDu,
-            au: _journalAu,
-            nombreFiches: _journalFiches.length,
-            // Le serveur coupe a 400 lignes: atteindre ce nombre signale une
-            // liste incomplete, pas un journal complet de 400 fiches.
-            listeTronquee: _journalFiches.length >= _plafondJournal,
-            actif: !_journalLoading,
-            onClasseChangee: (valeur) {
-              setState(() => _journalClasseId = valeur);
-              _loadSheetJournal();
-            },
-            onDuChange: (valeur) {
-              setState(() => _journalDu = valeur);
-              _loadSheetJournal();
-            },
-            onAuChange: (valeur) {
-              setState(() => _journalAu = valeur);
-              _loadSheetJournal();
-            },
-            onReinitialiser: () {
-              setState(() {
-                _journalClasseId = null;
-                _journalDu = null;
-                _journalAu = null;
-              });
-              _loadSheetJournal();
-            },
-          ),
-          const SizedBox(height: 10),
-          AttendanceSheetJournal(
-            fiches: _journalFiches,
-            loading: _journalLoading,
-            // Consulter et reprendre sont deux gestes differents: l'un ouvre
-            // le document, l'autre ramene la fiche en saisie.
-            onVoir: _ouvrirApercuFiche,
-            onModifier: _chargerFicheDansFormulaire,
-            onExporterPdf: (classroomId, date) =>
-                _exportSheetAt(classroomId, date, excel: false),
-            onExporterExcel: (classroomId, date) =>
-                _exportSheetAt(classroomId, date, excel: true),
-          ),
+          // Tout le journal est reserve a qui peut voir la feuille. Il
+          // s'affichait auparavant pour tous, vide et inerte -- ses donnees
+          // n'etant jamais chargees. Ses filtres et son export, eux,
+          // lanceraient des appels que le serveur refuse: la regle du projet
+          // est qu'aucun bouton ne mene a un 403.
+          if (canUseSheet) ...[
+            const SizedBox(height: 16),
+            // Meme seuil que le journal juste en dessous: cote a cote tant qu'il
+            // y a la place, sinon le bouton passe sous le titre. Sur un
+            // telephone, le garder a droite ecrasait le titre sur trois lignes.
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final titre = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Fiches enregistrées',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Les fiches déjà saisies, par classe et par date.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                );
+                // Le geste de fin de journee: tout l'etablissement en un seul
+                // document, plutot qu'un export par classe a recoller.
+                final bouton = OutlinedButton.icon(
+                  onPressed: _exportJourneeEnCours ? null : _exporterLaJournee,
+                  icon: _exportJourneeEnCours
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                  label: const Text('Exporter la journée'),
+                );
+
+                if (constraints.maxWidth < 720) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [titre, const SizedBox(height: 10), bouton],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: titre),
+                    bouton,
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+            AttendanceJournalFilters(
+              classes: _sheetClassrooms,
+              classeSelectionnee: _journalClasseId,
+              du: _journalDu,
+              au: _journalAu,
+              nombreFiches: _journalFiches.length,
+              // Le serveur coupe a 400 lignes: atteindre ce nombre signale une
+              // liste incomplete, pas un journal complet de 400 fiches.
+              listeTronquee: _journalFiches.length >= _plafondJournal,
+              actif: !_journalLoading,
+              onClasseChangee: (valeur) {
+                setState(() => _journalClasseId = valeur);
+                _loadSheetJournal();
+              },
+              onDuChange: (valeur) {
+                setState(() => _journalDu = valeur);
+                _loadSheetJournal();
+              },
+              onAuChange: (valeur) {
+                setState(() => _journalAu = valeur);
+                _loadSheetJournal();
+              },
+              onReinitialiser: () {
+                setState(() {
+                  _journalClasseId = null;
+                  _journalDu = null;
+                  _journalAu = null;
+                });
+                _loadSheetJournal();
+              },
+            ),
+            const SizedBox(height: 10),
+            AttendanceSheetJournal(
+              fiches: _journalFiches,
+              loading: _journalLoading,
+              // Consulter et reprendre sont deux gestes differents: l'un ouvre
+              // le document, l'autre ramene la fiche en saisie.
+              onVoir: _ouvrirApercuFiche,
+              onModifier: _chargerFicheDansFormulaire,
+              onExporterPdf: (classroomId, date) =>
+                  _exportSheetAt(classroomId, date, excel: false),
+              onExporterExcel: (classroomId, date) =>
+                  _exportSheetAt(classroomId, date, excel: true),
+            ),
+          ],
         ],
       ),
     );
@@ -1192,14 +1302,12 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                 ),
               ),
               lineBarsData: [
-                _serie(
-                  [for (final jour in stats.daily) jour.absences],
-                  scheme.error,
-                ),
-                _serie(
-                  [for (final jour in stats.daily) jour.lates],
-                  scheme.tertiary,
-                ),
+                _serie([
+                  for (final jour in stats.daily) jour.absences,
+                ], scheme.error),
+                _serie([
+                  for (final jour in stats.daily) jour.lates,
+                ], scheme.tertiary),
               ],
             ),
           ),
@@ -1252,10 +1360,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   /// Un menu deroulant listait l'etablissement entier: inutilisable au-dela
   /// de cent eleves, et la page etait la seule des trois a ne proposer aucune
   /// recherche.
-  Widget _selecteurEleve(
-    BuildContext context,
-    List<AttendanceStudent> eleves,
-  ) {
+  Widget _selecteurEleve(BuildContext context, List<AttendanceStudent> eleves) {
     final saisie = _rechercheEleve.trim().toLowerCase();
     final correspondances = saisie.isEmpty
         ? eleves

@@ -6,6 +6,8 @@ import '../../auth/presentation/auth_controller.dart';
 import '../../../models/etablissement.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/permissions/module_permissions.dart';
+import '../../../core/widgets/barre_recherche_module.dart';
+import 'widgets/academique_palette_cards.dart';
 import 'widgets/assistant_ouverture_annee.dart';
 import 'widgets/carte_annee_active.dart';
 
@@ -33,6 +35,18 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
   int? _selectedSubjectClassroomId;
   String _classQuery = '';
   String _subjectQuery = '';
+
+  /// La recherche qui ouvre le module: elle cherche dans les classes et dans
+  /// les matieres a la fois. Les deux champs ci-dessus restent les filtres
+  /// locaux de leurs tableaux respectifs, plus bas dans la page.
+  final _rechercheController = TextEditingController();
+  String _recherche = '';
+
+  /// Ce que la palette montre: 'classe' ou 'matiere', et l'identifiant de
+  /// l'entite. Deux entites de types differents pouvant porter le meme
+  /// identifiant, le type ne peut pas se deduire du seul numero.
+  String? _typeSelectionne;
+  int? _idSelectionne;
   int? _subjectFilterClassroomId;
   int _classPage = 1;
   int _subjectPage = 1;
@@ -59,6 +73,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     _classSearchController.dispose();
     _subjectSearchController.dispose();
     _classNameController.dispose();
+    _rechercheController.dispose();
     super.dispose();
   }
 
@@ -976,6 +991,232 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     );
   }
 
+  /// La zone sous la barre: la palette choisie, les correspondances a
+  /// departager, ou l'invitation a chercher.
+  Widget _zoneRecherche({
+    required Map<int, Map<String, dynamic>> anneeParId,
+    required bool peutEcrire,
+  }) {
+    final classes = _classesTrouvees(anneeParId);
+    final matieres = _matieresTrouvees();
+
+    if (_typeSelectionne == 'classe') {
+      final classe = _classrooms.firstWhere(
+        (row) => _asInt(row['id']) == _idSelectionne,
+        orElse: () => const <String, dynamic>{},
+      );
+      if (classe.isNotEmpty) {
+        final classeId = _asInt(classe['id']);
+        return ClassePaletteCard(
+          classe: classe,
+          anneeNom:
+              (anneeParId[_asInt(classe['academic_year'])]?['name'] ?? '')
+                  .toString(),
+          matieres: _subjects
+              .where((m) => _asInt(m['classroom']) == classeId)
+              .toList(),
+          actions: _actionsClasse(classe, peutEcrire),
+          onClear: (classes.length + matieres.length) > 1
+              ? () => setState(() {
+                  _typeSelectionne = null;
+                  _idSelectionne = null;
+                })
+              : null,
+          onOuvrirMatiere: (matiere) =>
+              _choisir('matiere', _asInt(matiere['id'])),
+        );
+      }
+    }
+
+    if (_typeSelectionne == 'matiere') {
+      final matiere = _subjects.firstWhere(
+        (row) => _asInt(row['id']) == _idSelectionne,
+        orElse: () => const <String, dynamic>{},
+      );
+      if (matiere.isNotEmpty) {
+        return MatierePaletteCard(
+          matiere: matiere,
+          classeNom: (matiere['classroom_name'] ?? '').toString(),
+          actions: _actionsMatiere(matiere, peutEcrire),
+          onClear: (classes.length + matieres.length) > 1
+              ? () => setState(() {
+                  _typeSelectionne = null;
+                  _idSelectionne = null;
+                })
+              : null,
+          onOuvrirClasse: () => _choisir('classe', _asInt(matiere['classroom'])),
+        );
+      }
+    }
+
+    // Une seule reponse: inutile de faire cliquer pour rien, comme chez les
+    // eleves.
+    if (classes.length + matieres.length == 1) {
+      final unique = classes.isNotEmpty ? classes.first : matieres.first;
+      final type = classes.isNotEmpty ? 'classe' : 'matiere';
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _typeSelectionne == null) {
+          _choisir(type, _asInt(unique['id']));
+        }
+      });
+    }
+
+    if (classes.isNotEmpty || matieres.isNotEmpty) {
+      return _carteCorrespondances(classes, matieres);
+    }
+
+    return EtatVideRecherche(
+      recherche: _recherche,
+      invitation: 'Recherchez une classe ou une matière pour ouvrir sa palette.',
+      precision: 'Nom de classe, intitulé ou code de matière, année scolaire.',
+      motAucun: 'Rien ne correspond à',
+    );
+  }
+
+  /// Consulter et corriger une classe. La suppression vit dans la fiche
+  /// detaillee, derriere son controle de dependances.
+  List<Widget> _actionsClasse(Map<String, dynamic> classe, bool peutEcrire) {
+    return [
+      FilledButton.tonalIcon(
+        onPressed: _saving ? null : () => _openClassroomDetails(classe),
+        icon: const Icon(Icons.visibility_outlined),
+        label: const Text('Afficher'),
+      ),
+      FilledButton.tonalIcon(
+        onPressed: (_saving || !peutEcrire)
+            ? null
+            : () => _openEditClassroomForm(classe),
+        icon: const Icon(Icons.edit_outlined),
+        label: const Text('Modifier'),
+      ),
+    ];
+  }
+
+  List<Widget> _actionsMatiere(Map<String, dynamic> matiere, bool peutEcrire) {
+    return [
+      FilledButton.tonalIcon(
+        onPressed: _saving ? null : () => _openSubjectDetails(matiere),
+        icon: const Icon(Icons.visibility_outlined),
+        label: const Text('Afficher'),
+      ),
+      FilledButton.tonalIcon(
+        onPressed: (_saving || !peutEcrire)
+            ? null
+            : () => _openEditSubjectForm(matiere),
+        icon: const Icon(Icons.edit_outlined),
+        label: const Text('Modifier'),
+      ),
+    ];
+  }
+
+  /// Les classes qui repondent a la recherche du haut de page.
+  List<Map<String, dynamic>> _classesTrouvees(
+    Map<int, Map<String, dynamic>> anneeParId,
+  ) {
+    final terme = _recherche.trim().toLowerCase();
+    if (terme.isEmpty) return const [];
+    return _classrooms.where((classe) {
+      final nom = _texteBas(classe['name']);
+      final annee = _texteBas(
+        anneeParId[_asInt(classe['academic_year'])]?['name'],
+      );
+      return nom.contains(terme) || annee.contains(terme);
+    }).toList();
+  }
+
+  /// Les matieres qui repondent a la meme recherche.
+  ///
+  /// Le nom de la classe en fait partie: « 6e A » doit ramener la classe et
+  /// tout ce qu'elle enseigne.
+  List<Map<String, dynamic>> _matieresTrouvees() {
+    final terme = _recherche.trim().toLowerCase();
+    if (terme.isEmpty) return const [];
+    return _subjects.where((matiere) {
+      return _texteBas(matiere['name']).contains(terme) ||
+          _texteBas(matiere['code']).contains(terme) ||
+          _texteBas(matiere['classroom_name']).contains(terme);
+    }).toList();
+  }
+
+  static String _texteBas(dynamic valeur) =>
+      (valeur ?? '').toString().toLowerCase();
+
+  void _choisir(String type, int id) {
+    setState(() {
+      _typeSelectionne = type;
+      _idSelectionne = id;
+    });
+  }
+
+  void _effacerRecherche() {
+    _rechercheController.clear();
+    setState(() {
+      _recherche = '';
+      _typeSelectionne = null;
+      _idSelectionne = null;
+    });
+  }
+
+  /// Les correspondances a departager, classes et matieres melees.
+  ///
+  /// Une puce dit de quel type est chaque ligne: sans elle, « 6e A » la classe
+  /// et « 6e A » la matiere d'une autre classe se confondraient.
+  Widget _carteCorrespondances(
+    List<Map<String, dynamic>> classes,
+    List<Map<String, dynamic>> matieres,
+  ) {
+    final textTheme = Theme.of(context).textTheme;
+    final total = classes.length + matieres.length;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$total résultats',
+              style: textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Choisissez ce dont vous voulez ouvrir la palette.',
+              style: textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            for (final classe in classes)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const CircleAvatar(
+                  child: Icon(Icons.meeting_room_outlined, size: 20),
+                ),
+                title: Text('${classe['name'] ?? '-'}'),
+                subtitle: Text(
+                  'Classe · ${_asInt(classe['student_count'])} élève'
+                  '${_asInt(classe['student_count']) > 1 ? 's' : ''}',
+                ),
+                onTap: () => _choisir('classe', _asInt(classe['id'])),
+              ),
+            for (final matiere in matieres)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const CircleAvatar(
+                  child: Icon(Icons.menu_book_outlined, size: 20),
+                ),
+                title: Text('${matiere['name'] ?? '-'}'),
+                subtitle: Text(
+                  'Matière · ${matiere['classroom_name'] ?? 'classe inconnue'}',
+                ),
+                onTap: () => _choisir('matiere', _asInt(matiere['id'])),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final authUser = ref.watch(authControllerProvider).value;
@@ -1307,6 +1548,27 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
             ),
           ],
         ),
+        const SizedBox(height: 14),
+        // Le point d'entree du module, comme chez les eleves, les enseignants
+        // et les comptes: une seule barre, qui cherche dans les classes et
+        // dans les matieres. Les deux tableaux plus bas gardent leurs propres
+        // filtres, pour parcourir plutot que pour trouver.
+        BarreRechercheModule(
+          controller: _rechercheController,
+          indication:
+              'Rechercher une classe ou une matière : nom, code, année…',
+          onChanged: (valeur) => setState(() {
+            _recherche = valeur;
+            // Une frappe de plus invalide le choix precedent: garder la
+            // palette ouverte sur une entite hors resultats egarerait.
+            _typeSelectionne = null;
+            _idSelectionne = null;
+          }),
+          onEffacer: _effacerRecherche,
+          compact: MediaQuery.sizeOf(context).width < 720,
+        ),
+        const SizedBox(height: 12),
+        _zoneRecherche(anneeParId: yearById, peutEcrire: peutEcrire),
         const SizedBox(height: 14),
         Card(
           child: Padding(
