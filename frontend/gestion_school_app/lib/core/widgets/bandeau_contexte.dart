@@ -33,7 +33,12 @@ class BandeauContexte extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Flexible(
+        // Une borne haute plutot qu'un `Flexible` nu: le nom d'ecole cede la
+        // place au-dela, mais l'annee -- dont le libelle est court et connu
+        // d'avance -- n'a plus a se faire tronquer en « 2025-2... » parce que
+        // le voisin s'etale.
+        ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: etendu ? 260 : 170),
           child: SelecteurEtablissement(
             etendu: etendu,
             surFondSombre: surFondSombre,
@@ -47,11 +52,9 @@ class BandeauContexte extends StatelessWidget {
           margin: EdgeInsets.symmetric(horizontal: etendu ? 12 : 8),
           color: separateur,
         ),
-        Flexible(
-          child: SelecteurAnneeScolaire(
-            etendu: etendu,
-            surFondSombre: surFondSombre,
-          ),
+        SelecteurAnneeScolaire(
+          etendu: etendu,
+          surFondSombre: surFondSombre,
         ),
       ],
     );

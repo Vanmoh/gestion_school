@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/models/paginated_result.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/widgets/barre_recherche_module.dart';
 import '../../auth/presentation/auth_controller.dart';
@@ -39,6 +40,23 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   /// « all », « actifs » ou « desactives ». C'est le filtre qui sort les
   /// comptes restes ouverts apres un depart.
   String _etatFilter = 'all';
+  /// Le formulaire de creation, replie par defaut.
+  ///
+  /// Il etait deploye en permanence sous la recherche: la page s'ouvrait sur
+  /// une quinzaine de champs vides alors qu'on vient presque toujours y
+  /// chercher un compte existant.
+  bool _creationOuverte = false;
+
+  /// La derniere page de comptes recue du serveur.
+  ///
+  /// Chaque frappe dans la recherche fabrique une nouvelle requete, donc un
+  /// nouveau provider, donc un etat « en chargement ». La page entiere etait
+  /// alors remplacee par une roue: en-tete, compteurs, filtres -- et le champ
+  /// de recherche lui-meme, detruit puis reconstruit, qui perdait le focus a
+  /// chaque lettre. On garde les resultats precedents a l'ecran pendant que
+  /// les suivants arrivent.
+  PaginatedResult<UserAccount>? _dernierePage;
+  final _ancreCreation = GlobalKey();
   int? _selectedUserId;
   int? _selectedCreateEtablissementId;
   int? _selectedCreateClassroomId;
@@ -53,6 +71,18 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   static const int _pageSize = 25;
   String _searchTerm = '';
   Timer? _searchDebounce;
+
+  /// Relance la liste pour que « en ligne » veuille dire maintenant.
+  ///
+  /// L'etat de presence a une duree de vie: passe la fenetre sans signe de
+  /// vie, la personne est hors ligne. Sans ce rappel, l'ecran gardait
+  /// l'affichage du moment ou il a ete charge -- quelqu'un parti depuis une
+  /// heure y restait vert jusqu'a ce qu'on recharge la page a la main.
+  Timer? _rafraichissementPresence;
+
+  /// Plus court que la fenetre de presence (75 s), pour qu'un passage hors
+  /// ligne se voie dans la foulee plutot qu'au coup d'apres.
+  static const Duration _cadencePresence = Duration(seconds: 30);
 
   static const List<(String, String)> _roles = [
     ('super_admin', 'Super Admin'),
@@ -73,10 +103,15 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       if (!mounted) return;
       _syncCreationReferences(force: true);
     });
+    _rafraichissementPresence = Timer.periodic(_cadencePresence, (_) {
+      if (!mounted) return;
+      unawaited(_refreshUsers());
+    });
   }
 
   @override
   void dispose() {
+    _rafraichissementPresence?.cancel();
     _searchDebounce?.cancel();
     _searchController.dispose();
     _usernameController.dispose();
@@ -893,6 +928,26 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     );
   }
 
+  /// Deplie ou replie le formulaire de creation, en bas de page.
+  ///
+  /// A l'ouverture on amene l'ancre a l'ecran: le formulaire nait sous la
+  /// zone de resultats, donc hors du champ de vision de qui vient de cliquer
+  /// dans la barre de recherche, tout en haut.
+  void _basculerCreation() {
+    setState(() => _creationOuverte = !_creationOuverte);
+    if (!_creationOuverte) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ancre = _ancreCreation.currentContext;
+      if (ancre == null) return;
+      Scrollable.ensureVisible(
+        ancre,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+        alignment: 0.1,
+      );
+    });
+  }
+
   /// Ouvre l'annuaire complet et ramene le compte choisi dans la palette.
   ///
   /// La page s'ouvre sur une recherche; parcourir tous les comptes reste
@@ -1050,6 +1105,632 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     final isMutating = mutationState.isLoading;
     final colorScheme = Theme.of(context).colorScheme;
 
+    // Le contenu est une fonction locale et non un `data:`: elle capture les
+    // variables du build sans qu'il faille les repasser une a une, et se
+    // rappelle avec les anciennes donnees pendant un rechargement.
+    Widget contenu(PaginatedResult<UserAccount> pageData) {
+      final users = pageData.results;
+      final existingUsernames = users
+        .map((user) => user.username.trim().toLowerCase())
+        .where((username) => username.isNotEmpty)
+        .toSet();
+      final filteredUsers = _filteredUsers(users);
+      _syncSelectedUser(filteredUsers);
+      final selectedUser = _currentSelectedUser(filteredUsers);
+
+      final totalUsers = pageData.count;
+      final adminCount = users
+          .where(
+            (user) =>
+                user.role == 'super_admin' ||
+                user.role == 'director' ||
+                user.role == 'promoter',
+          )
+          .length;
+      final teachingCount = users
+          .where(
+            (user) =>
+                user.role == 'teacher' ||
+                user.role == 'censor' ||
+                user.role == 'supervisor',
+          )
+          .length;
+      final familyCount = users
+          .where((user) => user.role == 'parent' || user.role == 'student')
+          .length;
+
+      return RefreshIndicator(
+        onRefresh: _refreshUsers,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(18),
+          children: [
+            Text(
+              'Gestion des utilisateurs',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Annuaire comptes, profil detaille et administration des acces.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              decoration: BoxDecoration(
+                color: colorScheme.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+                ),
+              ),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _metricChip('Total comptes', '$totalUsers'),
+                  _metricChip('Direction/Admin', '$adminCount'),
+                  _metricChip('Pedagogie', '$teachingCount'),
+                  _metricChip('Parents/Eleves', '$familyCount'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Le point d'entree du module, comme chez les eleves et les
+            // enseignants: on arrive avec un nom en tete. Les filtres role
+            // et etat restent dessous, ils cadrent la recherche sans la
+            // remplacer.
+            BarreRechercheModule(
+              controller: _searchController,
+              indication:
+                  'Rechercher un utilisateur : nom, identifiant, e-mail, téléphone…',
+              onChanged: _onSearchChanged,
+              onEffacer: () {
+                _searchDebounce?.cancel();
+                _searchController.clear();
+                setState(() {
+                  _searchTerm = '';
+                  _currentPage = 1;
+                  _selectedUserId = null;
+                });
+              },
+              // La page reste en place pendant qu'on tape; c'est cette
+              // pastille, et elle seule, qui signale l'aller-retour au
+              // serveur.
+              rechercheEnCours: usersAsync.isLoading,
+              compact: MediaQuery.sizeOf(context).width < 720,
+              actions: [
+                OutlinedButton.icon(
+                  onPressed: _ouvrirListeUtilisateurs,
+                  icon: const Icon(Icons.groups_2_outlined),
+                  label: const Text('Liste des utilisateurs'),
+                ),
+                // La creation prend sa place ici, a cote de l'annuaire:
+                // deux gestes de meme rang -- parcourir, ajouter -- au
+                // meme endroit, plutot qu'un formulaire deplie en
+                // permanence plus bas.
+                FilledButton.tonalIcon(
+                  key: const Key('basculer-creation-utilisateur'),
+                  onPressed: _basculerCreation,
+                  icon: Icon(
+                    _creationOuverte
+                        ? Icons.close_rounded
+                        : Icons.person_add_alt_1_outlined,
+                  ),
+                  label: Text(
+                    _creationOuverte
+                        ? 'Fermer la création'
+                        : 'Créer un utilisateur',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              decoration: BoxDecoration(
+                color: colorScheme.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                ),
+              ),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 240,
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _roleFilter,
+                      decoration: const InputDecoration(
+                        labelText: 'Filtrer par role',
+                      ),
+                      items: [
+                        const DropdownMenuItem<String>(
+                          value: 'all',
+                          child: Text('Tous les roles'),
+                        ),
+                        ..._roles.map(
+                          (item) => DropdownMenuItem<String>(
+                            value: item.$1,
+                            child: Text(item.$2),
+                          ),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        setState(() {
+                          _roleFilter = value ?? 'all';
+                          _currentPage = 1;
+                        });
+                      },
+                    ),
+                  ),
+                  SizedBox(
+                    width: 210,
+                    child: DropdownButtonFormField<String>(
+                      key: const Key('filtre-etat-compte'),
+                      initialValue: _etatFilter,
+                      decoration: const InputDecoration(
+                        labelText: 'État du compte',
+                      ),
+                      items: const [
+                        DropdownMenuItem<String>(
+                          value: 'all',
+                          child: Text('Tous les états'),
+                        ),
+                        DropdownMenuItem<String>(
+                          value: 'actifs',
+                          child: Text('Actifs'),
+                        ),
+                        DropdownMenuItem<String>(
+                          value: 'desactives',
+                          child: Text('Désactivés'),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        setState(() {
+                          _etatFilter = value ?? 'all';
+                          _currentPage = 1;
+                        });
+                      },
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: isMutating
+                        ? null
+                        : () {
+                            _searchDebounce?.cancel();
+                            _searchController.clear();
+                            setState(() {
+                              _roleFilter = 'all';
+                              _searchTerm = '';
+                              _currentPage = 1;
+                            });
+                          },
+                    icon: const Icon(Icons.filter_alt_off_outlined),
+                    label: const Text('Reinitialiser'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+
+
+                // Le panneau ne porte plus que la creation: l'identite et
+                // les actions d'un compte vivent desormais dans sa palette,
+                // au-dessus.
+                final panneauCreation = Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: colorScheme.outlineVariant.withValues(
+                        alpha: 0.5,
+                      ),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Divider(color: colorScheme.outlineVariant),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Creer un utilisateur',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Form(
+                        key: _formKey,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                SizedBox(
+                                  width: 220,
+                                  child: TextFormField(
+                                    controller: _usernameController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Nom utilisateur',
+                                    ),
+                                    validator: (value) =>
+                                        (value == null ||
+                                          value.trim().isEmpty)
+                                        ? 'Champ requis'
+                                        : existingUsernames.contains(
+                                          value.trim().toLowerCase(),
+                                        )
+                                        ? 'Ce nom utilisateur existe deja'
+                                        : null,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 170,
+                                  child: TextFormField(
+                                    controller: _firstNameController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Prenom',
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 170,
+                                  child: TextFormField(
+                                    controller: _lastNameController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Nom',
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 250,
+                                  child: TextFormField(
+                                    controller: _emailController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Email',
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 200,
+                                  child: TextFormField(
+                                    controller: _phoneController,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Telephone',
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 220,
+                                  child: DropdownButtonFormField<String>(
+                                    initialValue: _selectedRole,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Role',
+                                    ),
+                                    items: _roles
+                                        .map(
+                                          (item) => DropdownMenuItem<String>(
+                                            value: item.$1,
+                                            child: Text(item.$2),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: (value) {
+                                      if (value != null) {
+                                        setState(() {
+                                          _selectedRole = value;
+                                          _selectedCreateClassroomId = null;
+                                          _selectedCreateStudentIds.clear();
+                                        });
+                                        unawaited(_syncCreationReferences(force: true));
+                                      }
+                                    },
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 280,
+                                  child: DropdownButtonFormField<int>(
+                                    initialValue: isSuperAdmin
+                                        ? (_selectedCreateEtablissementId ??
+                                              selectedEtablissement?.id)
+                                        : selectedEtablissement?.id,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Etablissement',
+                                    ),
+                                    items: allEtablissements
+                                        .map(
+                                          (etab) => DropdownMenuItem<int>(
+                                            value: etab.id,
+                                            child: Text(etab.name),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: !isSuperAdmin
+                                        ? null
+                                        : (value) {
+                                            setState(() {
+                                              _selectedCreateEtablissementId =
+                                                  value;
+                                              _selectedCreateClassroomId = null;
+                                              _selectedCreateStudentIds.clear();
+                                            });
+                                            unawaited(_syncCreationReferences(force: true));
+                                          },
+                                    validator: (value) {
+                                      if ((value ??
+                                              selectedEtablissement?.id) ==
+                                          null) {
+                                        return 'Etablissement requis';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 220,
+                                  child: TextFormField(
+                                    controller: _passwordController,
+                                    obscureText: true,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Mot de passe',
+                                    ),
+                                    validator: (value) {
+                                      if (value == null ||
+                                          value.trim().length < 8) {
+                                        return '8 caracteres minimum';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            if (_roleNeedsClassroom(_selectedRole))
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                                margin: const EdgeInsets.only(bottom: 12),
+                                decoration: BoxDecoration(
+                                  color: colorScheme.surface,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _selectedRole == 'student'
+                                          ? 'Champs supplementaires eleve'
+                                          : 'Champs supplementaires parent',
+                                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Wrap(
+                                      spacing: 10,
+                                      runSpacing: 10,
+                                      crossAxisAlignment: WrapCrossAlignment.center,
+                                      children: [
+                                        SizedBox(
+                                          width: 320,
+                                          child: DropdownButtonFormField<int>(
+                                            initialValue: _selectedCreateClassroomId,
+                                            decoration: const InputDecoration(
+                                              labelText: 'Classe (obligatoire)',
+                                            ),
+                                            items: _classroomOptions
+                                                .map(
+                                                  (row) => DropdownMenuItem<int>(
+                                                    value: _asInt(row['id']),
+                                                    child: Text(
+                                                      row['name']?.toString() ??
+                                                          'Classe #${_asInt(row['id'])}',
+                                                    ),
+                                                  ),
+                                                )
+                                                .toList(),
+                                            onChanged: _loadingCreationRefs
+                                                ? null
+                                                : (value) {
+                                                    setState(
+                                                      () => _selectedCreateClassroomId = value,
+                                                    );
+                                                  },
+                                            validator: (value) {
+                                              if (_roleNeedsClassroom(_selectedRole) &&
+                                                  value == null) {
+                                                return 'Classe requise';
+                                              }
+                                              return null;
+                                            },
+                                          ),
+                                        ),
+                                        if (_roleNeedsStudents(_selectedRole))
+                                          SizedBox(
+                                            width: 350,
+                                            child: FormField<Set<int>>(
+                                              initialValue: _selectedCreateStudentIds,
+                                              validator: (_) {
+                                                if (_roleNeedsStudents(_selectedRole) &&
+                                                    _selectedCreateStudentIds.isEmpty) {
+                                                  return 'Selectionnez au moins un eleve';
+                                                }
+                                                return null;
+                                              },
+                                              builder: (field) {
+                                                final selectedNames = _selectedStudentNames();
+                                                return Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    OutlinedButton.icon(
+                                                      onPressed: _loadingCreationRefs
+                                                          ? null
+                                                          : () async {
+                                                              await _openStudentMultiSelectDialog();
+                                                              field.didChange(
+                                                                Set<int>.from(_selectedCreateStudentIds),
+                                                              );
+                                                            },
+                                                      icon: const Icon(Icons.groups_2_outlined),
+                                                      label: Text(
+                                                        _selectedCreateStudentIds.isEmpty
+                                                            ? 'Selectionner les eleves (obligatoire)'
+                                                            : '${_selectedCreateStudentIds.length} eleve(s) selectionne(s)',
+                                                      ),
+                                                    ),
+                                                    if (selectedNames.isNotEmpty) ...[
+                                                      const SizedBox(height: 8),
+                                                      Wrap(
+                                                        spacing: 6,
+                                                        runSpacing: 6,
+                                                        children: selectedNames
+                                                            .map((name) => Chip(label: Text(name)))
+                                                            .toList(growable: false),
+                                                      ),
+                                                    ],
+                                                    if (field.errorText != null)
+                                                      Padding(
+                                                        padding: const EdgeInsets.only(top: 6),
+                                                        child: Text(
+                                                          field.errorText!,
+                                                          style: TextStyle(
+                                                            color: Theme.of(context).colorScheme.error,
+                                                            fontSize: 12,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                  ],
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      _selectedRole == 'student'
+                                          ? 'Un eleve doit obligatoirement etre associe a une classe.'
+                                          : 'Un parent doit avoir une classe de reference et au moins un eleve. Les eleves peuvent venir de classes differentes.',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                    if (_selectedCreateClassroomId != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text(
+                                          'Classe selectionnee: ${_classroomDisplayName(_selectedCreateClassroomId)}',
+                                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            if (_roleNeedsClassroom(_selectedRole) && _loadingCreationRefs)
+                              const Padding(
+                                padding: EdgeInsets.only(bottom: 10),
+                                child: LinearProgressIndicator(minHeight: 2),
+                              ),
+                            if (!isSuperAdmin &&
+                                selectedEtablissement != null)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 10),
+                                child: Text(
+                                  'Les nouveaux comptes seront crees dans: ${selectedEtablissement.name}',
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.bodySmall,
+                                ),
+                              ),
+                            FilledButton.icon(
+                              onPressed: isMutating ? null : _createUser,
+                              icon: isMutating
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.person_add_alt_1_outlined,
+                                    ),
+                              label: const Text('Creer utilisateur'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+
+                // Trois etats, comme chez les eleves: le compte choisi,
+                // les correspondances a departager, ou l'invitation a
+                // chercher. La creation suit, elle ne depend d'aucun choix.
+                final Widget zoneResultat;
+                if (selectedUser != null) {
+                  zoneResultat = UserPaletteCard(
+                    compte: selectedUser,
+                    actions: _actionsPalette(selectedUser, isMutating),
+                    onClear: filteredUsers.length > 1
+                        ? () => setState(() => _selectedUserId = null)
+                        : null,
+                  );
+                } else if (_searchTerm.trim().isNotEmpty &&
+                    filteredUsers.length > 1) {
+                  zoneResultat = _carteCorrespondances(filteredUsers);
+                } else {
+                  zoneResultat = EtatVideRecherche(
+                    recherche: _searchTerm,
+                    invitation:
+                        'Recherchez un utilisateur pour ouvrir sa palette.',
+                    precision: 'Nom, identifiant, e-mail ou téléphone.',
+                    motAucun: 'Aucun utilisateur ne correspond à',
+                  );
+                }
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    zoneResultat,
+                    if (_creationOuverte) ...[
+                      const SizedBox(height: 12),
+                      KeyedSubtree(
+                        key: _ancreCreation,
+                        child: panneauCreation,
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (usersAsync.hasValue) {
+      _dernierePage = usersAsync.requireValue;
+    }
+    final pageAffichee = usersAsync.valueOrNull ?? _dernierePage;
+
+    // On ne vide l'ecran que faute de tout: au premier chargement, ou sur une
+    // erreur survenue avant d'avoir jamais rien affiche.
+    if (pageAffichee != null) {
+      return contenu(pageAffichee);
+    }
+
     return usersAsync.when(
       loading: () => RefreshIndicator(
         onRefresh: _refreshUsers,
@@ -1095,590 +1776,8 @@ class _UsersPageState extends ConsumerState<UsersPage> {
           ],
         ),
       ),
-      data: (pageData) {
-        final users = pageData.results;
-        final existingUsernames = users
-          .map((user) => user.username.trim().toLowerCase())
-          .where((username) => username.isNotEmpty)
-          .toSet();
-        final filteredUsers = _filteredUsers(users);
-        _syncSelectedUser(filteredUsers);
-        final selectedUser = _currentSelectedUser(filteredUsers);
-
-        final totalUsers = pageData.count;
-        final adminCount = users
-            .where(
-              (user) =>
-                  user.role == 'super_admin' ||
-                  user.role == 'director' ||
-                  user.role == 'promoter',
-            )
-            .length;
-        final teachingCount = users
-            .where(
-              (user) =>
-                  user.role == 'teacher' ||
-                  user.role == 'censor' ||
-                  user.role == 'supervisor',
-            )
-            .length;
-        final familyCount = users
-            .where((user) => user.role == 'parent' || user.role == 'student')
-            .length;
-
-        return RefreshIndicator(
-          onRefresh: _refreshUsers,
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(18),
-            children: [
-              Text(
-                'Gestion des utilisateurs',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Annuaire comptes, profil detaille et administration des acces.',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 14),
-              Container(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                decoration: BoxDecoration(
-                  color: colorScheme.surfaceContainerLowest,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: colorScheme.outlineVariant.withValues(alpha: 0.55),
-                  ),
-                ),
-                child: Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    _metricChip('Total comptes', '$totalUsers'),
-                    _metricChip('Direction/Admin', '$adminCount'),
-                    _metricChip('Pedagogie', '$teachingCount'),
-                    _metricChip('Parents/Eleves', '$familyCount'),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              // Le point d'entree du module, comme chez les eleves et les
-              // enseignants: on arrive avec un nom en tete. Les filtres role
-              // et etat restent dessous, ils cadrent la recherche sans la
-              // remplacer.
-              BarreRechercheModule(
-                controller: _searchController,
-                indication:
-                    'Rechercher un utilisateur : nom, identifiant, e-mail, téléphone…',
-                onChanged: _onSearchChanged,
-                onEffacer: () {
-                  _searchDebounce?.cancel();
-                  _searchController.clear();
-                  setState(() {
-                    _searchTerm = '';
-                    _currentPage = 1;
-                    _selectedUserId = null;
-                  });
-                },
-                compact: MediaQuery.sizeOf(context).width < 720,
-                actions: [
-                  OutlinedButton.icon(
-                    onPressed: _ouvrirListeUtilisateurs,
-                    icon: const Icon(Icons.groups_2_outlined),
-                    label: const Text('Liste des utilisateurs'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                decoration: BoxDecoration(
-                  color: colorScheme.surfaceContainerLowest,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: colorScheme.outlineVariant.withValues(alpha: 0.5),
-                  ),
-                ),
-                child: Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: 240,
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _roleFilter,
-                        decoration: const InputDecoration(
-                          labelText: 'Filtrer par role',
-                        ),
-                        items: [
-                          const DropdownMenuItem<String>(
-                            value: 'all',
-                            child: Text('Tous les roles'),
-                          ),
-                          ..._roles.map(
-                            (item) => DropdownMenuItem<String>(
-                              value: item.$1,
-                              child: Text(item.$2),
-                            ),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setState(() {
-                            _roleFilter = value ?? 'all';
-                            _currentPage = 1;
-                          });
-                        },
-                      ),
-                    ),
-                    SizedBox(
-                      width: 210,
-                      child: DropdownButtonFormField<String>(
-                        key: const Key('filtre-etat-compte'),
-                        initialValue: _etatFilter,
-                        decoration: const InputDecoration(
-                          labelText: 'État du compte',
-                        ),
-                        items: const [
-                          DropdownMenuItem<String>(
-                            value: 'all',
-                            child: Text('Tous les états'),
-                          ),
-                          DropdownMenuItem<String>(
-                            value: 'actifs',
-                            child: Text('Actifs'),
-                          ),
-                          DropdownMenuItem<String>(
-                            value: 'desactives',
-                            child: Text('Désactivés'),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setState(() {
-                            _etatFilter = value ?? 'all';
-                            _currentPage = 1;
-                          });
-                        },
-                      ),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: isMutating
-                          ? null
-                          : () {
-                              _searchDebounce?.cancel();
-                              _searchController.clear();
-                              setState(() {
-                                _roleFilter = 'all';
-                                _searchTerm = '';
-                                _currentPage = 1;
-                              });
-                            },
-                      icon: const Icon(Icons.filter_alt_off_outlined),
-                      label: const Text('Reinitialiser'),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              LayoutBuilder(
-                builder: (context, constraints) {
-
-
-                  // Le panneau ne porte plus que la creation: l'identite et
-                  // les actions d'un compte vivent desormais dans sa palette,
-                  // au-dessus.
-                  final panneauCreation = Container(
-                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surfaceContainerLowest,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: colorScheme.outlineVariant.withValues(
-                          alpha: 0.5,
-                        ),
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Divider(color: colorScheme.outlineVariant),
-                        const SizedBox(height: 10),
-                        Text(
-                          'Creer un utilisateur',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 8),
-                        Form(
-                          key: _formKey,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Wrap(
-                                spacing: 10,
-                                runSpacing: 10,
-                                children: [
-                                  SizedBox(
-                                    width: 220,
-                                    child: TextFormField(
-                                      controller: _usernameController,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Nom utilisateur',
-                                      ),
-                                      validator: (value) =>
-                                          (value == null ||
-                                            value.trim().isEmpty)
-                                          ? 'Champ requis'
-                                          : existingUsernames.contains(
-                                            value.trim().toLowerCase(),
-                                          )
-                                          ? 'Ce nom utilisateur existe deja'
-                                          : null,
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 170,
-                                    child: TextFormField(
-                                      controller: _firstNameController,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Prenom',
-                                      ),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 170,
-                                    child: TextFormField(
-                                      controller: _lastNameController,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Nom',
-                                      ),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 250,
-                                    child: TextFormField(
-                                      controller: _emailController,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Email',
-                                      ),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 200,
-                                    child: TextFormField(
-                                      controller: _phoneController,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Telephone',
-                                      ),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 220,
-                                    child: DropdownButtonFormField<String>(
-                                      initialValue: _selectedRole,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Role',
-                                      ),
-                                      items: _roles
-                                          .map(
-                                            (item) => DropdownMenuItem<String>(
-                                              value: item.$1,
-                                              child: Text(item.$2),
-                                            ),
-                                          )
-                                          .toList(),
-                                      onChanged: (value) {
-                                        if (value != null) {
-                                          setState(() {
-                                            _selectedRole = value;
-                                            _selectedCreateClassroomId = null;
-                                            _selectedCreateStudentIds.clear();
-                                          });
-                                          unawaited(_syncCreationReferences(force: true));
-                                        }
-                                      },
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 280,
-                                    child: DropdownButtonFormField<int>(
-                                      initialValue: isSuperAdmin
-                                          ? (_selectedCreateEtablissementId ??
-                                                selectedEtablissement?.id)
-                                          : selectedEtablissement?.id,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Etablissement',
-                                      ),
-                                      items: allEtablissements
-                                          .map(
-                                            (etab) => DropdownMenuItem<int>(
-                                              value: etab.id,
-                                              child: Text(etab.name),
-                                            ),
-                                          )
-                                          .toList(),
-                                      onChanged: !isSuperAdmin
-                                          ? null
-                                          : (value) {
-                                              setState(() {
-                                                _selectedCreateEtablissementId =
-                                                    value;
-                                                _selectedCreateClassroomId = null;
-                                                _selectedCreateStudentIds.clear();
-                                              });
-                                              unawaited(_syncCreationReferences(force: true));
-                                            },
-                                      validator: (value) {
-                                        if ((value ??
-                                                selectedEtablissement?.id) ==
-                                            null) {
-                                          return 'Etablissement requis';
-                                        }
-                                        return null;
-                                      },
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: 220,
-                                    child: TextFormField(
-                                      controller: _passwordController,
-                                      obscureText: true,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Mot de passe',
-                                      ),
-                                      validator: (value) {
-                                        if (value == null ||
-                                            value.trim().length < 8) {
-                                          return '8 caracteres minimum';
-                                        }
-                                        return null;
-                                      },
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              if (_roleNeedsClassroom(_selectedRole))
-                                Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-                                  margin: const EdgeInsets.only(bottom: 12),
-                                  decoration: BoxDecoration(
-                                    color: colorScheme.surface,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                      color: colorScheme.outlineVariant.withValues(alpha: 0.5),
-                                    ),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        _selectedRole == 'student'
-                                            ? 'Champs supplementaires eleve'
-                                            : 'Champs supplementaires parent',
-                                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Wrap(
-                                        spacing: 10,
-                                        runSpacing: 10,
-                                        crossAxisAlignment: WrapCrossAlignment.center,
-                                        children: [
-                                          SizedBox(
-                                            width: 320,
-                                            child: DropdownButtonFormField<int>(
-                                              initialValue: _selectedCreateClassroomId,
-                                              decoration: const InputDecoration(
-                                                labelText: 'Classe (obligatoire)',
-                                              ),
-                                              items: _classroomOptions
-                                                  .map(
-                                                    (row) => DropdownMenuItem<int>(
-                                                      value: _asInt(row['id']),
-                                                      child: Text(
-                                                        row['name']?.toString() ??
-                                                            'Classe #${_asInt(row['id'])}',
-                                                      ),
-                                                    ),
-                                                  )
-                                                  .toList(),
-                                              onChanged: _loadingCreationRefs
-                                                  ? null
-                                                  : (value) {
-                                                      setState(
-                                                        () => _selectedCreateClassroomId = value,
-                                                      );
-                                                    },
-                                              validator: (value) {
-                                                if (_roleNeedsClassroom(_selectedRole) &&
-                                                    value == null) {
-                                                  return 'Classe requise';
-                                                }
-                                                return null;
-                                              },
-                                            ),
-                                          ),
-                                          if (_roleNeedsStudents(_selectedRole))
-                                            SizedBox(
-                                              width: 350,
-                                              child: FormField<Set<int>>(
-                                                initialValue: _selectedCreateStudentIds,
-                                                validator: (_) {
-                                                  if (_roleNeedsStudents(_selectedRole) &&
-                                                      _selectedCreateStudentIds.isEmpty) {
-                                                    return 'Selectionnez au moins un eleve';
-                                                  }
-                                                  return null;
-                                                },
-                                                builder: (field) {
-                                                  final selectedNames = _selectedStudentNames();
-                                                  return Column(
-                                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                                    children: [
-                                                      OutlinedButton.icon(
-                                                        onPressed: _loadingCreationRefs
-                                                            ? null
-                                                            : () async {
-                                                                await _openStudentMultiSelectDialog();
-                                                                field.didChange(
-                                                                  Set<int>.from(_selectedCreateStudentIds),
-                                                                );
-                                                              },
-                                                        icon: const Icon(Icons.groups_2_outlined),
-                                                        label: Text(
-                                                          _selectedCreateStudentIds.isEmpty
-                                                              ? 'Selectionner les eleves (obligatoire)'
-                                                              : '${_selectedCreateStudentIds.length} eleve(s) selectionne(s)',
-                                                        ),
-                                                      ),
-                                                      if (selectedNames.isNotEmpty) ...[
-                                                        const SizedBox(height: 8),
-                                                        Wrap(
-                                                          spacing: 6,
-                                                          runSpacing: 6,
-                                                          children: selectedNames
-                                                              .map((name) => Chip(label: Text(name)))
-                                                              .toList(growable: false),
-                                                        ),
-                                                      ],
-                                                      if (field.errorText != null)
-                                                        Padding(
-                                                          padding: const EdgeInsets.only(top: 6),
-                                                          child: Text(
-                                                            field.errorText!,
-                                                            style: TextStyle(
-                                                              color: Theme.of(context).colorScheme.error,
-                                                              fontSize: 12,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                    ],
-                                                  );
-                                                },
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        _selectedRole == 'student'
-                                            ? 'Un eleve doit obligatoirement etre associe a une classe.'
-                                            : 'Un parent doit avoir une classe de reference et au moins un eleve. Les eleves peuvent venir de classes differentes.',
-                                        style: Theme.of(context).textTheme.bodySmall,
-                                      ),
-                                      if (_selectedCreateClassroomId != null)
-                                        Padding(
-                                          padding: const EdgeInsets.only(top: 4),
-                                          child: Text(
-                                            'Classe selectionnee: ${_classroomDisplayName(_selectedCreateClassroomId)}',
-                                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              if (_roleNeedsClassroom(_selectedRole) && _loadingCreationRefs)
-                                const Padding(
-                                  padding: EdgeInsets.only(bottom: 10),
-                                  child: LinearProgressIndicator(minHeight: 2),
-                                ),
-                              if (!isSuperAdmin &&
-                                  selectedEtablissement != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 10),
-                                  child: Text(
-                                    'Les nouveaux comptes seront crees dans: ${selectedEtablissement.name}',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall,
-                                  ),
-                                ),
-                              FilledButton.icon(
-                                onPressed: isMutating ? null : _createUser,
-                                icon: isMutating
-                                    ? const SizedBox(
-                                        width: 18,
-                                        height: 18,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(
-                                        Icons.person_add_alt_1_outlined,
-                                      ),
-                                label: const Text('Creer utilisateur'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-
-                  // Trois etats, comme chez les eleves: le compte choisi,
-                  // les correspondances a departager, ou l'invitation a
-                  // chercher. La creation suit, elle ne depend d'aucun choix.
-                  final Widget zoneResultat;
-                  if (selectedUser != null) {
-                    zoneResultat = UserPaletteCard(
-                      compte: selectedUser,
-                      actions: _actionsPalette(selectedUser, isMutating),
-                      onClear: filteredUsers.length > 1
-                          ? () => setState(() => _selectedUserId = null)
-                          : null,
-                    );
-                  } else if (_searchTerm.trim().isNotEmpty &&
-                      filteredUsers.length > 1) {
-                    zoneResultat = _carteCorrespondances(filteredUsers);
-                  } else {
-                    zoneResultat = EtatVideRecherche(
-                      recherche: _searchTerm,
-                      invitation:
-                          'Recherchez un utilisateur pour ouvrir sa palette.',
-                      precision: 'Nom, identifiant, e-mail ou téléphone.',
-                      motAucun: 'Aucun utilisateur ne correspond à',
-                    );
-                  }
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      zoneResultat,
-                      const SizedBox(height: 12),
-                      panneauCreation,
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
-        );
-      },
+      // Inatteignable: on n'arrive ici qu'en l'absence de toute donnee.
+      data: (_) => const SizedBox.shrink(),
     );
   }
 }

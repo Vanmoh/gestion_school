@@ -52,6 +52,11 @@ class ChatMessage(TimeStampedModel):
     class MessageType(models.TextChoices):
         TEXT = "text", "Texte"
         FILE = "file", "Fichier"
+        # L'appel d'attention fait surgir la fenetre de discussion chez le
+        # destinataire. Il laisse une ligne dans le fil plutot que d'etre
+        # volatil: savoir qui a interrompu qui, et quand, protege les deux
+        # cotes -- celui qui derange comme celui qui est derange.
+        ATTENTION = "attention", "Appel d'attention"
 
     conversation = models.ForeignKey(
         Conversation,
@@ -70,6 +75,34 @@ class ChatMessage(TimeStampedModel):
     attachment_size = models.PositiveIntegerField(default=0)
     attachment_mime_type = models.CharField(max_length=120, blank=True)
     client_message_id = models.CharField(max_length=64, blank=True, null=True)
+
+    # Un message parti dans le mauvais groupe y restait a vie: rien ne
+    # permettait de le retirer ni de le corriger. On efface le contenu plutot
+    # que la ligne -- le fil garderait un trou inexplicable, et l'on perdrait
+    # la trace de qui a retire quoi.
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="chat_messages_supprimes",
+    )
+    # Marque une correction. Sans elle, un message modifie apres coup se
+    # lirait comme le message d'origine -- de quoi faire dire a quelqu'un ce
+    # qu'il n'avait pas ecrit.
+    edited_at = models.DateTimeField(null=True, blank=True)
+
+    # Le message auquel celui-ci repond. Dans un groupe actif, sans citation
+    # on ne sait plus a quoi repond quoi: trois questions posees, une reponse
+    # « oui » et personne ne sait laquelle.
+    reply_to = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="replies",
+    )
 
     class Meta:
         ordering = ["id"]

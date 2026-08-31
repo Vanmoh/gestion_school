@@ -10,6 +10,8 @@ import '../../../core/permissions/module_permissions.dart';
 import '../../../core/network/api_client.dart';
 import '../../../models/etablissement.dart';
 
+import '../../../core/widgets/barre_recherche_module.dart';
+
 class BackupRestorePage extends ConsumerStatefulWidget {
   const BackupRestorePage({super.key});
 
@@ -25,6 +27,12 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
 
   bool _loading = true;
   bool _busy = false;
+
+  /// Filtre de l'historique. L'ecran empilait toutes les archives sans moyen
+  /// d'en retrouver une: passe quelques semaines, la liste se parcourt a la
+  /// molette.
+  final _rechercheController = TextEditingController();
+  String _recherche = '';
   bool _historyRefreshing = false;
   List<Map<String, dynamic>> _rows = [];
   Timer? _historyAutoRefreshTimer;
@@ -52,6 +60,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     _historyAutoRefreshTimer?.cancel();
     _notesController.dispose();
     _restoreNotesController.dispose();
+    _rechercheController.dispose();
     super.dispose();
   }
 
@@ -200,6 +209,13 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       return;
     }
 
+    // Le geste le plus destructeur de l'application se declenchait d'un seul
+    // clic, sur une petite icone voisine de « Telecharger »: la base entiere
+    // etait ecrasee par une archive parfois vieille de plusieurs semaines,
+    // sans une question. On demande desormais une confirmation qui dit ce
+    // qu'on remplace, et par quoi.
+    if (!await _confirmerRestauration(row)) return;
+
     await _runBusyTask(() async {
       _forcePollingUntil = DateTime.now().add(const Duration(minutes: 2));
       _syncHistoryAutoRefresh();
@@ -212,6 +228,52 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       _showMessage('Restauration lancée en arrière-plan.', isSuccess: true);
       await _loadRows();
     });
+  }
+
+  /// Demande confirmation avant d'ecraser les donnees en place.
+  Future<bool> _confirmerRestauration(Map<String, dynamic> row) async {
+    final nom = row['filename']?.toString().isNotEmpty == true
+        ? row['filename'].toString()
+        : 'Archive #${row['id']}';
+    final portee = _scopeLabel(row['scope']?.toString() ?? '');
+    final datee = _dateLisible(row['created_at']);
+
+    final reponse = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Restaurer cette archive ?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Les données actuelles seront remplacées par le contenu de '
+              '$nom.',
+            ),
+            const SizedBox(height: 10),
+            Text('Portée : $portee'),
+            if (datee.isNotEmpty) Text('Sauvegardée le : $datee'),
+            const SizedBox(height: 10),
+            const Text(
+              'Ce qui a été saisi depuis cette date sera perdu. '
+              'L’opération ne s’annule pas.',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            key: const Key('confirmer-restauration'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Restaurer'),
+          ),
+        ],
+      ),
+    );
+    return reponse == true;
   }
 
   Future<void> _pickRestoreFile() async {
@@ -374,8 +436,117 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       );
   }
 
+  /// L'historique restreint a ce qui est cherche, sur ce qui se lit a
+  /// l'ecran: le nom de fichier, l'etablissement, la portee et le statut.
+  List<Map<String, dynamic>> _archivesFiltrees() {
+    final terme = _recherche.trim().toLowerCase();
+    if (terme.isEmpty) return _rows;
+    return _rows.where((row) {
+      final champs = [
+        row['filename']?.toString() ?? '',
+        row['etablissement_name']?.toString() ?? '',
+        row['status']?.toString() ?? '',
+        _scopeLabel(row['scope']?.toString() ?? ''),
+        row['notes']?.toString() ?? '',
+      ];
+      return champs.any((champ) => champ.toLowerCase().contains(terme));
+    }).toList(growable: false);
+  }
+
+  /// Les trois reperes du module: combien d'archives, a quand remonte la
+  /// derniere reussie, et ce qu'elles pesent en tout.
+  Widget _compteurs(BuildContext context, String? etablissement) {
+    final reussies = _rows
+        .where((row) => row['status']?.toString() == 'completed')
+        .toList(growable: false);
+    final derniere = reussies.isEmpty ? '' : _dateLisible(reussies.first['created_at']);
+    final volume = _rows.fold<int>(0, (somme, row) => somme + _octets(row));
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        _compteur(context, Icons.inventory_2_outlined, '${_rows.length}',
+            _rows.length > 1 ? 'archives' : 'archive'),
+        _compteur(context, Icons.schedule_outlined,
+            derniere.isEmpty ? 'jamais' : derniere, 'dernière sauvegarde'),
+        _compteur(context, Icons.sd_storage_outlined,
+            _tailleLisible(volume), 'stockées'),
+        if (etablissement != null)
+          _compteur(context, Icons.apartment_outlined, etablissement,
+              'établissement actif'),
+      ],
+    );
+  }
+
+  Widget _compteur(
+    BuildContext context,
+    IconData icone,
+    String valeur,
+    String legende,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icone, size: 17, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Text(
+            valeur,
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(width: 6),
+          Text(legende, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+
   String _scopeLabel(String scope) {
     return scope == 'global' ? 'Globale plateforme' : 'Etablissement';
+  }
+
+  /// « 29/08/2026 à 03:35 », vide si la date manque ou n'est pas lisible.
+  String _dateLisible(Object? valeur) {
+    final brut = valeur?.toString() ?? '';
+    if (brut.isEmpty) return '';
+    final date = DateTime.tryParse(brut)?.toLocal();
+    if (date == null) return '';
+    String deux(int n) => n.toString().padLeft(2, '0');
+    return '${deux(date.day)}/${deux(date.month)}/${date.year} '
+        'à ${deux(date.hour)}:${deux(date.minute)}';
+  }
+
+  /// La taille d'une archive dans l'unite ou elle se lit d'un coup d'oeil.
+  /// Un nombre d'octets a sept chiffres ne dit rien a personne.
+  String _tailleLisible(int octets) {
+    if (octets <= 0) return '—';
+    const unites = ['o', 'Ko', 'Mo', 'Go', 'To'];
+    var valeur = octets.toDouble();
+    var rang = 0;
+    while (valeur >= 1024 && rang < unites.length - 1) {
+      valeur /= 1024;
+      rang += 1;
+    }
+    final arrondi = valeur >= 10 || rang == 0
+        ? valeur.round().toString()
+        : valeur.toStringAsFixed(1);
+    return '$arrondi ${unites[rang]}';
+  }
+
+  int _octets(Map<String, dynamic> row) {
+    final brut = row['file_size_bytes'];
+    if (brut is int) return brut;
+    return int.tryParse(brut?.toString() ?? '') ?? 0;
   }
 
   int _progressValue(Map<String, dynamic> row) {
@@ -417,6 +588,8 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       );
     }
 
+    final archivesAffichees = _archivesFiltrees();
+
     return RefreshIndicator(
       onRefresh: _loadRows,
       child: ListView(
@@ -429,13 +602,18 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
               fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Text(
-            selectedEtab == null
-                ? 'Aucun établissement sélectionné.'
-                : 'Établissement actif: ${selectedEtab.name}',
+            'Archives de la plateforme et des établissements, restauration '
+            'et suivi des opérations.',
+            style: Theme.of(context).textTheme.bodyMedium,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+          // Les memes reperes chiffres que les autres modules: sans eux,
+          // savoir a quand remonte la derniere sauvegarde demandait de lire
+          // l'historique ligne a ligne.
+          _compteurs(context, selectedEtab?.name),
+          const SizedBox(height: 14),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(14),
@@ -568,15 +746,32 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
-          if (_rows.isEmpty)
-            const Card(
+          BarreRechercheModule(
+            controller: _rechercheController,
+            indication:
+                'Rechercher une archive : nom de fichier, établissement, '
+                'statut…',
+            onChanged: (valeur) => setState(() => _recherche = valeur),
+            onEffacer: () {
+              _rechercheController.clear();
+              setState(() => _recherche = '');
+            },
+            compact: MediaQuery.sizeOf(context).width < 720,
+          ),
+          const SizedBox(height: 10),
+          if (archivesAffichees.isEmpty)
+            Card(
               child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('Aucune archive disponible.'),
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  _rows.isEmpty
+                      ? 'Aucune archive disponible.'
+                      : 'Aucune archive ne correspond à « $_recherche ».',
+                ),
               ),
             )
           else
-            ..._rows.map((row) {
+            ...archivesAffichees.map((row) {
               final statusValue = row['status']?.toString() ?? '-';
               final canDownload = (row['file_path']?.toString().isNotEmpty ?? false);
               final restoreLog = (row['restore_log']?.toString() ?? '').trim();

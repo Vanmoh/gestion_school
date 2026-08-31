@@ -7,9 +7,27 @@ from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
 from django.utils import timezone
 
+from apps.common.presence import presence_en_ligne
 from apps.school.models import Etablissement
 
 from .models import ChatMessage, ChatPresence, Conversation, ConversationParticipant
+
+# Qui peut faire surgir la fenetre de discussion chez quelqu'un d'autre.
+#
+# La matrice des droits ouvre la messagerie a tous, eleves et parents
+# compris. L'appel d'attention, lui, interrompt: il reste au personnel, pour
+# qu'un eleve ne puisse pas faire surgir une fenetre chez le directeur en
+# pleine reunion. Eleves et parents gardent le message ordinaire, qui attend
+# qu'on le lise.
+ROLES_POUVANT_APPELER_L_ATTENTION = frozenset({
+    "super_admin",
+    "director",
+    "promoter",
+    "censor",
+    "accountant",
+    "teacher",
+    "supervisor",
+})
 
 
 class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
@@ -113,7 +131,15 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
         action = str(content.get("action", "")).strip().lower()
 
         if action == "ping":
-            await self.send_json({"event": "pong", "ts": timezone.now().isoformat()})
+            vu_a = await self._battre_presence()
+            await self.send_json({"event": "pong", "ts": vu_a.isoformat()})
+            # Les autres ecrans n'apprendraient jamais qu'on est toujours la:
+            # sans ce rappel, leur horodatage vieillit et nous fait passer hors
+            # ligne alors que la fenetre est restee ouverte.
+            await self._broadcast_presence_update(
+                online=True,
+                last_seen_at=vu_a.isoformat(),
+            )
             return
 
         if action == "send_message":
@@ -176,6 +202,39 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
                     )
             return
 
+        if action == "attention":
+            conversation_id = content.get("conversation_id")
+            if self.user.role not in ROLES_POUVANT_APPELER_L_ATTENTION:
+                await self.send_json({
+                    "event": "error",
+                    "detail": "L'appel d'attention est reserve au personnel.",
+                })
+                return
+
+            trace = await self._tracer_l_appel_d_attention(conversation_id)
+            if trace is None:
+                await self.send_json({"event": "error", "detail": "Conversation invalide."})
+                return
+
+            # A soi-meme aussi: la ligne doit apparaitre dans le fil de celui
+            # qui appelle, sinon il ne voit pas la trace qu'il vient de laisser.
+            for user_id in trace["participant_user_ids"]:
+                await self.channel_layer.group_send(
+                    f"chat_user_{user_id}",
+                    {
+                        "type": "chat.attention",
+                        "payload": {
+                            "conversation_id": trace["conversation_id"],
+                            "message_id": trace["message_id"],
+                            "sender_id": trace["sender_id"],
+                            "sender_name": trace["sender_name"],
+                            "content": trace["content"],
+                            "created_at": trace["created_at"],
+                        },
+                    },
+                )
+            return
+
         if action == "typing":
             conversation_id = content.get("conversation_id")
             is_typing = bool(content.get("is_typing", False))
@@ -195,6 +254,12 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
 
     async def chat_message(self, event):
         await self.send_json({"event": "message", **event["message"]})
+
+    async def chat_message_revise(self, event):
+        await self.send_json({"event": "message_revise", **event["payload"]})
+
+    async def chat_attention(self, event):
+        await self.send_json({"event": "attention", **event["payload"]})
 
     async def chat_typing(self, event):
         await self.send_json({"event": "typing", **event})
@@ -289,13 +354,15 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
         if not contact_user_ids:
             return []
 
+        # `is_online` en base est un souvenir, pas un etat: il reste vrai apres
+        # un socket mort sans prevenir. On recalcule depuis l'horodatage.
         presence_by_user = {
             row["user_id"]: {
-                "online": bool(row["is_online"]),
+                "online": presence_en_ligne(row["last_seen_at"]),
                 "last_seen_at": row["last_seen_at"].isoformat() if row["last_seen_at"] else None,
             }
             for row in ChatPresence.objects.filter(user_id__in=contact_user_ids).values(
-                "user_id", "is_online", "last_seen_at"
+                "user_id", "last_seen_at"
             )
         }
 
@@ -376,6 +443,56 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
             }
 
     @database_sync_to_async
+    def _tracer_l_appel_d_attention(self, conversation_id):
+        """Ecrit la ligne « a demande votre attention » dans le fil.
+
+        L'appel aurait pu rester volatil -- un evenement qui passe et ne
+        laisse rien. En milieu scolaire, savoir qui a interrompu qui et quand
+        protege les deux cotes, celui qui derange comme celui qui l'est.
+        """
+        try:
+            conversation_id = int(conversation_id)
+        except (TypeError, ValueError):
+            return None
+
+        with transaction.atomic():
+            if not self._scoped_conversation_ids_queryset().filter(
+                conversation_id=conversation_id
+            ).exists():
+                return None
+
+            conversation = Conversation.objects.filter(id=conversation_id).first()
+            if conversation is None:
+                return None
+            if not ConversationParticipant.objects.filter(
+                conversation=conversation, user=self.user
+            ).exists():
+                return None
+
+            sender_name = self.user.get_full_name().strip() or self.user.username
+            message = ChatMessage.objects.create(
+                conversation=conversation,
+                sender=self.user,
+                message_type=ChatMessage.MessageType.ATTENTION,
+                content=f"{sender_name} a demande votre attention",
+            )
+            conversation.save(update_fields=["updated_at"])
+
+            return {
+                "conversation_id": conversation.id,
+                "message_id": message.id,
+                "sender_id": self.user.id,
+                "sender_name": sender_name,
+                "content": message.content,
+                "created_at": message.created_at.isoformat(),
+                "participant_user_ids": list(
+                    ConversationParticipant.objects.filter(
+                        conversation_id=conversation.id
+                    ).values_list("user_id", flat=True)
+                ),
+            }
+
+    @database_sync_to_async
     def _mark_conversation_read(self, conversation_id):
         try:
             conversation_id = int(conversation_id)
@@ -408,15 +525,25 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _increment_presence(self):
+        """Ouverture d'un socket: on note l'heure autant que le compteur.
+
+        Le compteur seul ne suffit plus a dire « en ligne » (voir
+        `apps.common.presence`); sans horodatage pose ici, la personne
+        paraitrait hors ligne pendant les vingt secondes qui separent la
+        connexion du premier battement.
+        """
         with transaction.atomic():
             row, _ = ChatPresence.objects.select_for_update().get_or_create(
                 user=self.user,
                 defaults={"is_online": True, "connection_count": 0},
             )
             row.connection_count += 1
-            row.is_online = row.connection_count > 0
-            row.save(update_fields=["connection_count", "is_online", "updated_at"])
-            return row.is_online
+            row.is_online = True
+            row.last_seen_at = timezone.now()
+            row.save(
+                update_fields=["connection_count", "is_online", "last_seen_at", "updated_at"]
+            )
+            return True
 
     @database_sync_to_async
     def _decrement_presence(self):
@@ -426,7 +553,31 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
                 defaults={"is_online": False, "connection_count": 0},
             )
             row.connection_count = max(0, row.connection_count - 1)
-            row.is_online = row.connection_count > 0
+            reste_un_socket = row.connection_count > 0
+            row.is_online = reste_un_socket
+            # L'heure de depart se pose meme s'il reste un autre onglet: c'est
+            # la derniere fois qu'on a vu la personne, pas la fin de sa
+            # session.
             row.last_seen_at = timezone.now()
-            row.save(update_fields=["connection_count", "is_online", "last_seen_at", "updated_at"])
-            return row.is_online, row.last_seen_at
+            row.save(
+                update_fields=["connection_count", "is_online", "last_seen_at", "updated_at"]
+            )
+            return reste_un_socket, row.last_seen_at
+
+    @database_sync_to_async
+    def _battre_presence(self):
+        """Le battement du client vaut signe de vie.
+
+        Sans lui, seuls les appels REST rafraichissaient l'horodatage: quelqu'un
+        qui laisse l'application ouverte sans rien faire serait passe hors
+        ligne au bout d'une minute.
+        """
+        maintenant = timezone.now()
+        row, _ = ChatPresence.objects.get_or_create(
+            user=self.user,
+            defaults={"is_online": True, "connection_count": 1, "last_seen_at": maintenant},
+        )
+        row.is_online = True
+        row.last_seen_at = maintenant
+        row.save(update_fields=["is_online", "last_seen_at", "updated_at"])
+        return maintenant

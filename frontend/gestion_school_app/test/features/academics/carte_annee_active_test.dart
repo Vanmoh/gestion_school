@@ -63,6 +63,9 @@ Future<void> _monter(
   int classes = 0,
   int eleves = 0,
   VoidCallback? onOuvrirAnnee,
+  VoidCallback? onActiver,
+  VoidCallback? onCloturer,
+  VoidCallback? onRouvrir,
 }) async {
   tester.view.physicalSize = const Size(1200, 900);
   tester.view.devicePixelRatio = 1.0;
@@ -77,6 +80,9 @@ Future<void> _monter(
             classes: classes,
             eleves: eleves,
             onOuvrirAnnee: onOuvrirAnnee,
+            onActiver: onActiver,
+            onCloturer: onCloturer,
+            onRouvrir: onRouvrir,
           ),
         ),
       ),
@@ -84,6 +90,13 @@ Future<void> _monter(
   );
   await tester.pump();
 }
+
+const _consultee = AnneeScolaire(
+  id: 3,
+  nom: '2023-2024',
+  debut: '2023-09-01',
+  fin: '2024-06-30',
+);
 
 void main() {
   testWidgets('la carte nomme l_annee et sa periode', (tester) async {
@@ -166,5 +179,61 @@ void main() {
     await _monter(tester, await _controleur([_enCours()]));
 
     expect(find.byKey(const Key('ouvrir-annee-suivante')), findsNothing);
+  });
+
+  group('les gestes de vie de l_annee', () {
+    testWidgets('une annee consultee peut etre rendue active', (tester) async {
+      var active = 0;
+      await _monter(
+        tester,
+        await _controleur([_consultee]),
+        onActiver: () => active++,
+      );
+
+      await tester.tap(find.byKey(const Key('annee-rendre-active')));
+      expect(active, 1);
+    });
+
+    testWidgets('l_annee de saisie ne se propose pas de le redevenir', (
+      tester,
+    ) async {
+      await _monter(
+        tester,
+        await _controleur([_enCours()]),
+        onActiver: () {},
+        onCloturer: () {},
+      );
+
+      expect(find.byKey(const Key('annee-rendre-active')), findsNothing);
+      expect(find.byKey(const Key('annee-cloturer')), findsOneWidget);
+    });
+
+    testWidgets('une annee cloturee s_ouvre a la reouverture, pas au reste', (
+      tester,
+    ) async {
+      await _monter(
+        tester,
+        await _controleur([_close]),
+        onActiver: () {},
+        onCloturer: () {},
+        onRouvrir: () {},
+      );
+
+      expect(find.byKey(const Key('annee-rouvrir')), findsOneWidget);
+      // Le serveur refuse d'activer une annee cloturee: ne pas proposer le
+      // geste evite de mener l'utilisateur a un refus.
+      expect(find.byKey(const Key('annee-rendre-active')), findsNothing);
+      expect(find.byKey(const Key('annee-cloturer')), findsNothing);
+    });
+
+    testWidgets('sans droit d_ecriture, aucun geste n_est offert', (
+      tester,
+    ) async {
+      await _monter(tester, await _controleur([_consultee]));
+
+      expect(find.byKey(const Key('annee-rendre-active')), findsNothing);
+      expect(find.byKey(const Key('annee-cloturer')), findsNothing);
+      expect(find.byKey(const Key('annee-rouvrir')), findsNothing);
+    });
   });
 }

@@ -7,6 +7,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gestion_school_app/core/models/presence.dart';
 import 'package:gestion_school_app/features/users/domain/user_account.dart';
 import 'package:gestion_school_app/features/users/presentation/widgets/user_palette_card.dart';
 
@@ -22,6 +23,7 @@ UserAccount _compte({
   bool isActive = true,
   DateTime? lastLogin,
   DateTime? dateJoined,
+  Presence presence = const Presence(),
 }) {
   return UserAccount(
     id: 1,
@@ -36,6 +38,7 @@ UserAccount _compte({
     isActive: isActive,
     lastLogin: lastLogin,
     dateJoined: dateJoined,
+    presence: presence,
   );
 }
 
@@ -123,11 +126,43 @@ void main() {
         _compte(
           lastLogin: DateTime(2026, 3, 12),
           dateJoined: DateTime(2025, 9, 1),
+          presence: Presence(vuA: DateTime(2026, 3, 12, 14, 32)),
         ),
       );
 
-      expect(find.text('12/03/2026'), findsOneWidget);
+      // L'heure et la minute accompagnent la date de connexion: entre deux
+      // visites du meme jour, la date seule ne departage pas.
+      expect(find.text('Vu le 12/03/2026 à 14:32'), findsOneWidget);
       expect(find.text('01/09/2025'), findsOneWidget);
+    });
+
+    testWidgets('une personne presente est annoncee en ligne', (tester) async {
+      await _pump(
+        tester,
+        _compte(presence: Presence(vuA: DateTime.now(), annonceEnLigne: true)),
+      );
+
+      // Une fois en pastille pres du role, une fois dans l'etat du compte.
+      expect(find.text('En ligne'), findsNWidgets(2));
+    });
+
+    testWidgets('un signe de vie trop vieux ne dit plus en ligne', (
+      tester,
+    ) async {
+      // Le defaut signale: un socket mort sans prevenir laissait la fiche
+      // verte indefiniment.
+      await _pump(
+        tester,
+        _compte(
+          presence: Presence(
+            vuA: DateTime.now().subtract(const Duration(hours: 6)),
+            annonceEnLigne: true,
+          ),
+        ),
+      );
+
+      expect(find.text('En ligne'), findsNothing);
+      expect(find.textContaining('Vu '), findsOneWidget);
     });
 
     testWidgets('les actions se posent sous le nom', (tester) async {
