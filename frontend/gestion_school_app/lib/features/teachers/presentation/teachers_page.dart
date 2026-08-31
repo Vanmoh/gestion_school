@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
 import '../../../core/permissions/module_permissions.dart';
+import '../../../core/providers/navigation_intents.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../core/widgets/roster_pdf_preview_dialog.dart';
 import 'widgets/detail_indicateur_dialog.dart';
@@ -2600,6 +2601,13 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
         creneaux: creneaux,
         affectations: affectations,
       ),
+      // Le module n'a pas de selecteur d'un enseignant unique -- il rend la
+      // charge de tous -- mais on y arrive deja sur la vue par enseignant.
+      libelleModule: 'Ouvrir l\'emploi du temps',
+      onOuvrirModule: () {
+        ref.read(timetableTeacherViewIntentProvider.notifier).state = true;
+        ref.read(adminShellNavigationKeyProvider.notifier).state = 'timetable';
+      },
     );
   }
 
@@ -2619,6 +2627,16 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
           '${pointages.length} pointage${pointages.length > 1 ? 's' : ''}'
           '${retards > 0 ? ' · $retards retard${retards > 1 ? 's' : ''}' : ''}',
       corps: DetailEmargement(pointages: pointages),
+      libelleModule: 'Ouvrir les émargements',
+      onOuvrirModule: () {
+        final teacherId = _selectedTeacherId;
+        if (teacherId != null) {
+          // Sans cette intention, le module s'ouvrait sur le premier
+          // enseignant de sa liste et il fallait rechercher celui-ci.
+          ref.read(teacherTimesheetFocusProvider.notifier).state = teacherId;
+        }
+        ref.read(adminShellNavigationKeyProvider.notifier).state = 'attendance';
+      },
     );
   }
 

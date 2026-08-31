@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.permissions import HasModuleAccess
+from apps.common.presence import presence_en_ligne
 from apps.school.models import Etablissement
 
 from .models import ChatMessage, ChatPresence, Conversation, ConversationParticipant
@@ -57,6 +58,31 @@ _CHAT_ALLOWED_ATTACHMENT_MIME_PREFIXES = (
     "application/zip",
     "application/x-zip-compressed",
 )
+
+
+def _diffuser_la_revision(participant_user_ids, charge):
+    """Previent les autres qu'un message a change.
+
+    Sans cela, celui qui a l'ecran ouvert continuerait de lire le texte
+    d'origine jusqu'a son prochain rechargement -- soit exactement ce que la
+    suppression cherchait a eviter.
+    """
+
+    def job():
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is None:
+                return
+            for user_id in participant_user_ids:
+                async_to_sync(channel_layer.group_send)(
+                    f"chat_user_{user_id}",
+                    {"type": "chat.message_revise", "payload": charge},
+                )
+        except Exception:
+            return
+
+    worker = threading.Thread(target=job, name="chat-revision", daemon=True)
+    worker.start()
 
 
 def _broadcast_rest_message_async(participant_user_ids, ws_message):
@@ -223,12 +249,9 @@ def _touch_presence(user):
     row.save(update_fields=["is_online", "last_seen_at", "updated_at"])
 
 
-def _presence_online_from_values(connection_count, last_seen_at):
-    if (connection_count or 0) > 0:
-        return True
-    if last_seen_at is None:
-        return False
-    return (timezone.now() - last_seen_at) <= timedelta(seconds=90)
+def _presence_online_from_values(last_seen_at):
+    """Voir `apps.common.presence`: l'horodatage seul, jamais le compteur."""
+    return presence_en_ligne(last_seen_at)
 
 
 class ChatUsersView(APIView):
@@ -303,7 +326,21 @@ class ConversationMessagesView(APIView):
         if conversation is None:
             return Response({"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN)
 
-        query = ChatMessage.objects.filter(conversation=conversation).select_related("sender").order_by("-id")
+        query = (
+            ChatMessage.objects.filter(conversation=conversation)
+            .select_related("sender", "reply_to", "reply_to__sender")
+            .order_by("-id")
+        )
+
+        # Chercher dans ce qui a ete dit, et pas seulement parmi les noms de
+        # conversations: retrouver « la note de service sur les conges »
+        # demandait jusqu'ici de remonter le fil a la main.
+        recherche = (request.query_params.get("q") or "").strip()
+        if recherche:
+            query = query.filter(
+                content__icontains=recherche, deleted_at__isnull=True
+            )
+
         before_id = request.query_params.get("before_id")
         if before_id:
             try:
@@ -323,6 +360,102 @@ class ConversationMessagesView(APIView):
         return Response(payload)
 
 
+class ChatMessageReviseView(APIView):
+    """Corriger ou retirer un message deja envoye.
+
+    Retirer efface le contenu et garde la ligne: supprimer la ligne laisserait
+    un trou inexplicable au milieu du fil, et l'on perdrait la trace de qui a
+    retire quoi. Corriger horodate la correction, pour qu'un message modifie
+    apres coup ne se lise pas comme celui d'origine.
+    """
+
+    access_module = "chat"
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+
+    # Passe ce delai, un message a ete lu et cite: le corriger reecrirait
+    # l'histoire d'une conversation dont d'autres se souviennent.
+    DELAI_DE_CORRECTION = timedelta(minutes=15)
+
+    def _charger(self, request, message_id):
+        message = (
+            ChatMessage.objects.select_related("conversation", "sender")
+            .filter(id=message_id)
+            .first()
+        )
+        if message is None:
+            return None, Response(
+                {"detail": "Message introuvable."}, status=status.HTTP_404_NOT_FOUND
+            )
+        if _get_conversation_for_user(request, message.conversation_id) is None:
+            return None, Response(
+                {"detail": "Acces refuse."}, status=status.HTTP_403_FORBIDDEN
+            )
+        if message.sender_id != request.user.id:
+            return None, Response(
+                {"detail": "On ne modifie que ses propres messages."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if message.deleted_at is not None:
+            return None, Response(
+                {"detail": "Ce message a deja ete retire."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return message, None
+
+    def patch(self, request, message_id):
+        message, erreur = self._charger(request, message_id)
+        if erreur is not None:
+            return erreur
+
+        if message.message_type != ChatMessage.MessageType.TEXT:
+            return Response(
+                {"detail": "Seul un message texte se corrige."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if timezone.now() - message.created_at > self.DELAI_DE_CORRECTION:
+            return Response(
+                {"detail": "Passe quinze minutes, un message ne se corrige plus."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        contenu = str(request.data.get("content", "")).strip()
+        if not contenu:
+            return Response(
+                {"detail": "Un message corrige ne peut pas etre vide."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        message.content = contenu
+        message.edited_at = timezone.now()
+        message.save(update_fields=["content", "edited_at", "updated_at"])
+        return self._repondre(request, message)
+
+    def delete(self, request, message_id):
+        message, erreur = self._charger(request, message_id)
+        if erreur is not None:
+            return erreur
+
+        message.deleted_at = timezone.now()
+        message.deleted_by = request.user
+        message.content = ""
+        message.save(
+            update_fields=["deleted_at", "deleted_by", "content", "updated_at"]
+        )
+        return self._repondre(request, message)
+
+    def _repondre(self, request, message):
+        charge = ChatMessageSerializer(message, context={"request": request}).data
+        _diffuser_la_revision(
+            list(
+                ConversationParticipant.objects.filter(
+                    conversation_id=message.conversation_id
+                ).values_list("user_id", flat=True)
+            ),
+            charge,
+        )
+        return Response(charge)
+
+
 class ConversationPresenceView(APIView):
     access_module = "chat"
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
@@ -339,7 +472,6 @@ class ConversationPresenceView(APIView):
             .exclude(user=request.user)
             .values(
                 "user_id",
-                "user__chat_presence__connection_count",
                 "user__chat_presence__last_seen_at",
             )
         )
@@ -350,10 +482,7 @@ class ConversationPresenceView(APIView):
             payload.append(
                 {
                     "user_id": row.get("user_id"),
-                    "online": _presence_online_from_values(
-                        row.get("user__chat_presence__connection_count"),
-                        last_seen,
-                    ),
+                    "online": _presence_online_from_values(last_seen),
                     "last_seen_at": last_seen.isoformat() if last_seen else None,
                 }
             )
@@ -722,6 +851,18 @@ class ConversationSendMessageView(APIView):
         raw_client_message_id = str(request.data.get("client_message_id", "")).strip()
         client_message_id = raw_client_message_id[:64] if raw_client_message_id else None
 
+        # La citation ne vaut que dans la meme conversation: repondre a un
+        # message d'ailleurs y ferait fuiter un extrait de ce fil-la.
+        cite = None
+        brut_cite = request.data.get("reply_to")
+        if brut_cite:
+            try:
+                cite = ChatMessage.objects.filter(
+                    id=int(brut_cite), conversation=conversation
+                ).first()
+            except (TypeError, ValueError):
+                cite = None
+
         created = True
         if client_message_id:
             message = ChatMessage.objects.filter(
@@ -735,6 +876,7 @@ class ConversationSendMessageView(APIView):
                     sender=request.user,
                     content=content,
                     client_message_id=client_message_id,
+                    reply_to=cite,
                 )
             else:
                 created = False
@@ -743,6 +885,7 @@ class ConversationSendMessageView(APIView):
                 conversation=conversation,
                 sender=request.user,
                 content=content,
+                reply_to=cite,
             )
 
         participant.last_read_message = message

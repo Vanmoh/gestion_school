@@ -1,8 +1,10 @@
 import time
+from datetime import timedelta
 
 from django.conf import settings
 from django.db import connection
 from django.middleware.gzip import GZipMiddleware as DjangoGZipMiddleware
+from django.utils import timezone
 
 from apps.common.models import ActivityLog
 
@@ -182,3 +184,75 @@ class ActivityLogMiddleware:
             return Etablissement.objects.filter(id=requested_id).first()
         except Exception:
             return None
+
+
+class PresenceMiddleware:
+    """« En ligne » veut dire: se sert de l'application en ce moment.
+
+    La presence ne vivait que dans le websocket du chat. Quelqu'un qui saisit
+    des notes toute la matinee sans ouvrir la messagerie -- ou dont le socket
+    n'a pas pu s'etablir -- apparaissait hors ligne pendant qu'il travaillait.
+
+    Chaque requete authentifiee vaut donc signe de vie. L'ecriture n'a lieu
+    qu'une fois par intervalle: une ligne par requete ferait payer la presence
+    plus cher que ce qu'elle rapporte.
+    """
+
+    # Bien en deca de la fenetre de presence (75 s): sans cette marge, une
+    # requete arrivant juste avant l'expiration ne la repousserait pas.
+    INTERVALLE_ECRITURE = timedelta(seconds=25)
+
+    PREFIXES_IGNORES = (
+        "/admin",
+        "/static",
+        "/media",
+        "/api/schema",
+        "/api/docs",
+    )
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+
+        path = request.path or ""
+        if any(path.startswith(prefix) for prefix in self.PREFIXES_IGNORES):
+            return response
+
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            return response
+
+        try:
+            self._marquer(user)
+        except Exception:
+            # La presence est un confort d'affichage: elle ne fait echouer
+            # aucune requete si sa table est indisponible.
+            pass
+
+        return response
+
+    def _marquer(self, user):
+        # Importe ici: le middleware se charge avant les applications.
+        from apps.chat.models import ChatPresence
+
+        maintenant = timezone.now()
+        row = ChatPresence.objects.filter(user=user).first()
+        if row is None:
+            ChatPresence.objects.get_or_create(
+                user=user,
+                defaults={
+                    "is_online": True,
+                    "connection_count": 0,
+                    "last_seen_at": maintenant,
+                },
+            )
+            return
+
+        if row.last_seen_at is not None and (maintenant - row.last_seen_at) < self.INTERVALLE_ECRITURE:
+            return
+
+        row.is_online = True
+        row.last_seen_at = maintenant
+        row.save(update_fields=["is_online", "last_seen_at", "updated_at"])

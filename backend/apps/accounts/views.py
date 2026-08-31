@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from rest_framework import generics, permissions, status, viewsets
+from django.db.models import Q
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -106,10 +107,11 @@ class UserViewSet(viewsets.ModelViewSet):
     # `is_active` fait partie des filtres et non de la seule lecture: c'est
     # lui qui sort la liste des comptes restes ouverts apres un depart.
     filterset_fields = ["role", "etablissement", "is_active"]
-    # `phone` y figure comme chez les eleves: l'ecran annonce le telephone
-    # parmi les criteres de recherche, et le champ existe depuis l'origine --
-    # il ne manquait qu'ici pour qu'un numero ramene son titulaire.
-    search_fields = ["username", "first_name", "last_name", "email", "phone"]
+    # La recherche est construite a la main (voir `_chercher`): le
+    # `search_fields` de DRF interrogeait l'email entier, domaine compris.
+    # Tous les comptes d'une ecole partageant « @ifp-obk.com », taper « o »
+    # ou « k » ramenait l'annuaire complet et la recherche paraissait cassee.
+    search_fields = []
 
     def _requested_etablissement_id(self):
         raw_value = (
@@ -161,19 +163,50 @@ class UserViewSet(viewsets.ModelViewSet):
             return requested
         return getattr(user, "etablissement", None)
 
+    def _chercher(self, queryset):
+        """Cherche un compte par ce qui l'identifie, pas par son domaine.
+
+        L'email entier entrait dans la recherche. Tous les comptes d'une
+        ecole partageant le meme domaine, taper une lettre qu'il contient --
+        le « o » de « @ifp-obk.com » -- ramenait l'annuaire complet.
+
+        L'email n'est donc interroge que par son debut: « ali » trouve
+        « ali.cisse@... », « com » ne trouve plus personne. Le telephone
+        reste cherche en entier: un numero se retient souvent par sa fin.
+        """
+        terme = (self.request.query_params.get("search") or "").strip()
+        if not terme:
+            return queryset
+
+        return queryset.filter(
+            Q(username__icontains=terme)
+            | Q(first_name__icontains=terme)
+            | Q(last_name__icontains=terme)
+            | Q(phone__icontains=terme)
+            | Q(email__istartswith=terme)
+        )
+
     def get_queryset(self):
         user = self.request.user
-        qs = User.objects.select_related("etablissement").all().order_by("-id")
+        # `chat_presence` est jointe ici: la fiche affiche « en ligne », et
+        # sans cela chaque ligne de la liste declencherait sa propre requete.
+        qs = (
+            User.objects.select_related("etablissement", "chat_presence")
+            .all()
+            .order_by("-id")
+        )
         requested = self._requested_etablissement()
 
         if getattr(user, "role", None) == "super_admin":
             if requested is not None:
-                return qs.filter(etablissement=requested)
+                return self._chercher(qs.filter(etablissement=requested))
             if self._has_requested_scope():
                 return qs.none()
-            return qs
+            return self._chercher(qs)
 
-        return qs.filter(etablissement=getattr(user, "etablissement", None))
+        return self._chercher(
+            qs.filter(etablissement=getattr(user, "etablissement", None))
+        )
 
     def perform_create(self, serializer):
         user = serializer.save(etablissement=self._resolve_target_etablissement())

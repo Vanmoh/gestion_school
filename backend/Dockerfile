@@ -48,4 +48,13 @@ ENTRYPOINT ["sh", "/app/entrypoint.sh"]
 # ASGI et non WSGI: le chat temps reel passe par Channels (config/asgi.py).
 # Servi en WSGI, la route websocket n'existe tout simplement pas et chaque
 # tentative de connexion echoue cote client.
-CMD ["gunicorn", "config.asgi:application", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--timeout", "120"]
+#
+# --timeout 0 desarme le chien de garde de gunicorn, et c'est obligatoire des
+# qu'on sert des websockets. Le compteur mesure le temps passe dans une
+# requete; une connexion de chat en est une, ouverte des heures. A 120 s,
+# gunicorn concluait que ses deux workers etaient bloques et les tuait
+# (« WORKER TIMEOUT » puis SIGABRT dans les journaux), coupant du meme coup
+# toutes les conversations ouvertes -- d'ou une messagerie qui cessait de
+# recevoir sans que rien ne l'annonce. Le worker uvicorn est asynchrone: une
+# requete lente n'y bloque personne, le garde-fou ne protegeait de rien.
+CMD ["gunicorn", "config.asgi:application", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--timeout", "0"]

@@ -97,6 +97,8 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "apps.common.middleware.ActivityLogMiddleware",
+    # Apres l'authentification: c'est `request.user` qu'il note comme present.
+    "apps.common.middleware.PresenceMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -406,6 +408,11 @@ SIMPLE_JWT = {
     "ALGORITHM": "HS256",
     "SIGNING_KEY": SECRET_KEY,
     "AUTH_HEADER_TYPES": ("Bearer",),
+    # Sans cela, `last_login` n'est jamais renseigne: SimpleJWT ne le touche
+    # pas par defaut, et seule `django.contrib.auth.login()` -- que l'API
+    # n'appelle jamais -- l'ecrit. Tous les comptes restaient donc marques
+    # « jamais connecte » a vie, y compris celui qui consultait l'ecran.
+    "UPDATE_LAST_LOGIN": True,
 }
 
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://redis:6379/0")

@@ -7,6 +7,7 @@ import '../../../models/etablissement.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../../core/widgets/barre_recherche_module.dart';
+import 'annee_scolaire_controller.dart';
 import 'widgets/academique_palette_cards.dart';
 import 'widgets/assistant_ouverture_annee.dart';
 import 'widgets/carte_annee_active.dart';
@@ -142,6 +143,80 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
       if (mounted) {
         setState(() => _loading = false);
       }
+    }
+  }
+
+  /// Bascule l'etat de l'annee affichee: activer, cloturer, rouvrir.
+  ///
+  /// Les trois routes existaient au serveur sans qu'aucun ecran ne les
+  /// appelle: rendre une annee active ou la fermer demandait de passer par
+  /// l'admin Django. La cloture demande confirmation -- elle retire l'annee
+  /// de la saisie pour tout l'etablissement, pas seulement pour qui clique.
+  Future<void> _changerEtatAnnee(String action) async {
+    final controleur = ref.read(anneeScolaireProvider);
+    final annee = controleur.selectionnee;
+    if (annee == null) return;
+
+    if (action == 'cloturer') {
+      final confirme = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('Clôturer ${annee.nom} ?'),
+          content: const Text(
+            'Plus aucune saisie ne sera possible sur cette année : ni note, '
+            'ni inscription, ni émargement. Elle reste consultable, et la '
+            'direction peut la rouvrir ensuite.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              key: const Key('confirmer-cloture-annee'),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Clôturer'),
+            ),
+          ],
+        ),
+      );
+      if (confirme != true) return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final repo = ref.read(anneesScolairesRepositoryProvider);
+      switch (action) {
+        case 'activer':
+          await repo.activer(annee.id);
+        case 'cloturer':
+          await repo.cloturer(annee.id);
+        case 'rouvrir':
+          await repo.rouvrir(annee.id);
+      }
+      // Recharge la liste partagee: la carte, le bandeau et les autres ecrans
+      // lisent tous le meme controleur.
+      await controleur.charger();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            switch (action) {
+              'activer' => '${annee.nom} est désormais l’année de saisie.',
+              'cloturer' => '${annee.nom} est clôturée.',
+              _ => '${annee.nom} est rouverte.',
+            },
+          ),
+        ),
+      );
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Action impossible sur l’année : $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -1316,6 +1391,17 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                   context: context,
                   builder: (_) => const AssistantOuvertureAnnee(),
                 ).then((_) => _loadData())
+              : null,
+          // Meme exigence que l'ouverture: la vie de l'annee scolaire
+          // engage tout l'etablissement, elle reste a la direction.
+          onActiver: peutSupprimer && !_saving
+              ? () => _changerEtatAnnee('activer')
+              : null,
+          onCloturer: peutSupprimer && !_saving
+              ? () => _changerEtatAnnee('cloturer')
+              : null,
+          onRouvrir: peutSupprimer && !_saving
+              ? () => _changerEtatAnnee('rouvrir')
               : null,
         ),
         const SizedBox(height: 14),

@@ -1,3 +1,5 @@
+import '../../../core/models/presence.dart';
+
 /// Un compte, tel que l'administration le voit.
 ///
 /// L'etat manquait entierement: ni actif, ni derniere connexion, ni date de
@@ -21,6 +23,11 @@ class UserAccount {
   final DateTime? lastLogin;
   final DateTime? dateJoined;
 
+  /// La derniere fois que le compte a donne signe de vie, et si c'est
+  /// maintenant. `last_login` ne repond pas a cela: il date de l'ouverture de
+  /// session, pas de la derniere action.
+  final Presence presence;
+
   const UserAccount({
     required this.id,
     required this.username,
@@ -35,6 +42,7 @@ class UserAccount {
     this.isActive = true,
     this.lastLogin,
     this.dateJoined,
+    this.presence = const Presence(),
   });
 
   factory UserAccount.fromJson(Map<String, dynamic> json) {
@@ -52,8 +60,13 @@ class UserAccount {
       // Absent d'un serveur anterieur: on suppose le compte ouvert plutot
       // que de l'afficher coupe a tort.
       isActive: json['is_active'] as bool? ?? true,
-      lastLogin: DateTime.tryParse(json['last_login']?.toString() ?? ''),
-      dateJoined: DateTime.tryParse(json['date_joined']?.toString() ?? ''),
+      lastLogin: DateTime.tryParse(
+        json['last_login']?.toString() ?? '',
+      )?.toLocal(),
+      dateJoined: DateTime.tryParse(
+        json['date_joined']?.toString() ?? '',
+      )?.toLocal(),
+      presence: Presence.depuisJson(json),
     );
   }
 
@@ -63,11 +76,27 @@ class UserAccount {
   }
 
   /// Un compte cree puis oublie: c'est ce qu'on cherche en faisant le menage.
-  bool get jamaisConnecte => lastLogin == null;
+  ///
+  /// Une connexion suffit a le sortir de cet etat, meme si l'ancien serveur
+  /// n'ecrivait pas `last_login`: la presence, elle, l'a vu passer.
+  bool get jamaisConnecte => lastLogin == null && presence.jamaisVue;
+
+  /// Vrai tant que la personne donne signe de vie.
+  bool get enLigne => presence.enLigne();
+
+  /// « En ligne », « Vu hier à 08:05 », « Jamais connecté »: l'etat du compte
+  /// en une ligne, celle que l'administration lit.
+  String get etatDeConnexion {
+    if (enLigne) return 'En ligne';
+    final quand = presence.vuA ?? lastLogin;
+    if (quand == null) return 'Jamais connecté';
+    return 'Vu ${dateHeureLisible(quand)}';
+  }
 
   /// « il y a 3 jours », « jamais connecté ».
   String get derniereActivite {
-    final quand = lastLogin;
+    if (enLigne) return 'En ligne';
+    final quand = _derniereTrace;
     if (quand == null) return 'Jamais connecté';
 
     final ecart = DateTime.now().difference(quand);
@@ -77,5 +106,15 @@ class UserAccount {
     if (ecart.inDays < 30) return 'Il y a ${ecart.inDays} jours';
     if (ecart.inDays < 365) return 'Il y a ${(ecart.inDays / 30).round()} mois';
     return 'Il y a plus d’un an';
+  }
+
+  /// Le plus recent des deux repères: la derniere activite si on l'a, sinon
+  /// l'ouverture de session.
+  DateTime? get _derniereTrace {
+    final vuA = presence.vuA;
+    final connexion = lastLogin;
+    if (vuA == null) return connexion;
+    if (connexion == null) return vuA;
+    return vuA.isAfter(connexion) ? vuA : connexion;
   }
 }
