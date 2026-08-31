@@ -350,9 +350,23 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                 .toList(growable: false);
       }
 
+      // Un enseignant demande par la palette prime sur le premier de la
+      // liste: on vient ici pour lui, pas pour l'annuaire. L'intention est
+      // consommee aussitot, sinon chaque visite ulterieure le rouvrirait.
+      final demande = ref.read(teacherTimesheetFocusProvider);
+      if (demande != null) {
+        ref.read(teacherTimesheetFocusProvider.notifier).state = null;
+      }
+      final existe =
+          demande != null &&
+          teachers.any((row) => _asInt(row['id']) == demande);
+
       setState(() {
         _teachers = teachers;
         _timeEntries = timeEntries;
+        if (existe) {
+          _selectedTeacherId = demande;
+        }
         _selectedTeacherId ??= _teachers.isNotEmpty
         ? _asInt(_teachers.first['id'])
             : null;

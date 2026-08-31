@@ -1,9 +1,8 @@
 from django.contrib.auth import get_user_model
 from django.db.models import Q
-from django.utils import timezone
-from datetime import timedelta
 from rest_framework import serializers
 
+from apps.common.presence import presence_depuis_ligne, presence_last_seen
 from apps.school.models import Etablissement
 
 from .models import ChatMessage, ChatPresence, Conversation, ConversationParticipant
@@ -59,23 +58,28 @@ def _chat_scope_etablissement(request):
 
 
 def _presence_is_online(presence):
-    if presence is None:
-        return False
-    if getattr(presence, "connection_count", 0) > 0:
-        return True
-    stamp = getattr(presence, "last_seen_at", None) or getattr(presence, "updated_at", None)
-    if stamp is None:
-        return False
-    return (timezone.now() - stamp) <= timedelta(seconds=90)
+    """Voir `apps.common.presence`: l'horodatage seul, jamais le compteur."""
+    return presence_depuis_ligne(presence)
 
 
 class ChatUserLiteSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     online = serializers.SerializerMethodField()
+    # « Hors ligne » tout court laissait la question ouverte: parti a l'instant
+    # ou plus revenu depuis une semaine? L'ecran affiche « vu le ... ».
+    last_seen_at = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "username", "full_name", "role", "etablissement", "online"]
+        fields = [
+            "id",
+            "username",
+            "full_name",
+            "role",
+            "etablissement",
+            "online",
+            "last_seen_at",
+        ]
 
     def get_full_name(self, obj):
         full_name = obj.get_full_name().strip()
@@ -85,10 +89,15 @@ class ChatUserLiteSerializer(serializers.ModelSerializer):
         presence = getattr(obj, "chat_presence", None)
         return _presence_is_online(presence)
 
+    def get_last_seen_at(self, obj):
+        stamp = presence_last_seen(getattr(obj, "chat_presence", None))
+        return stamp.isoformat() if stamp else None
+
 
 class ChatMessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.SerializerMethodField()
     attachment_url = serializers.SerializerMethodField()
+    reply_to_apercu = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatMessage
@@ -105,7 +114,46 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "attachment_name",
             "attachment_size",
             "attachment_mime_type",
+            "deleted_at",
+            "edited_at",
+            "reply_to",
+            "reply_to_apercu",
         ]
+
+    def to_representation(self, instance):
+        """Un message retire ne livre plus son contenu.
+
+        Le vider a l'affichage seulement laisserait le texte accessible a qui
+        regarde la reponse de l'API: la suppression doit valoir au dela de ce
+        que l'ecran veut bien montrer.
+        """
+        donnees = super().to_representation(instance)
+        if instance.deleted_at is not None:
+            donnees["content"] = ""
+            donnees["attachment_url"] = None
+            donnees["attachment_name"] = ""
+            donnees["attachment_size"] = 0
+        return donnees
+
+    def get_reply_to_apercu(self, obj):
+        """De quoi afficher la citation sans une requete par message.
+
+        Le client a besoin du nom et d'un extrait; charger le message cite
+        entier ferait grossir chaque page de messages pour trois mots.
+        """
+        cite = obj.reply_to
+        if cite is None:
+            return None
+        if cite.deleted_at is not None:
+            return {"id": cite.id, "sender_name": "", "extrait": "Message retire"}
+        extrait = (cite.content or "").strip()
+        if not extrait and cite.attachment_name:
+            extrait = cite.attachment_name
+        return {
+            "id": cite.id,
+            "sender_name": cite.sender.get_full_name().strip() or cite.sender.username,
+            "extrait": extrait[:120],
+        }
 
     def get_sender_name(self, obj):
         return obj.sender.get_full_name().strip() or obj.sender.username
@@ -209,12 +257,17 @@ class ConversationSerializer(serializers.ModelSerializer):
         }
         payload = []
         for user in users:
+            presence = getattr(user, "chat_presence", None)
+            derniere_activite = presence_last_seen(presence)
             payload.append(
                 {
                     "id": user.id,
                     "username": user.username,
                     "full_name": user.get_full_name().strip() or user.username,
-                    "online": _presence_is_online(getattr(user, "chat_presence", None)),
+                    "online": _presence_is_online(presence),
+                    "last_seen_at": (
+                        derniere_activite.isoformat() if derniere_activite else None
+                    ),
                     "is_admin": bool(participant_admins.get(user.id, False)),
                 }
             )

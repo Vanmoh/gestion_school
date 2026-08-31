@@ -10,6 +10,7 @@ import 'package:printing/printing.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/providers/navigation_intents.dart';
 import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../../../core/widgets/frozen_column_table.dart';
@@ -274,6 +275,13 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         _teacherAssignmentIds = teacherAssignmentIds;
         _teacherClassroomIds = teacherClassroomIds;
         if (_isTeacherUser) {
+          _viewMode = 'teacher';
+        }
+        // Arrive depuis la palette enseignant: on ouvre sur la vue par
+        // enseignant plutot que sur celle par classe. L'intention est
+        // consommee aussitot, sinon toute visite ulterieure la rejouerait.
+        if (ref.read(timetableTeacherViewIntentProvider)) {
+          ref.read(timetableTeacherViewIntentProvider.notifier).state = false;
           _viewMode = 'teacher';
         }
 

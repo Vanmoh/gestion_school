@@ -28,6 +28,10 @@ class UserPaletteCard extends StatelessWidget {
   static const nonRenseigne = 'Non renseigné';
   static const jamaisConnecte = 'Jamais connecté';
 
+  /// Le meme vert que la pastille de la messagerie: « en ligne » doit se
+  /// reconnaitre d'un ecran a l'autre.
+  static const couleurEnLigne = Color(0xFF12B76A);
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -129,6 +133,14 @@ class UserPaletteCard extends StatelessWidget {
                       couleur: scheme.errorContainer,
                       texteCouleur: scheme.onErrorContainer,
                     ),
+                  if (compte.isActive && compte.enLigne)
+                    _pastille(
+                      scheme,
+                      textTheme,
+                      'En ligne',
+                      couleur: couleurEnLigne.withValues(alpha: 0.18),
+                      texteCouleur: couleurEnLigne,
+                    ),
                   if (compte.etablissementName.trim().isNotEmpty)
                     _pastille(scheme, textTheme, compte.etablissementName),
                 ],
@@ -177,11 +189,17 @@ class UserPaletteCard extends StatelessWidget {
           _indicateur(
             scheme,
             textTheme,
-            'Dernière connexion',
-            _date(compte.lastLogin, repli: jamaisConnecte),
-            // Un compte qui n'a jamais servi merite un oeil: soit il ne sert
-            // a personne, soit son titulaire n'a jamais recu ses acces.
-            couleur: compte.lastLogin == null ? scheme.tertiary : null,
+            // La date seule ne repondait pas a la question qu'on se pose en
+            // regardant cette fiche: est-il devant son ecran la, maintenant?
+            compte.enLigne ? 'Connexion' : 'Dernière connexion',
+            compte.etatDeConnexion,
+            // Vert quand la personne est la; l'accent tertiaire signale au
+            // contraire un compte qui n'a jamais servi -- soit il ne sert a
+            // personne, soit son titulaire n'a jamais recu ses acces.
+            couleur: compte.enLigne
+                ? couleurEnLigne
+                : (compte.jamaisConnecte ? scheme.tertiary : null),
+            puce: compte.enLigne,
           ),
           _indicateur(
             scheme,
@@ -200,6 +218,7 @@ class UserPaletteCard extends StatelessWidget {
     String libelle,
     String valeur, {
     Color? couleur,
+    bool puce = false,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -210,12 +229,30 @@ class UserPaletteCard extends StatelessWidget {
           style: textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
         ),
         const SizedBox(height: 2),
-        Text(
-          valeur,
-          style: textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w700,
-            color: couleur,
-          ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Le point vert se lit avant le mot: c'est la convention de toutes
+            // les messageries, et elle survit a un coup d'oeil rapide.
+            if (puce) ...[
+              Container(
+                width: 8,
+                height: 8,
+                decoration: const BoxDecoration(
+                  color: couleurEnLigne,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              valeur,
+              style: textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: couleur,
+              ),
+            ),
+          ],
         ),
       ],
     );

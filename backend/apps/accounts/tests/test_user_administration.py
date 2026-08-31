@@ -324,3 +324,95 @@ class FiltreParEtatTests(_ComptesMixin, APITestCase):
 
         self.assertIn(self.actif.id, identifiants)
         self.assertIn(self.parti.id, identifiants)
+
+
+class RechercheTests(_ComptesMixin, APITestCase):
+    """Chercher un compte par ce qui l'identifie, pas par son domaine.
+
+    L'email entier entrait dans la recherche. Tous les comptes d'une ecole
+    partageant « @ifp-obk.com », taper une lettre qu'il contient -- le « o »
+    du domaine -- ramenait l'annuaire complet, et la recherche paraissait
+    cassee: on cherchait « o » et Ali Cisse ressortait.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls._decor(nom="Etab Recherche")
+        cls.cisse = cls._compte("stu_014", UserRole.STUDENT)
+        cls.cisse.first_name = "Ali"
+        cls.cisse.last_name = "Cisse"
+        cls.cisse.email = "stu_014@ifp-obk.com"
+        cls.cisse.phone = "78785913"
+        cls.cisse.save()
+
+        cls.konate = cls._compte("stu_020", UserRole.STUDENT)
+        cls.konate.first_name = "Oumou"
+        cls.konate.last_name = "Konate"
+        cls.konate.email = "oumou.konate@ifp-obk.com"
+        cls.konate.save()
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.direction)
+
+    def _chercher(self, terme):
+        lignes = self.client.get(
+            "/api/auth/users/",
+            {"search": terme},
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
+        ).data["results"]
+        return {ligne["id"] for ligne in lignes}
+
+    def test_le_domaine_de_l_email_ne_ramene_plus_tout_le_monde(self):
+        """« o » ne doit plus trouver Ali Cisse via « @ifp-obk.com »."""
+        trouves = self._chercher("o")
+
+        self.assertNotIn(self.cisse.id, trouves)
+        self.assertIn(self.konate.id, trouves)
+
+    def test_le_domaine_seul_ne_ramene_pas_ses_porteurs(self):
+        """« com » ne doit plus trouver un compte par son seul email.
+
+        Il en trouve d'autres par leur identifiant -- « dir_comptes » en
+        contient --, et c'est legitime: c'est le domaine qui est ecarte, pas
+        la chaine.
+        """
+        trouves = self._chercher("com")
+
+        self.assertNotIn(self.cisse.id, trouves)
+        self.assertNotIn(self.konate.id, trouves)
+
+    def test_le_prenom_trouve_son_titulaire(self):
+        self.assertIn(self.cisse.id, self._chercher("ali"))
+
+    def test_le_nom_trouve_son_titulaire(self):
+        self.assertIn(self.konate.id, self._chercher("konate"))
+
+    def test_l_identifiant_trouve_son_compte(self):
+        self.assertEqual(self._chercher("stu_014"), {self.cisse.id})
+
+    def test_le_debut_de_l_email_reste_cherchable(self):
+        """« ali » trouve « ali.cisse@… »: c'est le domaine qui est écarté."""
+        self.assertIn(self.konate.id, self._chercher("oumou.konate"))
+
+    def test_le_telephone_trouve_son_titulaire(self):
+        """L'écran l'annonçait parmi les critères."""
+        self.assertEqual(self._chercher("78785913"), {self.cisse.id})
+
+    def test_une_recherche_vide_ne_filtre_rien(self):
+        trouves = self._chercher("")
+
+        self.assertIn(self.cisse.id, trouves)
+        self.assertIn(self.konate.id, trouves)
+
+    def test_la_recherche_reste_bornee_a_l_etablissement(self):
+        autre = Etablissement.objects.create(name="Ecole voisine recherche")
+        etranger = User.objects.create_user(
+            username="oumou_ailleurs",
+            password="Pass1234!",
+            role=UserRole.STUDENT,
+            first_name="Oumou",
+            etablissement=autre,
+        )
+
+        self.assertNotIn(etranger.id, self._chercher("oumou"))

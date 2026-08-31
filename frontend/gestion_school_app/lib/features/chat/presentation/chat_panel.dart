@@ -6,20 +6,43 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:printing/printing.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../../../core/models/presence.dart';
 import '../../../core/network/token_storage.dart';
+
+import '../data/canal_temps_reel.dart';
+import 'widgets/secousse_attention.dart';
 
 class ChatPanel extends StatefulWidget {
   final Dio dio;
   final TokenStorage tokenStorage;
   final ValueChanged<int>? onUnreadChanged;
 
+  /// La conversation a ouvrir d'emblee. Renseignee quand la fenetre surgit
+  /// sur un appel d'attention: l'ouvrir sur la liste obligerait a chercher
+  /// qui vient d'appeler, alors que le serveur vient de le dire.
+  final int? conversationInitiale;
+
+  /// Secoue la fenetre a l'ouverture quand c'est un appel qui l'a fait
+  /// surgir. Surgir ne suffit pas: sur un ecran charge, une fenetre de plus
+  /// passe inapercue.
+  final bool secouerALOuverture;
+
+  /// La connexion temps reel, tenue par la coquille de l'application.
+  ///
+  /// Le panneau en ouvrait une seconde a chaque affichage: deux sockets par
+  /// personne, et deux mecaniques de reprise a garder accordees. Il se
+  /// contente desormais de s'abonner a celle qui tourne deja.
+  final CanalTempsReel canal;
+
   const ChatPanel({
     super.key,
     required this.dio,
     required this.tokenStorage,
     this.onUnreadChanged,
+    this.conversationInitiale,
+    this.secouerALOuverture = false,
+    required this.canal,
   });
 
   @override
@@ -28,7 +51,11 @@ class ChatPanel extends StatefulWidget {
 
 class _ChatPanelState extends State<ChatPanel> {
   static const int _pageSize = 50;
-  static const Duration _heartbeatInterval = Duration(seconds: 20);
+
+  /// Cadence du repli quand le websocket est indisponible. Assez court pour
+  /// qu'une conversation reste suivable, assez long pour ne pas marteler le
+  /// serveur avec une requete par seconde et par onglet ouvert.
+  static const Duration _intervalleSondage = Duration(seconds: 10);
   static const List<String> _allowedAttachmentExtensions = <String>[
     'jpg',
     'jpeg',
@@ -64,7 +91,14 @@ class _ChatPanelState extends State<ChatPanel> {
   List<Map<String, dynamic>> _conversations = <Map<String, dynamic>>[];
   List<Map<String, dynamic>> _messages = <Map<String, dynamic>>[];
   List<Map<String, dynamic>> _users = <Map<String, dynamic>>[];
-  final Map<int, bool> _presenceByUser = <int, bool>{};
+  /// La presence de chacun, horodatee.
+  ///
+  /// C'etait un simple booleen: « en ligne » une fois pose ne redescendait
+  /// jamais tout seul. Quand un correspondant fermait sa fenetre sans que le
+  /// serveur ait pu le signaler -- navigateur tue, wifi coupe -- la pastille
+  /// restait verte indefiniment. Avec l'horodatage, l'ecran refait le calcul
+  /// a chaque affichage et la presence perime d'elle-meme.
+  final Map<int, Presence> _presenceByUser = <int, Presence>{};
   final Map<int, bool> _typingByConversation = <int, bool>{};
   final Map<int, Timer> _typingExpiryByConversation = <int, Timer>{};
   final Map<int, int> _lastReadByConversation = <int, int>{};
@@ -72,19 +106,48 @@ class _ChatPanelState extends State<ChatPanel> {
   final Set<String> _seenMessageKeys = <String>{};
   int _pendingInThreadCount = 0;
 
-  WebSocketChannel? _channel;
-  StreamSubscription<dynamic>? _channelSub;
-  Timer? _reconnectTimer;
   Timer? _heartbeatTimer;
   Timer? _typingStopTimer;
   Timer? _presenceRefreshTimer;
+  Timer? _sondageTimer;
+  StreamSubscription<Map<String, dynamic>>? _canalSub;
+
+  /// Compte les secousses demandees. On incremente plutot que de basculer un
+  /// booleen: deux appels d'affilee doivent secouer deux fois, et « vrai »
+  /// suivi de « vrai » ne se distingue pas.
+  int _secousses = 0;
+
+  /// Le message auquel le prochain envoi repondra. Nul hors citation.
+  Map<String, dynamic>? _messageCite;
+
+  /// Ce qu'on cherche dans le fil ouvert. Vide, le fil est entier.
+  final TextEditingController _rechercheFilController = TextEditingController();
+  String _rechercheFil = '';
+  Timer? _rechercheFilDebounce;
+
+  /// Ce qui suit le « @ » en cours de frappe, vide hors mention. Sert a
+  /// n'afficher que les participants dont le nom commence ainsi.
+  String? _mentionEnCours;
+
+  /// Le role du compte connecte, pour savoir s'il peut appeler l'attention.
+  /// Le serveur reste seul juge -- il refuse l'action -- mais proposer un
+  /// bouton qui mene a un refus ne vaut rien.
+  String _currentUserRole = '';
+
+  /// Qui peut faire surgir une fenetre chez quelqu'un d'autre. Doit rester
+  /// aligne sur ROLES_POUVANT_APPELER_L_ATTENTION, cote serveur.
+  static const Set<String> _rolesAppelAttention = <String>{
+    'super_admin',
+    'director',
+    'promoter',
+    'censor',
+    'accountant',
+    'teacher',
+    'supervisor',
+  };
   CancelToken? _activeUploadCancelToken;
   String? _activeUploadClientMessageId;
   bool _wsConnected = false;
-  bool _awaitingPong = false;
-  int _wsReconnectAttempt = 0;
-  String? _wsBaseUrl;
-  String? _wsToken;
 
   String _messageKey(int conversationId, int messageId) => '$conversationId:$messageId';
 
@@ -166,6 +229,9 @@ class _ChatPanelState extends State<ChatPanel> {
       const Duration(seconds: 20),
       (_) => _refreshPresenceSnapshot(),
     );
+    if (widget.secouerALOuverture) {
+      _secousses = 1;
+    }
     _bootstrap();
   }
 
@@ -178,14 +244,17 @@ class _ChatPanelState extends State<ChatPanel> {
       timer.cancel();
     }
     _typingExpiryByConversation.clear();
-    _reconnectTimer?.cancel();
     _heartbeatTimer?.cancel();
     _presenceRefreshTimer?.cancel();
-    _channelSub?.cancel();
-    _channel?.sink.close();
+    _sondageTimer?.cancel();
+    // On se desabonne sans fermer: le canal appartient a la coquille et
+    // continue de compter les non-lus une fois le panneau referme.
+    _canalSub?.cancel();
     _messageScrollController.dispose();
     _messageController.dispose();
     _searchController.dispose();
+    _rechercheFilController.dispose();
+    _rechercheFilDebounce?.cancel();
     _conversationSearchController.dispose();
     super.dispose();
   }
@@ -196,6 +265,112 @@ class _ChatPanelState extends State<ChatPanel> {
   }
 
   String _asString(dynamic value) => value?.toString() ?? '';
+
+  /// Le bandeau « Aujourd’hui » / « Hier » / « 12 août 2026 » qui ouvre un
+  /// nouveau jour dans le fil.
+  ///
+  /// Nul quand le message precedent est du meme jour. Le fil n'affichait que
+  /// des heures: rien n'y disait ou finissait hier, et « 08:12 » pouvait
+  /// aussi bien dater de ce matin que de la semaine derniere.
+  Widget? _separateurDeJour(
+    Map<String, dynamic> message,
+    Map<String, dynamic>? precedent,
+  ) {
+    final jour = _jourDe(message);
+    if (jour == null) return null;
+    if (precedent != null && _jourDe(precedent) == jour) return null;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            _libelleDeJour(jour),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// La date du message, sans son heure. Nulle si elle est illisible.
+  DateTime? _jourDe(Map<String, dynamic> message) {
+    final brut = _asString(message['created_at']).trim();
+    if (brut.isEmpty) return null;
+    final date = DateTime.tryParse(brut)?.toLocal();
+    if (date == null) return null;
+    return DateTime(date.year, date.month, date.day);
+  }
+
+  static const List<String> _moisCourts = [
+    'janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin',
+    'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.',
+  ];
+
+  String _libelleDeJour(DateTime jour) {
+    final maintenant = DateTime.now();
+    final aujourdHui = DateTime(maintenant.year, maintenant.month, maintenant.day);
+    final ecart = aujourdHui.difference(jour).inDays;
+    if (ecart == 0) return 'Aujourd’hui';
+    if (ecart == 1) return 'Hier';
+    final mois = _moisCourts[jour.month - 1];
+    // L'annee ne s'affiche que si ce n'est pas la courante: la repeter sur
+    // chaque separateur d'une meme annee scolaire n'apprend rien.
+    if (jour.year == maintenant.year) return '${jour.day} $mois';
+    return '${jour.day} $mois ${jour.year}';
+  }
+
+  /// La ligne laissee par un appel d'attention, au centre du fil.
+  Widget _ligneAppelAttention(
+    BuildContext context,
+    Map<String, dynamic> message,
+    String heure,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    final nom = _senderLabel(message).trim();
+    final qui = nom.isNotEmpty ? nom : 'Quelqu’un';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: scheme.tertiaryContainer,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.waving_hand_outlined,
+                size: 15,
+                color: scheme.onTertiaryContainer,
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  heure.isEmpty
+                      ? '$qui a demandé votre attention'
+                      : '$qui a demandé votre attention · $heure',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: scheme.onTertiaryContainer,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   String _formatMessageTime(dynamic rawIso) {
     final raw = _asString(rawIso).trim();
@@ -364,66 +539,6 @@ class _ChatPanelState extends State<ChatPanel> {
     }
   }
 
-  String _wsUrlFromApiBase(
-    String apiBase,
-    String token, {
-    int? etablissementId,
-  }) {
-    final base = Uri.parse(apiBase.trim());
-    final wsScheme = base.scheme == 'https' ? 'wss' : 'ws';
-
-    var path = base.path;
-    if (path.endsWith('/')) {
-      path = path.substring(0, path.length - 1);
-    }
-    if (path.endsWith('/api')) {
-      path = path.substring(0, path.length - 4);
-    }
-
-    final wsPath = '$path/ws/chat/stream/';
-    final queryParameters = <String, String>{'token': token};
-    if (etablissementId != null && etablissementId > 0) {
-      queryParameters['etablissement_id'] = etablissementId.toString();
-    }
-    final uri = Uri(
-      scheme: wsScheme,
-      host: base.host,
-      port: base.hasPort ? base.port : null,
-      path: wsPath,
-      queryParameters: queryParameters,
-    );
-    return uri.toString();
-  }
-
-  Future<int?> _resolveWsEtablissementId() async {
-    final values = await Future.wait<String?>(<Future<String?>>[
-      widget.tokenStorage.selectedEtablissement(),
-      widget.tokenStorage.cachedUser(),
-    ]);
-
-    final selectedEtablissementRaw = values[0] ?? '';
-    final cachedUserRaw = values[1] ?? '';
-
-    if (selectedEtablissementRaw.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(selectedEtablissementRaw) as Map<String, dynamic>;
-        return (decoded['id'] as num?)?.toInt();
-      } catch (_) {
-        // Ignore malformed cached establishment payload.
-      }
-    }
-
-    if (cachedUserRaw.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(cachedUserRaw) as Map<String, dynamic>;
-        return (decoded['etablissementId'] as num?)?.toInt();
-      } catch (_) {
-        // Ignore malformed cached user payload.
-      }
-    }
-
-    return null;
-  }
 
   Future<void> _bootstrap() async {
     setState(() => _loading = true);
@@ -435,11 +550,10 @@ class _ChatPanelState extends State<ChatPanel> {
       ]);
 
       final rawUser = values[0] ?? '';
-      final token = values[1] ?? '';
-      final storedBase = values[2] ?? '';
       if (rawUser.isNotEmpty) {
         final parsed = jsonDecode(rawUser) as Map<String, dynamic>;
         _currentUserId = _asInt(parsed['id']);
+        _currentUserRole = _asString(parsed['role']);
       }
 
       final responses = await Future.wait<Response<dynamic>>(<Future<Response<dynamic>>>[
@@ -452,12 +566,19 @@ class _ChatPanelState extends State<ChatPanel> {
       _syncConversationReadState(conversations);
       for (final row in users) {
         final id = _asInt(row['id']);
-        _presenceByUser[id] = row['online'] == true;
+        _presenceByUser[id] = Presence.depuisJson(row);
       }
 
       _conversations = conversations;
       _users = users;
-      if (_selectedConversationId == null && _conversations.isNotEmpty) {
+      // La conversation demandee prime sur la plus recente: quand un appel
+      // d'attention fait surgir la fenetre, elle doit s'ouvrir sur qui vient
+      // d'appeler, pas sur le dernier fil consulte.
+      final demandee = widget.conversationInitiale;
+      if (demandee != null &&
+          _conversations.any((row) => _asInt(row['id']) == demandee)) {
+        _selectedConversationId = demandee;
+      } else if (_selectedConversationId == null && _conversations.isNotEmpty) {
         _selectedConversationId = _asInt(_conversations.first['id']);
       }
 
@@ -468,11 +589,7 @@ class _ChatPanelState extends State<ChatPanel> {
         await _refreshConversationPresence(_selectedConversationId!);
       }
 
-      if (token.isNotEmpty) {
-        final activeBase = widget.dio.options.baseUrl.trim();
-        final baseUrl = activeBase.isNotEmpty ? activeBase : storedBase;
-        unawaited(_connectWs(baseUrl, token));
-      }
+      _brancherSurLeCanal();
 
       // Refresh once after websocket connect attempt so counterpart online
       // state in conversation rows catches up quickly.
@@ -511,6 +628,11 @@ class _ChatPanelState extends State<ChatPanel> {
         queryParameters: <String, dynamic>{
           'page_size': _pageSize,
           'before_id': ?beforeId,
+          // Le serveur filtre plutot que le client: chercher dans les
+          // cinquante messages deja charges ne retrouverait pas la note de
+          // service d'il y a trois semaines, qui est justement ce qu'on
+          // cherche.
+          if (_rechercheFil.trim().isNotEmpty) 'q': _rechercheFil.trim(),
         },
       );
       final rows = _rows(resp.data);
@@ -620,11 +742,15 @@ class _ChatPanelState extends State<ChatPanel> {
       setState(() {
         _users = rows;
         for (final user in rows) {
-          _presenceByUser[_asInt(user['id'])] = user['online'] == true;
+          _presenceByUser[_asInt(user['id'])] = Presence.depuisJson(user);
         }
       });
     } catch (_) {
-      // Keep chat usable if periodic presence refresh fails.
+      // Le serveur muet ne doit pas figer l'affichage: la presence perime
+      // toute seule, encore faut-il repasser par un rendu pour qu'elle se
+      // voie. Sans ce setState, un correspondant parti restait vert tant que
+      // l'annuaire ne repondait pas.
+      if (mounted) setState(() {});
     }
   }
 
@@ -637,7 +763,7 @@ class _ChatPanelState extends State<ChatPanel> {
         for (final row in rows) {
           final userId = _asInt(row['user_id']);
           if (userId > 0) {
-            _presenceByUser[userId] = row['online'] == true;
+            _presenceByUser[userId] = Presence.depuisJson(row);
           }
         }
       });
@@ -771,10 +897,10 @@ class _ChatPanelState extends State<ChatPanel> {
         '/chat/conversations/$conversationId/mark-read/',
         data: <String, dynamic>{},
       );
-      _channel?.sink.add(jsonEncode(<String, dynamic>{
+      widget.canal.envoyer(<String, dynamic>{
         'action': 'mark_read',
         'conversation_id': conversationId,
-      }));
+      });
     } catch (_) {
       // Non-blocking.
     }
@@ -791,38 +917,32 @@ class _ChatPanelState extends State<ChatPanel> {
     widget.onUnreadChanged?.call(_sumUnread(_conversations));
   }
 
-  Future<void> _connectWs(String baseUrl, String token) async {
-    _wsBaseUrl = baseUrl;
-    _wsToken = token;
-    _reconnectTimer?.cancel();
-    _channelSub?.cancel();
-    _channel?.sink.close();
+  /// S'abonne au canal de la coquille au lieu d'ouvrir un second socket.
+  void _brancherSurLeCanal() {
+    _canalSub ??= widget.canal.evenements.listen((evenement) {
+      final type = (evenement['event'] ?? '').toString();
+      if (type == '_canal_ouvert') {
+        _setWsConnected();
+        return;
+      }
+      if (type == '_canal_rompu') {
+        _setWsDisconnected();
+        return;
+      }
+      _handleWsEvent(evenement);
+    });
 
-    final etablissementId = await _resolveWsEtablissementId();
-    final wsUrl = _wsUrlFromApiBase(
-      baseUrl,
-      token,
-      etablissementId: etablissementId,
-    );
-    _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
-    _channelSub = _channel!.stream.listen(
-      _handleWsEvent,
-      onError: (_) {
-        _setWsDisconnected();
-        _scheduleReconnect();
-      },
-      onDone: () {
-        _setWsDisconnected();
-        _scheduleReconnect();
-      },
-    );
-    _setWsConnected();
-    _startHeartbeat();
+    // Le canal peut deja tourner: dans ce cas aucun « _canal_ouvert » ne
+    // viendra, et le panneau resterait a se croire hors ligne.
+    if (widget.canal.connecte) {
+      _setWsConnected();
+    } else {
+      _setWsDisconnected();
+    }
   }
 
   void _setWsConnected() {
-    _awaitingPong = false;
-    _wsReconnectAttempt = 0;
+    _arreterSondageDeSecours();
     if (!mounted) return;
     setState(() => _wsConnected = true);
     unawaited(_reloadConversationsOnly());
@@ -834,71 +954,552 @@ class _ChatPanelState extends State<ChatPanel> {
 
   void _setWsDisconnected() {
     _heartbeatTimer?.cancel();
+    _demarrerSondageDeSecours();
     if (!mounted) return;
     setState(() => _wsConnected = false);
   }
 
-  void _startHeartbeat() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
-      if (!_wsConnected) {
+  /// Rafraichit la messagerie a intervalle fixe quand le temps reel est tombe.
+  ///
+  /// Sans cela, socket coupe voulait dire messagerie figee: les messages
+  /// n'arrivaient plus du tout jusqu'a ce qu'une reconnexion reussisse -- ou
+  /// que l'utilisateur rouvre le panneau. Le sondage est plus lent que le
+  /// direct, mais il ne ment jamais.
+  void _demarrerSondageDeSecours() {
+    if (_sondageTimer != null) return;
+    _sondageTimer = Timer.periodic(_intervalleSondage, (_) {
+      // Le direct a repris: il recharge lui-meme a la reconnexion.
+      if (_wsConnected) {
+        _arreterSondageDeSecours();
         return;
       }
-      if (_awaitingPong) {
-        _channel?.sink.close();
-        _setWsDisconnected();
-        _scheduleReconnect();
-        return;
+      if (!mounted) return;
+      unawaited(_reloadConversationsOnly());
+      final conversationId = _selectedConversationId;
+      if (conversationId != null) {
+        unawaited(_loadMessages(conversationId, reset: true));
       }
-      _awaitingPong = true;
-      _channel?.sink.add(jsonEncode(<String, dynamic>{'action': 'ping'}));
     });
   }
 
-  void _scheduleReconnect() {
-    if (!mounted || _reconnectTimer != null) {
+  /// Fait surgir la fenetre de discussion chez les autres participants.
+  ///
+  /// Passe par le websocket et non par une route REST: l'appel n'a de sens
+  /// que si l'autre est connecte a l'instant meme, et c'est exactement ce
+  /// que le canal temps reel sait dire.
+  void _appelerLAttention() {
+    final conversationId = _selectedConversationId;
+    if (conversationId == null) return;
+
+    if (!_wsConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Reconnexion en cours : l’appel d’attention a besoin du temps réel.',
+          ),
+        ),
+      );
       return;
     }
-    final base = _wsBaseUrl;
-    final token = _wsToken;
-    if (base == null || token == null || token.isEmpty) {
-      return;
-    }
-    final seconds = _backoffSeconds(_wsReconnectAttempt);
-    _wsReconnectAttempt += 1;
-    _reconnectTimer = Timer(Duration(seconds: seconds), () {
-      _reconnectTimer = null;
-      unawaited(_connectWs(base, token));
+
+    widget.canal.envoyer(<String, dynamic>{
+      'action': 'attention',
+      'conversation_id': conversationId,
     });
   }
 
-  int _backoffSeconds(int attempt) {
-    final value = 1 << (attempt.clamp(0, 5));
-    if (value > 30) {
-      return 30;
+  /// Le texte d'un message, ses mentions mises en evidence.
+  ///
+  /// Une mention noyee dans le paragraphe ne remplit pas son role: c'est
+  /// justement pour etre vue qu'on nomme quelqu'un.
+  Widget _texteAvecMentions(BuildContext context, String texte) {
+    if (!texte.contains('@')) return Text(texte);
+
+    final scheme = Theme.of(context).colorScheme;
+    final base = Theme.of(context).textTheme.bodyMedium;
+    final morceaux = <TextSpan>[];
+    // Un nom peut porter des accents et des traits d'union; il s'arrete au
+    // premier signe de ponctuation ou espace double.
+    final motif = RegExp("@[\\wÀ-ÿ'-]+(?: [\\wÀ-ÿ'-]+)?");
+
+    var curseur = 0;
+    for (final trouve in motif.allMatches(texte)) {
+      if (trouve.start > curseur) {
+        morceaux.add(TextSpan(text: texte.substring(curseur, trouve.start)));
+      }
+      morceaux.add(
+        TextSpan(
+          text: trouve.group(0),
+          style: base?.copyWith(
+            color: scheme.primary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+      curseur = trouve.end;
     }
-    return value;
+    if (curseur < texte.length) {
+      morceaux.add(TextSpan(text: texte.substring(curseur)));
+    }
+
+    return RichText(
+      text: TextSpan(style: base, children: morceaux),
+    );
   }
+
+  /// Repere un « @ » en cours de frappe, pour proposer qui interpeller.
+  ///
+  /// Interpeller quelqu'un dans un groupe demandait d'ecrire son nom en
+  /// esperant qu'il repasse: la mention le nomme, et le message le designe
+  /// sans deranger les onze autres.
+  void _repererLaMentionEnCours(String texte) {
+    final position = _messageController.selection.baseOffset;
+    final avant = position >= 0 && position <= texte.length
+        ? texte.substring(0, position)
+        : texte;
+
+    final arobase = avant.lastIndexOf('@');
+    String? mention;
+    if (arobase >= 0) {
+      final fragment = avant.substring(arobase + 1);
+      // Un « @ » suivi d'un espace n'ouvre plus rien: la mention est finie,
+      // ou n'en etait pas une.
+      if (!fragment.contains(' ') && !fragment.contains('\n')) {
+        mention = fragment;
+      }
+    }
+
+    if (mention != _mentionEnCours && mounted) {
+      setState(() => _mentionEnCours = mention);
+    }
+  }
+
+  /// Insere le nom choisi a la place du « @fragment » en cours.
+  void _insererLaMention(String nom) {
+    final texte = _messageController.text;
+    final position = _messageController.selection.baseOffset;
+    final avant = position >= 0 && position <= texte.length
+        ? texte.substring(0, position)
+        : texte;
+    final arobase = avant.lastIndexOf('@');
+    if (arobase < 0) return;
+
+    final apres = position >= 0 && position <= texte.length
+        ? texte.substring(position)
+        : '';
+    final remplace = '${texte.substring(0, arobase)}@$nom $apres';
+    _messageController.value = TextEditingValue(
+      text: remplace,
+      selection: TextSelection.collapsed(offset: arobase + nom.length + 2),
+    );
+    setState(() => _mentionEnCours = null);
+  }
+
+  /// Les participants proposes sous le champ pendant qu'on tape un « @ ».
+  Widget? _suggestionsDeMention(BuildContext context) {
+    final fragment = _mentionEnCours;
+    if (fragment == null) return null;
+
+    final recherche = fragment.toLowerCase();
+    final candidats = _users
+        .where((user) {
+          if (_asInt(user['id']) == _currentUserId) return false;
+          final nom = _asString(user['full_name']).trim().isNotEmpty
+              ? _asString(user['full_name'])
+              : _asString(user['username']);
+          return recherche.isEmpty || nom.toLowerCase().contains(recherche);
+        })
+        .take(5)
+        .toList(growable: false);
+
+    if (candidats.isEmpty) return null;
+
+    return Container(
+      key: const Key('suggestions-mention'),
+      margin: const EdgeInsets.only(bottom: 6),
+      constraints: const BoxConstraints(maxHeight: 190),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: ListView(
+        shrinkWrap: true,
+        children: candidats.map((user) {
+          final nom = _asString(user['full_name']).trim().isNotEmpty
+              ? _asString(user['full_name'])
+              : _asString(user['username']);
+          return ListTile(
+            dense: true,
+            leading: const Icon(Icons.alternate_email, size: 18),
+            title: Text(nom),
+            subtitle: Text(_roleLabel(_asString(user['role']))),
+            onTap: () => _insererLaMention(nom),
+          );
+        }).toList(growable: false),
+      ),
+    );
+  }
+
+  /// La barre qui cherche dans les propos de la conversation ouverte.
+  ///
+  /// La recherche existante ne portait que sur les noms de conversations:
+  /// retrouver « la note de service sur les conges » demandait de remonter le
+  /// fil a la main.
+  Widget _rechercheDansLeFil(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+      child: TextField(
+        key: const Key('recherche-dans-le-fil'),
+        controller: _rechercheFilController,
+        onChanged: (valeur) {
+          _rechercheFilDebounce?.cancel();
+          _rechercheFilDebounce = Timer(
+            const Duration(milliseconds: 350),
+            () {
+              if (!mounted) return;
+              setState(() => _rechercheFil = valeur);
+              final id = _selectedConversationId;
+              if (id != null) unawaited(_loadMessages(id, reset: true));
+            },
+          );
+        },
+        decoration: InputDecoration(
+          isDense: true,
+          prefixIcon: const Icon(Icons.search, size: 18),
+          hintText: 'Rechercher dans la conversation…',
+          border: const OutlineInputBorder(),
+          suffixIcon: _rechercheFil.isEmpty
+              ? null
+              : IconButton(
+                  key: const Key('effacer-recherche-fil'),
+                  tooltip: 'Afficher toute la conversation',
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () {
+                    _rechercheFilDebounce?.cancel();
+                    _rechercheFilController.clear();
+                    setState(() => _rechercheFil = '');
+                    final id = _selectedConversationId;
+                    if (id != null) {
+                      unawaited(_loadMessages(id, reset: true));
+                    }
+                  },
+                ),
+        ),
+      ),
+    );
+  }
+
+  /// Le message cite, en tete de la bulle qui lui repond.
+  Widget _apercuCitation(
+    BuildContext context,
+    Map<String, dynamic> apercu, {
+    required bool mine,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final auteur = _asString(apercu['sender_name']).trim();
+    final extrait = _asString(apercu['extrait']).trim();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+      decoration: BoxDecoration(
+        color: (mine ? scheme.surface : scheme.surfaceContainerLowest)
+            .withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(8),
+        // La barre laterale, et non un cadre complet: elle dit « ceci est
+        // cite » sans ajouter une seconde bulle dans la bulle.
+        border: Border(
+          left: BorderSide(color: scheme.primary, width: 3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (auteur.isNotEmpty)
+            Text(
+              auteur,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: scheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          Text(
+            extrait.isEmpty ? 'Pièce jointe' : extrait,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Le bandeau « Réponse à … » pose au-dessus du champ de saisie.
+  Widget _bandeauCitation(BuildContext context) {
+    final cite = _messageCite!;
+    final scheme = Theme.of(context).colorScheme;
+
+    return Container(
+      key: const Key('bandeau-citation'),
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border(left: BorderSide(color: scheme.primary, width: 3)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Réponse à ${_senderLabel(cite)}',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  _asString(cite['content']).trim().isEmpty
+                      ? 'Pièce jointe'
+                      : _asString(cite['content']),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            key: const Key('annuler-citation'),
+            tooltip: 'Ne plus répondre à ce message',
+            onPressed: () => setState(() => _messageCite = null),
+            icon: const Icon(Icons.close, size: 18),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Le menu « corriger / retirer » d'un message, sous appui long.
+  Future<void> _ouvrirLesActionsDuMessage(
+    Map<String, dynamic> message,
+    bool mine,
+  ) async {
+    final id = _asInt(message['id']);
+    if (id <= 0) return;
+    // Un message encore en vol n'a pas d'existence au serveur: rien a y
+    // corriger ni a y retirer.
+    if (message['pending'] == true || message['upload_failed'] == true) return;
+
+    final texte = _asString(message['message_type']) != 'file';
+
+    final choix = await showModalBottomSheet<String>(
+      context: context,
+      builder: (feuille) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Repondre vaut pour tous les messages: c'est justement a celui
+            // d'un autre qu'on repond le plus souvent.
+            ListTile(
+              key: const Key('action-repondre-message'),
+              leading: const Icon(Icons.reply_outlined),
+              title: const Text('Répondre'),
+              onTap: () => Navigator.pop(feuille, 'repondre'),
+            ),
+            if (mine && texte)
+              ListTile(
+                key: const Key('action-corriger-message'),
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Corriger'),
+                onTap: () => Navigator.pop(feuille, 'corriger'),
+              ),
+            if (mine)
+              ListTile(
+                key: const Key('action-retirer-message'),
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Retirer'),
+                onTap: () => Navigator.pop(feuille, 'retirer'),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    if (choix == 'repondre') {
+      if (mounted) setState(() => _messageCite = message);
+    } else if (choix == 'corriger') {
+      await _corrigerLeMessage(message);
+    } else if (choix == 'retirer') {
+      await _retirerLeMessage(message);
+    }
+  }
+
+  /// Retire un message deja envoye, apres confirmation.
+  Future<void> _retirerLeMessage(Map<String, dynamic> message) async {
+    final id = _asInt(message['id']);
+    if (id <= 0) return;
+
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Retirer ce message ?'),
+        content: const Text(
+          'Son contenu disparaîtra pour tout le monde. La ligne restera dans '
+          'la conversation, en indiquant que le message a été retiré.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            key: const Key('confirmer-retrait-message'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Retirer'),
+          ),
+        ],
+      ),
+    );
+    if (confirme != true) return;
+
+    try {
+      await widget.dio.delete('/chat/messages/$id/');
+    } on DioException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_detailErreur(error, 'Retrait impossible.'))),
+      );
+    }
+  }
+
+  /// Corrige un message deja envoye.
+  Future<void> _corrigerLeMessage(Map<String, dynamic> message) async {
+    final id = _asInt(message['id']);
+    if (id <= 0) return;
+
+    final controleur = TextEditingController(
+      text: _asString(message['content']),
+    );
+    final nouveau = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Corriger le message'),
+        content: TextField(
+          key: const Key('champ-correction-message'),
+          controller: controleur,
+          autofocus: true,
+          maxLines: 4,
+          minLines: 1,
+          decoration: const InputDecoration(border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controleur.text),
+            child: const Text('Enregistrer'),
+          ),
+        ],
+      ),
+    );
+    controleur.dispose();
+
+    final texte = (nouveau ?? '').trim();
+    if (texte.isEmpty || texte == _asString(message['content']).trim()) return;
+
+    try {
+      await widget.dio.patch(
+        '/chat/messages/$id/',
+        data: <String, dynamic>{'content': texte},
+      );
+    } on DioException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_detailErreur(error, 'Correction impossible.'))),
+      );
+    }
+  }
+
+  /// Le message d'erreur du serveur, qui dit pourquoi -- « passe quinze
+  /// minutes, un message ne se corrige plus » vaut mieux qu'un code.
+  String _detailErreur(DioException error, String defaut) {
+    final donnees = error.response?.data;
+    if (donnees is Map && donnees['detail'] != null) {
+      return donnees['detail'].toString();
+    }
+    return defaut;
+  }
+
+  Widget _bandeauTempsReelIndisponible(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      key: const Key('bandeau-temps-reel-indisponible'),
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: scheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: scheme.onTertiaryContainer,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Reconnexion… les messages arrivent avec quelques secondes de '
+              'retard.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onTertiaryContainer,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _arreterSondageDeSecours() {
+    _sondageTimer?.cancel();
+    _sondageTimer = null;
+  }
+
 
   void _onInputChanged(String value) {
+    _repererLaMentionEnCours(value);
+
     if (!_wsConnected || _selectedConversationId == null) {
       return;
     }
 
-    _channel?.sink.add(jsonEncode(<String, dynamic>{
+    widget.canal.envoyer(<String, dynamic>{
       'action': 'typing',
       'conversation_id': _selectedConversationId,
       'is_typing': value.trim().isNotEmpty,
-    }));
+    });
 
     _typingStopTimer?.cancel();
     if (value.trim().isNotEmpty) {
       _typingStopTimer = Timer(const Duration(milliseconds: 1200), () {
-        _channel?.sink.add(jsonEncode(<String, dynamic>{
+        widget.canal.envoyer(<String, dynamic>{
           'action': 'typing',
           'conversation_id': _selectedConversationId,
           'is_typing': false,
-        }));
+        });
       });
     }
   }
@@ -921,9 +1522,8 @@ class _ChatPanelState extends State<ChatPanel> {
     });
   }
 
-  void _handleWsEvent(dynamic payload) {
+  void _handleWsEvent(Map<String, dynamic> data) {
     try {
-      final data = jsonDecode(payload.toString()) as Map<String, dynamic>;
       final event = _asString(data['event']);
 
       if (event == 'connected') {
@@ -934,16 +1534,41 @@ class _ChatPanelState extends State<ChatPanel> {
         return;
       }
 
-      if (event == 'pong') {
-        _awaitingPong = false;
+      if (event == 'presence') {
+        final userId = _asInt(data['user_id']);
+        if (mounted) {
+          setState(() => _presenceByUser[userId] = Presence.depuisJson(data));
+        }
         return;
       }
 
-      if (event == 'presence') {
-        final userId = _asInt(data['user_id']);
-        final online = data['online'] == true;
+      if (event == 'message_revise') {
+        final id = _asInt(data['id']);
+        if (id > 0 && mounted) {
+          setState(() {
+            _messages = _messages.map((row) {
+              if (_asInt(row['id']) != id) return row;
+              return Map<String, dynamic>.from(data);
+            }).toList(growable: false);
+          });
+        }
+        return;
+      }
+
+      if (event == 'attention') {
+        // Panneau deja ouvert: la fenetre n'a pas a surgir, mais elle doit
+        // se signaler -- et venir sur la conversation qui appelle, sinon on
+        // secoue devant un fil qui n'est pas celui-la.
+        final conversationId = _asInt(data['conversation_id']);
+        final emetteur = _asInt(data['sender_id']);
         if (mounted) {
-          setState(() => _presenceByUser[userId] = online);
+          setState(() {
+            if (conversationId > 0) _selectedConversationId = conversationId;
+            if (emetteur != _currentUserId) _secousses += 1;
+          });
+          if (conversationId > 0) {
+            unawaited(_loadMessages(conversationId, reset: true));
+          }
         }
         return;
       }
@@ -959,7 +1584,7 @@ class _ChatPanelState extends State<ChatPanel> {
           setState(() {
             _setTypingState(conversationId, isTyping);
             if (userId > 0) {
-              _presenceByUser[userId] = true;
+              _presenceByUser[userId] = _vuALInstant();
             }
           });
         }
@@ -975,7 +1600,7 @@ class _ChatPanelState extends State<ChatPanel> {
             setState(() {
               _lastReadByConversation[conversationId] = lastRead;
               if (userId > 0) {
-                _presenceByUser[userId] = true;
+                _presenceByUser[userId] = _vuALInstant();
               }
             });
           }
@@ -1018,7 +1643,7 @@ class _ChatPanelState extends State<ChatPanel> {
         if (!mounted) return;
         setState(() {
           if (senderId > 0) {
-            _presenceByUser[senderId] = true;
+            _presenceByUser[senderId] = _vuALInstant();
           }
           if (_selectedConversationId == conversationId) {
             _messages = <Map<String, dynamic>>[..._messages, message];
@@ -1143,9 +1768,23 @@ class _ChatPanelState extends State<ChatPanel> {
       'is_local_pending': true,
     };
 
+    // La citation est relevee avant l'envoi puis relachee: laisser le bandeau
+    // ouvert ferait citer le meme message au message suivant, sans qu'on l'ait
+    // demande.
+    final citeId = _asInt(_messageCite?['id']);
+    if (citeId > 0) {
+      localMessage['reply_to'] = citeId;
+      localMessage['reply_to_apercu'] = <String, dynamic>{
+        'id': citeId,
+        'sender_name': _senderLabel(_messageCite!),
+        'extrait': _asString(_messageCite!['content']),
+      };
+    }
+
     setState(() {
       _sending = true;
       _sendError = null;
+      _messageCite = null;
       _messages = <Map<String, dynamic>>[..._messages, localMessage];
       _conversations = _conversations.map((row) {
         if (_asInt(row['id']) != conversationId) return row;
@@ -1167,6 +1806,7 @@ class _ChatPanelState extends State<ChatPanel> {
           data: <String, dynamic>{
             'content': content,
             'client_message_id': clientMessageId,
+            if (citeId > 0) 'reply_to': citeId,
           },
         );
       } catch (error) {
@@ -1177,6 +1817,7 @@ class _ChatPanelState extends State<ChatPanel> {
             data: <String, dynamic>{
               'content': content,
               'client_message_id': clientMessageId,
+              if (citeId > 0) 'reply_to': citeId,
             },
           );
         } else {
@@ -1291,11 +1932,32 @@ class _ChatPanelState extends State<ChatPanel> {
     return content;
   }
 
+  /// Une action a l'instant vaut signe de vie: on n'attend pas le prochain
+  /// battement du serveur pour rallumer la pastille.
+  Presence _vuALInstant() =>
+      Presence(vuA: DateTime.now(), annonceEnLigne: true);
+
+  Presence _presenceDe(int userId, [Map? repli]) {
+    final connue = _presenceByUser[userId];
+    if (connue != null) return connue;
+    if (repli == null) return const Presence();
+    return Presence.depuisJson(Map<String, dynamic>.from(repli));
+  }
+
   bool _conversationOnline(Map<String, dynamic> row) {
     final counterpart = row['counterpart'];
     if (counterpart is! Map) return false;
-    final uid = _asInt(counterpart['id']);
-    return _presenceByUser[uid] ?? (counterpart['online'] == true);
+    return _presenceDe(_asInt(counterpart['id']), counterpart).enLigne();
+  }
+
+  /// « En ligne » ou « Vu hier à 08:05 »: hors ligne tout court laissait la
+  /// question entiere -- parti a l'instant, ou plus revenu depuis une semaine?
+  String _libellePresenceConversation(Map<String, dynamic> row) {
+    final counterpart = row['counterpart'];
+    if (counterpart is! Map) return 'Hors ligne';
+    return _presenceDe(_asInt(counterpart['id']), counterpart).libelle(
+      repliJamaisVu: 'Hors ligne',
+    );
   }
 
   String _senderLabel(Map<String, dynamic> message) {
@@ -2261,7 +2923,9 @@ class _ChatPanelState extends State<ChatPanel> {
 
     final compact = MediaQuery.sizeOf(context).width < 900;
 
-    return Dialog(
+    return SecousseAttention(
+      declencheur: _secousses,
+      child: Dialog(
       insetPadding: const EdgeInsets.all(12),
       child: Container(
         width: 1100,
@@ -2284,6 +2948,11 @@ class _ChatPanelState extends State<ChatPanel> {
                 ),
               ],
             ),
+            // Le temps reel peut tomber sans que la messagerie cesse de
+            // fonctionner: le repli par sondage prend le relais. Le dire est
+            // pourtant necessaire -- un message peut mettre dix secondes a
+            // apparaitre, et l'ignorer ferait douter de l'envoi.
+            if (!_wsConnected) _bandeauTempsReelIndisponible(context),
             const SizedBox(height: 8),
             Expanded(
               child: _loading
@@ -2323,6 +2992,7 @@ class _ChatPanelState extends State<ChatPanel> {
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -2478,7 +3148,11 @@ class _ChatPanelState extends State<ChatPanel> {
                                   key: ValueKey('chat-direct-role-$role'),
                                   title: Text('${_roleLabel(role)} (${roleUsers.length})'),
                                   children: roleUsers.map((user) {
-                                    final online = _presenceByUser[_asInt(user['id'])] ?? (user['online'] == true);
+                                    final presence = _presenceDe(
+                                      _asInt(user['id']),
+                                      user,
+                                    );
+                                    final online = presence.enLigne();
                                     return ListTile(
                                       onTap: () async {
                                         Navigator.of(context).pop();
@@ -2489,7 +3163,10 @@ class _ChatPanelState extends State<ChatPanel> {
                                             ? _asString(user['username'])
                                             : _asString(user['full_name']),
                                       ),
-                                      subtitle: Text(_asString(user['username'])),
+                                      subtitle: Text(
+                                        '${_asString(user['username'])} — '
+                                        '${presence.libelle(repliJamaisVu: 'Hors ligne')}',
+                                      ),
                                       trailing: Container(
                                         width: 10,
                                         height: 10,
@@ -2571,7 +3248,7 @@ class _ChatPanelState extends State<ChatPanel> {
                                   children: roleUsers.map((user) {
                                     final userId = _asInt(user['id']);
                                     final checked = selectedUserIds.contains(userId);
-                                    final online = _presenceByUser[userId] ?? (user['online'] == true);
+                                    final online = _presenceDe(userId, user).enLigne();
 
                                     return CheckboxListTile(
                                       value: checked,
@@ -2939,11 +3616,27 @@ class _ChatPanelState extends State<ChatPanel> {
           subtitle: Text(
             isTyping
                 ? 'Ecrit...'
-                : (online ? 'En ligne' : 'Hors ligne'),
+                // Groupe: pas de correspondant unique dont on dirait l'heure
+                // de depart.
+                : (isGroup
+                      ? (online ? 'En ligne' : 'Hors ligne')
+                      : _libellePresenceConversation(conversation)),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Faire surgir la fenetre chez l'autre. Reserve au personnel:
+              // la messagerie est ouverte aux eleves et aux parents, mais
+              // interrompre quelqu'un ne l'est pas.
+              if (_rolesAppelAttention.contains(_currentUserRole))
+                IconButton(
+                  key: const Key('appeler-attention'),
+                  tooltip: 'Attirer l’attention',
+                  onPressed: _appelerLAttention,
+                  icon: const Icon(Icons.waving_hand_outlined),
+                ),
               if (!isGroup)
                 Container(
                   width: 10,
@@ -2995,6 +3688,8 @@ class _ChatPanelState extends State<ChatPanel> {
           ),
         ),
         const Divider(height: 1),
+        // Chercher dans ce qui a ete dit, la ou on le lit.
+        _rechercheDansLeFil(context),
         Expanded(
           child: ListView.builder(
             controller: _messageScrollController,
@@ -3070,7 +3765,69 @@ class _ChatPanelState extends State<ChatPanel> {
                   _asString(message['client_message_id']).trim() == firstFailedClientMessageId;
               final messageTime = _formatMessageTime(message['created_at']);
               final lastRead = _lastReadByConversation[conversationId] ?? 0;
-              return Align(
+              final separateur = _separateurDeJour(message, previousMessage);
+
+              // Un appel d'attention n'est pas un propos echange: il se pose
+              // au centre du fil, comme une mention de service, et non dans
+              // une bulle qui le ferait lire comme un message.
+              if (_asString(message['message_type']) == 'attention') {
+                return Column(
+                  children: [
+                    ?separateur,
+                    _ligneAppelAttention(context, message, messageTime),
+                  ],
+                );
+              }
+
+              // Un message retire garde sa place mais plus son propos.
+              final retire = _asString(message['deleted_at']).trim().isNotEmpty;
+              if (retire) {
+                final ligne = Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Align(
+                    alignment:
+                        mine ? Alignment.centerRight : Alignment.centerLeft,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .outlineVariant
+                              .withValues(alpha: 0.7),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.block_outlined,
+                            size: 14,
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Message retiré',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  fontStyle: FontStyle.italic,
+                                  color: Theme.of(context).colorScheme.outline,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+                if (separateur == null) return ligne;
+                return Column(children: [separateur, ligne]);
+              }
+
+              final bulle = Align(
                 alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
                 child: Container(
                   margin: EdgeInsets.only(
@@ -3100,6 +3857,14 @@ class _ChatPanelState extends State<ChatPanel> {
                         ),
                       if (showSender)
                         const SizedBox(height: 2),
+                      if (message['reply_to_apercu'] is Map)
+                        _apercuCitation(
+                          context,
+                          Map<String, dynamic>.from(
+                            message['reply_to_apercu'] as Map,
+                          ),
+                          mine: mine,
+                        ),
                       if (_messageHasAttachment(message))
                         Column(
                           crossAxisAlignment:
@@ -3262,12 +4027,20 @@ class _ChatPanelState extends State<ChatPanel> {
                       if (_messageHasAttachment(message) && _asString(message['content']).trim().isNotEmpty)
                         const SizedBox(height: 6),
                       if (_asString(message['content']).trim().isNotEmpty)
-                        Text(_asString(message['content'])),
+                        _texteAvecMentions(
+                          context,
+                          _asString(message['content']),
+                        ),
                       if (messageTime.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 3),
                           child: Text(
-                            messageTime,
+                            // « modifié » accole a l'heure: sans lui, un
+                            // message corrige apres coup se lirait comme
+                            // celui d'origine.
+                            _asString(message['edited_at']).trim().isEmpty
+                                ? messageTime
+                                : '$messageTime · modifié',
                             style: Theme.of(context).textTheme.labelSmall,
                           ),
                         ),
@@ -3283,6 +4056,20 @@ class _ChatPanelState extends State<ChatPanel> {
                   ),
                 ),
               );
+
+              // Corriger et retirer se trouvent sous un appui long, sur ses
+              // propres messages seulement: le serveur refuse les autres, et
+              // proposer un geste qui mene a un refus ne vaut rien.
+              final interactive = GestureDetector(
+                key: Key('message-actions-${_asInt(message['id'])}'),
+                behavior: HitTestBehavior.opaque,
+                onLongPress: () => _ouvrirLesActionsDuMessage(message, mine),
+                onSecondaryTap: () => _ouvrirLesActionsDuMessage(message, mine),
+                child: bulle,
+              );
+
+              if (separateur == null) return interactive;
+              return Column(children: [separateur, interactive]);
             },
           ),
         ),
@@ -3319,6 +4106,8 @@ class _ChatPanelState extends State<ChatPanel> {
                 ),
                 const SizedBox(height: 8),
               ],
+              ?_suggestionsDeMention(context),
+              if (_messageCite != null) _bandeauCitation(context),
               Row(
                 children: [
                   IconButton(

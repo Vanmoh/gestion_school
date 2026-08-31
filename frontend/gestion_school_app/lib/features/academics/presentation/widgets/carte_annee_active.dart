@@ -25,11 +25,22 @@ class CarteAnneeActive extends ConsumerWidget {
   /// écrire : proposer le bouton mènerait à un refus.
   final VoidCallback? onOuvrirAnnee;
 
+  /// Changer l'état de l'année affichée. Le back-office sait le faire depuis
+  /// toujours (`activer`, `cloturer`, `rouvrir`) mais aucun écran ne l'offrait :
+  /// basculer l'année de saisie ou fermer une année demandait de passer par
+  /// l'admin Django. Nuls quand le profil ne peut pas écrire.
+  final VoidCallback? onActiver;
+  final VoidCallback? onCloturer;
+  final VoidCallback? onRouvrir;
+
   const CarteAnneeActive({
     super.key,
     required this.classes,
     required this.eleves,
     this.onOuvrirAnnee,
+    this.onActiver,
+    this.onCloturer,
+    this.onRouvrir,
   });
 
   @override
@@ -128,18 +139,45 @@ class CarteAnneeActive extends ConsumerWidget {
             _compteur(context, Icons.groups_2_outlined, eleves, 'élève'),
           ],
         ),
-        if (onOuvrirAnnee != null) ...[
-          const SizedBox(height: 4),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              key: const Key('ouvrir-annee-suivante'),
-              onPressed: onOuvrirAnnee,
-              icon: const Icon(Icons.event_available_outlined, size: 18),
-              label: const Text('Ouvrir une nouvelle année'),
-            ),
-          ),
-        ],
+        const SizedBox(height: 4),
+        // Les gestes de vie de l'annee, la ou on la regarde. Chacun n'a de
+        // sens que dans un etat: une annee active n'a pas a etre activee, une
+        // annee cloturee ne redevient l'annee de saisie qu'apres reouverture
+        // -- le serveur refuse d'ailleurs le raccourci.
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            if (annee.etat == EtatAnnee.consultee && onActiver != null)
+              FilledButton.tonalIcon(
+                key: const Key('annee-rendre-active'),
+                onPressed: onActiver,
+                icon: const Icon(Icons.play_circle_outline, size: 18),
+                label: const Text('Rendre active'),
+              ),
+            if (annee.etat != EtatAnnee.cloturee && onCloturer != null)
+              TextButton.icon(
+                key: const Key('annee-cloturer'),
+                onPressed: onCloturer,
+                icon: const Icon(Icons.lock_outline, size: 18),
+                label: const Text('Clôturer'),
+              ),
+            if (annee.etat == EtatAnnee.cloturee && onRouvrir != null)
+              TextButton.icon(
+                key: const Key('annee-rouvrir'),
+                onPressed: onRouvrir,
+                icon: const Icon(Icons.lock_open_outlined, size: 18),
+                label: const Text('Rouvrir'),
+              ),
+            if (onOuvrirAnnee != null)
+              TextButton.icon(
+                key: const Key('ouvrir-annee-suivante'),
+                onPressed: onOuvrirAnnee,
+                icon: const Icon(Icons.event_available_outlined, size: 18),
+                label: const Text('Ouvrir une nouvelle année'),
+              ),
+          ],
+        ),
       ],
     );
   }

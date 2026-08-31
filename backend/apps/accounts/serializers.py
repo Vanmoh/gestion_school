@@ -3,6 +3,7 @@ from django.db import transaction
 from rest_framework import serializers
 
 from apps.accounts.models import UserRole
+from apps.common.presence import presence_depuis_ligne, presence_last_seen
 from apps.school.models import ClassRoom, Etablissement, ParentProfile, Student
 
 User = get_user_model()
@@ -32,6 +33,11 @@ class UserSerializer(serializers.ModelSerializer):
     last_login = serializers.DateTimeField(read_only=True)
     date_joined = serializers.DateTimeField(read_only=True)
     has_never_logged_in = serializers.SerializerMethodField(read_only=True)
+    # « Derniere connexion » repondait a la question de l'annee derniere, pas a
+    # celle de maintenant: qui est devant son ecran a cet instant. Les deux se
+    # lisent ensemble -- en ligne, ou vu a telle heure, ou jamais venu.
+    online = serializers.SerializerMethodField(read_only=True)
+    last_seen_at = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
@@ -52,6 +58,8 @@ class UserSerializer(serializers.ModelSerializer):
             "last_login",
             "date_joined",
             "has_never_logged_in",
+            "online",
+            "last_seen_at",
         ]
 
     def get_full_name(self, obj):
@@ -60,6 +68,19 @@ class UserSerializer(serializers.ModelSerializer):
     def get_has_never_logged_in(self, obj):
         """Un compte cree puis oublie: c'est ce qu'on cherche en faisant le menage."""
         return obj.last_login is None
+
+    def get_online(self, obj):
+        return presence_depuis_ligne(getattr(obj, "chat_presence", None))
+
+    def get_last_seen_at(self, obj):
+        """La derniere activite reelle, plus fraiche que `last_login`.
+
+        `last_login` ne bouge qu'a l'ouverture de session; quelqu'un connecte
+        depuis ce matin et parti il y a dix minutes y apparaitrait comme vu a
+        huit heures.
+        """
+        stamp = presence_last_seen(getattr(obj, "chat_presence", None))
+        return stamp.isoformat() if stamp else None
 
     def validate(self, attrs):
         """Un mot de passe glisse dans une modification n'est pas ignore en silence.

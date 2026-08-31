@@ -1,13 +1,12 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'models/etablissement.dart';
 import 'screens/etablissement_selection_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 import 'core/constants/branding.dart';
 import 'core/network/api_client.dart';
 import 'core/permissions/module_permissions.dart';
@@ -23,6 +22,7 @@ import 'features/auth/presentation/auth_controller.dart';
 import 'features/auth/domain/auth_user.dart';
 import 'features/auth/presentation/login_page.dart';
 import 'features/canteen/presentation/canteen_page.dart';
+import 'features/chat/data/canal_temps_reel.dart';
 import 'features/chat/presentation/chat_panel.dart';
 import 'features/backup/presentation/backup_restore_page.dart';
 import 'features/promotion/presentation/promotion_page.dart';
@@ -53,6 +53,7 @@ import 'features/teachers/presentation/teachers_page.dart';
 import 'features/timetable/presentation/timetable_module_page.dart';
 import 'features/users/presentation/users_controller.dart';
 import 'features/users/presentation/users_page.dart';
+import 'core/providers/saisie_en_cours.dart';
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
 
@@ -255,7 +256,6 @@ class _AdminShell extends ConsumerStatefulWidget {
 }
 
 class _AdminShellState extends ConsumerState<_AdminShell> {
-  static const Duration _chatWsHeartbeatInterval = Duration(seconds: 20);
 
   String _selectedKey = 'dashboard';
   // Etablissement pour lequel les annees ont ete chargees: en changer doit
@@ -271,13 +271,14 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   final Map<int, int> _chatUnreadByConversation = <int, int>{};
   final Set<String> _seenShellMessageKeys = <String>{};
   Timer? _chatUnreadTimer;
-  WebSocketChannel? _chatChannel;
-  StreamSubscription<dynamic>? _chatChannelSub;
+  /// La connexion temps reel, partagee avec le panneau de discussion.
+  ///
+  /// Il y en avait deux: celle-ci pour compter les non-lus, et une seconde
+  /// ouverte par le panneau des qu'on l'affichait. Deux sockets par personne
+  /// connectee, et deux mecaniques de reprise a tenir accordees.
+  final CanalTempsReel _canalChat = CanalTempsReel();
+  StreamSubscription<Map<String, dynamic>>? _canalChatSub;
   Timer? _chatWsReconnectTimer;
-  Timer? _chatWsHeartbeatTimer;
-  bool _chatWsAwaitingPong = false;
-  String? _chatWsBaseUrl;
-  String? _chatWsToken;
 
   int _shellAsInt(dynamic value) {
     if (value is int) return value;
@@ -621,9 +622,8 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     _sessionExpiredSub?.cancel();
     _chatUnreadTimer?.cancel();
     _chatWsReconnectTimer?.cancel();
-    _chatWsHeartbeatTimer?.cancel();
-    _chatChannelSub?.cancel();
-    _chatChannel?.sink.close();
+    _canalChatSub?.cancel();
+    unawaited(_canalChat.fermer());
     super.dispose();
   }
 
@@ -684,78 +684,28 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       final storedBase = (await storage.apiBaseUrl()) ?? '';
       final activeBase = ref.read(dioProvider).options.baseUrl.trim();
       final base = activeBase.isNotEmpty ? activeBase : storedBase;
-      _connectChatUnreadWs(base, token);
+      _canalChatSub ??= _canalChat.evenements.listen(_surEvenementChat);
+      await _canalChat.ouvrir(
+        base,
+        token,
+        fabriqueUrl: (b, t) => Uri.parse(_chatWsUrlFromApiBase(b, t)),
+      );
     } catch (_) {
-      // Fallback polling remains active.
+      // Le sondage de secours reste actif.
     }
   }
 
-  void _connectChatUnreadWs(String baseUrl, String token) {
-    _chatWsBaseUrl = baseUrl;
-    _chatWsToken = token;
-    _chatWsReconnectTimer?.cancel();
-    _chatWsHeartbeatTimer?.cancel();
-    _chatWsAwaitingPong = false;
-    _chatChannelSub?.cancel();
-    _chatChannel?.sink.close();
-
-    final wsUrl = _chatWsUrlFromApiBase(baseUrl, token);
-    _chatChannel = WebSocketChannel.connect(Uri.parse(wsUrl));
-    _chatChannelSub = _chatChannel!.stream.listen(
-      _handleChatUnreadWsEvent,
-      onError: (_) => _scheduleChatUnreadReconnect(),
-      onDone: _scheduleChatUnreadReconnect,
-    );
-    _startChatUnreadHeartbeat();
-  }
-
-  void _startChatUnreadHeartbeat() {
-    _chatWsHeartbeatTimer?.cancel();
-    _chatWsHeartbeatTimer = Timer.periodic(_chatWsHeartbeatInterval, (_) {
-      if (_chatChannel == null) {
-        return;
-      }
-      if (_chatWsAwaitingPong) {
-        _chatChannel?.sink.close();
-        _scheduleChatUnreadReconnect();
-        return;
-      }
-      _chatWsAwaitingPong = true;
-      _chatChannel?.sink.add(jsonEncode(<String, dynamic>{'action': 'ping'}));
-    });
-  }
-
-  void _scheduleChatUnreadReconnect() {
-    if (!mounted || _chatWsReconnectTimer != null) {
-      return;
-    }
-    _chatWsHeartbeatTimer?.cancel();
-    final base = _chatWsBaseUrl;
-    final token = _chatWsToken;
-    if (base == null || token == null || token.isEmpty) {
-      return;
-    }
-    _chatWsReconnectTimer = Timer(const Duration(seconds: 4), () {
-      _chatWsReconnectTimer = null;
-      _connectChatUnreadWs(base, token);
-    });
-  }
-
-  void _handleChatUnreadWsEvent(dynamic payload) {
+  void _surEvenementChat(Map<String, dynamic> data) {
     try {
-      final data = jsonDecode(payload.toString());
-      if (data is! Map) {
-        return;
-      }
       final event = (data['event'] ?? '').toString();
-      if (event == 'pong') {
-        _chatWsAwaitingPong = false;
+
+      // Le canal signale lui-meme ses ouvertures et ses ruptures; « pong »
+      // ne remonte plus jusqu'ici, il l'absorbe.
+      if (event == '_canal_ouvert' || event == 'connected') {
+        _refreshChatUnread();
         return;
       }
-
-      if (event == 'connected') {
-        _chatWsAwaitingPong = false;
-        _refreshChatUnread();
+      if (event == '_canal_rompu') {
         return;
       }
 
@@ -773,6 +723,10 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
               final senderName = _shellAsString(data['sender_name']).trim();
               final contentPreview = _shellAsString(data['content']).trim();
               final title = senderName.isNotEmpty ? senderName : 'Nouveau message';
+              // Deux secondes: l'annonce dit qu'un message est arrive, elle
+              // n'a pas a rester au bas de l'ecran pendant qu'on travaille.
+              // Le compteur de l'icone, lui, ne s'efface pas: la conversation
+              // reste retrouvable une fois l'annonce partie.
               ScaffoldMessenger.of(context)
                 ..hideCurrentSnackBar()
                 ..showSnackBar(
@@ -781,12 +735,26 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                       contentPreview.isEmpty ? title : '$title: $contentPreview',
                     ),
                     duration: const Duration(seconds: 2),
+                    action: SnackBarAction(
+                      label: 'Ouvrir',
+                      onPressed: () => unawaited(
+                        _openChatPanel(conversationInitiale: conversationId),
+                      ),
+                    ),
                   ),
                 );
+              // Un son bref: on ne regarde pas toujours l'ecran ou le
+              // message arrive.
+              unawaited(SystemSound.play(SystemSoundType.alert));
             }
           }
         }
         _refreshChatUnread();
+        return;
+      }
+
+      if (event == 'attention') {
+        _repondreALAppelDAttention(data);
         return;
       }
 
@@ -840,7 +808,60 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     }
   }
 
-  Future<void> _openChatPanel() async {
+  /// Fait surgir la fenetre de discussion quand quelqu'un appelle.
+  ///
+  /// C'est le seul endroit d'ou cela peut venir: le panneau ferme n'a pas de
+  /// connexion a lui, seul ce websocket de coquille tourne en permanence.
+  void _repondreALAppelDAttention(Map<dynamic, dynamic> data) {
+    if (!mounted) return;
+
+    final emetteur = _shellAsInt(data['sender_id']);
+    final conversationId = _shellAsInt(data['conversation_id']);
+    final moi = ref.read(authControllerProvider).value?.id;
+    // Son propre appel ne se retourne pas contre soi.
+    if (moi != null && emetteur == moi) return;
+    if (conversationId <= 0) return;
+
+    final nom = _shellAsString(data['sender_name']).trim();
+    final qui = nom.isNotEmpty ? nom : 'Quelqu’un';
+
+    // Panneau deja ouvert: il gere l'appel lui-meme, il recoit le meme
+    // evenement sur sa propre connexion.
+    if (_chatPanelOpen) return;
+
+    // Une saisie en cours ne se fait pas recouvrir. Le formulaire a moitie
+    // rempli vaut plus que l'interruption: on annonce l'appel sans voler la
+    // main, et un geste suffit pour y aller.
+    if (ref.read(saisieEnCoursProvider) > 0) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('$qui demande votre attention.'),
+            duration: const Duration(seconds: 10),
+            action: SnackBarAction(
+              label: 'Ouvrir',
+              onPressed: () => unawaited(
+                _openChatPanel(
+                  conversationInitiale: conversationId,
+                  secouer: true,
+                ),
+              ),
+            ),
+          ),
+        );
+      return;
+    }
+
+    unawaited(
+      _openChatPanel(conversationInitiale: conversationId, secouer: true),
+    );
+  }
+
+  Future<void> _openChatPanel({
+    int? conversationInitiale,
+    bool secouer = false,
+  }) async {
     if (mounted) {
       setState(() => _chatPanelOpen = true);
     }
@@ -850,6 +871,11 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         return ChatPanel(
           dio: ref.read(dioProvider),
           tokenStorage: ref.read(tokenStorageProvider),
+          // Le panneau se greffe sur la connexion de la coquille au lieu
+          // d'en ouvrir une seconde a chaque affichage.
+          canal: _canalChat,
+          conversationInitiale: conversationInitiale,
+          secouerALOuverture: secouer,
           onUnreadChanged: (value) {
             if (!mounted) {
               return;
@@ -1650,11 +1676,15 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                                   // actions. L'etablissement n'etait qu'un
                                   // texte: en changer demandait de repasser
                                   // par le portail d'accueil.
-                                  const Flexible(
-                                    child: BandeauContexte(
-                                      etendu: true,
-                                      surFondSombre: true,
-                                    ),
+                                  // Sans `Flexible`: le bandeau garde sa
+                                  // taille, et c'est le nom de l'utilisateur
+                                  // -- le moins utile des trois -- qui cede
+                                  // en premier. L'inverse tronquait l'annee
+                                  // en « 2025-2... » alors qu'il restait de
+                                  // la place a droite.
+                                  const BandeauContexte(
+                                    etendu: true,
+                                    surFondSombre: true,
                                   ),
                                   const SizedBox(width: 14),
                                   Flexible(

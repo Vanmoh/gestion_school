@@ -57,8 +57,14 @@ echo "--------------------------------"
 
 # ASGI: la route websocket du chat (config/asgi.py) n'est servie que par un
 # worker ASGI. En WSGI, l'API repond normalement mais le temps reel est mort.
+#
+# --timeout 0: le chien de garde de gunicorn compte le temps passe dans une
+# requete, et une connexion de chat en est une, ouverte des heures. A 120 s il
+# tuait ses propres workers (« WORKER TIMEOUT » puis SIGABRT) en coupant
+# toutes les conversations en cours. Le worker uvicorn etant asynchrone, une
+# requete lente n'y bloque personne: le garde-fou ne protegeait de rien.
 exec gunicorn config.asgi:application \
   -k uvicorn.workers.UvicornWorker \
   --bind 0.0.0.0:${PORT:-8000} \
   --workers ${WEB_CONCURRENCY:-3} \
-  --timeout 120
+  --timeout 0
