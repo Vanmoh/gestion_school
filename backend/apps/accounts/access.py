@@ -51,6 +51,57 @@ ROLE_LABELS = {
 }
 
 
+# --- Hierarchie d'administration des comptes -------------------------------
+# Le rang ne dit pas ce qu'un role peut lire ou ecrire -- c'est le role de la
+# matrice ci-dessous. Il repond a une autre question, qu'aucune colonne ne
+# posait: sur QUI un compte peut agir quand il administre les utilisateurs.
+#
+# Sans cette echelle, "ecriture sur le module users" voulait dire ecriture sur
+# n'importe quel compte, le sien et ceux au-dessus compris. Un directeur
+# pouvait donc creer un super-administrateur, ou reinitialiser le mot de passe
+# de celui qui existait, et obtenir d'un coup la restauration de la base, tous
+# les etablissements et la passerelle SMS -- les trois choses que la matrice
+# lui refuse par ailleurs.
+#
+# Les rangs egaux (censeur et comptable, surveillant et enseignant) sont
+# voulus: aucun des deux n'administre l'autre.
+
+ROLE_RANKS = {
+    SUPER_ADMIN: 60,
+    PROMOTER: 50,
+    DIRECTOR: 40,
+    CENSOR: 30,
+    ACCOUNTANT: 30,
+    SUPERVISOR: 20,
+    TEACHER: 20,
+    PARENT: 10,
+    STUDENT: 10,
+}
+
+
+def role_rank(role: str) -> int:
+    """Rang d'un role, 0 s'il est inconnu: on echoue ferme."""
+    return ROLE_RANKS.get(role, 0)
+
+
+def peut_administrer_compte(role_acteur: str, role_cible: str) -> bool:
+    """Peut-on creer, modifier, ou reinitialiser un compte de ce role?
+
+    Strictement en dessous de soi. Un directeur ne nomme donc pas un autre
+    directeur -- c'est au super-administrateur de le faire. La regle est plus
+    seche que necessaire dans le cas courant, mais c'est la seule qui ne
+    laisse aucun chemin vers une promotion de soi-meme par personne
+    interposee.
+    """
+    if role_acteur == SUPER_ADMIN:
+        return True
+    rang_acteur = role_rank(role_acteur)
+    rang_cible = role_rank(role_cible)
+    if rang_acteur == 0 or rang_cible == 0:
+        return False
+    return rang_acteur > rang_cible
+
+
 # --- Niveaux ---------------------------------------------------------------
 
 NONE = 0
@@ -118,10 +169,18 @@ MODULES = {
         "group": "pilotage",
         "access": _row("L", "L", "L", "L", "L", "L", "L*", "L*", "L*"),
     },
+    # Parent et eleve en L*: ils lisaient deja les notes, les absences, la
+    # discipline et les frais de leur perimetre, mais pas la fiche elle-meme --
+    # ni classe, ni matricule, ni contacts enregistres. Une erreur sur un
+    # numero de telephone leur restait donc invisible.
+    #
+    # L'ouverture ne porte que la lecture: StudentViewSet.get_queryset() rend
+    # a l'eleve son seul dossier et au parent ceux de ses enfants, et la
+    # saisie comme la suppression restent hors de leur portee.
     "students": {
         "label": "Gestion des eleves",
         "group": "pedagogie",
-        "access": _row("A", "L", "A", "L", "L", "L", "L*", "-", "-"),
+        "access": _row("A", "L", "A", "L", "L", "L", "L*", "L*", "L*"),
     },
     # Ecran de consultation seule: on reprend exactement les colonnes de
     # "students" en retirant l'ecriture (A -> L). Personne n'y gagne un acces
@@ -130,18 +189,22 @@ MODULES = {
     "student_lookup": {
         "label": "Recherche eleve",
         "group": "pedagogie",
-        "access": _row("L", "L", "L", "L", "L", "L", "L*", "-", "-"),
+        "access": _row("L", "L", "L", "L", "L", "L", "L*", "L*", "L*"),
     },
     "teachers": {
         "label": "Enseignants",
         "group": "pedagogie",
         "access": _row("A", "L", "A", "L", "L", "-", "-", "-", "-"),
     },
-    # Le promoteur saisit et valide la feuille d'appel, le comptable la
-    # consulte: c'est ce que la fiche de presence faisait deja, via une liste
-    # de roles locale a AttendanceViewSet qui contredisait cette matrice. La
-    # liste a disparu au profit de ces deux colonnes -- c'est le comportement
-    # reel qui monte ici, aucun acces n'est ouvert qui ne l'etait pas.
+    # Deux colonnes ont ete resserrees apres relecture de l'etablissement.
+    #
+    # Le promoteur passe de la saisie a la lecture: il ne fait pas l'appel. La
+    # colonne venait d'une liste de roles locale a AttendanceViewSet, remontee
+    # telle quelle dans la matrice sans que personne ait verifie qu'elle
+    # decrivait le travail reel.
+    #
+    # Le comptable perd la lecture: la facturation ne s'appuie pas sur les
+    # absences, et savoir quel eleve manquait mardi ne le regarde pas.
     #
     # Valider et verrouiller une fiche demande l'ecriture sans portee
     # restreinte: l'enseignant (E*) saisit l'appel de ses classes mais ne
@@ -149,7 +212,7 @@ MODULES = {
     "attendance": {
         "label": "Absences",
         "group": "pedagogie",
-        "access": _row("A", "E", "A", "E", "L", "E", "E*", "L*", "L*"),
+        "access": _row("A", "L", "A", "E", "-", "E", "E*", "L*", "L*"),
     },
     # Separation des taches deja en place avant la matrice: la direction lit
     # l'emargement mais ne le saisit pas, le censeur l'arbitre, l'enseignant
@@ -171,10 +234,15 @@ MODULES = {
         "group": "pedagogie",
         "access": _row("A", "L", "A", "E", "-", "-", "E*", "-", "-"),
     },
+    # Comptable et surveillant en lecture: l'ecran « Gestion des eleves »
+    # charge les classes et les annees scolaires avant d'afficher quoi que ce
+    # soit. Sans ce droit, il ne leur rendait que son message d'erreur -- une
+    # entree de menu qui ne menait nulle part, et que personne n'avait
+    # signalee.
     "academics": {
         "label": "Academique",
         "group": "academique",
-        "access": _row("A", "L", "A", "E", "-", "-", "L", "-", "-"),
+        "access": _row("A", "L", "A", "E", "L", "L", "L", "-", "-"),
     },
     "academic_imports": {
         "label": "Imports academiques",
@@ -239,15 +307,24 @@ MODULES = {
         "group": "administration",
         "access": _row("A", "L", "A", "L", "L", "L", "L*", "L*", "L*"),
     },
+    # Le promoteur en lecture: proprietaire de l'etablissement, il ne voyait
+    # pas qui y detenait un acces. Il consulte, il n'administre pas -- creer,
+    # modifier et couper un compte restent a la direction.
     "users": {
         "label": "Gestion des utilisateurs",
         "group": "administration",
-        "access": _row("A", "-", "E", "-", "-", "-", "-", "-", "-"),
+        "access": _row("A", "L", "E", "-", "-", "-", "-", "-", "-"),
     },
+    # Le directeur en E*: le nom, l'adresse, le telephone, le logo et l'en-tete
+    # imprime sur les bulletins ne se corrigeaient que par le
+    # super-administrateur, ce qui immobilisait l'etablissement le temps d'une
+    # demande. L'etoile n'est pas decorative ici: EtablissementViewSet refuse
+    # la creation aux roles restreints et limite la modification a leur propre
+    # etablissement. La suppression reste au niveau A, hors de leur portee.
     "etablissements": {
         "label": "Gestion etablissements",
         "group": "administration",
-        "access": _row("A", "L", "L", "-", "-", "-", "-", "-", "-"),
+        "access": _row("A", "L", "E*", "-", "-", "-", "-", "-", "-"),
     },
     "activity_logs": {
         "label": "Logs activites",
