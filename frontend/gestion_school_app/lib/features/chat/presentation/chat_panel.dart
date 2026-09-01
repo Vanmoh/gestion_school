@@ -1739,10 +1739,13 @@ class _ChatPanelState extends State<ChatPanel> {
         );
       });
       await _loadMessages(cid, reset: true);
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
+      // Le serveur dit pourquoi il refuse -- hors etablissement, ou une
+      // correspondance que la messagerie de l'ecole ne permet pas. Le message
+      // generique laissait chercher.
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Impossible de demarrer la conversation.')),
+        SnackBar(content: Text(_extractApiError(error))),
       );
     }
   }
@@ -3325,10 +3328,10 @@ class _ChatPanelState extends State<ChatPanel> {
                       });
                       navigator.pop();
                       await _loadMessages(cid, reset: true);
-                    } catch (_) {
+                    } catch (error) {
                       if (!mounted) return;
                       messenger.showSnackBar(
-                        const SnackBar(content: Text('Impossible de creer le groupe.')),
+                        SnackBar(content: Text(_extractApiError(error))),
                       );
                     }
                   },

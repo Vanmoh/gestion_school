@@ -9,7 +9,7 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apps.school.models import Etablissement, ParentProfile
-from .access import can_read, role_payload
+from .access import ROLE_LABELS, can_read, peut_administrer_compte, role_payload
 from .access_routes import module_paths
 from .permissions import HasModuleAccess
 from .serializers import RegisterSerializer, UserSerializer
@@ -212,7 +212,40 @@ class UserViewSet(viewsets.ModelViewSet):
         user = serializer.save(etablissement=self._resolve_target_etablissement())
         self._sync_parent_profile(user)
 
+    def _verifier_la_cible(self, cible, geste):
+        """On n'agit que sur des comptes situes sous le sien.
+
+        La matrice ouvre le module « users » a la direction, mais ne disait pas
+        sur QUELS comptes. Reinitialiser le mot de passe d'un
+        super-administrateur, ou le desactiver, donnait le meme resultat que
+        s'en fabriquer un: la meme prise sur la restauration de la base, tous
+        les etablissements et la passerelle SMS.
+        """
+        if cible is None:
+            return
+
+        acteur = self.request.user
+        if cible.pk == acteur.pk:
+            # Son propre compte se modifie (nom, telephone), mais son role et
+            # son etat sont verrouilles ailleurs -- voir la validation du role
+            # et `_verifier_la_desactivation`.
+            return
+
+        if peut_administrer_compte(getattr(acteur, "role", ""), cible.role):
+            return
+
+        raise ValidationError(
+            {
+                "detail": f"{geste} : le compte de "
+                          f"{cible.get_full_name().strip() or cible.username} "
+                          f"({ROLE_LABELS.get(cible.role, cible.role)}) est au moins "
+                          "au niveau du vôtre."
+            }
+        )
+
     def perform_update(self, serializer):
+        self._verifier_la_cible(serializer.instance, "Modification impossible")
+        self._verifier_le_propre_role(serializer)
         self._verifier_la_desactivation(serializer)
         target_etablissement = self._resolve_target_etablissement()
         if getattr(self.request.user, "role", None) == "super_admin":
@@ -221,6 +254,40 @@ class UserViewSet(viewsets.ModelViewSet):
             return
         user = serializer.save(etablissement=target_etablissement)
         self._sync_parent_profile(user)
+
+    def _verifier_le_propre_role(self, serializer):
+        """Personne ne change son propre role.
+
+        Meme un super-administrateur: se retrograder soi-meme pouvait laisser
+        l'installation sans aucun compte capable de restaurer la base. Un
+        autre super-administrateur reste libre de le faire.
+        """
+        cible = serializer.instance
+        nouveau_role = serializer.validated_data.get("role")
+        if cible is None or nouveau_role is None or nouveau_role == cible.role:
+            return
+
+        if cible.pk == self.request.user.pk:
+            raise ValidationError(
+                {"role": "Vous ne pouvez pas changer votre propre rôle."}
+            )
+
+        # Le dernier super-administrateur actif ne se retrograde pas davantage
+        # qu'il ne se desactive: sans lui, plus personne ne peut rendre le
+        # rôle a quiconque.
+        if cible.role == UserRole.SUPER_ADMIN:
+            restants = (
+                User.objects.filter(role=UserRole.SUPER_ADMIN, is_active=True)
+                .exclude(pk=cible.pk)
+                .count()
+            )
+            if restants == 0:
+                raise ValidationError(
+                    {
+                        "role": "Ce compte est le dernier super-administrateur actif. "
+                                "Nommez-en un autre avant de changer son rôle."
+                    }
+                )
 
     def _verifier_la_desactivation(self, serializer):
         """Deux comptes ne doivent jamais pouvoir etre coupes.
@@ -296,6 +363,7 @@ class UserViewSet(viewsets.ModelViewSet):
         preferable dans presque tous les cas, et le message le rappelle.
         """
         cible = self.get_object()
+        self._verifier_la_cible(cible, "Suppression impossible")
 
         if cible.pk == request.user.pk:
             raise ValidationError(
@@ -331,6 +399,10 @@ class UserViewSet(viewsets.ModelViewSet):
         passe etait perdu.
         """
         cible = self.get_object()
+        # Reinitialiser le mot de passe de quelqu'un, c'est prendre sa place:
+        # la meme echelle que la modification s'applique, sans quoi la garde
+        # posee la se contournerait ici.
+        self._verifier_la_cible(cible, "Réinitialisation impossible")
         nouveau = str(request.data.get("password") or "")
 
         if len(nouveau) < 8:

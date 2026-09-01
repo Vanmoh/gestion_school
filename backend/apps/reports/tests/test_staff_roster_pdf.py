@@ -122,6 +122,13 @@ class StaffRosterPdfTests(APITestCase):
         """Garde-fou N+1: sans prefetch, chaque enseignant coutait 2 requetes."""
         self.client.force_authenticate(self.directeur)
 
+        # Un appel a blanc d'abord: la toute premiere requete d'un compte cree
+        # sa ligne de presence, ce qui coute quelques requetes une fois pour
+        # toutes. Sans cet echauffement, la mesure « maigre » porterait cette
+        # creation et la mesure « chargee » non -- un ecart qui ne dit rien du
+        # N+1 qu'on surveille ici.
+        self._get()
+
         with CaptureQueriesContext(connection) as maigre:
             self._get()
 
