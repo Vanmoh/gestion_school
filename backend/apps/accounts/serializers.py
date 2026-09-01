@@ -2,11 +2,35 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from rest_framework import serializers
 
+from apps.accounts.access import ROLE_LABELS, peut_administrer_compte
 from apps.accounts.models import UserRole
 from apps.common.presence import presence_depuis_ligne, presence_last_seen
 from apps.school.models import ClassRoom, Etablissement, ParentProfile, Student
 
 User = get_user_model()
+
+
+def verifier_le_role_attribue(demandeur, role_vise):
+    """Un compte ne cree ni ne promeut au-dessus de lui.
+
+    Le module « users » ouvrait l'ecriture sur les comptes sans dire sur
+    lesquels: un directeur pouvait donc creer un super-administrateur, puis
+    s'y connecter. Voir `apps.accounts.access.peut_administrer_compte`.
+    """
+    if role_vise in (None, ""):
+        return
+
+    role_demandeur = getattr(demandeur, "role", "")
+    if peut_administrer_compte(role_demandeur, role_vise):
+        return
+
+    raise serializers.ValidationError(
+        {
+            "role": "Vous ne pouvez pas attribuer le rôle "
+                    f"« {ROLE_LABELS.get(role_vise, role_vise)} » : "
+                    "il est au moins au niveau du vôtre."
+        }
+    )
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -98,6 +122,15 @@ class UserSerializer(serializers.ModelSerializer):
                                 "Utilisez l'action « Réinitialiser le mot de passe »."
                 }
             )
+
+        # Le role vise, qu'il s'agisse d'une creation ou d'une promotion.
+        role_vise = attrs.get("role")
+        request = self.context.get("request")
+        if role_vise and request is not None:
+            instance = getattr(self, "instance", None)
+            if instance is None or instance.role != role_vise:
+                verifier_le_role_attribue(request.user, role_vise)
+
         return attrs
 
 
@@ -145,6 +178,8 @@ class RegisterSerializer(serializers.ModelSerializer):
 
         requester = request.user
         is_super_admin = getattr(requester, "role", None) == "super_admin"
+
+        verifier_le_role_attribue(requester, attrs.get("role"))
 
         if not is_super_admin:
             attrs["etablissement"] = getattr(requester, "etablissement", None)

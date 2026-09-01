@@ -6,6 +6,7 @@ import '../../auth/presentation/auth_controller.dart';
 import '../../students/domain/student.dart';
 import '../../students/presentation/students_controller.dart';
 import '../presentation/payments_controller.dart';
+import 'widgets/finance_communs.dart';
 
 Future<bool?> showGuidedPaymentEntryDialog({
   required BuildContext context,
@@ -326,10 +327,10 @@ class _GuidedPaymentEntryDialogState
       _amountDueController.text.trim().replaceAll(',', '.'),
     );
     if (student == null) {
-      throw Exception('Selectionnez un eleve.');
+      throw Exception('Sélectionnez un élève.');
     }
     if (academicYearId == null) {
-      throw Exception('Selectionnez une annee scolaire.');
+      throw Exception('Sélectionnez une année scolaire.');
     }
     if (amountDue == null || amountDue <= 0) {
       throw Exception('Montant du frais invalide.');
@@ -378,13 +379,13 @@ class _GuidedPaymentEntryDialogState
   Future<void> _submit() async {
     final student = _selectedStudent;
     if (student == null) {
-      _showError('Selectionnez un eleve.');
+      _showError('Sélectionnez un élève.');
       return;
     }
 
     final selectedTypes = _orderedSelectedFeeTypes();
     if (selectedTypes.isEmpty) {
-      _showError('Selectionnez au moins un type de frais.');
+      _showError('Sélectionnez au moins un type de frais.');
       return;
     }
 
@@ -393,7 +394,7 @@ class _GuidedPaymentEntryDialogState
       (sum, type) => sum + _maxCollectibleForType(type),
     );
     if (totalCollectible <= 0) {
-      _showError('Aucun montant encaissable pour les frais selectionnes.');
+      _showError('Aucun montant encaissable pour les frais sélectionnés.');
       return;
     }
 
@@ -495,7 +496,7 @@ class _GuidedPaymentEntryDialogState
       case 'registration':
         return 'Frais inscription';
       case 'monthly':
-        return 'Scolarite';
+        return 'Scolarité';
       case 'exam':
         return 'Frais examen';
       default:
@@ -505,7 +506,7 @@ class _GuidedPaymentEntryDialogState
 
   String _academicYearLabel(Map<String, dynamic> row) {
     final name = row['name']?.toString().trim() ?? '';
-    return name.isEmpty ? 'Annee scolaire' : name;
+    return name.isEmpty ? 'Année scolaire' : name;
   }
 
   String _cashierLabel(AuthUser? user) {
@@ -516,18 +517,7 @@ class _GuidedPaymentEntryDialogState
     return '$name • ${user.role}';
   }
 
-  String _formatMoney(double value) {
-    final whole = value.round().toString();
-    final buffer = StringBuffer();
-    for (var i = 0; i < whole.length; i++) {
-      final reversedIndex = whole.length - i;
-      buffer.write(whole[i]);
-      if (reversedIndex > 1 && reversedIndex % 3 == 1) {
-        buffer.write(' ');
-      }
-    }
-    return '${buffer.toString()} FCFA';
-  }
+  String _formatMoney(double value) => montantEnFrancs(value);
 
   String _formatDate(DateTime value) {
     return '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}/${value.year}';
@@ -700,7 +690,7 @@ class _GuidedPaymentEntryDialogState
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Encaissement guide: classe, eleve, type de frais, puis validation immediate par le caissier actif.',
+                  'Encaissement guidé : classe, élève, type de frais, puis validation immédiate par le caissier actif.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 12),
@@ -709,7 +699,7 @@ class _GuidedPaymentEntryDialogState
                   runSpacing: 8,
                   children: [
                     _StepChip(label: '1. Classe'),
-                    _StepChip(label: '2. Eleve'),
+                    _StepChip(label: '2. Élève'),
                     _StepChip(label: '3. Frais & encaissement'),
                     if (widget.lockStudentSelection)
                       const _StepChip(label: 'Mode post-inscription'),
@@ -777,14 +767,14 @@ class _GuidedPaymentEntryDialogState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Selection classe et eleve',
+            'Sélection classe et élève',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
           ),
           const SizedBox(height: 4),
           Text(
-            'Choisissez d abord la classe, puis cliquez sur l eleve concerne pour charger ses frais.',
+            'Choisissez d\'abord la classe, puis cliquez sur l\'élève concerné pour charger ses frais.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 12),
@@ -797,17 +787,18 @@ class _GuidedPaymentEntryDialogState
                 value: '${_classrooms.length}',
               ),
               _MetricPill(
-                label: 'Eleves visibles',
+                label: 'Élèves visibles',
                 value: '${filteredStudents.length}',
               ),
               _MetricPill(
-                label: 'Selection rapide',
+                label: 'Sélection rapide',
                 value: 'Tactile',
               ),
             ],
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<int>(
+            isExpanded: true,
             initialValue: _selectedClassroomId,
             decoration: const InputDecoration(labelText: 'Classe'),
             items: _classrooms
@@ -836,7 +827,7 @@ class _GuidedPaymentEntryDialogState
             controller: _studentSearchController,
             onChanged: (_) => setState(() {}),
             decoration: const InputDecoration(
-              labelText: 'Recherche eleve',
+              labelText: 'Recherche élève',
               prefixIcon: Icon(Icons.search),
             ),
           ),
@@ -909,7 +900,7 @@ class _GuidedPaymentEntryDialogState
               child: _studentsLoading
                   ? const Center(child: CircularProgressIndicator())
                   : filteredStudents.isEmpty
-                      ? const Center(child: Text('Aucun eleve dans cette classe.'))
+                      ? const Center(child: Text('Aucun élève dans cette classe.'))
                       : ListView.separated(
                           itemCount: filteredStudents.length,
                           separatorBuilder: (_, _) => const SizedBox(height: 8),
@@ -970,7 +961,7 @@ class _GuidedPaymentEntryDialogState
                                                 const SizedBox(width: 4),
                                                 Text(
                                                   selected
-                                                      ? 'Eleve actif pour encaissement'
+                                                      ? 'Élève actif pour encaissement'
                                                       : 'Toucher pour charger les frais',
                                                   style: Theme.of(context).textTheme.labelSmall,
                                                 ),
@@ -1009,7 +1000,7 @@ class _GuidedPaymentEntryDialogState
               child: _studentsLoading
                   ? const Center(child: CircularProgressIndicator())
                   : filteredStudents.isEmpty
-                      ? const Center(child: Text('Aucun eleve dans cette classe.'))
+                      ? const Center(child: Text('Aucun élève dans cette classe.'))
                       : ListView.separated(
                           itemCount: filteredStudents.length,
                           separatorBuilder: (_, _) => const SizedBox(height: 8),
@@ -1070,7 +1061,7 @@ class _GuidedPaymentEntryDialogState
                                                 const SizedBox(width: 4),
                                                 Text(
                                                   selected
-                                                      ? 'Eleve actif pour encaissement'
+                                                      ? 'Élève actif pour encaissement'
                                                       : 'Toucher pour charger les frais',
                                                   style: Theme.of(context).textTheme.labelSmall,
                                                 ),
@@ -1134,7 +1125,7 @@ class _GuidedPaymentEntryDialogState
             ),
             const SizedBox(height: 4),
             Text(
-              'Selection du type de frais, creation automatique si necessaire, puis validation du paiement.',
+              'Sélection du type de frais, création automatique si nécessaire, puis validation du paiement.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -1172,7 +1163,7 @@ class _GuidedPaymentEntryDialogState
                           value: '${_orderedSelectedFeeTypes().length}',
                         ),
                         _MetricPill(
-                          label: 'A creer',
+                          label: 'À créer',
                           value: '${_orderedSelectedFeeTypes().where((t) => _selectedFeeIdsByType[t] == null).length}',
                         ),
                       ],
@@ -1224,7 +1215,7 @@ class _GuidedPaymentEntryDialogState
                   color: colorScheme.surface,
                   border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.35)),
                 ),
-                child: const Text('Choisissez d abord une classe puis un eleve.'),
+                child: const Text('Choisissez d\'abord une classe puis un élève.'),
               )
             else if (_feesLoading)
               const Padding(
@@ -1246,8 +1237,8 @@ class _GuidedPaymentEntryDialogState
                   children: [
                     Text(
                       selectedFees.isEmpty
-                          ? 'Aucun frais selectionne existant pour cet eleve.'
-                          : 'Aucun nouveau frais a creer pour les types deja existants.',
+                          ? 'Aucun frais sélectionné existant pour cet élève.'
+                          : 'Aucun nouveau frais à créer pour les types déjà existants.',
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
                             fontWeight: FontWeight.w700,
                           ),
@@ -1279,8 +1270,9 @@ class _GuidedPaymentEntryDialogState
             if (feeNeedsCreation) ...[
               const SizedBox(height: 12),
               DropdownButtonFormField<int>(
+                isExpanded: true,
                 initialValue: _selectedAcademicYearId,
-                decoration: const InputDecoration(labelText: 'Annee scolaire (creation auto)'),
+                decoration: const InputDecoration(labelText: 'Année scolaire (création auto)'),
                 items: _academicYears
                     .map(
                       (row) => DropdownMenuItem<int>(
@@ -1304,7 +1296,7 @@ class _GuidedPaymentEntryDialogState
                         });
                       },
                       decoration: const InputDecoration(
-                        labelText: 'Montant du frais a creer (par type manquant)',
+                        labelText: 'Montant du frais à créer (par type manquant)',
                       ),
                     ),
                   ),
@@ -1335,8 +1327,9 @@ class _GuidedPaymentEntryDialogState
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
+              isExpanded: true,
               initialValue: _selectedMethod,
-              decoration: const InputDecoration(labelText: 'Methode'),
+              decoration: const InputDecoration(labelText: 'Méthode'),
               items: _paymentMethods
                   .map(
                     (method) => DropdownMenuItem<String>(
@@ -1372,7 +1365,7 @@ class _GuidedPaymentEntryDialogState
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Methode active: $_selectedMethod',
+                      'Méthode active: $_selectedMethod',
                       style: Theme.of(context).textTheme.labelLarge?.copyWith(
                             color: _methodAccentColor(_selectedMethod, colorScheme),
                             fontWeight: FontWeight.w800,
@@ -1386,7 +1379,7 @@ class _GuidedPaymentEntryDialogState
             TextField(
               controller: _referenceController,
               decoration: const InputDecoration(
-                labelText: 'Reference',
+                labelText: 'Référence',
                 prefixIcon: Icon(Icons.qr_code_2_outlined),
                 helperText: 'Obligatoire pour Mobile Money, Virement, Cheque et Carte.',
               ),
@@ -1419,8 +1412,8 @@ class _GuidedPaymentEntryDialogState
                 children: [
                   Text(
                     feeNeedsCreation
-                        ? 'Le systeme cree les frais manquants puis repartit le paiement sur les types selectionnes.'
-                        : 'Le paiement est reparti automatiquement sur les frais selectionnes.',
+                        ? 'Le système crée les frais manquants puis répartit le paiement sur les types sélectionnés.'
+                        : 'Le paiement est réparti automatiquement sur les frais sélectionnés.',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
@@ -1455,7 +1448,7 @@ class _GuidedPaymentEntryDialogState
                               )
                             : const Icon(Icons.payments_outlined),
                         label: Text(
-                          feeNeedsCreation ? 'Creer et encaisser' : 'Encaisser maintenant',
+                          feeNeedsCreation ? 'Créer et encaisser' : 'Encaisser maintenant',
                         ),
                       ),
                     ],
@@ -1541,40 +1534,17 @@ class _StepChip extends StatelessWidget {
 }
 
 class _MetricPill extends StatelessWidget {
+  /// Même pastille que la page des finances: le dialogue avait la sienne,
+  /// en forme de gélule et de composition différente, pour dire exactement
+  /// la même chose.
   const _MetricPill({required this.label, required this.value});
 
   final String label;
   final String value;
 
   @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: colorScheme.surface.withValues(alpha: 0.76),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.26)),
-      ),
-      child: RichText(
-        text: TextSpan(
-          style: DefaultTextStyle.of(context).style,
-          children: [
-            TextSpan(
-              text: '$label: ',
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-            TextSpan(
-              text: value,
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      IndicateurFinance(libelle: label, valeur: value);
 }
 
 class _FeeSummaryCard extends StatelessWidget {
@@ -1643,7 +1613,7 @@ class _FeeSummaryCard extends StatelessWidget {
               _MetricPill(label: 'Du', value: amountDue),
               _MetricPill(label: 'Paye', value: amountPaid),
               _MetricPill(label: 'Reste', value: balance),
-              _MetricPill(label: 'Echeance', value: dueDate),
+              _MetricPill(label: 'Échéance', value: dueDate),
             ],
           ),
         ],

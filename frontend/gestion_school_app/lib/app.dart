@@ -298,6 +298,13 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     ),
     _AdminMenuItem(
       keyName: 'students',
+      // L'ecran charge les classes et les annees scolaires avant d'afficher
+      // quoi que ce soit: sans le droit de les lire, il ne rend que son
+      // message d'erreur. C'etait deja le cas pour le comptable et le
+      // surveillant; ouvrir le dossier eleve aux familles l'aurait etendu a
+      // elles, alors que « Recherche eleve » leur donne exactement ce qu'il
+      // leur faut.
+      clesRequises: ['academics'],
       label: 'Gestion des élèves',
       icon: Icons.school_outlined,
       view: StudentsPage(),
@@ -367,6 +374,13 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     ),
     _AdminMenuItem(
       keyName: 'finance',
+      // La paie vit dans cet ecran, sous son propre droit. Sans cette cle,
+      // l'entree ne s'ouvrait qu'a « finance »: le censeur, a qui la matrice
+      // confie la validation de niveau 1, et l'enseignant, a qui elle donne
+      // sa propre fiche, n'atteignaient jamais la page. La double validation
+      // prevue -- le censeur genere, le comptable contresigne -- ne pouvait
+      // donc pas avoir lieu.
+      extraKeys: ['payroll'],
       label: 'Finances',
       icon: Icons.account_balance_wallet_outlined,
       view: PaymentsPage(),
@@ -485,9 +499,11 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   bool _isItemVisible(String key) => _permissions.canRead(key);
 
-  /// Une entree est visible des qu'une seule de ses cles l'est.
+  /// Une entree est visible des qu'une seule de ses cles l'est -- et a
+  /// condition que ce dont son ecran depend le soit aussi.
   bool _isEntryVisible(_AdminMenuItem item) =>
-      item.allKeys.any(_isItemVisible);
+      item.allKeys.any(_isItemVisible) &&
+      item.clesRequises.every(_isItemVisible);
 
   bool _isItemReadOnly(String key) => _permissions.isReadOnly(key);
 
@@ -1973,12 +1989,21 @@ class _AdminMenuItem {
   /// par la sienne.
   final List<String> extraKeys;
 
+  /// Les modules dont l'ecran a besoin pour s'afficher, en plus du sien.
+  ///
+  /// Different de [extraKeys], qui ouvre l'entree: celles-ci la ferment. Un
+  /// ecran qui charge les donnees d'un autre module n'affiche rien de bon
+  /// sans le droit de les lire -- il rend son message d'erreur, ce qui est
+  /// pire qu'une entree absente.
+  final List<String> clesRequises;
+
   const _AdminMenuItem({
     required this.keyName,
     required this.label,
     required this.icon,
     required this.view,
     this.extraKeys = const [],
+    this.clesRequises = const [],
   });
 
   /// Toutes les cles qui rendent cette entree accessible.

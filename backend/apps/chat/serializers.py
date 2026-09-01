@@ -5,6 +5,8 @@ from rest_framework import serializers
 from apps.common.presence import presence_depuis_ligne, presence_last_seen
 from apps.school.models import Etablissement
 
+from .correspondants import peut_correspondre
+
 from .models import ChatMessage, ChatPresence, Conversation, ConversationParticipant
 
 User = get_user_model()
@@ -301,6 +303,15 @@ class DirectConversationCreateSerializer(serializers.Serializer):
         if target_etablissement is not None and target.etablissement_id != target_etablissement.id:
             raise serializers.ValidationError("Utilisateur hors etablissement.")
 
+        # Filtrer l'annuaire ne suffit pas: cette route accepte un identifiant
+        # brut, et rien n'oblige a etre passe par la liste pour l'obtenir.
+        if not peut_correspondre(
+            getattr(request_user, "role", ""), getattr(target, "role", "")
+        ):
+            raise serializers.ValidationError(
+                "La messagerie de l'établissement ne permet pas cette conversation."
+            )
+
         attrs["target_user"] = target
         return attrs
 
@@ -333,6 +344,20 @@ class GroupConversationCreateSerializer(serializers.Serializer):
         users = list(query)
         if len(users) != len(participant_ids):
             raise serializers.ValidationError("Certains participants sont invalides ou hors etablissement.")
+
+        # Un groupe reunit tout le monde avec tout le monde: il ne doit pas
+        # servir a mettre en presence deux personnes qui ne peuvent pas
+        # s'ecrire directement.
+        roles = [getattr(request_user, "role", "")] + [
+            getattr(membre, "role", "") for membre in users
+        ]
+        for index, role_a in enumerate(roles):
+            for role_b in roles[index + 1:]:
+                if not peut_correspondre(role_a, role_b):
+                    raise serializers.ValidationError(
+                        "Ce groupe réunirait des personnes que la messagerie de "
+                        "l'établissement ne met pas en relation."
+                    )
 
         attrs["participants"] = users
         return attrs

@@ -247,13 +247,18 @@ class StudentDossierTests(APITestCase):
         for autorisee in ("fees", "payments", "canteen_services"):
             self.assertTrue(self._section(payload, autorisee)["granted"], autorisee)
 
-    def test_the_dossier_is_closed_to_parents_and_students(self):
-        """Le refus tombe sur la matrice, avant meme de chercher l'eleve.
+    def test_the_dossier_is_limited_to_the_family_perimeter(self):
+        """Le sien, et lui seul.
 
-        Le module "students" est ferme aux parents et aux eleves: ils n'ont
-        acces ni au dossier de leur propre enfant ni a celui d'un autre. Le
-        refus est donc un 403 uniforme, jamais un 404 qui revelerait au
-        passage quels identifiants existent.
+        Le module "students" leur etait entierement ferme: un parent lisait les
+        notes et les absences de son enfant sans jamais pouvoir verifier sa
+        fiche -- classe, matricule, contacts enregistres. Il l'atteint
+        desormais, mais rien d'autre.
+
+        Le refus prend ici la forme d'un 404 et non d'un 403, sans que cela
+        revele quoi que ce soit: le cloisonnement se fait dans le queryset, si
+        bien qu'un dossier hors perimetre repond exactement comme un
+        identifiant qui n'existe pas.
         """
         parent_user = User.objects.create_user(
             username="parent_dossier",
@@ -267,12 +272,12 @@ class StudentDossierTests(APITestCase):
         sien = self._make_student("enfant_du_parent", parent=parent)
 
         self.client.force_authenticate(parent_user)
-        self._dossier(self.eleve, attendu=status.HTTP_403_FORBIDDEN)
-        self._dossier(sien, attendu=status.HTTP_403_FORBIDDEN)
+        self._dossier(sien)
+        self._dossier(self.eleve, attendu=status.HTTP_404_NOT_FOUND)
 
         self.client.force_authenticate(self.autre_eleve.user)
-        self._dossier(self.eleve, attendu=status.HTTP_403_FORBIDDEN)
-        self._dossier(self.autre_eleve, attendu=status.HTTP_403_FORBIDDEN)
+        self._dossier(self.autre_eleve)
+        self._dossier(self.eleve, attendu=status.HTTP_404_NOT_FOUND)
 
     def test_it_requires_authentication(self):
         self.client.force_authenticate(None)
@@ -285,6 +290,13 @@ class StudentDossierTests(APITestCase):
     def test_the_query_count_does_not_grow_with_the_data(self):
         """Garde-fou N+1: le dossier doit couter pareil a 5 et a 120 notes."""
         self.client.force_authenticate(self.directeur)
+
+        # Un appel a blanc d'abord: la toute premiere requete d'un compte cree
+        # sa ligne de presence, ce qui coute quelques requetes une fois pour
+        # toutes. Sans cet echauffement, la mesure « maigre » porterait cette
+        # creation et la mesure « chargee » non -- un ecart qui ne dit rien du
+        # N+1 qu'on surveille ici.
+        self._dossier()
 
         with CaptureQueriesContext(connection) as maigre:
             self._dossier()

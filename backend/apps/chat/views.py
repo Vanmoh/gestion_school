@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import HasModuleAccess
 from apps.common.presence import presence_en_ligne
+from .correspondants import peut_correspondre, roles_exclus_pour, roles_joignables_par
 from apps.school.models import Etablissement
 
 from .models import ChatMessage, ChatPresence, Conversation, ConversationParticipant
@@ -114,6 +115,17 @@ def _allowed_users_queryset(request):
         query = query.filter(etablissement=target_etablissement)
     elif _has_requested_chat_scope(request) or getattr(user, "role", "") != "super_admin":
         query = query.none()
+
+    # L'annuaire ne propose que des correspondants permis: laisser apparaitre
+    # un nom qu'on ne peut pas joindre revient a promettre puis refuser.
+    role = getattr(user, "role", "")
+    joignables = roles_joignables_par(role)
+    if joignables is not None:
+        query = query.filter(role__in=joignables)
+    exclus = roles_exclus_pour(role)
+    if exclus:
+        query = query.exclude(role__in=exclus)
+
     return query.order_by("first_name", "last_name", "username")
 
 
@@ -649,6 +661,22 @@ class GroupConversationAddMemberView(APIView):
 
         if conversation.etablissement_id and target_user.etablissement_id and conversation.etablissement_id != target_user.etablissement_id:
             return Response({"detail": "Utilisateur hors etablissement."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Un groupe deja forme ne doit pas servir de detour: verrouiller sa
+        # creation sans verrouiller les ajouts ne verrouille rien.
+        roles_en_place = list(
+            ConversationParticipant.objects.filter(conversation=conversation)
+            .values_list("user__role", flat=True)
+        )
+        role_cible = getattr(target_user, "role", "")
+        if any(not peut_correspondre(role_cible, role) for role in roles_en_place):
+            return Response(
+                {
+                    "detail": "La messagerie de l'établissement ne met pas cette "
+                              "personne en relation avec les membres du groupe."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         ConversationParticipant.objects.get_or_create(
             conversation=conversation,

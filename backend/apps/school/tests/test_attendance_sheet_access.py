@@ -131,11 +131,15 @@ class AttendanceSheetAccessTests(APITestCase):
 
     # --- Lecture -------------------------------------------------------
 
-    def test_the_accountant_reads_the_sheet(self):
-        """Il la lisait deja: la matrice le dit maintenant au lieu de l'inverse."""
+    def test_the_accountant_no_longer_reads_the_sheet(self):
+        """La facturation ne s'appuie pas sur les absences.
+
+        Il la lisait, faute qu'on ait demande pourquoi. Savoir quel eleve
+        manquait mardi ne regarde pas la comptabilite.
+        """
         self.assertEqual(
             self._lire_fiche(self.comptes[UserRole.ACCOUNTANT]).status_code,
-            status.HTTP_200_OK,
+            status.HTTP_403_FORBIDDEN,
         )
 
     def test_the_accountant_does_not_write_it(self):
@@ -144,12 +148,33 @@ class AttendanceSheetAccessTests(APITestCase):
             status.HTTP_403_FORBIDDEN,
         )
 
+    def test_the_promoter_reads_but_does_not_fill(self):
+        """Il ne fait pas l'appel.
+
+        Sa colonne d'ecriture venait d'une ancienne liste de roles remontee
+        telle quelle dans la matrice, sans que personne ait verifie qu'elle
+        decrivait le travail reel. Il garde la lecture: c'est son ecole.
+        """
+        self.assertEqual(
+            self._lire_fiche(self.comptes[UserRole.PROMOTER]).status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            self._ecrire_fiche(self.comptes[UserRole.PROMOTER]).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+    def test_the_promoter_does_not_lock_either(self):
+        self.assertEqual(
+            self._valider(self.comptes[UserRole.PROMOTER]).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
     # --- Ecriture ------------------------------------------------------
 
     def test_who_fills_the_sheet(self):
         for role in (
             UserRole.SUPER_ADMIN,
-            UserRole.PROMOTER,
             UserRole.DIRECTOR,
             UserRole.CENSOR,
             UserRole.SUPERVISOR,
@@ -170,7 +195,6 @@ class AttendanceSheetAccessTests(APITestCase):
     def test_who_locks_the_sheet(self):
         for role in (
             UserRole.SUPER_ADMIN,
-            UserRole.PROMOTER,
             UserRole.DIRECTOR,
             UserRole.CENSOR,
             UserRole.SUPERVISOR,

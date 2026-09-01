@@ -1221,6 +1221,35 @@ class EtablissementViewSet(viewsets.ModelViewSet):
             return [permissions.AllowAny()]
         return [permissions.IsAuthenticated(), HasModuleAccess()]
 
+    def _role(self):
+        return getattr(self.request.user, "role", "")
+
+    def _est_restreint(self):
+        """Le directeur ecrit ici, mais sur son etablissement seulement.
+
+        La matrice dit « E* »; l'etoile n'a de valeur que si quelqu'un
+        l'applique. Sans ces deux gardes, l'ecriture accordee pour corriger sa
+        propre fiche ouvrait aussi la creation d'ecoles et la modification de
+        celles des autres.
+        """
+        return is_scoped(self._role(), self.access_module)
+
+    def perform_create(self, serializer):
+        if self._est_restreint():
+            raise PermissionDenied(
+                "La création d'un établissement est réservée au super-administrateur."
+            )
+        serializer.save()
+
+    def perform_update(self, serializer):
+        if self._est_restreint():
+            sien = getattr(self.request.user, "etablissement_id", None)
+            if sien is None or serializer.instance.pk != sien:
+                raise PermissionDenied(
+                    "Vous ne pouvez modifier que votre propre établissement."
+                )
+        serializer.save()
+
 
 class ClassRoomViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "academics"

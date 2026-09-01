@@ -174,11 +174,28 @@ class AcademicsApiTests(APITestCase):
         )
         self.assertEqual(creation.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_an_accountant_has_no_access_to_the_referential(self):
+    def test_an_accountant_reads_the_referential_without_touching_it(self):
+        """Il consulte classes et matieres, il n'en cree aucune.
+
+        Le referentiel lui etait entierement ferme -- au point que l'ecran
+        « Gestion des eleves », qui charge les classes avant d'afficher quoi
+        que ce soit, ne lui rendait que son message d'erreur.
+        """
         self.client.force_authenticate(self.comptable)
+
         self.assertEqual(
-            self.client.get("/api/subjects/").status_code, status.HTTP_403_FORBIDDEN
+            self.client.get("/api/subjects/").status_code, status.HTTP_200_OK
         )
+        self.assertEqual(
+            self.client.get("/api/classrooms/").status_code, status.HTTP_200_OK
+        )
+
+        creation = self.client.post(
+            "/api/classrooms/",
+            {"name": "3D", "academic_year": self.annee.id},
+            format="json",
+        )
+        self.assertEqual(creation.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_a_director_creates_a_classroom_in_their_own_school(self):
         self.client.force_authenticate(self.directeur)
