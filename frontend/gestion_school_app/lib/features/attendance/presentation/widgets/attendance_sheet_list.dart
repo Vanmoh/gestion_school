@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Etat d'un eleve sur la feuille d'appel.
+/// Etat d'un élève sur la feuille d'appel.
 ///
 /// « Present » n'existe pas en base: c'est l'absence de `is_absent`. Le retard
 /// reste independant, un eleve en retard etant present -- les fondre en trois
@@ -192,7 +192,7 @@ class _Ligne extends StatelessWidget {
 
   String get _nom {
     final nom = (ligne['student_full_name'] ?? '').toString().trim();
-    return nom.isEmpty ? 'Élève' : nom;
+    return nom.isEmpty ? 'Eleve' : nom;
   }
 
   String get _matricule => (ligne['student_matricule'] ?? '').toString();

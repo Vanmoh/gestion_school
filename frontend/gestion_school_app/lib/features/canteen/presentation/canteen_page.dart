@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/network/chargement_tolerant.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class CanteenPage extends ConsumerStatefulWidget {
   const CanteenPage({super.key});
@@ -60,9 +62,11 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
     setState(() => _loading = true);
     try {
       final dio = ref.read(dioProvider);
+      // Le referentiel scolaire est ferme a la famille, qui a pourtant
+      // acces a la cantine: le reclamer fermement lui coutait tout l'ecran.
       final results = await Future.wait([
         dio.get('/students/'),
-        dio.get('/academic-years/'),
+        reponseTolerante(dio.get('/academic-years/')),
         dio.get('/canteen-menus/'),
         dio.get('/canteen-subscriptions/'),
         dio.get('/canteen-services/'),
@@ -144,28 +148,8 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
     await _loadData();
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -264,7 +248,7 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
                     'unit_price':
                         double.tryParse(_menuPriceController.text.trim()) ?? 0,
                     'is_active': true,
-                  }, 'Menu cantine cree'),
+                  }, 'Menu cantine créé'),
             child: const Text('Ajouter menu'),
           ),
         ],
@@ -277,8 +261,9 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           DropdownButtonFormField<int>(
+            isExpanded: true,
             initialValue: _selectedSubStudent,
-            decoration: const InputDecoration(labelText: 'Eleve'),
+            decoration: const InputDecoration(labelText: 'Élève'),
             items: _students
                 .map(
                   (row) => DropdownMenuItem<int>(
@@ -291,8 +276,9 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<int>(
+            isExpanded: true,
             initialValue: _selectedSubYear,
-            decoration: const InputDecoration(labelText: 'Annee academique'),
+            decoration: const InputDecoration(labelText: 'Année académique'),
             items: _years
                 .map(
                   (row) => DropdownMenuItem<int>(
@@ -320,6 +306,7 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
             },
           ),
           DropdownButtonFormField<String>(
+            isExpanded: true,
             initialValue: _subStatus,
             decoration: const InputDecoration(labelText: 'Statut'),
             items: const [
@@ -350,7 +337,7 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
                     'daily_limit':
                         int.tryParse(_subDailyLimitController.text.trim()) ?? 1,
                     'status': _subStatus,
-                  }, 'Abonnement cantine cree'),
+                  }, 'Abonnement cantine créé'),
             child: const Text('Creer abonnement'),
           ),
         ],
@@ -363,8 +350,9 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           DropdownButtonFormField<int>(
+            isExpanded: true,
             initialValue: _selectedServiceStudent,
-            decoration: const InputDecoration(labelText: 'Eleve'),
+            decoration: const InputDecoration(labelText: 'Élève'),
             items: _students
                 .map(
                   (row) => DropdownMenuItem<int>(
@@ -378,6 +366,7 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<int>(
+            isExpanded: true,
             initialValue: _selectedServiceMenu,
             decoration: const InputDecoration(labelText: 'Menu'),
             items: _menus
@@ -434,7 +423,7 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
                         int.tryParse(_serviceQtyController.text.trim()) ?? 1,
                     'is_paid': _servicePaid,
                     'notes': _serviceNotesController.text.trim(),
-                  }, 'Service cantine enregistre'),
+                  }, 'Service cantine enregistré'),
             child: const Text('Enregistrer service'),
           ),
         ],
@@ -487,7 +476,7 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Menus, abonnements eleves et services quotidiens.',
+                      'Menus, abonnements élèves et services quotidiens.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
@@ -518,7 +507,7 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _metricChip('Eleves', '${_students.length}'),
+                _metricChip('Élèves', '${_students.length}'),
                 _metricChip('Menus', '${_menus.length}'),
                 _metricChip('Abonnements', '${_subscriptions.length}'),
                 _metricChip('Abonnements actifs', '$activeSubscriptions'),

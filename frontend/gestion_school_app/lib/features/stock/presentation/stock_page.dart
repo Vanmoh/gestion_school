@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class StockPage extends ConsumerStatefulWidget {
   const StockPage({super.key});
@@ -130,28 +131,8 @@ class _StockPageState extends ConsumerState<StockPage> {
     await _loadData();
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -266,6 +247,7 @@ class _StockPageState extends ConsumerState<StockPage> {
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<int?>(
+            isExpanded: true,
             initialValue: _selectedSupplier,
             decoration: const InputDecoration(
               labelText: 'Fournisseur (optionnel)',
@@ -311,6 +293,7 @@ class _StockPageState extends ConsumerState<StockPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           DropdownButtonFormField<int>(
+            isExpanded: true,
             initialValue: _selectedMovementItem,
             decoration: const InputDecoration(labelText: 'Article'),
             items: _items
@@ -325,6 +308,7 @@ class _StockPageState extends ConsumerState<StockPage> {
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
+            isExpanded: true,
             initialValue: _movementType,
             decoration: const InputDecoration(labelText: 'Type mouvement'),
             items: const [

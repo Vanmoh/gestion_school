@@ -552,6 +552,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
             SizedBox(
               width: 320,
               child: DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _selectedSubjectClassroomId,
                 decoration: const InputDecoration(labelText: 'Classe'),
                 items: _classrooms
@@ -649,6 +650,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
             SizedBox(
               width: 260,
               child: DropdownButtonFormField<int>(
+                isExpanded: true,
                 initialValue: _selectedYearId,
                 decoration: const InputDecoration(labelText: 'Année scolaire'),
                 items: _years
@@ -816,6 +818,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
             SizedBox(
               width: 320,
               child: DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _selectedSubjectClassroomId,
                 decoration: const InputDecoration(labelText: 'Classe'),
                 items: _classrooms
@@ -1380,7 +1383,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        // Le repere de l'annee de travail, en tete: c'est cet ecran qui
+        // Le repere de l'année de travail, en tete: c'est cet ecran qui
         // ouvre, ferme et bascule les annees, et l'information y arrivait
         // noyee au milieu d'un bandeau, sans dates ni avancement.
         CarteAnneeActive(
@@ -1508,6 +1511,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                           const SizedBox(height: 10),
                           if (isSuperAdmin) ...[
                             DropdownButtonFormField<int?>(
+                              isExpanded: true,
                               initialValue: selectedEtablissementId,
                               decoration: const InputDecoration(
                                 labelText: 'Établissement actif',
@@ -1838,6 +1842,7 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<int?>(
+                  isExpanded: true,
                   initialValue: _subjectFilterClassroomId,
                   decoration: const InputDecoration(
                     prefixIcon: Icon(Icons.filter_list),

@@ -7,7 +7,7 @@ import 'library_page.dart';
 ///
 /// Une seule cle de droits (`library`) les gouverne, contrairement aux
 /// emargements dont les deux onglets ont des matrices incompatibles: qui
-/// tient le fonds papier tient le fonds numerique, et l'eleve qui lit l'un
+/// tient le fonds papier tient le fonds numerique, et l'élève qui lit l'un
 /// lit l'autre. Deux cles auraient invente une distinction que personne n'a
 /// demandee.
 class LibraryModulePage extends StatefulWidget {

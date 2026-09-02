@@ -104,7 +104,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         }
       });
     } catch (error) {
-      _showMessage('Erreur chargement etablissements: $error');
+      _showMessage('Erreur chargement établissements: $error');
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -307,7 +307,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
 
   Future<void> _save() async {
     if (!ref.read(currentPermissionsProvider).canWrite('etablissements')) {
-      _showMessage('Modification des etablissements reservee au super admin.');
+      _showMessage('Modification des établissements réservée au super admin.');
       return;
     }
 
@@ -404,13 +404,13 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
               options: options,
             );
         savedId = _asInt((response.data as Map<String, dynamic>)['id']);
-        _showMessage('Etablissement modifie avec succes.', isSuccess: true);
+        _showMessage('Établissement modifié avec succès.', isSuccess: true);
       } else {
         final response = await ref
             .read(dioProvider)
             .post('/etablissements/', data: data, options: options);
         savedId = _asInt((response.data as Map<String, dynamic>)['id']);
-        _showMessage('Etablissement ajoute avec succes.', isSuccess: true);
+        _showMessage('Établissement ajouté avec succès.', isSuccess: true);
       }
 
       _clearForm();
@@ -423,7 +423,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     } on DioException catch (error) {
       _showMessage(_extractApiError(error));
     } catch (error) {
-      _showMessage('Erreur enregistrement etablissement: $error');
+      _showMessage('Erreur enregistrement établissement: $error');
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -434,7 +434,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
   Future<void> _deleteSelected() async {
     final id = _selectedId;
     if (id == null || id <= 0) {
-      _showMessage('Selectionnez un etablissement a supprimer.');
+      _showMessage('Sélectionnez un établissement a supprimer.');
       return;
     }
 
@@ -442,9 +442,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Supprimer etablissement'),
+          title: const Text('Supprimer établissement'),
           content: const Text(
-            'Confirmez-vous la suppression de cet etablissement ?',
+            'Confirmez-vous la suppression de cet établissement ?',
           ),
           actions: [
             TextButton(
@@ -478,14 +478,14 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
             '/etablissements/$id/',
             options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
           );
-      _showMessage('Etablissement supprime.', isSuccess: true);
+      _showMessage('Établissement supprimé.', isSuccess: true);
       _clearForm();
       await _loadData();
       await _syncEtablissementProvider(_rows, refreshAuthProfile: true);
     } on DioException catch (error) {
       _showMessage(_extractApiError(error));
     } catch (error) {
-      _showMessage('Erreur suppression etablissement: $error');
+      _showMessage('Erreur suppression établissement: $error');
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -509,7 +509,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     if (data is String && data.trim().isNotEmpty) {
       return data.trim();
     }
-    return 'Erreur API sur la gestion des etablissements.';
+    return 'Erreur API sur la gestion des établissements.';
   }
 
   @override
@@ -532,12 +532,12 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            'Gestion etablissements',
+            'Gestion établissements',
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: 6),
           Text(
-            'Module reserve au super admin. Ajout, modification et suppression des etablissements.',
+            'Module réservé au super admin. Ajout, modification et suppression des établissements.',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 12),
@@ -631,7 +631,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                     child: TextField(
                       controller: _principalSignatureLabelController,
                       decoration: const InputDecoration(
-                        labelText: 'Libelle signature direction',
+                        labelText: 'Libellé signature direction',
                       ),
                     ),
                   ),
@@ -640,7 +640,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                     child: TextField(
                       controller: _cashierSignatureLabelController,
                       decoration: const InputDecoration(
-                        labelText: 'Libelle signature caissier',
+                        labelText: 'Libellé signature caissier',
                       ),
                     ),
                   ),
@@ -656,6 +656,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                   SizedBox(
                     width: 210,
                     child: DropdownButtonFormField<String>(
+                      isExpanded: true,
                       initialValue: _principalSignaturePosition,
                       decoration: const InputDecoration(
                         labelText: 'Position signature direction',
@@ -676,6 +677,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                   SizedBox(
                     width: 210,
                     child: DropdownButtonFormField<String>(
+                      isExpanded: true,
                       initialValue: _stampPosition,
                       decoration: const InputDecoration(
                         labelText: 'Position cachet',
@@ -748,7 +750,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                   if (selectedRow != null) ...[
                     const SizedBox(width: 6),
                     Text(
-                      'Apercu actif: $selectedName',
+                      'Aperçu actif: $selectedName',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                     if ((selectedRow['logo'] ?? '').toString().isNotEmpty)
@@ -819,12 +821,12 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Etablissement selectionne: $selectedName'),
+                    Text('Établissement sélectionné: $selectedName'),
                     const SizedBox(height: 8),
                     if (_rows.isEmpty)
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 12),
-                        child: Text('Aucun etablissement disponible.'),
+                        child: Text('Aucun établissement disponible.'),
                       )
                     else
                       ..._rows.map((row) {

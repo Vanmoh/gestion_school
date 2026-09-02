@@ -85,7 +85,7 @@ class _ParentAttendancePageState extends ConsumerState<ParentAttendancePage> {
     final groupes = <String, List<Map<String, dynamic>>>{};
     for (final ligne in _lignes) {
       final nom = (ligne['student_full_name'] ?? '').toString().trim();
-      groupes.putIfAbsent(nom.isEmpty ? 'Élève' : nom, () => []).add(ligne);
+      groupes.putIfAbsent(nom.isEmpty ? 'Eleve' : nom, () => []).add(ligne);
     }
     return groupes;
   }

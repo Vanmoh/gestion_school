@@ -818,6 +818,7 @@ class _AcademicImportsPageState extends ConsumerState<AcademicImportsPage> {
                         ),
                         const SizedBox(height: 12),
                         DropdownButtonFormField<int>(
+                          isExpanded: true,
                           initialValue: _selectedClassroomId,
                           items: _classrooms
                               .map(
@@ -842,6 +843,7 @@ class _AcademicImportsPageState extends ConsumerState<AcademicImportsPage> {
                         if (_selectedType == _AcademicImportType.controls) ...[
                           const SizedBox(height: 12),
                           DropdownButtonFormField<int>(
+                            isExpanded: true,
                             initialValue: _selectedAcademicYearId,
                             items: _academicYears
                                 .map(
@@ -865,6 +867,7 @@ class _AcademicImportsPageState extends ConsumerState<AcademicImportsPage> {
                           ),
                           const SizedBox(height: 12),
                           DropdownButtonFormField<String>(
+                            isExpanded: true,
                             initialValue: _selectedTerm,
                             items: _terms
                                 .map(
@@ -890,6 +893,7 @@ class _AcademicImportsPageState extends ConsumerState<AcademicImportsPage> {
                         if (_selectedType == _AcademicImportType.exams) ...[
                           const SizedBox(height: 12),
                           DropdownButtonFormField<int>(
+                            isExpanded: true,
                             initialValue: _selectedSessionId,
                             items: _examSessions
                                 .map(

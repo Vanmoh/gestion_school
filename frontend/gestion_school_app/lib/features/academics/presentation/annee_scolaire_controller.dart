@@ -14,7 +14,7 @@ final anneesScolairesRepositoryProvider = Provider<AnneesScolairesRepository>((
   return AnneesScolairesRepository(ref.read(dioProvider));
 });
 
-/// L'annee de travail, partagee par toute l'application.
+/// L'année de travail, partagee par toute l'application.
 ///
 /// « Notes », « Examens » et « Academique » avaient chacune son selecteur
 /// d'annee, et rien ne les accordait: on pouvait saisir une note sur une
@@ -47,7 +47,7 @@ class AnneeScolaireController extends ChangeNotifier {
   bool get chargement => _chargement;
   String? get erreur => _erreur;
 
-  /// Vrai quand l'annee consultee n'accepte plus la saisie ordinaire.
+  /// Vrai quand l'année consultee n'accepte plus la saisie ordinaire.
   bool get consulteUneAnneeCloturee => _selectionnee?.estCloturee ?? false;
 
   /// Relit le choix precedent avant tout appel reseau.
@@ -74,7 +74,7 @@ class AnneeScolaireController extends ChangeNotifier {
 
   /// Charge les annees de l'etablissement actif.
   ///
-  /// A appeler apres chaque changement d'etablissement: les annees d'une
+  /// A appeler apres chaque changement d'établissement: les années d'une
   /// ecole n'ont aucun sens dans une autre.
   Future<void> charger() async {
     _chargement = true;
@@ -89,7 +89,7 @@ class AnneeScolaireController extends ChangeNotifier {
       final encoreValide =
           choisie != null && annees.any((annee) => annee.id == choisie.id);
       if (!encoreValide) {
-        // L'annee en cours de l'etablissement, a defaut la plus recente.
+        // L'année en cours de l'etablissement, a defaut la plus recente.
         final courante = annees.where((annee) => annee.estCourante).firstOrNull;
         await selectionner(courante ?? annees.firstOrNull);
       } else {

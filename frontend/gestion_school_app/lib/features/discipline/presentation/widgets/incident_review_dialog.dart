@@ -87,6 +87,7 @@ class _IncidentReviewDialogState extends State<IncidentReviewDialog> {
               ],
               const Divider(height: 26),
               DropdownButtonFormField<String>(
+                isExpanded: true,
                 key: const Key('review-severity'),
                 initialValue: _severity,
                 decoration: const InputDecoration(labelText: 'Gravité'),
@@ -108,6 +109,7 @@ class _IncidentReviewDialogState extends State<IncidentReviewDialog> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
+                isExpanded: true,
                 key: const Key('review-status'),
                 initialValue: _status,
                 decoration: const InputDecoration(labelText: 'Statut'),

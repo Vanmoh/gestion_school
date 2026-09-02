@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/network/chargement_tolerant.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class ReportsPage extends ConsumerStatefulWidget {
   const ReportsPage({super.key});
@@ -73,10 +75,13 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
           rethrow;
         }
 
+        // Les encaissements et le referentiel n'ouvrent qu'un encart de
+        // cet ecran: le censeur, le surveillant, l'enseignant et la famille
+        // n'y ont pas droit, et l'ecran entier tombait avec eux.
         final responses = await Future.wait([
           dio.get('/students/'),
-          dio.get('/academic-years/'),
-          dio.get('/payments/'),
+          reponseTolerante(dio.get('/academic-years/')),
+          reponseTolerante(dio.get('/payments/')),
         ]);
 
         students = _extractRows(responses[0].data);
@@ -317,9 +322,10 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
               SizedBox(
                 width: 260,
                 child: DropdownButtonFormField<int>(
+                  isExpanded: true,
                   initialValue: _selectedYearId,
                   decoration: const InputDecoration(
-                    labelText: 'Annee academique',
+                    labelText: 'Année académique',
                   ),
                   items: _years
                       .map(
@@ -337,6 +343,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
               SizedBox(
                 width: 220,
                 child: DropdownButtonFormField<String>(
+                  isExpanded: true,
                   initialValue: _term,
                   decoration: const InputDecoration(labelText: 'Trimestre'),
                   items: const [
@@ -363,7 +370,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
                 child: TextField(
                   controller: _bulletinSearchController,
                   decoration: const InputDecoration(
-                    labelText: 'Rechercher eleve',
+                    labelText: 'Rechercher élève',
                     prefixIcon: Icon(Icons.search),
                   ),
                   onChanged: (_) {
@@ -375,7 +382,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
           ),
           const SizedBox(height: 12),
           if (pagedBulletinRows.isEmpty)
-            const Text('Aucun eleve trouve.')
+            const Text('Aucun élève trouvé.')
           else
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -385,7 +392,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
                 dataRowMaxHeight: 62,
                 columns: const [
                   DataColumn(label: Text('Matricule')),
-                  DataColumn(label: Text('Eleve')),
+                  DataColumn(label: Text('Élève')),
                   DataColumn(label: Text('Classe')),
                   DataColumn(label: Text('Actions')),
                 ],
@@ -475,7 +482,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
           FilledButton.icon(
             onPressed: _busy ? null : _printBulletin,
             icon: const Icon(Icons.picture_as_pdf),
-            label: const Text('Imprimer le bulletin selectionne'),
+            label: const Text('Imprimer le bulletin sélectionné'),
           ),
         ],
       ),
@@ -498,7 +505,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
-          const Text('Impression carte eleve individuelle ou par classe.'),
+          const Text('Impression carte élève individuelle ou par classe.'),
           const SizedBox(height: 12),
           Wrap(
             spacing: 10,
@@ -507,8 +514,9 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
               SizedBox(
                 width: 320,
                 child: DropdownButtonFormField<int>(
+                  isExpanded: true,
                   initialValue: _selectedStudentId,
-                  decoration: const InputDecoration(labelText: 'Eleve'),
+                  decoration: const InputDecoration(labelText: 'Élève'),
                   items: _students
                       .map(
                         (row) => DropdownMenuItem<int>(
@@ -525,6 +533,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
               SizedBox(
                 width: 260,
                 child: DropdownButtonFormField<int>(
+                  isExpanded: true,
                   initialValue: _selectedClassroomId,
                   decoration: const InputDecoration(labelText: 'Classe'),
                   items: classRows
@@ -545,6 +554,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
               SizedBox(
                 width: 250,
                 child: DropdownButtonFormField<String>(
+                  isExpanded: true,
                   initialValue: _cardsLayoutMode,
                   decoration: const InputDecoration(
                     labelText: 'Mode impression cartes classe',
@@ -580,7 +590,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
               FilledButton.icon(
                 onPressed: _busy ? null : _printStudentCard,
                 icon: const Icon(Icons.badge_outlined),
-                label: const Text('Imprimer carte eleve'),
+                label: const Text('Imprimer carte élève'),
               ),
               FilledButton.tonalIcon(
                 onPressed: _busy || classRows.isEmpty ? null : _printClassCards,
@@ -606,7 +616,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Recu de paiement (PDF)',
+            'Reçu de paiement (PDF)',
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 12),
@@ -635,7 +645,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
                 dataRowMaxHeight: 62,
                 columns: const [
                   DataColumn(label: Text('ID')),
-                  DataColumn(label: Text('Eleve')),
+                  DataColumn(label: Text('Élève')),
                   DataColumn(label: Text('Type frais')),
                   DataColumn(label: Text('Montant')),
                   DataColumn(label: Text('Date')),
@@ -729,7 +739,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
           FilledButton.tonalIcon(
             onPressed: _busy ? null : _printReceipt,
             icon: const Icon(Icons.receipt_long),
-            label: const Text('Imprimer le recu selectionne'),
+            label: const Text('Imprimer le recu sélectionné'),
           ),
         ],
       ),
@@ -783,7 +793,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Generation des bulletins, recus et exports a partir des donnees en production.',
+                      'Génération des bulletins, reçus et exports à partir des données en production.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
@@ -814,8 +824,8 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _metricChip('Eleves', '${_students.length}'),
-                _metricChip('Annees', '${_years.length}'),
+                _metricChip('Élèves', '${_students.length}'),
+                _metricChip('Années', '${_years.length}'),
                 _metricChip('Paiements', '${_payments.length}'),
                 _metricChip('Classes', '${classRows.length}'),
                 _metricChip(
@@ -873,28 +883,8 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
     );
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   List<Map<String, dynamic>> _extractRows(dynamic data) {
     final List<dynamic> rows;

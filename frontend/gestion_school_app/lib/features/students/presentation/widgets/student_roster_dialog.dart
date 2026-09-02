@@ -137,7 +137,7 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
   /// Ouvre le document tel qu'il sera imprime.
   ///
   /// La table ci-dessus montre les donnees, pas la mise en page: l'en-tete de
-  /// l'etablissement et la colonne d'emargement n'existent que sur le papier.
+  /// l'établissement et la colonne d'emargement n'existent que sur le papier.
   Future<void> _showDocument() async {
     final slug = _classeLabel.replaceAll(RegExp(r'\s+'), '_');
     await showDialog<void>(

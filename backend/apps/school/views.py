@@ -1457,6 +1457,37 @@ class TeacherViewSet(BaseModelViewSet):
     serializer_class = TeacherSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
 
+    def get_permissions(self):
+        # « mon-profil » n'est pas de la gestion du personnel: il rend a
+        # l'enseignant connecte sa propre fiche, rien d'autre. Le soumettre au
+        # module « teachers » -- ferme a l'enseignant -- fermait son propre
+        # ecran d'emargement, qui a besoin de son identifiant pour pointer.
+        #
+        # Meme exemption que l'annuaire des comptes, et pour la meme raison.
+        if self.action == "mon_profil":
+            return [permissions.IsAuthenticated()]
+        return super().get_permissions()
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[permissions.IsAuthenticated],
+        url_path="mon-profil",
+    )
+    def mon_profil(self, request):
+        """La fiche enseignant du compte connecte, ou 404 s'il n'en a pas."""
+        profil = (
+            Teacher.objects.select_related("user", "etablissement")
+            .filter(user=request.user)
+            .first()
+        )
+        if profil is None:
+            return Response(
+                {"detail": "Aucune fiche enseignant pour ce compte."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(self.get_serializer(profil).data)
+
     filterset_fields = [
         "user",
         "etablissement",
@@ -5858,8 +5889,105 @@ class TeacherTimeEntryViewSet(BaseModelViewSet):
     access_module = "teacher_timesheet"
     queryset = TeacherTimeEntry.objects.select_related("teacher", "teacher__user", "recorded_by").all().order_by("-entry_date", "-id")
     serializer_class = TeacherTimeEntrySerializer
-    filterset_fields = ["teacher", "entry_date", "etablissement"]
+    # L'intervalle, et pas seulement la date exacte: on paie un mois de
+    # travail, on ne consulte pas un jour isole. `entry_date` reste accepte
+    # tel quel pour ne rien casser de ce qui l'utilisait.
+    filterset_fields = {
+        "teacher": ["exact"],
+        "etablissement": ["exact"],
+        "entry_date": ["exact", "gte", "lte"],
+    }
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+
+    @action(detail=False, methods=["get"], url_path="synthese")
+    def synthese(self, request):
+        """Ce que l'ecole doit a chaque enseignant sur un intervalle.
+
+        L'ecran de paie n'affichait que des paies deja generees, mois par
+        mois: pour savoir ce qui est du avant de generer, il fallait ouvrir
+        l'emargement, compter les heures a la main et les multiplier par un
+        taux qu'on allait chercher ailleurs.
+
+        Le calcul se fait ici et non chez le client: additionner des heures
+        sur trois cents pointages n'est pas son travail, et deux ecrans qui
+        le referaient chacun de leur cote finiraient par ne plus tomber
+        d'accord.
+        """
+        debut = parse_date(str(request.query_params.get("debut") or ""))
+        fin = parse_date(str(request.query_params.get("fin") or ""))
+        if debut is None or fin is None:
+            # Par defaut, le mois courant: c'est la periode de paie.
+            aujourdhui = timezone.localdate()
+            debut = aujourdhui.replace(day=1)
+            fin = aujourdhui
+        if debut > fin:
+            debut, fin = fin, debut
+
+        lignes = self.filter_queryset(self.get_queryset()).filter(
+            entry_date__gte=debut, entry_date__lte=fin
+        )
+
+        identifiant_enseignant = request.query_params.get("teacher")
+        if identifiant_enseignant:
+            lignes = lignes.filter(teacher_id=identifiant_enseignant)
+
+        agregats = (
+            lignes.values(
+                "teacher_id",
+                "teacher__employee_code",
+                "teacher__hourly_rate",
+                "teacher__user__first_name",
+                "teacher__user__last_name",
+                "teacher__user__username",
+            )
+            .annotate(
+                heures=Coalesce(Sum("worked_hours"), Value(Decimal("0"))),
+                pointages=Count("id"),
+                retard_minutes=Coalesce(Sum("late_minutes"), Value(0)),
+            )
+            .order_by("teacher__user__last_name", "teacher__user__first_name")
+        )
+
+        enseignants = []
+        total_heures = Decimal("0")
+        total_montant = Decimal("0")
+        for ligne in agregats:
+            heures = Decimal(ligne["heures"] or 0)
+            taux = Decimal(ligne["teacher__hourly_rate"] or 0)
+            montant = (heures * taux).quantize(Decimal("0.01"))
+            nom = " ".join(
+                part
+                for part in (
+                    ligne["teacher__user__first_name"],
+                    ligne["teacher__user__last_name"],
+                )
+                if part
+            ).strip() or ligne["teacher__user__username"]
+
+            enseignants.append(
+                {
+                    "teacher": ligne["teacher_id"],
+                    "nom": nom,
+                    "matricule": ligne["teacher__employee_code"],
+                    "heures": str(heures),
+                    "taux_horaire": str(taux),
+                    "montant_du": str(montant),
+                    "pointages": ligne["pointages"],
+                    "retard_minutes": ligne["retard_minutes"],
+                }
+            )
+            total_heures += heures
+            total_montant += montant
+
+        return Response(
+            {
+                "debut": debut.isoformat(),
+                "fin": fin.isoformat(),
+                "enseignants": enseignants,
+                "total_heures": str(total_heures),
+                "total_montant": str(total_montant.quantize(Decimal("0.01"))),
+            }
+        )
 
 
 

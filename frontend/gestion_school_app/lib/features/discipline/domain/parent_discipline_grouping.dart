@@ -53,7 +53,7 @@ List<ChildIncidentGroup> groupIncidentsByChild(
       ..sort((a, b) => b.dateDeTri.compareTo(a.dateDeTri));
     return ChildIncidentGroup(
       studentId: entry.key,
-      childName: names[entry.key] ?? 'Eleve',
+      childName: names[entry.key] ?? 'Élève',
       matricule: matricules[entry.key] ?? '',
       incidents: sorted,
     );

@@ -12,6 +12,7 @@ import '../../auth/presentation/auth_controller.dart';
 import '../../../core/widgets/roster_pdf_preview_dialog.dart';
 import 'widgets/detail_indicateur_dialog.dart';
 import 'widgets/teacher_palette_card.dart';
+import '../../../core/widgets/indicateur.dart';
 
 /// Motif affiche sur les actions grisees.
 ///
@@ -414,6 +415,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     DropdownButtonFormField<int>(
+                      isExpanded: true,
                       initialValue: teacherId,
                       decoration: const InputDecoration(
                         labelText: 'Enseignant',
@@ -431,6 +433,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<int>(
+                      isExpanded: true,
                       initialValue: subjectId,
                       decoration: const InputDecoration(labelText: 'Matière'),
                       items: _subjects
@@ -448,6 +451,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<int>(
+                      isExpanded: true,
                       initialValue: classroomId,
                       decoration: const InputDecoration(labelText: 'Classe'),
                       items: _classrooms
@@ -647,6 +651,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                                 SizedBox(
                                   width: 220,
                                   child: DropdownButtonFormField<String>(
+                                    isExpanded: true,
                                     initialValue: sortBy,
                                     decoration: const InputDecoration(
                                       labelText: 'Trier par',
@@ -937,6 +942,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                                 SizedBox(
                                   width: 220,
                                   child: DropdownButtonFormField<String>(
+                                    isExpanded: true,
                                     initialValue: sortBy,
                                     decoration: const InputDecoration(
                                       labelText: 'Trier par',
@@ -1778,6 +1784,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                                 SizedBox(
                                   width: 220,
                                   child: DropdownButtonFormField<String>(
+                                    isExpanded: true,
                                     initialValue: sortBy,
                                     decoration: const InputDecoration(
                                       labelText: 'Trier par',
@@ -1969,6 +1976,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     DropdownButtonFormField<int>(
+                      isExpanded: true,
                       initialValue: selectedUserId,
                       decoration: const InputDecoration(
                         labelText: 'Compte enseignant',
@@ -2133,6 +2141,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     DropdownButtonFormField<int>(
+                      isExpanded: true,
                       initialValue: selectedTeacherId,
                       decoration: const InputDecoration(
                         labelText: 'Enseignant',
@@ -2153,6 +2162,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<int>(
+                      isExpanded: true,
                       initialValue: selectedSubjectId,
                       decoration: const InputDecoration(labelText: 'Matière'),
                       items: _subjects
@@ -2173,6 +2183,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<int>(
+                      isExpanded: true,
                       initialValue: selectedClassroomId,
                       decoration: const InputDecoration(labelText: 'Classe'),
                       items: _classrooms
@@ -2535,7 +2546,7 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
   /// Liste imprimable du personnel, dans l'apercu deja utilise cote eleves.
   ///
   /// Le PDF est monte par le serveur, comme les bulletins et la liste
-  /// d'appel: c'est lui qui detient le logo, l'annee scolaire et l'effectif.
+  /// d'appel: c'est lui qui detient le logo, l'année scolaire et l'effectif.
   Future<void> _openStaffRoster() async {
     await showDialog<void>(
       context: context,
@@ -3004,34 +3015,8 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
     );
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      constraints: const BoxConstraints(minWidth: 170),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Theme.of(
-            context,
-          ).colorScheme.outlineVariant.withValues(alpha: 0.5),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   Widget _panelSurface(
     BuildContext context, {

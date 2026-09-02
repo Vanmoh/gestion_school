@@ -20,6 +20,7 @@ import '../domain/student_fee.dart';
 import 'payment_entry_dialog.dart';
 import 'payments_controller.dart';
 import 'widgets/finance_communs.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class PaymentsPage extends ConsumerStatefulWidget {
   const PaymentsPage({super.key});
@@ -166,6 +167,36 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
   Timer? _searchDebounce;
   bool _financeBusy = false;
   List<Map<String, dynamic>> _financePayrolls = [];
+
+  /// Les heures travaillees sur l'intervalle choisi, par enseignant.
+  ///
+  /// L'onglet ne montrait que des paies deja generees, mois par mois: pour
+  /// savoir ce qui etait du avant de generer, il fallait ouvrir l'emargement,
+  /// compter a la main et chercher le taux horaire ailleurs.
+  Map<String, dynamic> _syntheseHeures = <String, dynamic>{};
+
+  /// L'intervalle consulte. Un mois par defaut: c'est la periode de paie.
+  DateTimeRange _intervalleHeures = DateTimeRange(
+    start: DateTime(DateTime.now().year, DateTime.now().month, 1),
+    end: DateTime.now(),
+  );
+
+  /// L'enseignant sur lequel la liste est restreinte, nul pour tout le monde.
+  int? _enseignantFiltre;
+
+  /// De quoi peupler le menu du filtre.
+  ///
+  /// Tiree de la synthese non filtree et non de `/teachers/`: ce module-la est
+  /// ferme aux enseignants, qui verraient un refus en ouvrant leur propre
+  /// paie. Et elle ne propose que des enseignants ayant pointe sur la
+  /// periode -- filtrer sur quelqu'un qui n'y figure pas ne rendrait rien.
+  List<Map<String, dynamic>> _enseignantsConnus = [];
+
+  /// L'enseignant dont on a ouvert le detail, nul quand on regarde tout le
+  /// monde.
+  int? _enseignantOuvert;
+  List<Map<String, dynamic>> _pointagesOuverts = [];
+  bool _chargementHeures = false;
   List<Map<String, dynamic>> _financeExpenses = [];
   _FinancePeriod _financePeriod = _FinancePeriod.all;
   int _lateAlertMinDays = 7;
@@ -347,7 +378,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
 
   /// Ce que la famille vient chercher: ce qu'elle doit, ce qu'elle a payé.
   ///
-  /// Le parent et l'eleve recevaient l'ecran du comptable -- recherche de
+  /// Le parent et l'élève recevaient l'ecran du comptable -- recherche de
   /// reglements, indicateurs par classe, historique des relances, classement
   /// des retards. Leurs donnees etaient bien cloisonnees par le serveur, qui
   /// ne leur rend que leur dossier: ces blocs etaient donc calcules sur leur
@@ -653,7 +684,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     final lower = normalized.toLowerCase();
 
     if (lower.contains('dimanche')) {
-      return 'Pointage refuse: le dimanche est interdit. Choisissez un jour autorise (lundi a samedi).';
+      return 'Pointage refusé : le dimanche est interdit. Choisissez un jour autorisé (lundi à samedi).';
     }
 
     if (lower.contains("aucun creneau") || lower.contains("emploi du temps")) {
@@ -727,9 +758,106 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
         _financePayrolls = payrolls;
         _financeExpenses = expenses;
       });
+      await _chargerLesHeures();
     } catch (error) {
       _showMessage('Erreur chargement paie horaire: $error');
     }
+  }
+
+  String _enJourApi(DateTime valeur) =>
+      '${valeur.year.toString().padLeft(4, '0')}-'
+      '${valeur.month.toString().padLeft(2, '0')}-'
+      '${valeur.day.toString().padLeft(2, '0')}';
+
+  /// La synthese des heures sur l'intervalle, tous enseignants confondus.
+  Future<void> _chargerLesHeures() async {
+    final authUser = ref.read(authControllerProvider).value;
+    if (!_isTeacherFinanceVisible(authUser?.role)) {
+      return;
+    }
+
+    setState(() => _chargementHeures = true);
+    try {
+      final synthese = await ref
+          .read(paymentsRepositoryProvider)
+          .fetchSyntheseHeures(
+            debut: _enJourApi(_intervalleHeures.start),
+            fin: _enJourApi(_intervalleHeures.end),
+            teacherId: _enseignantFiltre,
+          );
+      if (!mounted) return;
+      setState(() {
+        _syntheseHeures = synthese;
+        _chargementHeures = false;
+        // Le menu ne se met a jour que sur une liste complete: une synthese
+        // filtree ne rend qu'un enseignant, et le menu se refermerait sur
+        // lui sans permettre d'en choisir un autre.
+        if (_enseignantFiltre == null) {
+          _enseignantsConnus =
+              (synthese['enseignants'] as List?)
+                  ?.whereType<Map>()
+                  .map((ligne) => Map<String, dynamic>.from(ligne))
+                  .toList(growable: false) ??
+              const <Map<String, dynamic>>[];
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _chargementHeures = false);
+      _showMessage('Erreur chargement des heures: ${_extractApiErrorMessage(error)}');
+    }
+  }
+
+  /// Le detail d'un enseignant: ses pointages, jour par jour, sur le meme
+  /// intervalle. Un second clic referme.
+  Future<void> _ouvrirLeDetail(int enseignant) async {
+    if (_enseignantOuvert == enseignant) {
+      setState(() {
+        _enseignantOuvert = null;
+        _pointagesOuverts = [];
+      });
+      return;
+    }
+
+    setState(() {
+      _enseignantOuvert = enseignant;
+      _pointagesOuverts = [];
+    });
+    try {
+      final pointages = await ref
+          .read(paymentsRepositoryProvider)
+          .fetchTeacherTimeEntries(
+            teacherId: enseignant,
+            debut: _enJourApi(_intervalleHeures.start),
+            fin: _enJourApi(_intervalleHeures.end),
+          );
+      if (!mounted || _enseignantOuvert != enseignant) return;
+      setState(() => _pointagesOuverts = pointages);
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('Erreur chargement du détail: ${_extractApiErrorMessage(error)}');
+    }
+  }
+
+  Future<void> _choisirLIntervalle() async {
+    final choisi = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(DateTime.now().year - 2),
+      lastDate: DateTime(DateTime.now().year + 1, 12, 31),
+      initialDateRange: _intervalleHeures,
+      helpText: 'Période des heures travaillées',
+      saveText: 'Appliquer',
+    );
+    if (choisi == null) return;
+    setState(() {
+      _intervalleHeures = choisi;
+      // Nouvelle periode, nouvelle liste: un enseignant qui avait pointe le
+      // mois dernier n'a peut-etre rien pointe celui-ci.
+      _enseignantFiltre = null;
+      _enseignantOuvert = null;
+      _pointagesOuverts = [];
+    });
+    await _chargerLesHeures();
   }
 
   Future<void> _generateTeacherPayroll() async {
@@ -759,7 +887,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     setState(() => _financeBusy = true);
     try {
       await ref.read(paymentsRepositoryProvider).validateTeacherPayrollLevelOne(payrollId);
-      _showMessage('Validation niveau 1 enregistree.', isSuccess: true);
+      _showMessage('Validation niveau 1 enregistrée.', isSuccess: true);
       await _loadTeacherFinanceSection();
     } catch (error) {
       _showMessage('Erreur validation niveau 1: ${_extractApiErrorMessage(error)}');
@@ -772,7 +900,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     setState(() => _financeBusy = true);
     try {
       await ref.read(paymentsRepositoryProvider).validateTeacherPayrollLevelTwo(payrollId);
-      _showMessage('Validation niveau 2 enregistree.', isSuccess: true);
+      _showMessage('Validation niveau 2 enregistrée.', isSuccess: true);
       await _loadTeacherFinanceSection();
     } catch (error) {
       _showMessage('Erreur validation niveau 2: ${_extractApiErrorMessage(error)}');
@@ -1005,7 +1133,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
 
     if (saved == true) {
       _showMessage(
-        expense == null ? 'Dépense enregistree.' : 'Dépense modifiee.',
+        expense == null ? 'Dépense enregistrée.' : 'Dépense modifiee.',
         isSuccess: true,
       );
       await _loadTeacherFinanceSection();
@@ -2707,7 +2835,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
         return AlertDialog(
           title: const Text('Annuler paiement'),
           content: Text(
-            'Voulez-vous annuler le paiement #${payment.id} de ${_formatMoney(payment.amount)} ? Cette operation est tracée.',
+            'Voulez-vous annuler le paiement #${payment.id} de ${_formatMoney(payment.amount)} ? Cette opération est tracée.',
           ),
           actions: [
             TextButton(
@@ -2747,7 +2875,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
   }
 
   Widget _metricChip(String label, String value) =>
-      IndicateurFinance(libelle: label, valeur: value);
+      Indicateur(libelle: label, valeur: value);
 
   Widget _methodTag(BuildContext context, String method) {
     final color = method.toLowerCase().contains('mobile')
@@ -2795,6 +2923,282 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
         ],
       ),
     );
+  }
+
+  /// Les heures travaillées sur l'intervalle, enseignant par enseignant.
+  ///
+  /// Une ligne par enseignant — heures, taux, ce qui lui est dû — et le total
+  /// général en pied. Un clic sur une ligne déplie ses pointages, jour par
+  /// jour : c'est là que se règle une contestation, pas dans un total.
+  List<Widget> _sectionHeuresTravaillees({
+    required BuildContext context,
+    required ColorScheme scheme,
+  }) {
+    final textTheme = Theme.of(context).textTheme;
+    final enseignants =
+        (_syntheseHeures['enseignants'] as List?)
+            ?.whereType<Map>()
+            .map((ligne) => Map<String, dynamic>.from(ligne))
+            .toList(growable: false) ??
+        const <Map<String, dynamic>>[];
+
+    double nombre(Object? valeur) =>
+        double.tryParse(valeur?.toString() ?? '') ?? 0;
+
+    String jourEnLettres(DateTime quand) {
+      const jours = [
+        'lundi',
+        'mardi',
+        'mercredi',
+        'jeudi',
+        'vendredi',
+        'samedi',
+        'dimanche',
+      ];
+      return jours[quand.weekday - 1];
+    }
+
+    Widget detailDe(int enseignant) {
+      if (_pointagesOuverts.isEmpty) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+          child: Text(
+            'Aucun pointage sur cette période.',
+            style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        );
+      }
+
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 8, 12),
+        child: TableauOuFiches(
+          colonnes: const [
+            DataColumn(label: Text('Jour')),
+            DataColumn(label: Text('Date')),
+            DataColumn(label: Text('Arrivée')),
+            DataColumn(label: Text('Départ')),
+            DataColumn(label: Text('Heures')),
+          ],
+          lignes: _pointagesOuverts.map((pointage) {
+            final quand = DateTime.tryParse(
+              pointage['entry_date']?.toString() ?? '',
+            );
+            return DataRow(
+              cells: [
+                DataCell(Text(quand == null ? '-' : jourEnLettres(quand))),
+                DataCell(Text(quand == null ? '-' : dateEnJour(quand))),
+                DataCell(Text(_heureCourte(pointage['check_in_time']))),
+                DataCell(Text(_heureCourte(pointage['check_out_time']))),
+                DataCell(
+                  Text(
+                    '${nombre(pointage['worked_hours']).toStringAsFixed(2)} h',
+                  ),
+                ),
+              ],
+            );
+          }).toList(growable: false),
+        ),
+      );
+    }
+
+    return <Widget>[
+      Container(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerLowest,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Heures travaillées',
+                    style: textTheme.titleSmall,
+                  ),
+                ),
+                if (_chargementHeures)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Du ${dateEnJour(_intervalleHeures.start)} au '
+              '${dateEnJour(_intervalleHeures.end)}',
+              style: textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                OutlinedButton.icon(
+                  key: const Key('choisir-periode-heures'),
+                  onPressed: _choisirLIntervalle,
+                  icon: const Icon(Icons.date_range_outlined, size: 18),
+                  label: const Text('Changer la période'),
+                ),
+                // Le depliage montre un enseignant sans masquer les autres;
+                // ce filtre fait l'inverse, pour une fiche a imprimer ou une
+                // question qui ne porte que sur une personne.
+                if (_enseignantsConnus.length > 1)
+                  SizedBox(
+                    width: 260,
+                    child: DropdownButtonFormField<int?>(
+                      key: const Key('filtre-enseignant-heures'),
+                      isExpanded: true,
+                      initialValue: _enseignantFiltre,
+                      decoration: const InputDecoration(
+                        labelText: 'Enseignant',
+                        isDense: true,
+                      ),
+                      items: [
+                        const DropdownMenuItem<int?>(
+                          value: null,
+                          child: Text('Tous les enseignants'),
+                        ),
+                        for (final connu in _enseignantsConnus)
+                          DropdownMenuItem<int?>(
+                            value: (connu['teacher'] as num?)?.toInt(),
+                            child: Text(connu['nom']?.toString() ?? ''),
+                          ),
+                      ],
+                      onChanged: (choix) {
+                        setState(() {
+                          _enseignantFiltre = choix;
+                          _enseignantOuvert = null;
+                          _pointagesOuverts = [];
+                        });
+                        unawaited(_chargerLesHeures());
+                      },
+                    ),
+                  ),
+                IndicateurFinance(
+                  libelle: 'Enseignants',
+                  valeur: '${enseignants.length}',
+                ),
+                IndicateurFinance(
+                  libelle: 'Heures totales',
+                  valeur:
+                      '${nombre(_syntheseHeures['total_heures']).toStringAsFixed(2)} h',
+                ),
+                IndicateurFinance(
+                  libelle: 'Total dû',
+                  valeur: montantEnFrancs(
+                    nombre(_syntheseHeures['total_montant']),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (enseignants.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Text(
+                  'Aucune heure pointée sur cette période.',
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              )
+            else
+              for (final ligne in enseignants) ...[
+                Builder(
+                  builder: (context) {
+                    final identifiant = (ligne['teacher'] as num?)?.toInt() ?? 0;
+                    final ouvert = _enseignantOuvert == identifiant;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Card(
+                          margin: const EdgeInsets.only(bottom: 4),
+                          color: ouvert ? scheme.primaryContainer : null,
+                          child: ListTile(
+                            // Une ligne se clique pour ouvrir le detail: c'est
+                            // la que se regle une contestation d'heures.
+                            onTap: () => _ouvrirLeDetail(identifiant),
+                            title: Text(
+                              ligne['nom']?.toString() ?? '',
+                              style: textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            subtitle: Text(
+                              '${ligne['matricule'] ?? ''} • '
+                              '${nombre(ligne['heures']).toStringAsFixed(2)} h × '
+                              '${montantEnFrancs(nombre(ligne['taux_horaire']))} • '
+                              '${ligne['pointages'] ?? 0} pointage(s)',
+                            ),
+                            trailing: Wrap(
+                              spacing: 6,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                Text(
+                                  montantEnFrancs(nombre(ligne['montant_du'])),
+                                  style: textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                Icon(
+                                  ouvert ? Icons.expand_less : Icons.expand_more,
+                                  size: 20,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (ouvert) detailDe(identifiant),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            if (enseignants.isNotEmpty) ...[
+              const Divider(),
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Total à payer, tous enseignants',
+                      style: textTheme.titleSmall,
+                    ),
+                    Text(
+                      montantEnFrancs(nombre(_syntheseHeures['total_montant'])),
+                      style: textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
+    ];
+  }
+
+  /// « 08:00 » à partir de ce que rend le serveur, « - » quand la sortie
+  /// n'a pas été pointée.
+  String _heureCourte(Object? valeur) {
+    final brut = valeur?.toString() ?? '';
+    if (brut.isEmpty) return '-';
+    final morceaux = brut.split(':');
+    if (morceaux.length < 2) return brut;
+    return '${morceaux[0].padLeft(2, '0')}:${morceaux[1].padLeft(2, '0')}';
   }
 
   /// La paie horaire enseignants, avec sa double validation N1/N2.
@@ -2870,78 +3274,76 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
             if (_financePayrolls.isEmpty)
               const Text('Aucune paie horaire générée pour ce mois.')
             else
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: DataTable(
-                  columns: const [
-                    DataColumn(label: Text('Enseignant')),
-                    DataColumn(label: Text('Mois')),
-                    DataColumn(label: Text('H. attribuees')),
-                    DataColumn(label: Text('H. travaillees')),
-                    DataColumn(label: Text('Taux horaire')),
-                    DataColumn(label: Text('Montant')),
-                    DataColumn(label: Text('Validation')),
-                    DataColumn(label: Text('Actions')),
-                  ],
-                  rows: _financePayrolls.map((row) {
-                    final payrollId = (row['id'] as num?)?.toInt();
-                    final teacherName = row['teacher_full_name']?.toString() ?? 'Enseignant';
-                    final month = row['month']?.toString() ?? '-';
-                    final attributed = row['hours_attributed']?.toString() ?? '0';
-                    final worked = row['hours_worked']?.toString() ?? '0';
-                    final rate = double.tryParse(row['hourly_rate']?.toString() ?? '0') ?? 0;
-                    final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
-                    final stage = (row['validation_stage'] ?? '').toString();
-                      final canL1 = (role == 'censor' || role == 'super_admin') &&
-                        stage != 'level_two' &&
-                        payrollId != null;
-                    final canL2 = (role == 'accountant' || role == 'super_admin') &&
-                        stage == 'level_one' &&
-                        payrollId != null;
-                    final canReset = role == 'super_admin' && payrollId != null;
+              TableauOuFiches(
+                colonnesSansLibelle: const {7},
+                colonnes: const [
+                  DataColumn(label: Text('Enseignant')),
+                  DataColumn(label: Text('Mois')),
+                  DataColumn(label: Text('H. attribuées')),
+                  DataColumn(label: Text('H. travaillées')),
+                  DataColumn(label: Text('Taux horaire')),
+                  DataColumn(label: Text('Montant')),
+                  DataColumn(label: Text('Validation')),
+                  DataColumn(label: Text('Actions')),
+                ],
+                lignes: _financePayrolls.map((row) {
+                  final payrollId = (row['id'] as num?)?.toInt();
+                  final teacherName = row['teacher_full_name']?.toString() ?? 'Enseignant';
+                  final month = row['month']?.toString() ?? '-';
+                  final attributed = row['hours_attributed']?.toString() ?? '0';
+                  final worked = row['hours_worked']?.toString() ?? '0';
+                  final rate = double.tryParse(row['hourly_rate']?.toString() ?? '0') ?? 0;
+                  final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
+                  final stage = (row['validation_stage'] ?? '').toString();
+                    final canL1 = (role == 'censor' || role == 'super_admin') &&
+                      stage != 'level_two' &&
+                      payrollId != null;
+                  final canL2 = (role == 'accountant' || role == 'super_admin') &&
+                      stage == 'level_one' &&
+                      payrollId != null;
+                  final canReset = role == 'super_admin' && payrollId != null;
 
-                    return DataRow(
-                      cells: [
-                        DataCell(Text(teacherName)),
-                        DataCell(Text(month)),
-                        DataCell(Text(attributed)),
-                        DataCell(Text(worked)),
-                        DataCell(Text('${_formatMoney(rate)}/h')),
-                        DataCell(Text(_formatMoney(amount))),
-                        DataCell(Text(_payrollStageLabel(row))),
-                        DataCell(
-                          Wrap(
-                            spacing: 6,
-                            runSpacing: 6,
-                            children: [
-                              if (canL1)
-                                OutlinedButton(
-                                  onPressed: _financeBusy
-                                      ? null
-                                      : () => _validatePayrollLevelOne(payrollId),
-                                  child: const Text('Valider N1'),
-                                ),
-                              if (canL2)
-                                FilledButton.tonal(
-                                  onPressed: _financeBusy
-                                      ? null
-                                      : () => _validatePayrollLevelTwo(payrollId),
-                                  child: const Text('Valider N2'),
-                                ),
-                              if (canReset)
-                                TextButton(
-                                  onPressed: _financeBusy
-                                      ? null
-                                      : () => _resetPayrollValidation(payrollId),
-                                  child: const Text('Reset'),
-                                ),
-                            ],
-                          ),
+                  return DataRow(
+                    cells: [
+                      DataCell(Text(teacherName)),
+                      DataCell(Text(month)),
+                      DataCell(Text(attributed)),
+                      DataCell(Text(worked)),
+                      DataCell(Text('${_formatMoney(rate)}/h')),
+                      DataCell(Text(_formatMoney(amount))),
+                      DataCell(Text(_payrollStageLabel(row))),
+                      DataCell(
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            if (canL1)
+                              OutlinedButton(
+                                onPressed: _financeBusy
+                                    ? null
+                                    : () => _validatePayrollLevelOne(payrollId),
+                                child: const Text('Valider N1'),
+                              ),
+                            if (canL2)
+                              FilledButton.tonal(
+                                onPressed: _financeBusy
+                                    ? null
+                                    : () => _validatePayrollLevelTwo(payrollId),
+                                child: const Text('Valider N2'),
+                              ),
+                            if (canReset)
+                              TextButton(
+                                onPressed: _financeBusy
+                                    ? null
+                                    : () => _resetPayrollValidation(payrollId),
+                                child: const Text('Reset'),
+                              ),
+                          ],
                         ),
-                      ],
-                    );
-                  }).toList(growable: false),
-                ),
+                      ),
+                    ],
+                  );
+                }).toList(growable: false),
               ),
           ],
         ),
@@ -2972,12 +3374,20 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(18),
-        children: _sectionPaieEnseignants(
-          context: context,
-          colorScheme: Theme.of(context).colorScheme,
-          lectureSeule: lectureSeule,
-          role: role,
-        ),
+        children: [
+          // Le censeur, qui n'a que cet onglet, valide la paie: il lui faut
+          // les heures sur lesquelles elle repose autant qu'aux autres.
+          ..._sectionHeuresTravaillees(
+            context: context,
+            scheme: Theme.of(context).colorScheme,
+          ),
+          ..._sectionPaieEnseignants(
+            context: context,
+            colorScheme: Theme.of(context).colorScheme,
+            lectureSeule: lectureSeule,
+            role: role,
+          ),
+        ],
       ),
     );
   }
@@ -4127,56 +4537,53 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                               if (classKpiRows.isEmpty)
                                 const Text('Aucun frais disponible pour calculer les KPI.')
                               else
-                                SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: DataTable(
-                                    columns: const [
-                                      DataColumn(label: Text('Classe')),
-                                      DataColumn(label: Text('Élèves')),
-                                      DataColumn(label: Text('Frais')),
-                                      DataColumn(label: Text('Montant dû')),
-                                      DataColumn(label: Text('Montant paye')),
-                                      DataColumn(label: Text('Solde')),
-                                      DataColumn(label: Text('Taux recouvrement')),
-                                      DataColumn(label: Text('Retards')),
-                                      DataColumn(label: Text('Relance')),
-                                    ],
-                                    rows: classKpiRows.take(15).map((row) {
-                                      final isAlert = row.totalOutstanding > 0 && row.overdueCount > 0;
-                                      final classAlerts = filteredLateFeeAlerts
-                                          .where((item) => item.className == row.className)
-                                          .toList(growable: false);
-                                      return DataRow(
-                                        color: isAlert
-                                            ? WidgetStateProperty.resolveWith(
-                                                (_) => const Color(0xFFFEEFE8),
-                                              )
-                                            : null,
-                                        cells: [
-                                          DataCell(Text(row.className)),
-                                          DataCell(Text('${row.studentCount}')),
-                                          DataCell(Text('${row.feeCount}')),
-                                          DataCell(Text(_formatMoney(row.totalDue))),
-                                          DataCell(Text(_formatMoney(row.totalPaid))),
-                                          DataCell(Text(_formatMoney(row.totalOutstanding))),
-                                          DataCell(Text('${(row.recoveryRate * 100).toStringAsFixed(1)} %')),
-                                          DataCell(Text('${row.overdueCount}')),
-                                          DataCell(
-                                            classAlerts.isEmpty
-                                                ? const Text('-')
-                                                : OutlinedButton.icon(
-                                                    onPressed: () => _copyClassReminder(
-                                                      className: row.className,
-                                                      alerts: classAlerts,
-                                                    ),
-                                                    icon: const Icon(Icons.content_copy, size: 16),
-                                                    label: const Text('Relance'),
+                                TableauOuFiches(
+                                  colonnes: const [
+                                    DataColumn(label: Text('Classe')),
+                                    DataColumn(label: Text('Élèves')),
+                                    DataColumn(label: Text('Frais')),
+                                    DataColumn(label: Text('Montant dû')),
+                                    DataColumn(label: Text('Montant payé')),
+                                    DataColumn(label: Text('Solde')),
+                                    DataColumn(label: Text('Taux de recouvrement')),
+                                    DataColumn(label: Text('Retards')),
+                                    DataColumn(label: Text('Relance')),
+                                  ],
+                                  lignes: classKpiRows.take(15).map((row) {
+                                    final isAlert = row.totalOutstanding > 0 && row.overdueCount > 0;
+                                    final classAlerts = filteredLateFeeAlerts
+                                        .where((item) => item.className == row.className)
+                                        .toList(growable: false);
+                                    return DataRow(
+                                      color: isAlert
+                                          ? WidgetStateProperty.resolveWith(
+                                              (_) => const Color(0xFFFEEFE8),
+                                            )
+                                          : null,
+                                      cells: [
+                                        DataCell(Text(row.className)),
+                                        DataCell(Text('${row.studentCount}')),
+                                        DataCell(Text('${row.feeCount}')),
+                                        DataCell(Text(_formatMoney(row.totalDue))),
+                                        DataCell(Text(_formatMoney(row.totalPaid))),
+                                        DataCell(Text(_formatMoney(row.totalOutstanding))),
+                                        DataCell(Text('${(row.recoveryRate * 100).toStringAsFixed(1)} %')),
+                                        DataCell(Text('${row.overdueCount}')),
+                                        DataCell(
+                                          classAlerts.isEmpty
+                                              ? const Text('-')
+                                              : OutlinedButton.icon(
+                                                  onPressed: () => _copyClassReminder(
+                                                    className: row.className,
+                                                    alerts: classAlerts,
                                                   ),
-                                          ),
-                                        ],
-                                      );
-                                    }).toList(growable: false),
-                                  ),
+                                                  icon: const Icon(Icons.content_copy, size: 16),
+                                                  label: const Text('Relance'),
+                                                ),
+                                        ),
+                                      ],
+                                    );
+                                  }).toList(growable: false),
                                 ),
                               const SizedBox(height: 8),
                               Text(
@@ -4187,30 +4594,27 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                               if (topLateStudents.isEmpty)
                                 const Text('Aucun élève en retard sur le seuil sélectionné.')
                               else
-                                SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: DataTable(
-                                    columns: const [
-                                      DataColumn(label: Text('Élève')),
-                                      DataColumn(label: Text('Classe')),
-                                      DataColumn(label: Text('Matricule')),
-                                      DataColumn(label: Text('Frais en retard')),
-                                      DataColumn(label: Text('Retard max')),
-                                      DataColumn(label: Text('Solde total')),
-                                    ],
-                                    rows: topLateStudents.take(10).map((row) {
-                                      return DataRow(
-                                        cells: [
-                                          DataCell(Text(row.studentFullName)),
-                                          DataCell(Text(row.className)),
-                                          DataCell(Text(row.studentMatricule.isEmpty ? '-' : row.studentMatricule)),
-                                          DataCell(Text('${row.lateFeesCount}')),
-                                          DataCell(Text('${row.maxDaysLate} j')),
-                                          DataCell(Text(_formatMoney(row.totalBalance))),
-                                        ],
-                                      );
-                                    }).toList(growable: false),
-                                  ),
+                                TableauOuFiches(
+                                  colonnes: const [
+                                    DataColumn(label: Text('Élève')),
+                                    DataColumn(label: Text('Classe')),
+                                    DataColumn(label: Text('Matricule')),
+                                    DataColumn(label: Text('Frais en retard')),
+                                    DataColumn(label: Text('Retard max')),
+                                    DataColumn(label: Text('Solde total')),
+                                  ],
+                                  lignes: topLateStudents.take(10).map((row) {
+                                    return DataRow(
+                                      cells: [
+                                        DataCell(Text(row.studentFullName)),
+                                        DataCell(Text(row.className)),
+                                        DataCell(Text(row.studentMatricule.isEmpty ? '-' : row.studentMatricule)),
+                                        DataCell(Text('${row.lateFeesCount}')),
+                                        DataCell(Text('${row.maxDaysLate} j')),
+                                        DataCell(Text(_formatMoney(row.totalBalance))),
+                                      ],
+                                    );
+                                  }).toList(growable: false),
                                 ),
                               const SizedBox(height: 8),
                               Text(
@@ -4380,45 +4784,43 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                                             ],
                                           ),
                                           children: [
-                                            SingleChildScrollView(
-                                              scrollDirection: Axis.horizontal,
-                                              child: DataTable(
-                                                columns: const [
-                                                  DataColumn(label: Text('Sel.')),
-                                                  DataColumn(label: Text('Élève')),
-                                                  DataColumn(label: Text('Matricule')),
-                                                  DataColumn(label: Text('Type frais')),
-                                                  DataColumn(label: Text('Montant dû')),
-                                                  DataColumn(label: Text('Solde')),
-                                                ],
-                                                rows: classRows
-                                                    .map(
-                                                      (fee) => DataRow(
-                                                        cells: [
-                                                          DataCell(
-                                                            Checkbox(
-                                                              value: _selectedOutstandingFeeIds.contains(fee.id),
-                                                              onChanged: (value) {
-                                                                setState(() {
-                                                                  if (value == true) {
-                                                                    _selectedOutstandingFeeIds.add(fee.id);
-                                                                  } else {
-                                                                    _selectedOutstandingFeeIds.remove(fee.id);
-                                                                  }
-                                                                });
-                                                              },
-                                                            ),
+                                            TableauOuFiches(
+                                              colonnesSansLibelle: const {0},
+                                              colonnes: const [
+                                                DataColumn(label: Text('Choix')),
+                                                DataColumn(label: Text('Élève')),
+                                                DataColumn(label: Text('Matricule')),
+                                                DataColumn(label: Text('Type frais')),
+                                                DataColumn(label: Text('Montant dû')),
+                                                DataColumn(label: Text('Solde')),
+                                              ],
+                                              lignes: classRows
+                                                  .map(
+                                                    (fee) => DataRow(
+                                                      cells: [
+                                                        DataCell(
+                                                          Checkbox(
+                                                            value: _selectedOutstandingFeeIds.contains(fee.id),
+                                                            onChanged: (value) {
+                                                              setState(() {
+                                                                if (value == true) {
+                                                                  _selectedOutstandingFeeIds.add(fee.id);
+                                                                } else {
+                                                                  _selectedOutstandingFeeIds.remove(fee.id);
+                                                                }
+                                                              });
+                                                            },
                                                           ),
-                                                          DataCell(Text(fee.studentFullName)),
-                                                          DataCell(Text(fee.studentMatricule)),
-                                                          DataCell(Text(fee.feeType)),
-                                                          DataCell(Text(_formatMoney(fee.amountDue))),
-                                                          DataCell(Text(_formatMoney(fee.balance))),
-                                                        ],
-                                                      ),
-                                                    )
-                                                    .toList(growable: false),
-                                              ),
+                                                        ),
+                                                        DataCell(Text(fee.studentFullName)),
+                                                        DataCell(Text(fee.studentMatricule)),
+                                                        DataCell(Text(fee.feeType)),
+                                                        DataCell(Text(_formatMoney(fee.amountDue))),
+                                                        DataCell(Text(_formatMoney(fee.balance))),
+                                                      ],
+                                                    ),
+                                                  )
+                                                  .toList(growable: false),
                                             ),
                                           ],
                                         ),
@@ -4602,86 +5004,84 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                               if (periodExpenses.isEmpty)
                                 const Text('Aucune dépense enregistrée.')
                               else
-                                SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: DataTable(
-                                    columns: const [
-                                      DataColumn(label: Text('Libellé')),
-                                      DataColumn(label: Text('Date')),
-                                      DataColumn(label: Text('Catégorie')),
-                                      DataColumn(label: Text('Montant')),
-                                      DataColumn(label: Text('Validation')),
-                                      DataColumn(label: Text('Paiement')),
-                                      DataColumn(label: Text('Actions')),
-                                    ],
-                                    rows: periodExpenses.map((row) {
-                                      final expenseId = (row['id'] as num?)?.toInt();
-                                      final stage = (row['validation_stage'] ?? '').toString();
-                                        final canL1 = (authUser?.role == 'censor' || authUser?.role == 'super_admin') &&
-                                          stage != 'level_two' &&
-                                          expenseId != null;
-                                      final canL2 = (authUser?.role == 'accountant' || authUser?.role == 'super_admin') &&
-                                          stage == 'level_one' &&
-                                          expenseId != null;
-                                      final canReset = authUser?.role == 'super_admin' && expenseId != null;
-                                      final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
-                                      final paidOn = row['paid_on']?.toString();
+                                TableauOuFiches(
+                                  colonnesSansLibelle: const {6},
+                                  colonnes: const [
+                                    DataColumn(label: Text('Libellé')),
+                                    DataColumn(label: Text('Date')),
+                                    DataColumn(label: Text('Catégorie')),
+                                    DataColumn(label: Text('Montant')),
+                                    DataColumn(label: Text('Validation')),
+                                    DataColumn(label: Text('Paiement')),
+                                    DataColumn(label: Text('Actions')),
+                                  ],
+                                  lignes: periodExpenses.map((row) {
+                                    final expenseId = (row['id'] as num?)?.toInt();
+                                    final stage = (row['validation_stage'] ?? '').toString();
+                                      final canL1 = (authUser?.role == 'censor' || authUser?.role == 'super_admin') &&
+                                        stage != 'level_two' &&
+                                        expenseId != null;
+                                    final canL2 = (authUser?.role == 'accountant' || authUser?.role == 'super_admin') &&
+                                        stage == 'level_one' &&
+                                        expenseId != null;
+                                    final canReset = authUser?.role == 'super_admin' && expenseId != null;
+                                    final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
+                                    final paidOn = row['paid_on']?.toString();
 
-                                      return DataRow(
-                                        cells: [
-                                          DataCell(Text((row['label'] ?? '-').toString())),
-                                          DataCell(Text((row['date'] ?? '-').toString())),
-                                          DataCell(Text((row['category'] ?? '-').toString())),
-                                          DataCell(Text(_formatMoney(amount))),
-                                          DataCell(Text(_expenseStageLabel(row))),
-                                          DataCell(Text((paidOn == null || paidOn.isEmpty) ? '-' : paidOn)),
-                                          DataCell(
-                                            Wrap(
-                                              spacing: 6,
-                                              runSpacing: 6,
-                                              children: [
-                                                if (expenseId != null)
-                                                  OutlinedButton(
-                                                    onPressed: _financeBusy || stage == 'level_two'
-                                                        ? null
-                                                        : () => _openExpenseDialog(expense: row),
-                                                    child: const Text('Modifier'),
-                                                  ),
-                                                if (expenseId != null)
-                                                  TextButton(
-                                                    onPressed: _financeBusy || stage == 'level_two'
-                                                        ? null
-                                                        : () => _deleteExpense(row),
-                                                    child: const Text('Supprimer'),
-                                                  ),
-                                                if (canL1)
-                                                  OutlinedButton(
-                                                    onPressed: _financeBusy
-                                                        ? null
-                                                        : () => _validateExpenseLevelOne(expenseId),
-                                                    child: const Text('Valider N1'),
-                                                  ),
-                                                if (canL2)
-                                                  FilledButton.tonal(
-                                                    onPressed: _financeBusy
-                                                        ? null
-                                                        : () => _validateExpenseLevelTwo(expenseId),
-                                                    child: const Text('Valider N2'),
-                                                  ),
-                                                if (canReset)
-                                                  TextButton(
-                                                    onPressed: _financeBusy
-                                                        ? null
-                                                        : () => _resetExpenseValidation(expenseId),
-                                                    child: const Text('Reset'),
-                                                  ),
-                                              ],
-                                            ),
+                                    return DataRow(
+                                      cells: [
+                                        DataCell(Text((row['label'] ?? '-').toString())),
+                                        DataCell(Text((row['date'] ?? '-').toString())),
+                                        DataCell(Text((row['category'] ?? '-').toString())),
+                                        DataCell(Text(_formatMoney(amount))),
+                                        DataCell(Text(_expenseStageLabel(row))),
+                                        DataCell(Text((paidOn == null || paidOn.isEmpty) ? '-' : paidOn)),
+                                        DataCell(
+                                          Wrap(
+                                            spacing: 6,
+                                            runSpacing: 6,
+                                            children: [
+                                              if (expenseId != null)
+                                                OutlinedButton(
+                                                  onPressed: _financeBusy || stage == 'level_two'
+                                                      ? null
+                                                      : () => _openExpenseDialog(expense: row),
+                                                  child: const Text('Modifier'),
+                                                ),
+                                              if (expenseId != null)
+                                                TextButton(
+                                                  onPressed: _financeBusy || stage == 'level_two'
+                                                      ? null
+                                                      : () => _deleteExpense(row),
+                                                  child: const Text('Supprimer'),
+                                                ),
+                                              if (canL1)
+                                                OutlinedButton(
+                                                  onPressed: _financeBusy
+                                                      ? null
+                                                      : () => _validateExpenseLevelOne(expenseId),
+                                                  child: const Text('Valider N1'),
+                                                ),
+                                              if (canL2)
+                                                FilledButton.tonal(
+                                                  onPressed: _financeBusy
+                                                      ? null
+                                                      : () => _validateExpenseLevelTwo(expenseId),
+                                                  child: const Text('Valider N2'),
+                                                ),
+                                              if (canReset)
+                                                TextButton(
+                                                  onPressed: _financeBusy
+                                                      ? null
+                                                      : () => _resetExpenseValidation(expenseId),
+                                                  child: const Text('Reset'),
+                                                ),
+                                            ],
                                           ),
-                                        ],
-                                      );
-                                    }).toList(growable: false),
-                                  ),
+                                        ),
+                                      ],
+                                    );
+                                  }).toList(growable: false),
                                 ),
                             ],
                           ),
@@ -4692,14 +5092,18 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                 _OngletFinance(
                   libelle: 'Paie enseignants',
                   icone: Icons.payments_outlined,
-                  contenu: _ongletDefilant(
-                    _sectionPaieEnseignants(
+                  contenu: _ongletDefilant([
+                    ..._sectionHeuresTravaillees(
+                      context: context,
+                      scheme: colorScheme,
+                    ),
+                    ..._sectionPaieEnseignants(
                       context: context,
                       colorScheme: colorScheme,
                       lectureSeule: isTeacherFinanceReadOnly,
                       role: authUser?.role,
                     ),
-                  ),
+                  ]),
                 ),
             ];
             final controleurOnglets = _controleurDOnglets(ongletsOuverts.length);

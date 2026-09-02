@@ -1245,7 +1245,7 @@ class _DashboardVisualFilters extends StatelessWidget {
             children: [
               _ContextPill(
                 icon: Icons.filter_alt_rounded,
-                label: 'Periode: $periodLabel',
+                label: 'Période: $periodLabel',
               ),
               _ContextPill(
                 icon: Icons.account_tree_rounded,

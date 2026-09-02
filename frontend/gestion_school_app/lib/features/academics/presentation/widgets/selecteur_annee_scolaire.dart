@@ -73,7 +73,7 @@ class PastilleEtatAnnee extends StatelessWidget {
   }
 }
 
-/// Le choix de l'annee de travail, dans la barre de l'application.
+/// Le choix de l'année de travail, dans la barre de l'application.
 ///
 /// Place a cote de l'etablissement, et pour la meme raison: ce sont les
 /// deux dimensions qui decident de ce que chaque ecran montre. Elles
@@ -144,7 +144,7 @@ class SelecteurAnneeScolaire extends ConsumerWidget {
         final choisie = annees.firstWhere((annee) => annee.id == id);
         if (choisie.id == selectionnee.id) return;
 
-        // Changer d'annee recharge l'ecran: une saisie en cours partirait
+        // Changer d'année recharge l'ecran: une saisie en cours partirait
         // sur une annee qui n'est plus celle affichee.
         final feuVert = await confirmerChangementDeContexte(
           context,
@@ -284,6 +284,6 @@ class BandeauAnneeCloturee extends ConsumerWidget {
   }
 }
 
-/// Etiquette courte d'une annee, pour les entetes d'ecran.
+/// Etiquette courte d'une année, pour les entetes d'ecran.
 String libelleAnnee(AnneeScolaire? annee) =>
     annee == null ? '' : annee.libelle;

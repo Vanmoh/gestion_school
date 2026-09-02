@@ -142,7 +142,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
         publishedYear: saisie.publishedYear,
         subject: saisie.subject,
         shelfLocation: saisie.shelfLocation,
-        // L'annee videe doit partir en `null` explicite, sinon l'ancienne
+        // L'année videe doit partir en `null` explicite, sinon l'ancienne
         // valeur survivrait a la correction.
         effacerAnnee: saisie.publishedYear == null,
       ),

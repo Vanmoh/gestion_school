@@ -492,6 +492,7 @@ class _TeacherAvailabilityPageState
         SizedBox(
           width: 150,
           child: DropdownButtonFormField<int>(
+            isExpanded: true,
             initialValue: _pas,
             decoration: const InputDecoration(
               labelText: 'Pas horaire',
