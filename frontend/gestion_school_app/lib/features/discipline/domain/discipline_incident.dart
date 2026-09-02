@@ -77,7 +77,7 @@ class DisciplineIncident {
   DateTime get dateDeTri =>
       DateTime.tryParse(incidentDate) ?? DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// Libelle de l'eleve, avec repli sur l'identifiant.
+  /// Libelle de l'élève, avec repli sur l'identifiant.
   ///
   /// Le nom vient du serializer et non d'une jointure cote client: la page
   /// croisait la liste des eleves pour l'afficher, ce qui laissait « Élève »

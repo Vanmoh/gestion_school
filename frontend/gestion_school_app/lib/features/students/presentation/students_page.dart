@@ -25,6 +25,7 @@ import 'students_controller.dart';
 import 'widgets/student_palette_card.dart';
 import 'widgets/students_dashboard_card.dart';
 import 'widgets/student_roster_dialog.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class StudentsPage extends ConsumerStatefulWidget {
   const StudentsPage({super.key});
@@ -478,7 +479,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   Future<bool> _registerStudent() async {
     if (_isStudentsReadOnlyRole()) {
-      _showMessage('Mode lecture seule: creation eleve non autorisee.');
+      _showMessage('Mode lecture seule: creation élève non autorisée.');
       return false;
     }
 
@@ -539,7 +540,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         _tablePage = 1;
       });
       await _loadBaseData(keepSelectedId: student.id);
-      // L'eleve vient d'etre cree: on ouvre sa palette directement. Parcourir
+      // L'élève vient d'etre cree: on ouvre sa palette directement. Parcourir
       // les pages pour le retrouver n'avait de sens qu'avec un tableau.
       if (_selectedStudent?.id != student.id) {
         _activateStudent(student);
@@ -617,7 +618,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   Future<bool> _saveStudentAssignments() async {
     if (_isStudentsReadOnlyRole()) {
-      _showMessage('Mode lecture seule: modification profil non autorisee.');
+      _showMessage('Mode lecture seule: modification profil non autorisée.');
       return false;
     }
 
@@ -713,7 +714,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   Future<bool> _updateStudentPhoto() async {
     if (_isStudentsReadOnlyRole()) {
-      _showMessage('Mode lecture seule: mise a jour photo non autorisee.');
+      _showMessage('Mode lecture seule: mise a jour photo non autorisée.');
       return false;
     }
 
@@ -844,7 +845,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   Future<bool> _createAttendanceEntry() async {
     if (_isStudentsReadOnlyRole()) {
-      _showMessage('Mode lecture seule: saisie absence/retard non autorisee.');
+      _showMessage('Mode lecture seule: saisie absence/retard non autorisée.');
       return false;
     }
 
@@ -888,7 +889,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   Future<bool> _createStudentFeeEntry() async {
     if (_isStudentsReadOnlyRole()) {
-      _showMessage('Mode lecture seule: creation de frais non autorisee.');
+      _showMessage('Mode lecture seule: creation de frais non autorisée.');
       return false;
     }
 
@@ -1255,6 +1256,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 320,
               child: DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _cardsClassroomId,
                 decoration: const InputDecoration(labelText: 'Classe'),
                 items: _classrooms
@@ -1274,6 +1276,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 320,
               child: DropdownButtonFormField<String>(
+                isExpanded: true,
                 initialValue: _cardsLayoutMode,
                 decoration: const InputDecoration(labelText: 'Mode impression'),
                 items: const [
@@ -1510,7 +1513,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     final saved = await showGuidedPaymentEntryDialog(
       context: context,
       ref: ref,
-      title: 'Encaissement apres inscription',
+      title: 'Encaissement après inscription',
       initialStudent: student,
       initialClassroomId: student.classroomId,
       preferredFeeType: 'registration',
@@ -1538,6 +1541,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 260,
               child: DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _historyYearId,
                 decoration: const InputDecoration(labelText: 'Année scolaire'),
                 items: _years
@@ -1557,6 +1561,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 260,
               child: DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _historyClassroomId,
                 decoration: const InputDecoration(
                   labelText: 'Classe concernée',
@@ -1671,6 +1676,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 200,
               child: DropdownButtonFormField<String>(
+                isExpanded: true,
                 initialValue: _registrationGender,
                 decoration: const InputDecoration(labelText: 'Genre *'),
                 items: const [
@@ -1692,6 +1698,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 260,
               child: DropdownButtonFormField<int>(
+                isExpanded: true,
                 initialValue: _registrationClassroomId,
                 decoration: const InputDecoration(labelText: 'Classe *'),
                 items: _classrooms
@@ -1711,6 +1718,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 300,
               child: DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _registrationParentId,
                 decoration: const InputDecoration(
                   labelText: 'Parent (optionnel)',
@@ -1974,6 +1982,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 200,
               child: DropdownButtonFormField<String>(
+                isExpanded: true,
                 initialValue: _updateGender,
                 decoration: const InputDecoration(labelText: 'Genre'),
                 items: const [
@@ -1995,6 +2004,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 280,
               child: DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _selectedClassroomUpdateId,
                 decoration: const InputDecoration(
                   labelText: 'Réattribuer classe',
@@ -2016,6 +2026,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 300,
               child: DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _selectedParentUpdateId,
                 decoration: const InputDecoration(labelText: 'Parent lié'),
                 items: [
@@ -2198,6 +2209,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 180,
               child: DropdownButtonFormField<String>(
+                isExpanded: true,
                 initialValue: _incidentSeverity,
                 decoration: const InputDecoration(labelText: 'Gravité'),
                 items: const [
@@ -2434,6 +2446,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 260,
               child: DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _feeAcademicYearId,
                 decoration: const InputDecoration(labelText: 'Année scolaire'),
                 items: _years
@@ -2453,6 +2466,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 220,
               child: DropdownButtonFormField<String>(
+                isExpanded: true,
                 initialValue: _feeType,
                 decoration: const InputDecoration(labelText: 'Type de frais'),
                 items: const [
@@ -2534,6 +2548,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
             SizedBox(
               width: 500,
               child: DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _paymentFeeId,
                 decoration: const InputDecoration(labelText: 'Frais concerné'),
                 items: _fees
@@ -2855,7 +2870,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Text(
-              'Mode lecture seule: consultation des eleves uniquement pour ce profil.',
+              'Mode lecture seule: consultation des élèves uniquement pour ce profil.',
               style: textTheme.bodySmall,
             ),
           ),
@@ -3918,7 +3933,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                               compact: compact,
                             ),
                             _studentCardInfoRow(
-                              'Annee Scolaire',
+                              'Année Scolaire',
                               yearLabel,
                               compact: compact,
                             ),
@@ -4150,16 +4165,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-      ),
-      child: Text('$label: $value'),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   ButtonStyle _compactUnifiedActionButtonStyle() {
     return FilledButton.styleFrom(

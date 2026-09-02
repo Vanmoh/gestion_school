@@ -58,7 +58,7 @@ class DossierSection {
   }
 }
 
-/// Tout ce que l'etablissement sait d'un eleve, en une reponse.
+/// Tout ce que l'établissement sait d'un eleve, en une reponse.
 class StudentDossier {
   final Student student;
   final List<DossierSection> sections;

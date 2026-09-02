@@ -36,6 +36,72 @@ class _Transport implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     chemins.add(options.path);
+    if (options.path.contains('/teacher-time-entries/synthese')) {
+      // Filtrée sur un enseignant, la synthèse ne rend que lui — c'est ce qui
+      // impose de garder la liste du menu à part.
+      if (options.queryParameters['teacher'] != null) {
+        return _json(const {
+          'debut': '2026-03-01',
+          'fin': '2026-03-31',
+          'enseignants': [
+            {
+              'teacher': 5,
+              'nom': 'Moussa Diarra',
+              'matricule': 'ENS-02',
+              'heures': '5.00',
+              'taux_horaire': '3000.00',
+              'montant_du': '15000.00',
+              'pointages': 1,
+              'retard_minutes': 10,
+            },
+          ],
+          'total_heures': '5.00',
+          'total_montant': '15000.00',
+        });
+      }
+      return _json(const {
+        'debut': '2026-03-01',
+        'fin': '2026-03-31',
+        'enseignants': [
+          {
+            'teacher': 4,
+            'nom': 'Awa Traoré',
+            'matricule': 'ENS-01',
+            'heures': '6.00',
+            'taux_horaire': '2500.00',
+            'montant_du': '15000.00',
+            'pointages': 2,
+            'retard_minutes': 0,
+          },
+          {
+            'teacher': 5,
+            'nom': 'Moussa Diarra',
+            'matricule': 'ENS-02',
+            'heures': '5.00',
+            'taux_horaire': '3000.00',
+            'montant_du': '15000.00',
+            'pointages': 1,
+            'retard_minutes': 10,
+          },
+        ],
+        'total_heures': '11.00',
+        'total_montant': '30000.00',
+      });
+    }
+    if (options.path.contains('/teacher-time-entries')) {
+      return _json(const {
+        'results': [
+          {
+            'id': 90,
+            'teacher': 4,
+            'entry_date': '2026-03-02',
+            'check_in_time': '08:00:00',
+            'check_out_time': '11:00:00',
+            'worked_hours': '3.00',
+          },
+        ],
+      });
+    }
     if (avecReglement && options.path.contains('/payments')) {
       return _json(const {
         'count': 1,
@@ -366,6 +432,141 @@ void main() {
       // Le reglement est toujours la, mais en fiche.
       expect(find.text('Awa Traoré'), findsWidgets);
       expect(find.byType(DataTable), findsNothing);
+    });
+  });
+
+  group('les heures travaillées', () {
+    Future<void> ouvrirLaPaie(WidgetTester tester) async {
+      await _monter(
+        tester,
+        _droits(finance: AccessLevel.none, payroll: AccessLevel.write),
+      );
+    }
+
+    testWidgets('chaque enseignant porte ses heures et ce qui lui est dû', (
+      tester,
+    ) async {
+      await ouvrirLaPaie(tester);
+
+      expect(find.text('Heures travaillées'), findsOneWidget);
+      expect(find.text('Awa Traoré'), findsOneWidget);
+      expect(find.text('Moussa Diarra'), findsOneWidget);
+      // 6 h × 2 500 pour l'une, 5 h × 3 000 pour l'autre.
+      expect(find.text('15 000 FCFA'), findsNWidgets(2));
+    });
+
+    testWidgets('le total général ferme la liste', (tester) async {
+      await ouvrirLaPaie(tester);
+
+      expect(find.text('Total à payer, tous enseignants'), findsOneWidget);
+      // Une fois dans l'indicateur du haut, une fois en pied de liste.
+      expect(find.text('30 000 FCFA'), findsNWidgets(2));
+      expect(find.text('11.00 h'), findsOneWidget);
+    });
+
+    testWidgets('la période est annoncée et se change', (tester) async {
+      await ouvrirLaPaie(tester);
+
+      expect(find.textContaining('Du '), findsWidgets);
+      expect(find.byKey(const Key('choisir-periode-heures')), findsOneWidget);
+    });
+
+    testWidgets('un clic sur un enseignant déplie ses pointages', (
+      tester,
+    ) async {
+      // C'est là que se règle une contestation d'heures: le total ne dit pas
+      // quel jour ni de quelle heure à quelle heure.
+      await ouvrirLaPaie(tester);
+
+      await tester.tap(find.text('Awa Traoré'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('lundi'), findsOneWidget);
+      expect(find.text('02/03/2026'), findsOneWidget);
+      expect(find.text('08:00'), findsOneWidget);
+      expect(find.text('11:00'), findsOneWidget);
+      expect(find.text('3.00 h'), findsOneWidget);
+    });
+
+    testWidgets('un second clic referme le détail', (tester) async {
+      await ouvrirLaPaie(tester);
+
+      await tester.tap(find.text('Awa Traoré'));
+      await tester.pumpAndSettle();
+      expect(find.text('lundi'), findsOneWidget);
+
+      await tester.tap(find.text('Awa Traoré'));
+      await tester.pumpAndSettle();
+      expect(find.text('lundi'), findsNothing);
+    });
+
+    testWidgets('la synthèse est demandée sur un intervalle', (tester) async {
+      final transport = await _monter(
+        tester,
+        _droits(finance: AccessLevel.none, payroll: AccessLevel.write),
+      );
+
+      expect(
+        transport.chemins.where(
+          (chemin) => chemin.contains('/teacher-time-entries/synthese'),
+        ),
+        isNotEmpty,
+      );
+    });
+  });
+
+  group('le filtre par enseignant', () {
+    testWidgets('le menu propose tout le monde, puis chacun', (tester) async {
+      await _monter(
+        tester,
+        _droits(finance: AccessLevel.none, payroll: AccessLevel.write),
+      );
+
+      expect(find.byKey(const Key('filtre-enseignant-heures')), findsOneWidget);
+      expect(find.text('Tous les enseignants'), findsOneWidget);
+    });
+
+    testWidgets('choisir un enseignant restreint la liste', (tester) async {
+      final transport = await _monter(
+        tester,
+        _droits(finance: AccessLevel.none, payroll: AccessLevel.write),
+      );
+
+      await tester.tap(find.byKey(const Key('filtre-enseignant-heures')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Moussa Diarra').last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Awa Traoré'), findsNothing);
+      expect(find.text('Moussa Diarra'), findsWidgets);
+      expect(
+        transport.chemins.where(
+          (chemin) => chemin.contains('/teacher-time-entries/synthese'),
+        ).length,
+        greaterThan(1),
+      );
+    });
+
+    testWidgets('le menu garde tout le monde même une fois filtré', (
+      tester,
+    ) async {
+      // La synthèse filtrée ne rend qu'un enseignant: si le menu s'y adossait,
+      // il se refermerait sur lui et on ne pourrait plus en choisir un autre.
+      await _monter(
+        tester,
+        _droits(finance: AccessLevel.none, payroll: AccessLevel.write),
+      );
+
+      await tester.tap(find.byKey(const Key('filtre-enseignant-heures')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Moussa Diarra').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('filtre-enseignant-heures')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Awa Traoré'), findsWidgets);
+      expect(find.text('Tous les enseignants'), findsWidgets);
     });
   });
 }

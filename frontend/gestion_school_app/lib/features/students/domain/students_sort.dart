@@ -4,7 +4,7 @@
 
 /// Colonnes triables du registre, indexees comme dans le DataTable.
 ///
-/// L'index 0 est la colonne de cases a cocher, 1 le numero de ligne: ni l'une
+/// L'index 0 est la colonne de cases a cocher, 1 le numéro de ligne: ni l'une
 /// ni l'autre ne correspond a un ordre serveur. Les colonnes absentes de cette
 /// table (Telephone, Acces) restent non triables faute d'ordre equivalent.
 const studentSortKeyByColumnIndex = <int, String>{

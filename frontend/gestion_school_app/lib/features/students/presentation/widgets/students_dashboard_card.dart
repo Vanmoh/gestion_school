@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../domain/students_stats.dart';
 import '../student_actions.dart';
 
-/// En-tete de « Gestion des eleves »: ce que dit l'etablissement, et ce qu'on
+/// En-tete de « Gestion des eleves »: ce que dit l'établissement, et ce qu'on
 /// peut y faire qui ne vise pas un eleve en particulier.
 ///
 /// Extrait de la page conformement au Sprint 2 du roadmap. Ses entrees sont

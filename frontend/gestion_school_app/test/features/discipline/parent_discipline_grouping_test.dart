@@ -62,7 +62,7 @@ void main() {
     test('falls back to a generic label when no name is available', () {
       final groups = groupIncidentsByChild([incident(student: 7)]);
 
-      expect(groups.single.childName, 'Eleve');
+      expect(groups.single.childName, 'Élève');
       expect(groups.single.matricule, '');
     });
 

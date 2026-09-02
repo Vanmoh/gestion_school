@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class ActivityLogsPage extends ConsumerStatefulWidget {
   const ActivityLogsPage({super.key});
@@ -243,28 +244,8 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
     return 'fallback:$createdAt|$path|$method';
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -320,7 +301,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                 children: [
                   _detailLine('Date', row['created_at']?.toString() ?? '-'),
                   _detailLine('Action', row['action']?.toString() ?? '-'),
-                  _detailLine('Methode', row['method']?.toString() ?? '-'),
+                  _detailLine('Méthode', row['method']?.toString() ?? '-'),
                   _detailLine('Path', row['path']?.toString() ?? '-'),
                   _detailLine(
                     'Utilisateur',
@@ -501,8 +482,9 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                 SizedBox(
                   width: 170,
                   child: DropdownButtonFormField<String>(
+                    isExpanded: true,
                     initialValue: _methodFilter,
-                    decoration: const InputDecoration(labelText: 'Methode'),
+                    decoration: const InputDecoration(labelText: 'Méthode'),
                     items: const [
                       DropdownMenuItem(value: '', child: Text('Toutes')),
                       DropdownMenuItem(value: 'POST', child: Text('POST')),
@@ -519,6 +501,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                 SizedBox(
                   width: 170,
                   child: DropdownButtonFormField<String>(
+                    isExpanded: true,
                     initialValue: _successFilter,
                     decoration: const InputDecoration(labelText: 'Statut'),
                     items: const [
@@ -535,6 +518,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                 SizedBox(
                   width: 230,
                   child: DropdownButtonFormField<String>(
+                    isExpanded: true,
                     initialValue: _ordering,
                     decoration: const InputDecoration(labelText: 'Tri'),
                     items: const [
@@ -616,7 +600,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                 child: _logs.isEmpty
                     ? const Padding(
                         padding: EdgeInsets.symmetric(vertical: 18),
-                        child: Text('Aucune activite trouvee'),
+                        child: Text('Aucune activité trouvée'),
                       )
                     : SizedBox(
                         height: isWide ? 620 : 420,
@@ -724,12 +708,12 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
               );
 
               final detailPanel = _sectionCard(
-                title: 'Details evenement',
+                title: 'Détails evenement',
                 child: selectedLog == null
                     ? const Padding(
                         padding: EdgeInsets.symmetric(vertical: 24),
                         child: Text(
-                          'Selectionnez un evenement pour afficher les details.',
+                          'Sélectionnez un evenement pour afficher les détails.',
                         ),
                       )
                     : Column(
@@ -767,7 +751,7 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
                             selectedLog['action']?.toString() ?? '-',
                           ),
                           _detailLine(
-                            'Methode',
+                            'Méthode',
                             selectedLog['method']?.toString() ?? '-',
                           ),
                           _detailLine(

@@ -32,7 +32,7 @@ class UsersRepository {
         'email',
         'password',
         'role',
-        'etablissement',
+        'établissement',
       ];
 
       for (final key in orderedKeys) {

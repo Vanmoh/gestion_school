@@ -39,6 +39,7 @@ class _TimetableModulePageState extends State<TimetableModulePage> {
               SizedBox(
                 width: 280,
                 child: DropdownButtonFormField<String>(
+                  isExpanded: true,
                   initialValue: _section,
                   isDense: true,
                   decoration: const InputDecoration(

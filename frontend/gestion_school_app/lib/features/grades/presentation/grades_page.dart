@@ -15,6 +15,8 @@ import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../../core/network/chargement_tolerant.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class GradesPage extends ConsumerStatefulWidget {
   const GradesPage({super.key});
@@ -72,13 +74,17 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
     try {
       final dio = ref.read(dioProvider);
+      // Seuls les eleves et leurs notes sont indispensables ici. Le reste
+      // nomme des colonnes et remplit des menus: l'enseignant n'a pas droit au
+      // personnel, la famille pas au referentiel, et l'ecran entier tombait
+      // pour eux sur une donnee d'appoint.
       final results = await Future.wait([
         dio.get('/students/'),
-        dio.get('/subjects/'),
-        dio.get('/teachers/'),
-        dio.get('/teacher-assignments/'),
-        dio.get('/classrooms/'),
-        dio.get('/academic-years/'),
+        reponseTolerante(dio.get('/subjects/')),
+        reponseTolerante(dio.get('/teachers/')),
+        reponseTolerante(dio.get('/teacher-assignments/')),
+        reponseTolerante(dio.get('/classrooms/')),
+        reponseTolerante(dio.get('/academic-years/')),
       ]);
 
       if (!mounted) return;
@@ -423,7 +429,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     if (!_estLectureSeule()) {
       return false;
     }
-    _showMessage('Mode lecture seule: action sur les notes non autorisee.');
+    _showMessage('Mode lecture seule: action sur les notes non autorisée.');
     return true;
   }
 
@@ -545,6 +551,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<int>(
+                            isExpanded: true,
                             initialValue: selectedClassroom,
                             decoration: const InputDecoration(
                               labelText: 'Classe',
@@ -578,6 +585,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: DropdownButtonFormField<int>(
+                            isExpanded: true,
                             initialValue: selectedSubject > 0
                                 ? selectedSubject
                                 : null,
@@ -630,7 +638,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                       Container(
                         constraints: const BoxConstraints(maxHeight: 340),
                         decoration: BoxDecoration(
-                          border: Border.all(color: Colors.white24),
+                          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: ListView.separated(
@@ -1067,6 +1075,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<int>(
+                            isExpanded: true,
                             initialValue: selectedClassroom,
                             decoration: const InputDecoration(
                               labelText: 'Classe',
@@ -1100,6 +1109,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: DropdownButtonFormField<int>(
+                            isExpanded: true,
                             initialValue: selectedSubject > 0
                                 ? selectedSubject
                                 : null,
@@ -1204,7 +1214,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                       Container(
                         constraints: const BoxConstraints(maxHeight: 360),
                         decoration: BoxDecoration(
-                          border: Border.all(color: Colors.white24),
+                          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: ListView.separated(
@@ -1781,6 +1791,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                           SizedBox(
                             width: 260,
                             child: DropdownButtonFormField<int>(
+                              isExpanded: true,
                               initialValue: selectedClassroom,
                               decoration: const InputDecoration(
                                 labelText: 'Classe',
@@ -1831,6 +1842,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                           SizedBox(
                             width: 220,
                             child: DropdownButtonFormField<int>(
+                              isExpanded: true,
                               initialValue: selectedYear,
                               decoration: const InputDecoration(
                                 labelText: 'Année scolaire',
@@ -1886,6 +1898,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                           SizedBox(
                             width: 170,
                             child: DropdownButtonFormField<String>(
+                              isExpanded: true,
                               initialValue: selectedTerm,
                               decoration: const InputDecoration(
                                 labelText: 'Période',
@@ -1954,7 +1967,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                                       decoration: BoxDecoration(
                                         borderRadius: BorderRadius.circular(10),
                                         border: Border.all(
-                                          color: Colors.black12,
+                                          color: Theme.of(context).colorScheme.outlineVariant,
                                         ),
                                       ),
                                       child: visibleStudents.isEmpty
@@ -2016,7 +2029,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                               child: Container(
                                 decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(color: Colors.black12),
+                                  border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
                                 ),
                                 child: selectedStudent == null
                                     ? const Center(
@@ -2148,10 +2161,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       final buffer = StringBuffer();
       buffer.writeln('Export Notes Filtrees');
       buffer.writeln('Classe;$classroomName');
-      buffer.writeln('Annee;$academicYearName');
-      buffer.writeln('Periode;$period');
+      buffer.writeln('Année;$academicYearName');
+      buffer.writeln('Période;$period');
       buffer.writeln('');
-      buffer.writeln('Eleve;Matiere;Periode;Note classe');
+      buffer.writeln('Élève;Matière;Période;Note classe');
 
       for (final grade in grades) {
         final student = studentById[_asInt(grade['student'])];
@@ -2790,28 +2803,8 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     return '$y-$m-$d';
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -2862,7 +2855,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     final studentById = {for (final s in _students) _asInt(s['id']): s};
     final subjectById = {for (final s in _subjects) _asInt(s['id']): s};
 
-    final validationLabel = _isValidated ? 'Validee' : 'Non validee';
+    final validationLabel = _isValidated ? 'Validee' : 'Non validée';
     final validationBy = (_validationStatus?['validated_by_name'] ?? '')
         .toString();
     final validationDate = (_validationStatus?['validated_at'] ?? '-')
@@ -2958,14 +2951,14 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                   onPressed: _saving
                       ? null
                       : () => _toggleValidation(validate: true),
-                  child: const Text('Valider periode'),
+                  child: const Text('Valider période'),
                 ),
                 FilledButton.tonal(
                   key: const Key('reouvrir-periode'),
                   onPressed: _saving
                       ? null
                       : () => _toggleValidation(validate: false),
-                  child: const Text('Reouvrir periode'),
+                  child: const Text('Reouvrir période'),
                 ),
               ],
             ),
@@ -2992,6 +2985,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
             ),
           const SizedBox(height: 12),
           DropdownButtonFormField<int>(
+            isExpanded: true,
             initialValue: _selectedClassroom,
             decoration: const InputDecoration(labelText: 'Classe'),
             items: visibleClassrooms
@@ -3017,8 +3011,9 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<int>(
+            isExpanded: true,
             initialValue: _selectedAcademicYear,
-            decoration: const InputDecoration(labelText: 'Annee scolaire'),
+            decoration: const InputDecoration(labelText: 'Année scolaire'),
             items: _years
                 .map(
                   (y) => DropdownMenuItem<int>(
@@ -3038,6 +3033,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
+            isExpanded: true,
             initialValue: _currentTermOrDefault(),
             decoration: const InputDecoration(labelText: 'Période'),
             items: const [
@@ -3074,7 +3070,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Selection actuelle: ${_findById(_classrooms, _selectedClassroom ?? 0)?['name'] ?? '-'} • ${_findById(_years, _selectedAcademicYear ?? 0)?['name'] ?? '-'} • ${_currentTermOrDefault()}',
+            'Sélection actuelle: ${_findById(_classrooms, _selectedClassroom ?? 0)?['name'] ?? '-'} • ${_findById(_years, _selectedAcademicYear ?? 0)?['name'] ?? '-'} • ${_currentTermOrDefault()}',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -3086,7 +3082,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
       child: scopedGrades.isEmpty
           ? const Padding(
               padding: EdgeInsets.symmetric(vertical: 18),
-              child: Text('Aucune note enregistree'),
+              child: Text('Aucune note enregistrée'),
             )
           : SizedBox(
               height: 740,
@@ -3160,6 +3156,7 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                       SizedBox(
                         width: 130,
                         child: DropdownButtonFormField<int>(
+                          isExpanded: true,
                           initialValue: _notesRowsPerPage,
                           isDense: true,
                           decoration: const InputDecoration(
@@ -3406,10 +3403,10 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                   spacing: 10,
                   runSpacing: 10,
                   children: [
-                    _metricChip('Eleves', '${_students.length}'),
-                    _metricChip('Matieres', '${_subjects.length}'),
+                    _metricChip('Élèves', '${_students.length}'),
+                    _metricChip('Matières', '${_subjects.length}'),
                     _metricChip('Classes', '${visibleClassrooms.length}'),
-                    _metricChip('Annees', '${_years.length}'),
+                    _metricChip('Années', '${_years.length}'),
                     _metricChip('Notes', '${_grades.length}'),
                     _metricChip('Validation', validationLabel),
                   ],

@@ -246,6 +246,24 @@ class PaymentsRepository {
     return cleaned;
   }
 
+  /// La fiche enseignant du compte connecte, ou null s'il n'en a pas.
+  ///
+  /// La liste complete du personnel est fermee a l'enseignant: il ne pouvait
+  /// donc pas y retrouver son propre identifiant, dont son ecran d'emargement
+  /// a besoin pour pointer.
+  Future<Map<String, dynamic>?> fetchMonProfilEnseignant() async {
+    try {
+      final response = await dio.get('/teachers/mon-profil/');
+      final charge = response.data;
+      return charge is Map<String, dynamic> ? charge : null;
+    } on DioException catch (erreur) {
+      if (erreur.response?.statusCode == 404) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
   Future<List<Map<String, dynamic>>> fetchTeachers() async {
     final response = await dio.get(
       '/teachers/',
@@ -258,10 +276,46 @@ class PaymentsRepository {
     return rows.whereType<Map<String, dynamic>>().toList(growable: false);
   }
 
-  Future<List<Map<String, dynamic>>> fetchTeacherTimeEntries() async {
-    final response = await dio.get('/teacher-time-entries/');
+  Future<List<Map<String, dynamic>>> fetchTeacherTimeEntries({
+    int? teacherId,
+    String? debut,
+    String? fin,
+  }) async {
+    final response = await dio.get(
+      '/teacher-time-entries/',
+      queryParameters: <String, dynamic>{
+        'teacher': ?teacherId,
+        'entry_date__gte': ?debut,
+        'entry_date__lte': ?fin,
+        // Le detail d'un mois tient largement dedans, et on evite une
+        // pagination a suivre pour un tableau qu'on lit d'un bloc.
+        'page_size': 200,
+      },
+    );
     final rows = _extractRows(response.data);
     return rows.whereType<Map<String, dynamic>>().toList(growable: false);
+  }
+
+  /// Ce que l'ecole doit a chaque enseignant sur l'intervalle demande.
+  ///
+  /// L'addition se fait sur le serveur: additionner trois cents pointages
+  /// n'est pas le travail de l'ecran, et deux endroits qui le referaient
+  /// chacun de leur cote finiraient par ne plus tomber d'accord.
+  Future<Map<String, dynamic>> fetchSyntheseHeures({
+    required String debut,
+    required String fin,
+    int? teacherId,
+  }) async {
+    final response = await dio.get(
+      '/teacher-time-entries/synthese/',
+      queryParameters: <String, dynamic>{
+        'debut': debut,
+        'fin': fin,
+        'teacher': ?teacherId,
+      },
+    );
+    final charge = response.data;
+    return charge is Map<String, dynamic> ? charge : <String, dynamic>{};
   }
 
   Future<void> createTeacherTimeEntry({

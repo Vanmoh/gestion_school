@@ -89,7 +89,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
           status: _filtreStatut,
           severity: _filtreGravite,
         ),
-        // Le selecteur d'eleves ne sert qu'a declarer: un profil en lecture
+        // Le selecteur d'élèves ne sert qu'a declarer: un profil en lecture
         // seule n'a pas a payer le parcours complet de l'effectif.
         if (peutDeclarer)
           repository.fetchSelectableStudents(
@@ -136,7 +136,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
 
   Future<void> _createIncident() async {
     if (!_droits.canWrite) {
-      _showMessage('Mode lecture seule: creation d\'incident non autorisee.');
+      _showMessage('Mode lecture seule: creation d\'incident non autorisée.');
       return;
     }
 
@@ -340,6 +340,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<int>(
+              isExpanded: true,
               key: const Key('declaration-student'),
               initialValue: _selectedStudentId,
               decoration: const InputDecoration(labelText: 'Élève'),
@@ -382,6 +383,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
               },
             ),
             DropdownButtonFormField<String>(
+              isExpanded: true,
               key: const Key('declaration-category'),
               initialValue: _selectedCategory,
               decoration: const InputDecoration(labelText: 'Motif'),
@@ -404,6 +406,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
+              isExpanded: true,
               initialValue: _severity,
               decoration: const InputDecoration(labelText: 'Gravité'),
               items: const [
@@ -420,6 +423,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
             if (!estEnseignant) ...[
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(
+                isExpanded: true,
                 key: const Key('declaration-status'),
                 initialValue: _status,
                 decoration: const InputDecoration(labelText: 'Statut'),
@@ -505,6 +509,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
               children: [
                 Expanded(
                   child: DropdownButtonFormField<String>(
+                    isExpanded: true,
                     key: const Key('filter-status'),
                     initialValue: _filtreStatut,
                     decoration: const InputDecoration(labelText: 'Statut'),
@@ -525,6 +530,7 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: DropdownButtonFormField<String>(
+                    isExpanded: true,
                     key: const Key('filter-severity'),
                     initialValue: _filtreGravite,
                     decoration: const InputDecoration(labelText: 'Gravité'),

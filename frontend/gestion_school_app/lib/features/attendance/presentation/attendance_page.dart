@@ -86,7 +86,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
   /// Qui note la conduite.
   ///
   /// Seule regle de cette page qui reste exprimee en roles: la conduite est
-  /// un champ de l'eleve, pas un module, et la matrice de droits n'a pas de
+  /// un champ de l'élève, pas un module, et la matrice de droits n'a pas de
   /// cle pour elle. La verite reste cote serveur -- StudentSerializer refuse
   /// l'ecriture aux autres profils -- et cette liste ne fait que griser un
   /// champ que le serveur rejetterait.
@@ -117,7 +117,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
 
   /// La feuille d'appel decrit une classe, pas un eleve.
   ///
-  /// Le parent et l'eleve lisent l'assiduite en portee restreinte (leurs
+  /// Le parent et l'élève lisent l'assiduite en portee restreinte (leurs
   /// enfants, soi): la vue par classe ne sait pas restreindre cela et n'aurait
   /// pas de sens pour eux -- ils ont leur propre ecran. L'enseignant est
   /// restreint lui aussi, mais a des classes, et il ecrit: c'est ce qui l'en
@@ -870,6 +870,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                       const Text('Aucune classe accessible pour cette fiche.'),
                     if (_sheetClassrooms.isNotEmpty) ...[
                       DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _sheetSelectedClassroomId,
                         decoration: const InputDecoration(labelText: 'Classe'),
                         items: _sheetClassrooms

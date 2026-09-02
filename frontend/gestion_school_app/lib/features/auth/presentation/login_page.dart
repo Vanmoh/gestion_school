@@ -659,9 +659,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
     final id = user.etablissementId;
     if (id != null) {
-      return 'Etablissement #$id';
+      return 'Établissement #$id';
     }
-    return 'l\'etablissement associe a ce compte';
+    return 'l\'établissement associé à ce compte';
   }
 
   Future<void> _showWrongScopedLoginDialog(AuthUser user) async {
@@ -680,7 +680,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           Navigator.of(dialogContext).pop();
         }
         _showMessage(
-          'Impossible d\'identifier automatiquement l\'etablissement du compte.',
+          'Impossible d\'identifier automatiquement l\'établissement du compte.',
         );
         return;
       }
@@ -707,7 +707,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         Navigator.of(dialogContext).pop();
       }
       _showMessage(
-        'Etablissement "$targetLabel" selectionne. Reconnectez-vous pour continuer.',
+        'Établissement "$targetLabel" sélectionné. Reconnectez-vous pour continuer.',
         isSuccess: true,
       );
     }
@@ -741,7 +741,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Etablissement incorrect',
+                  'Établissement incorrect',
                   style: Theme.of(
                     dialogContext,
                   ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
@@ -754,7 +754,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Ce compte est rattache a cet etablissement :',
+                'Ce compte est rattache a cet établissement :',
                 style: Theme.of(dialogContext).textTheme.bodyMedium,
               ),
               const SizedBox(height: 10),
@@ -782,7 +782,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               ),
               const SizedBox(height: 10),
               Text(
-                'Selectionnez le bon etablissement avant de vous reconnecter.',
+                'Sélectionnez le bon établissement avant de vous reconnecter.',
                 style: Theme.of(dialogContext).textTheme.bodySmall,
               ),
             ],
@@ -802,12 +802,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 }
               },
               icon: const Icon(Icons.swap_horiz_rounded),
-              label: const Text('Changer d\'etablissement'),
+              label: const Text('Changer d\'établissement'),
             ),
             FilledButton.icon(
               onPressed: () => chooseTargetEtablissement(dialogContext),
               icon: const Icon(Icons.check_circle_outline),
-              label: const Text('Choisir cet etablissement'),
+              label: const Text('Choisir cet établissement'),
             ),
           ],
         );

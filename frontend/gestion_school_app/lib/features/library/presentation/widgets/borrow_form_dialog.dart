@@ -61,7 +61,7 @@ class _BorrowFormDialogState extends State<BorrowFormDialog> {
         _echeance = choix;
       } else {
         _emprunt = choix;
-        // L'echeance suit l'emprunt quand elle le precede: une date de
+        // L'échéance suit l'emprunt quand elle le precede: une date de
         // retour anterieure au pret est refusee par le serveur.
         if (_echeance.isBefore(choix)) {
           _echeance = choix.add(Duration(days: widget.dureeParDefaut));
@@ -117,6 +117,7 @@ class _BorrowFormDialogState extends State<BorrowFormDialog> {
                 )
               else ...[
                 DropdownButtonFormField<int>(
+                  isExpanded: true,
                   initialValue: _eleve,
                   decoration: const InputDecoration(labelText: 'Élève'),
                   items: [
@@ -130,6 +131,7 @@ class _BorrowFormDialogState extends State<BorrowFormDialog> {
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<int>(
+                  isExpanded: true,
                   initialValue: _livre,
                   decoration: const InputDecoration(labelText: 'Ouvrage'),
                   items: [

@@ -41,11 +41,11 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
   static const Duration _backupConnectTimeout = Duration(minutes: 2);
   static const Duration _backupTransferTimeout = Duration(minutes: 10);
 
-  String _createScope = 'etablissement';
+  String _createScope = 'établissement';
   bool _includeMedia = true;
   final TextEditingController _notesController = TextEditingController();
 
-  String _restoreScope = 'etablissement';
+  String _restoreScope = 'établissement';
   PlatformFile? _restoreFile;
   final TextEditingController _restoreNotesController = TextEditingController();
 
@@ -147,7 +147,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
         'include_media': _includeMedia,
         'notes': _notesController.text.trim(),
       };
-      if (_createScope == 'etablissement' && selectedEtab != null) {
+      if (_createScope == 'établissement' && selectedEtab != null) {
         payload['etablissement_id'] = selectedEtab.id;
       }
 
@@ -192,7 +192,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
 
       if (savePath == null) {
         if (kIsWeb) {
-          _showMessage('Telechargement effectue avec succes.', isSuccess: true);
+          _showMessage('Telechargement effectué avec succès.', isSuccess: true);
           return;
         }
         _showMessage('Téléchargement annulé.');
@@ -314,7 +314,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     return FormData.fromMap({
       'scope': _restoreScope,
       'notes': _restoreNotesController.text.trim(),
-      if (_restoreScope == 'etablissement' && selectedEtab != null)
+      if (_restoreScope == 'établissement' && selectedEtab != null)
         'etablissement_id': selectedEtab.id,
       'file': MultipartFile.fromBytes(
         _restoreFile!.bytes!,
@@ -356,7 +356,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     try {
       await task();
     } catch (error) {
-      _showMessage('Operation impossible: ${_extractOperationError(error)}');
+      _showMessage('Opération impossible: ${_extractOperationError(error)}');
     } finally {
       if (mounted) {
         setState(() => _busy = false);
@@ -380,7 +380,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       }
       if (error.type == DioExceptionType.receiveTimeout ||
           error.type == DioExceptionType.sendTimeout) {
-        return 'Operation longue interrompue par delai depasse. Reessayez.';
+        return 'Opération longue interrompue par delai depasse. Reessayez.';
       }
 
       final data = error.response?.data;
@@ -512,7 +512,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
   }
 
   String _scopeLabel(String scope) {
-    return scope == 'global' ? 'Globale plateforme' : 'Etablissement';
+    return scope == 'global' ? 'Globale plateforme' : 'Établissement';
   }
 
   /// « 29/08/2026 à 03:35 », vide si la date manque ou n'est pas lisible.
@@ -626,6 +626,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                   ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
+                    isExpanded: true,
                     initialValue: _createScope,
                     decoration: const InputDecoration(labelText: 'Type'),
                     items: [
@@ -635,7 +636,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                           child: Text('Sauvegarde globale plateforme'),
                         ),
                       const DropdownMenuItem(
-                        value: 'etablissement',
+                        value: 'établissement',
                         child: Text('Sauvegarde de l\'établissement actif'),
                       ),
                     ],
@@ -687,6 +688,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                   ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
+                    isExpanded: true,
                     initialValue: _restoreScope,
                     decoration: const InputDecoration(labelText: 'Mode restauration'),
                     items: [
@@ -696,7 +698,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                           child: Text('Restauration globale plateforme'),
                         ),
                       const DropdownMenuItem(
-                        value: 'etablissement',
+                        value: 'établissement',
                         child: Text('Restauration établissement actif'),
                       ),
                     ],

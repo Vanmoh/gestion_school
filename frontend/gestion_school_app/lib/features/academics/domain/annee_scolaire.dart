@@ -8,7 +8,7 @@ class AnneeScolaire {
   final String debut;
   final String fin;
 
-  /// L'annee de saisie de l'etablissement. Une seule a la fois.
+  /// L'année de saisie de l'etablissement. Une seule a la fois.
   final bool estCourante;
 
   /// Une annee cloturee reste consultable; l'ecriture y est reservee a la
@@ -57,7 +57,7 @@ class AnneeScolaire {
 
   /// L'etat de l'annee, en trois mots exclusifs.
   ///
-  /// L'ordre compte: une annee cloturee l'est meme si le serveur la marque
+  /// L'ordre compte: une année cloturee l'est meme si le serveur la marque
   /// encore courante -- la cloture prime sur tout le reste.
   EtatAnnee get etat {
     if (estCloturee) return EtatAnnee.cloturee;

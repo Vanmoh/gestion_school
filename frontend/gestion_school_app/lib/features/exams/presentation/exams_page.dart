@@ -6,6 +6,7 @@ import '../../../core/widgets/foreground_notice.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../domain/exam_models.dart';
 import 'exams_controller.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class ExamsPage extends ConsumerStatefulWidget {
   const ExamsPage({super.key});
@@ -70,28 +71,8 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     );
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   @override
   Widget build(BuildContext context) {
@@ -254,6 +235,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                       }
                       _selectedAcademicYear ??= years.first.id;
                       return DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedAcademicYear,
                         items: years
                             .map(
@@ -273,6 +255,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   ),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
+                    isExpanded: true,
                     initialValue: _selectedSessionTerm,
                     items: const [
                       DropdownMenuItem(value: 'T1', child: Text('T1')),
@@ -340,6 +323,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                       _selectedPlanningSession ??= sessions.first.id;
                       _selectedResultSession ??= sessions.first.id;
                       return DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedPlanningSession,
                         items: sessions
                             .map(
@@ -365,6 +349,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                       }
                       _selectedPlanningClassroom ??= classrooms.first.id;
                       return DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedPlanningClassroom,
                         items: classrooms
                             .map(
@@ -391,6 +376,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                         _selectedPlanningSubject = subjects.first.id;
                       }
                       return DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedPlanningSubject,
                         items: subjects
                             .map(
@@ -468,6 +454,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                       if (sessions.isEmpty) return const Text('Aucune session');
                       _selectedResultSession ??= sessions.first.id;
                       return DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedResultSession,
                         items: sessions
                             .map(
@@ -491,6 +478,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                       if (students.isEmpty) return const Text('Aucun élève');
                       _selectedResultStudent ??= students.first.id;
                       return DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedResultStudent,
                         items: students
                             .map(
@@ -517,6 +505,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                         _selectedResultSubject = subjects.first.id;
                       }
                       return DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedResultSubject,
                         items: subjects
                             .map(
@@ -590,6 +579,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                       }
                       _selectedInvigilationPlanning ??= plannings.first.id;
                       return DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedInvigilationPlanning,
                         items: plannings
                             .map(
@@ -621,6 +611,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                       }
                       _selectedInvigilationSupervisor ??= supervisors.first.id;
                       return DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedInvigilationSupervisor,
                         items: supervisors
                             .map(

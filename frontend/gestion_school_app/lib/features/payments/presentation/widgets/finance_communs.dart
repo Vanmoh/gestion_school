@@ -93,3 +93,100 @@ String dateEnJourEtHeure(DateTime valeur) {
   final minute = local.minute.toString().padLeft(2, '0');
   return '${dateEnJour(local)} $heure:$minute';
 }
+
+/// Un tableau sur grand écran, des fiches sur écran étroit.
+///
+/// Les listes du module s'affichaient en tableaux quelle que soit la largeur :
+/// sur un téléphone, neuf colonnes se parcouraient latéralement — un geste que
+/// l'application ne demande nulle part ailleurs.
+///
+/// Les fiches sont dérivées du tableau lui-même : chaque cellule reprend
+/// l'en-tête de sa colonne. Il n'y a donc pas deux descriptions de la même
+/// liste à tenir d'accord, et convertir une liste existante ne demande que de
+/// remplacer son `DataTable` par ceci.
+class TableauOuFiches extends StatelessWidget {
+  final List<DataColumn> colonnes;
+  final List<DataRow> lignes;
+
+  /// En deçà, la liste passe en fiches. 720 pixels : au-delà, une tablette
+  /// tient trois à quatre colonnes sans les serrer.
+  final double seuil;
+
+  /// Les colonnes dont l'en-tête n'apprend rien sur une fiche — une case à
+  /// cocher, une colonne « Actions ». Leur cellule s'affiche sans libellé.
+  final Set<int> colonnesSansLibelle;
+
+  const TableauOuFiches({
+    super.key,
+    required this.colonnes,
+    required this.lignes,
+    this.seuil = 720,
+    this.colonnesSansLibelle = const {},
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, contraintes) {
+        if (contraintes.maxWidth >= seuil) {
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(columns: colonnes, rows: lignes),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [for (final ligne in lignes) _fiche(context, ligne)],
+        );
+      },
+    );
+  }
+
+  Widget _fiche(BuildContext context, DataRow ligne) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final choisir = ligne.onSelectChanged;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      color: ligne.selected ? scheme.primaryContainer : null,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: choisir == null ? null : () => choisir(!ligne.selected),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var index = 0; index < ligne.cells.length; index++)
+                if (index < colonnes.length)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: colonnesSansLibelle.contains(index)
+                        ? Align(
+                            alignment: Alignment.centerLeft,
+                            child: ligne.cells[index].child,
+                          )
+                        : Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(
+                                width: 118,
+                                child: DefaultTextStyle.merge(
+                                  style: textTheme.labelSmall!.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                  child: colonnes[index].label,
+                                ),
+                              ),
+                              Expanded(child: ligne.cells[index].child),
+                            ],
+                          ),
+                  ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

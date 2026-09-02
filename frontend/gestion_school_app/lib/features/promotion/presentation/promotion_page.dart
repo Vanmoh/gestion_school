@@ -226,7 +226,7 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
           content: Text(
             'Aucune classe cible automatique n\'a ete trouvee pour:\n'
             '${missing.join('\n')}\n\n'
-            'Les eleves eligibles de ces classes seront archives automatiquement. Continuer ?',
+            'Les élèves éligibles de ces classes seront archivés automatiquement. Continuer ?',
           ),
           actions: [
             TextButton(
@@ -249,7 +249,7 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
   ///
   /// « Simuler » et « Executer » etaient deux boutons voisins, et seul le
   /// second reaffecte toute l'ecole, archive les sortants et ecrit
-  /// l'historique de scolarite. Rien ne separait le clic de l'execution:
+  /// l'historique de scolarité. Rien ne separait le clic de l'execution:
   /// une erreur de visee passait la rentree entiere.
   Future<bool> _confirmerExecution(
     List<Map<String, dynamic>> sourceClasses,
@@ -260,7 +260,7 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Executer la passation ?'),
         content: Text(
-          'Cette operation va reaffecter les eleves de $nombre classe(s), '
+          'Cette opération va réaffecter les élèves de $nombre classe(s), '
           'archiver les sortants et ecrire leur historique de scolarite.\n\n'
           'Elle ne peut pas etre annulee. Lancez une simulation d\'abord '
           'si vous voulez en verifier le resultat.',
@@ -283,7 +283,7 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
 
   Future<void> _launchRun({required bool execute}) async {
     if (_sourceYearId == null) {
-      _showMessage('Selectionnez une annee source.');
+      _showMessage('Sélectionnez une année source.');
       return;
     }
 
@@ -295,12 +295,12 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
     }
 
     if (_targetYearId == null) {
-      _showMessage('Selectionnez une annee cible.');
+      _showMessage('Sélectionnez une année cible.');
       return;
     }
 
     if (_sourceYearId == _targetYearId) {
-      _showMessage('L\'annee cible doit etre differente de l\'annee source.');
+      _showMessage('L\'annee cible doit etre differente de l\'année source.');
       return;
     }
 
@@ -345,8 +345,8 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
       }
       _showMessage(
         execute
-            ? 'Passation executee avec succes.'
-            : 'Simulation de passation creee avec succes.',
+            ? 'Passation exécutée avec succès.'
+            : 'Simulation de passation créée avec succès.',
         isSuccess: true,
       );
       await _loadData(showLoading: false);
@@ -357,7 +357,7 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
       if (!mounted) {
         return;
       }
-      _showMessage('Echec operation: $error');
+      _showMessage('Echec opération: $error');
     } finally {
       if (mounted) {
         setState(() => _busy = false);
@@ -396,7 +396,7 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
                         final row = decisions[index];
                         final studentName = (row['student_full_name']?.toString().trim().isNotEmpty ?? false)
                             ? row['student_full_name'].toString().trim()
-                            : 'Eleve #${row['student'] ?? '-'}';
+                            : 'Élève #${row['student'] ?? '-'}';
                         final matricule = row['student_matricule']?.toString() ?? '';
                         final sourceClass = row['source_classroom_name']?.toString() ?? '-';
                         final targetClass = row['target_classroom_name']?.toString() ?? '-';
@@ -472,8 +472,8 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
           const SizedBox(height: 8),
           Text(
             selectedEtab == null
-                ? 'Aucun etablissement selectionne.'
-                : 'Etablissement actif: ${selectedEtab.name}',
+                ? 'Aucun établissement sélectionné.'
+                : 'Établissement actif: ${selectedEtab.name}',
           ),
           const SizedBox(height: 12),
           Card(
@@ -488,9 +488,10 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
                   ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<int?>(
+                    isExpanded: true,
                     key: ValueKey('source-year-${_sourceYearId ?? 'none'}'),
                     initialValue: _sourceYearId,
-                    decoration: const InputDecoration(labelText: 'Annee source'),
+                    decoration: const InputDecoration(labelText: 'Année source'),
                     items: _years
                         .map(
                           (row) => DropdownMenuItem<int?>(
@@ -519,11 +520,12 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
                   ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<int?>(
+                    isExpanded: true,
                     key: ValueKey('target-year-${_targetYearId ?? 'none'}'),
                     initialValue: _targetYearId,
                     decoration: const InputDecoration(
-                      labelText: 'Annee cible',
-                      helperText: 'Obligatoire et differente de l\'annee source',
+                      labelText: 'Année cible',
+                      helperText: 'Obligatoire et differente de l\'année source',
                     ),
                     items: [
                       ..._years.map(
@@ -564,7 +566,7 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
                   ),
                   const SizedBox(height: 8),
                   if (sourceClasses.isEmpty)
-                    const Text('Aucune classe trouvee pour cette annee source.')
+                    const Text('Aucune classe trouvee pour cette année source.')
                   else
                     Wrap(
                       spacing: 8,
@@ -622,7 +624,7 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
                     const Padding(
                       padding: EdgeInsets.only(top: 10),
                       child: Text(
-                        'Attention: l\'annee source et l\'annee cible doivent etre differentes.',
+                        'Attention: l\'annee source et l\'année cible doivent etre differentes.',
                         style: TextStyle(color: Colors.orange),
                       ),
                     ),
