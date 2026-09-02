@@ -158,7 +158,7 @@ void main() {
     await _monter(tester, _FauxDepot());
 
     expect(
-      find.text('Aucun incident disciplinaire enregistre. Rien a signaler.'),
+      find.text('Aucun incident disciplinaire enregistré. Rien a signaler.'),
       findsOneWidget,
     );
   });

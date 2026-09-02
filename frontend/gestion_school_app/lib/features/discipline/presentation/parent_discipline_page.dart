@@ -9,7 +9,7 @@ import 'discipline_controller.dart';
 /// Vue discipline en lecture seule destinee aux parents et aux eleves.
 ///
 /// Le backend restreint deja `/discipline-incidents/` aux enfants du parent
-/// connecte (ou a l'eleve lui-meme), la page n'a donc aucun filtrage a faire:
+/// connecte (ou a l'élève lui-meme), la page n'a donc aucun filtrage a faire:
 /// elle se contente de presenter les incidents recus, groupes par enfant.
 /// Aucune action d'ecriture n'est exposee.
 class ParentDisciplinePage extends ConsumerStatefulWidget {
@@ -134,7 +134,7 @@ class _ParentDisciplinePageState extends ConsumerState<ParentDisciplinePage> {
               icon: Icons.verified_outlined,
               color: const Color(0xFF197A43),
               message:
-                  'Aucun incident disciplinaire enregistre. Rien a signaler.',
+                  'Aucun incident disciplinaire enregistré. Rien a signaler.',
             )
           else ...[
             Wrap(

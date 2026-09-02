@@ -321,8 +321,8 @@ class _ChatPanelState extends State<ChatPanel> {
     if (ecart == 0) return 'Aujourd’hui';
     if (ecart == 1) return 'Hier';
     final mois = _moisCourts[jour.month - 1];
-    // L'annee ne s'affiche que si ce n'est pas la courante: la repeter sur
-    // chaque separateur d'une meme annee scolaire n'apprend rien.
+    // L'année ne s'affiche que si ce n'est pas la courante: la repeter sur
+    // chaque separateur d'une meme année scolaire n'apprend rien.
     if (jour.year == maintenant.year) return '${jour.day} $mois';
     return '${jour.day} $mois ${jour.year}';
   }
@@ -465,7 +465,7 @@ class _ChatPanelState extends State<ChatPanel> {
       case 'parent':
         return 'Parents';
       case 'student':
-        return 'Eleves';
+        return 'Élèves';
       default:
         return 'Autres';
     }
@@ -880,7 +880,7 @@ class _ChatPanelState extends State<ChatPanel> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(isGroup ? 'Groupe ferme avec succes.' : 'Conversation fermee avec succes.'),
+          content: Text(isGroup ? 'Groupe fermé avec succès.' : 'Conversation fermée avec succès.'),
         ),
       );
     } catch (_) {
@@ -1984,7 +1984,7 @@ class _ChatPanelState extends State<ChatPanel> {
     if (messageId > 0 && lastReadMessageId >= messageId) {
       return 'Lu';
     }
-    return 'Recu';
+    return 'Reçu';
   }
 
   void _updatePendingMessageProgress(String clientMessageId, int progress) {
@@ -2144,7 +2144,7 @@ class _ChatPanelState extends State<ChatPanel> {
                       ),
                     ),
                     IconButton(
-                      tooltip: 'Telecharger',
+                      tooltip: 'Télécharger',
                       onPressed: message['is_local_pending'] == true
                           ? null
                           : () => _downloadAttachment(message),
@@ -2230,7 +2230,7 @@ class _ChatPanelState extends State<ChatPanel> {
                           ),
                         ),
                         IconButton(
-                          tooltip: 'Telecharger',
+                          tooltip: 'Télécharger',
                           onPressed: message['is_local_pending'] == true
                               ? null
                               : () => _downloadAttachment(message),
@@ -2267,7 +2267,7 @@ class _ChatPanelState extends State<ChatPanel> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Apercu PDF impossible: ${_extractApiError(error)}')),
+        SnackBar(content: Text('Aperçu PDF impossible: ${_extractApiError(error)}')),
       );
     }
   }
@@ -2604,7 +2604,7 @@ class _ChatPanelState extends State<ChatPanel> {
                               ),
                             ),
                             IconButton(
-                              tooltip: 'Telecharger',
+                              tooltip: 'Télécharger',
                               onPressed: currentMessage['is_local_pending'] == true
                                   ? null
                                   : () => _downloadAttachment(currentMessage),
@@ -2809,7 +2809,7 @@ class _ChatPanelState extends State<ChatPanel> {
         return false;
       }
       final cancelled = _isCancelledError(error);
-      final errorMessage = cancelled ? 'Envoi du fichier annule.' : _extractApiError(error);
+      final errorMessage = cancelled ? 'Envoi du fichier annulé.' : _extractApiError(error);
       setState(() {
         if (cancelled) {
           _removePendingUploadMessage(clientMessageId, conversationId);
@@ -2985,7 +2985,7 @@ class _ChatPanelState extends State<ChatPanel> {
                             const VerticalDivider(width: 18),
                             Expanded(
                               child: selectedConversation == null
-                                  ? const Center(child: Text('Selectionnez une conversation'))
+                                  ? const Center(child: Text('Sélectionnez une conversation'))
                                   : _buildThread(selectedConversation, compact: false),
                             ),
                           ],
@@ -3140,7 +3140,7 @@ class _ChatPanelState extends State<ChatPanel> {
                     SizedBox(
                       height: 320,
                       child: grouped.isEmpty
-                          ? const Center(child: Text('Aucun utilisateur trouve'))
+                          ? const Center(child: Text('Aucun utilisateur trouvé'))
                           : ListView.builder(
                               itemCount: grouped.length,
                               itemBuilder: (context, index) {
@@ -3238,7 +3238,7 @@ class _ChatPanelState extends State<ChatPanel> {
                     SizedBox(
                       height: 320,
                       child: grouped.isEmpty
-                          ? const Center(child: Text('Aucun utilisateur trouve'))
+                          ? const Center(child: Text('Aucun utilisateur trouvé'))
                           : ListView.builder(
                               itemCount: grouped.length,
                               itemBuilder: (context, index) {
@@ -3414,6 +3414,7 @@ class _ChatPanelState extends State<ChatPanel> {
         builder: (_, setLocal) => AlertDialog(
           title: const Text('Ajouter un membre'),
           content: DropdownButtonFormField<int?>(
+            isExpanded: true,
             initialValue: selectedUserId,
             items: candidates
                 .map(
@@ -3964,7 +3965,7 @@ class _ChatPanelState extends State<ChatPanel> {
                                           if (_isPdfAttachment(message) &&
                                               message['is_local_pending'] != true)
                                             Text(
-                                              'Apercu PDF disponible',
+                                              'Aperçu PDF disponible',
                                               style: Theme.of(context).textTheme.labelSmall?.copyWith(
                                                 color: Theme.of(context).colorScheme.primary,
                                                 fontWeight: FontWeight.w600,

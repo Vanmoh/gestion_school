@@ -91,4 +91,103 @@ void main() {
       expect(decoration.border!.top.color, isNot(Colors.black12));
     });
   });
+
+  group('TableauOuFiches', () {
+    final colonnes = const [
+      DataColumn(label: Text('Élève')),
+      DataColumn(label: Text('Montant')),
+      DataColumn(label: Text('Actions')),
+    ];
+    final lignes = const [
+      DataRow(
+        cells: [
+          DataCell(Text('Awa Traoré')),
+          DataCell(Text('25 000 FCFA')),
+          DataCell(Icon(Icons.more_vert)),
+        ],
+      ),
+    ];
+
+    Future<void> poser(WidgetTester tester, double largeur, {Set<int> muettes = const {}}) async {
+      tester.view.physicalSize = Size(largeur, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TableauOuFiches(
+              colonnes: colonnes,
+              lignes: lignes,
+              colonnesSansLibelle: muettes,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    testWidgets('au large, un tableau', (tester) async {
+      await poser(tester, 1200);
+
+      expect(find.byType(DataTable), findsOneWidget);
+      expect(find.text('Awa Traoré'), findsOneWidget);
+    });
+
+    testWidgets('à l_étroit, des fiches qui portent leurs libellés', (
+      tester,
+    ) async {
+      // Les mêmes données, sans le défilement latéral: chaque cellule reprend
+      // l'en-tête de sa colonne.
+      await poser(tester, 480);
+
+      expect(find.byType(DataTable), findsNothing);
+      expect(find.text('Awa Traoré'), findsOneWidget);
+      expect(find.text('Élève'), findsOneWidget);
+      expect(find.text('Montant'), findsOneWidget);
+    });
+
+    testWidgets('une colonne muette montre sa cellule sans son libellé', (
+      tester,
+    ) async {
+      // « Actions » n'apprend rien au-dessus d'un menu à trois points.
+      await poser(tester, 480, muettes: const {2});
+
+      expect(find.byIcon(Icons.more_vert), findsOneWidget);
+      expect(find.text('Actions'), findsNothing);
+      expect(find.text('Élève'), findsOneWidget);
+    });
+
+    testWidgets('la sélection d_une ligne survit au passage en fiches', (
+      tester,
+    ) async {
+      var choisi = false;
+      tester.view.physicalSize = const Size(480, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TableauOuFiches(
+              colonnes: colonnes,
+              lignes: [
+                DataRow(
+                  onSelectChanged: (_) => choisi = true,
+                  cells: const [
+                    DataCell(Text('Awa Traoré')),
+                    DataCell(Text('25 000 FCFA')),
+                    DataCell(Icon(Icons.more_vert)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Awa Traoré'));
+
+      expect(choisi, isTrue);
+    });
+  });
 }

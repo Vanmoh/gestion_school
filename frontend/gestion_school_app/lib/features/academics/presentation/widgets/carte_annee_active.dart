@@ -140,9 +140,9 @@ class CarteAnneeActive extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 4),
-        // Les gestes de vie de l'annee, la ou on la regarde. Chacun n'a de
+        // Les gestes de vie de l'année, la ou on la regarde. Chacun n'a de
         // sens que dans un etat: une annee active n'a pas a etre activee, une
-        // annee cloturee ne redevient l'annee de saisie qu'apres reouverture
+        // annee cloturee ne redevient l'année de saisie qu'apres reouverture
         // -- le serveur refuse d'ailleurs le raccourci.
         Wrap(
           spacing: 8,

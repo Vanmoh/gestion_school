@@ -37,7 +37,7 @@ class RepriseAnnee {
 /// Sans cet ecran, preparer une rentree demandait de ressaisir a la main
 /// les classes, leurs matieres, les affectations d'enseignants et tout
 /// l'emploi du temps -- pres de quatre cents lignes pour une structure qui
-/// change peu d'une annee sur l'autre.
+/// change peu d'une année sur l'autre.
 class AssistantOuvertureAnnee extends ConsumerStatefulWidget {
   const AssistantOuvertureAnnee({super.key});
 
@@ -167,7 +167,7 @@ class _AssistantOuvertureAnneeState
 
   /// Remonte le message du serveur plutot que la trace technique.
   ///
-  /// C'est lui qui dit ce qui bloque -- une periode qui chevauche l'annee
+  /// C'est lui qui dit ce qui bloque -- une période qui chevauche l'annee
   /// precedente, par exemple -- et l'utilisateur ne peut rien faire d'un
   /// « DioException [bad response] ».
   String _messageDErreur(Object error) {

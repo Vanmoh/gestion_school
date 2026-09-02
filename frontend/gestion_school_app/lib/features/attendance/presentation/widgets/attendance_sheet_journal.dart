@@ -299,7 +299,7 @@ class _LigneFiche extends StatelessWidget {
               : 'Modifier dans la feuille d\'appel',
           visualDensity: VisualDensity.compact,
           onPressed: () => onModifier(_classroomId, _date),
-          // Pas `edit_note`: c'est deja l'icone de l'etat « Brouillon », deux
+          // Pas `edit_note`: c'est déjà l'icone de l'etat « Brouillon », deux
           // lignes plus loin. Deux sens pour un meme dessin sur la meme ligne.
           icon: const Icon(Icons.edit_outlined, size: 19),
         ),

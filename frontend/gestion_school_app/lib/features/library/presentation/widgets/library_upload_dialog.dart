@@ -229,6 +229,7 @@ class _LibraryUploadDialogState extends State<LibraryUploadDialog> {
             children: [
               if (_series.isNotEmpty) ...[
                 DropdownButtonFormField<int>(
+                  isExpanded: true,
                   initialValue: _serieId,
                   decoration: const InputDecoration(labelText: 'Série'),
                   items: [
@@ -263,6 +264,7 @@ class _LibraryUploadDialogState extends State<LibraryUploadDialog> {
               if (_creeUneSerie) const SizedBox(height: 10),
               if (!_creeUneSerie && matieres.isNotEmpty) ...[
                 DropdownButtonFormField<int>(
+                  isExpanded: true,
                   initialValue: _matiereId,
                   decoration: const InputDecoration(labelText: 'Matière'),
                   items: [

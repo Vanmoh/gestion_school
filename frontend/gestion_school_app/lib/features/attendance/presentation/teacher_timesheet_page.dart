@@ -22,6 +22,7 @@ import '../data/timesheet_repository.dart';
 import '../domain/timesheet_concordance.dart';
 import 'widgets/concordance_panel.dart';
 import 'widgets/concordance_report_dialog.dart';
+import '../../../core/network/chargement_tolerant.dart';
 
 enum _SummaryPeriod { day, week, month }
 
@@ -201,7 +202,7 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
     final lower = normalized.toLowerCase();
 
     if (lower.contains('dimanche')) {
-      return 'Pointage refuse: le dimanche est interdit. Choisissez un jour autorise (lundi a samedi).';
+      return 'Pointage refusé : le dimanche est interdit. Choisissez un jour autorisé (lundi à samedi).';
     }
 
     if (lower.contains("aucun creneau") || lower.contains("emploi du temps")) {
@@ -305,7 +306,7 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
 
   Future<void> _openSummaryDialog() async {
     if (_timeEntries.isEmpty) {
-      _showMessage('Aucune donnee de presence a analyser pour le moment.');
+      _showMessage('Aucune donnée de presence a analyser pour le moment.');
       return;
     }
 
@@ -328,8 +329,11 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
     try {
       final repo = ref.read(paymentsRepositoryProvider);
       final authUser = ref.read(authControllerProvider).value;
+      // La liste du personnel est fermee a l'enseignant: la reclamer dans le
+      // meme groupe faisait tomber son propre ecran de pointage. Elle devient
+      // facultative, et il passe par sa fiche a lui.
       final results = await Future.wait([
-        repo.fetchTeachers(),
+        tolerantAuRefus(repo.fetchTeachers(), const <Map<String, dynamic>>[]),
         repo.fetchTeacherTimeEntries(),
       ]);
 
@@ -342,6 +346,14 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
         teachers = teachers
             .where((row) => _asInt(row['user']) == (authUser?.id ?? 0))
             .toList(growable: false);
+        if (teachers.isEmpty) {
+          // Sans la liste, sa propre fiche suffit -- et c'est la seule dont
+          // il ait besoin.
+          final sienne = await repo.fetchMonProfilEnseignant();
+          if (sienne != null) {
+            teachers = <Map<String, dynamic>>[sienne];
+          }
+        }
         final ownTeacherId = teachers.isNotEmpty ? _asInt(teachers.first['id']) : null;
         timeEntries = ownTeacherId == null
             ? const <Map<String, dynamic>>[]
@@ -390,13 +402,13 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
 
     final teacherId = _selectedTeacherId;
     if (teacherId == null) {
-      _showMessage('Selectionnez un enseignant.');
+      _showMessage('Sélectionnez un enseignant.');
       return;
     }
 
     if (!_forgotCheckout) {
       if (_toMinutes(_checkOut) <= _toMinutes(_checkIn)) {
-        _showMessage("L'heure de sortie doit etre apres l'heure d'entree.");
+        _showMessage("L'heure de sortie doit etre après l'heure d'entree.");
         return;
       }
     }
@@ -418,7 +430,7 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
       _notesController.clear();
       _offScheduleController.clear();
       setState(() => _forgotCheckout = false);
-      _showMessage('Pointage enregistre avec succes.', isSuccess: true);
+      _showMessage('Pointage enregistré avec succès.', isSuccess: true);
       await _loadData();
     } catch (error) {
       final details = _extractApiErrorMessage(error);
@@ -555,6 +567,7 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                     SizedBox(
                       width: 380,
                       child: DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedTeacherId,
                         decoration: const InputDecoration(
                           labelText: 'Enseignant',
@@ -761,7 +774,7 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                 ),
                 const SizedBox(height: 8),
                 if (_timeEntries.isEmpty)
-                  const Text('Aucun pointage enseignant enregistre.')
+                  const Text('Aucun pointage enseignant enregistré.')
                 else
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
@@ -922,7 +935,7 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
                     children: [
                       Expanded(
                         child: Text(
-                          'Details pointage enseignant',
+                          'Détails pointage enseignant',
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                       ),
@@ -1219,7 +1232,7 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1377,11 +1390,11 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
       );
 
       if (savePath == null && !kIsWeb) {
-        widget.onInfo('Export CSV annule.');
+        widget.onInfo('Export CSV annulé.');
         return;
       }
 
-      widget.onInfo('Fichier CSV exporte (${rows.length} lignes): $fileName');
+      widget.onInfo('Fichier CSV exporté (${rows.length} lignes): $fileName');
       return;
     } catch (_) {
       // Fallback: preserve user access to the data when file save is unavailable.
@@ -1409,7 +1422,7 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
       xl.TextCellValue('Sortie'),
       xl.TextCellValue('Heures'),
       xl.TextCellValue('Retard (min)'),
-      xl.TextCellValue('Auto ferme'),
+      xl.TextCellValue('Auto fermé'),
       xl.TextCellValue('Motif auto'),
     ]);
 
@@ -1454,11 +1467,11 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
       );
 
       if (savePath == null && !kIsWeb) {
-        widget.onInfo('Export XLSX annule.');
+        widget.onInfo('Export XLSX annulé.');
         return;
       }
 
-      widget.onInfo('Fichier XLSX exporte (${rows.length} lignes): $fileName');
+      widget.onInfo('Fichier XLSX exporté (${rows.length} lignes): $fileName');
       return;
     } catch (_) {
       final csv = _buildCsv(rows);
@@ -1475,7 +1488,7 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
     Map<String, dynamic> kpi,
   ) async {
     if (rows.isEmpty) {
-      widget.onInfo('Aucune donnee a exporter en PDF.');
+      widget.onInfo('Aucune donnée a exporter en PDF.');
       return;
     }
 
@@ -1581,9 +1594,9 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
               child: pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
-                  pw.Text('Periode: ${widget.periodLabelBuilder(_period)} | Plage: $rangeLabel'),
+                  pw.Text('Période: ${widget.periodLabelBuilder(_period)} | Plage: $rangeLabel'),
                   pw.Text('Portee: $scopeLabel | Enseignant: $teacherLabel'),
-                  pw.Text('Genere le: $generatedAt'),
+                  pw.Text('Généré le : $generatedAt'),
                 ],
               ),
             ),
@@ -1696,7 +1709,7 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1722,7 +1735,7 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
 
   Widget _hoursByDayBarChart(List<MapEntry<String, double>> sortedDays) {
     if (sortedDays.isEmpty) {
-      return const Center(child: Text('Aucune donnee'));
+      return const Center(child: Text('Aucune donnée'));
     }
 
     final maxY = sortedDays
@@ -2007,7 +2020,7 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
               child: _rightPaneTab == 0
                   ? _hoursByDayBarChart(sortedDays)
                   : (sortedTeachers.isEmpty
-                        ? const Center(child: Text('Aucune donnee'))
+                        ? const Center(child: Text('Aucune donnée'))
                         : ListView.builder(
                             itemCount: sortedTeachers.length,
                             itemBuilder: (context, index) {
@@ -2063,8 +2076,9 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
                   SizedBox(
                     width: 148,
                     child: DropdownButtonFormField<_SummaryPeriod>(
+                      isExpanded: true,
                       initialValue: _period,
-                      decoration: const InputDecoration(labelText: 'Periode', isDense: true),
+                      decoration: const InputDecoration(labelText: 'Période', isDense: true),
                       items: _SummaryPeriod.values
                           .map(
                             (period) => DropdownMenuItem<_SummaryPeriod>(
@@ -2082,6 +2096,7 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
                   SizedBox(
                     width: 168,
                     child: DropdownButtonFormField<_SummaryScope>(
+                      isExpanded: true,
                       initialValue: _scope,
                       decoration: const InputDecoration(labelText: 'Portee', isDense: true),
                       items: const [
@@ -2117,6 +2132,7 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
                     SizedBox(
                       width: 280,
                       child: DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: _selectedTeacherId,
                         decoration: const InputDecoration(labelText: 'Enseignant', isDense: true),
                         items: widget.teachers

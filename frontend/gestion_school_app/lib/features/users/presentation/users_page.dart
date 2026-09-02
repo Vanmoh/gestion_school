@@ -16,6 +16,7 @@ import 'widgets/dialogue_suppression.dart';
 import 'widgets/pastille_compte.dart';
 import 'widgets/user_palette_card.dart';
 import 'users_controller.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class UsersPage extends ConsumerStatefulWidget {
   const UsersPage({super.key});
@@ -93,7 +94,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     ('censor', 'Censeur'),
     ('supervisor', 'Surveillant'),
     ('parent', 'Parent'),
-    ('student', 'Eleve'),
+    ('student', 'Élève'),
   ];
 
   @override
@@ -319,12 +320,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     if (username.isNotEmpty) {
       return username;
     }
-    return 'Eleve #${_asInt(row['id'])}';
+    return 'Élève #${_asInt(row['id'])}';
   }
 
   String _classroomDisplayName(int? classroomId) {
     if (classroomId == null) {
-      return 'Non selectionnee';
+      return 'Non sélectionnée';
     }
     for (final row in _classroomOptions) {
       if (_asInt(row['id']) == classroomId) {
@@ -441,7 +442,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
 
   Future<void> _openStudentMultiSelectDialog() async {
     if (_studentOptions.isEmpty) {
-      _showMessage('Aucun eleve disponible pour cet etablissement.');
+      _showMessage('Aucun élève disponible pour cet établissement.');
       return;
     }
 
@@ -452,7 +453,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Selectionner un ou plusieurs eleves'),
+              title: const Text('Sélectionner un ou plusieurs élèves'),
               content: SizedBox(
                 width: 460,
                 child: ListView.builder(
@@ -519,16 +520,16 @@ class _UsersPageState extends ConsumerState<UsersPage> {
         : selectedEtablissement?.id;
 
     if (etablissementId == null) {
-      _showMessage('Aucun etablissement actif pour creer cet utilisateur.');
+      _showMessage('Aucun établissement actif pour creer cet utilisateur.');
       return;
     }
 
     if (_roleNeedsClassroom(_selectedRole) && _selectedCreateClassroomId == null) {
-      _showMessage('Selectionnez une classe pour ce role.');
+      _showMessage('Sélectionnez une classe pour ce role.');
       return;
     }
     if (_roleNeedsStudents(_selectedRole) && _selectedCreateStudentIds.isEmpty) {
-      _showMessage('Selectionnez au moins un eleve pour ce parent.');
+      _showMessage('Sélectionnez au moins un élève pour ce parent.');
       return;
     }
 
@@ -559,7 +560,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
 
     setState(_resetCreateForm);
     unawaited(_syncCreationReferences(force: true));
-    _showMessage('Utilisateur cree avec succes.', isSuccess: true);
+    _showMessage('Utilisateur créé avec succès.', isSuccess: true);
   }
 
   Future<void> _openUserDetails(UserAccount user) async {
@@ -567,7 +568,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Details utilisateur'),
+          title: const Text('Détails utilisateur'),
           content: SizedBox(
             width: 420,
             child: Column(
@@ -578,7 +579,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                 _detailRow('Username', user.username),
                 _detailRow('Role', _roleLabel(user.role)),
                 _detailRow(
-                  'Etablissement',
+                  'Établissement',
                   user.etablissementName.trim().isEmpty
                       ? '-'
                       : user.etablissementName,
@@ -662,6 +663,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                       ),
                       const SizedBox(height: 10),
                       DropdownButtonFormField<String>(
+                        isExpanded: true,
                         initialValue: editRole,
                         decoration: const InputDecoration(labelText: 'Role'),
                         items: _roles
@@ -680,9 +682,10 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                       ),
                       const SizedBox(height: 10),
                       DropdownButtonFormField<int>(
+                        isExpanded: true,
                         initialValue: editEtablissementId,
                         decoration: const InputDecoration(
-                          labelText: 'Etablissement',
+                          labelText: 'Établissement',
                         ),
                         items: ref
                             .read(etablissementProvider)
@@ -703,7 +706,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                               },
                         validator: (value) {
                           if (value == null) {
-                            return 'Etablissement requis';
+                            return 'Établissement requis';
                           }
                           return null;
                         },
@@ -778,7 +781,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     phoneController.dispose();
 
     if (updated == true) {
-      _showMessage('Utilisateur modifie avec succes.', isSuccess: true);
+      _showMessage('Utilisateur modifié avec succès.', isSuccess: true);
     }
   }
 
@@ -905,28 +908,8 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     );
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   /// Deplie ou replie le formulaire de creation, en bas de page.
   ///
@@ -1243,6 +1226,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                   SizedBox(
                     width: 240,
                     child: DropdownButtonFormField<String>(
+                      isExpanded: true,
                       initialValue: _roleFilter,
                       decoration: const InputDecoration(
                         labelText: 'Filtrer par role',
@@ -1270,6 +1254,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                   SizedBox(
                     width: 210,
                     child: DropdownButtonFormField<String>(
+                      isExpanded: true,
                       key: const Key('filtre-etat-compte'),
                       initialValue: _etatFilter,
                       decoration: const InputDecoration(
@@ -1367,7 +1352,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                         : existingUsernames.contains(
                                           value.trim().toLowerCase(),
                                         )
-                                        ? 'Ce nom utilisateur existe deja'
+                                        ? 'Ce nom utilisateur existe déjà'
                                         : null,
                                   ),
                                 ),
@@ -1410,6 +1395,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                 SizedBox(
                                   width: 220,
                                   child: DropdownButtonFormField<String>(
+                                    isExpanded: true,
                                     initialValue: _selectedRole,
                                     decoration: const InputDecoration(
                                       labelText: 'Role',
@@ -1437,12 +1423,13 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                 SizedBox(
                                   width: 280,
                                   child: DropdownButtonFormField<int>(
+                                    isExpanded: true,
                                     initialValue: isSuperAdmin
                                         ? (_selectedCreateEtablissementId ??
                                               selectedEtablissement?.id)
                                         : selectedEtablissement?.id,
                                     decoration: const InputDecoration(
-                                      labelText: 'Etablissement',
+                                      labelText: 'Établissement',
                                     ),
                                     items: allEtablissements
                                         .map(
@@ -1467,7 +1454,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                       if ((value ??
                                               selectedEtablissement?.id) ==
                                           null) {
-                                        return 'Etablissement requis';
+                                        return 'Établissement requis';
                                       }
                                       return null;
                                     },
@@ -1510,7 +1497,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                   children: [
                                     Text(
                                       _selectedRole == 'student'
-                                          ? 'Champs supplementaires eleve'
+                                          ? 'Champs supplementaires élève'
                                           : 'Champs supplementaires parent',
                                       style: Theme.of(context).textTheme.labelLarge?.copyWith(
                                         fontWeight: FontWeight.w700,
@@ -1525,6 +1512,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                         SizedBox(
                                           width: 320,
                                           child: DropdownButtonFormField<int>(
+                                            isExpanded: true,
                                             initialValue: _selectedCreateClassroomId,
                                             decoration: const InputDecoration(
                                               labelText: 'Classe (obligatoire)',
@@ -1564,7 +1552,7 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                               validator: (_) {
                                                 if (_roleNeedsStudents(_selectedRole) &&
                                                     _selectedCreateStudentIds.isEmpty) {
-                                                  return 'Selectionnez au moins un eleve';
+                                                  return 'Sélectionnez au moins un élève';
                                                 }
                                                 return null;
                                               },
@@ -1585,8 +1573,8 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                                       icon: const Icon(Icons.groups_2_outlined),
                                                       label: Text(
                                                         _selectedCreateStudentIds.isEmpty
-                                                            ? 'Selectionner les eleves (obligatoire)'
-                                                            : '${_selectedCreateStudentIds.length} eleve(s) selectionne(s)',
+                                                            ? 'Sélectionner les élèves (obligatoire)'
+                                                            : '${_selectedCreateStudentIds.length} élève(s) sélectionné(s)',
                                                       ),
                                                     ),
                                                     if (selectedNames.isNotEmpty) ...[
@@ -1620,15 +1608,15 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                     const SizedBox(height: 6),
                                     Text(
                                       _selectedRole == 'student'
-                                          ? 'Un eleve doit obligatoirement etre associe a une classe.'
-                                          : 'Un parent doit avoir une classe de reference et au moins un eleve. Les eleves peuvent venir de classes differentes.',
+                                          ? 'Un élève doit obligatoirement etre associe a une classe.'
+                                          : 'Un parent doit avoir une classe de référence et au moins un élève. Les élèves peuvent venir de classes differentes.',
                                       style: Theme.of(context).textTheme.bodySmall,
                                     ),
                                     if (_selectedCreateClassroomId != null)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4),
                                         child: Text(
-                                          'Classe selectionnee: ${_classroomDisplayName(_selectedCreateClassroomId)}',
+                                          'Classe sélectionnée: ${_classroomDisplayName(_selectedCreateClassroomId)}',
                                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                             fontWeight: FontWeight.w600,
                                           ),

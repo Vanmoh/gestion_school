@@ -20,6 +20,7 @@ import '../../attendance/data/timesheet_repository.dart';
 import '../../attendance/domain/timesheet_concordance.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import 'timetable_workload.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class TimetablePage extends ConsumerStatefulWidget {
   const TimetablePage({super.key});
@@ -432,7 +433,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
   Future<void> _publishSelectedClass({required bool lockAfterPublish}) async {
     if (_isTimetableReadOnlyRole()) {
-      _showMessage('Mode lecture seule: publication non autorisee.');
+      _showMessage('Mode lecture seule: publication non autorisée.');
       return;
     }
 
@@ -516,7 +517,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
   Future<void> _unpublishSelectedClass() async {
     if (_isTimetableReadOnlyRole()) {
-      _showMessage('Mode lecture seule: operation non autorisee.');
+      _showMessage('Mode lecture seule: opération non autorisée.');
       return;
     }
 
@@ -733,6 +734,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<int>(
+                            isExpanded: true,
                             initialValue: selectedClass,
                             decoration: const InputDecoration(
                               labelText: 'Classe',
@@ -813,7 +815,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
   Future<void> _openDuplicateScheduleDialog() async {
     if (_isTimetableReadOnlyRole()) {
-      _showMessage('Mode lecture seule: duplication non autorisee.');
+      _showMessage('Mode lecture seule: duplication non autorisée.');
       return;
     }
 
@@ -852,6 +854,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     DropdownButtonFormField<int>(
+                      isExpanded: true,
                       initialValue: sourceClass,
                       decoration: const InputDecoration(
                         labelText: 'Classe source',
@@ -882,6 +885,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<int>(
+                      isExpanded: true,
                       initialValue: targetClass,
                       decoration: const InputDecoration(
                         labelText: 'Classe cible',
@@ -1130,7 +1134,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     int? forceClassroomId,
   }) async {
     if (_isTimetableReadOnlyRole()) {
-      _showMessage('Mode lecture seule: modification des horaires non autorisee.');
+      _showMessage('Mode lecture seule: modification des horaires non autorisée.');
       return;
     }
 
@@ -1243,6 +1247,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     Text('Classe: ${_classNameById(classroomId)}'),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<int>(
+                      isExpanded: true,
                       initialValue: selectedAssignment,
                       decoration: const InputDecoration(
                         labelText: 'Affectation (matière / enseignant)',
@@ -1265,6 +1270,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<String>(
+                      isExpanded: true,
                       initialValue: selectedDay,
                       decoration: const InputDecoration(labelText: 'Jour'),
                       items: _dayOrder
@@ -1598,6 +1604,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               DropdownButtonFormField<int>(
+                                isExpanded: true,
                                 initialValue: selectedClass,
                                 decoration: const InputDecoration(
                                   labelText: 'Classe',
@@ -1622,6 +1629,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                               ),
                               const SizedBox(height: 10),
                               DropdownButtonFormField<int>(
+                                isExpanded: true,
                                 initialValue: selectedAssignment,
                                 decoration: const InputDecoration(
                                   labelText: 'Affectation (matière / enseignant)',
@@ -1864,7 +1872,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
   Future<void> _deleteSlot(Map<String, dynamic> slot) async {
     if (_isTimetableReadOnlyRole()) {
-      _showMessage('Mode lecture seule: suppression non autorisee.');
+      _showMessage('Mode lecture seule: suppression non autorisée.');
       return;
     }
 
@@ -1981,28 +1989,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     return false;
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -2165,6 +2153,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
             ),
           const SizedBox(height: 10),
           DropdownButtonFormField<int>(
+            isExpanded: true,
             initialValue: _selectedClassroom,
             decoration: const InputDecoration(labelText: 'Classe'),
             items: visibleClassrooms
@@ -2624,7 +2613,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   runSpacing: 10,
                   children: [
                     _metricChip('Enseignants', '${_teachers.length}'),
-                    _metricChip('Matieres', '${_subjects.length}'),
+                    _metricChip('Matières', '${_subjects.length}'),
                     _metricChip('Classes', '${_classrooms.length}'),
                     _metricChip('Affectations', '${_assignments.length}'),
                     _metricChip('Horaires', '${_scheduleSlots.length}'),

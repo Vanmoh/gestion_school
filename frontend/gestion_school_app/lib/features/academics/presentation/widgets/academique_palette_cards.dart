@@ -187,7 +187,7 @@ int _entier(dynamic valeur) {
 class ClassePaletteCard extends StatelessWidget {
   final Map<String, dynamic> classe;
 
-  /// Le nom de l'annee scolaire, resolu par l'appelant qui porte la table.
+  /// Le nom de l'année scolaire, resolu par l'appelant qui porte la table.
   final String anneeNom;
 
   /// Les matieres rattachees a cette classe.

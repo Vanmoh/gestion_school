@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
 import '../../../core/permissions/module_permissions.dart';
+import '../../../core/widgets/indicateur.dart';
 
 class CommunicationPage extends ConsumerStatefulWidget {
   const CommunicationPage({super.key});
@@ -37,7 +38,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
   List<Map<String, dynamic>> _notifications = [];
   List<Map<String, dynamic>> _smsProviders = [];
 
-  /// Lecture seule d'apres la matrice du backend, plus d'apres une liste de
+  /// Lecture seule d'après la matrice du backend, plus d'apres une liste de
   /// roles recopiee ici.
   bool _isCommunicationReadOnlyRole() {
     return !ref.read(currentPermissionsProvider).canWrite('communication');
@@ -136,7 +137,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
     String success,
   ) async {
     if (_isCommunicationReadOnlyRole()) {
-      _showMessage('Mode lecture seule: operation non autorisee.');
+      _showMessage('Mode lecture seule: opération non autorisée.');
       return false;
     }
 
@@ -159,7 +160,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
 
   Future<bool> _delete(String endpoint, String success) async {
     if (_isCommunicationReadOnlyRole()) {
-      _showMessage('Mode lecture seule: suppression non autorisee.');
+      _showMessage('Mode lecture seule: suppression non autorisée.');
       return false;
     }
 
@@ -194,7 +195,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
       'title': title,
       'message': message,
       'audience': audience.isEmpty ? 'all' : audience,
-    }, 'Annonce publiee');
+    }, 'Annonce publiée');
 
     if (ok) {
       _annTitleController.clear();
@@ -218,7 +219,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
       'title': title,
       'message': message,
       'is_sent': false,
-    }, 'Notification creee');
+    }, 'Notification créée');
 
     if (ok) {
       _notifTitleController.clear();
@@ -250,7 +251,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
       'api_token': apiToken,
       'sender_id': _smsSenderController.text.trim(),
       'is_active': _smsActive,
-    }, 'Configuration SMS enregistree');
+    }, 'Configuration SMS enregistrée');
 
     if (ok) {
       _smsProviderController.clear();
@@ -366,28 +367,8 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
     }).toList();
   }
 
-  Widget _metricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _metricChip(String label, String value) =>
+      Indicateur(libelle: label, valeur: value);
 
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -509,6 +490,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               DropdownButtonFormField<String>(
+                isExpanded: true,
                 initialValue: _notifChannel,
                 decoration: const InputDecoration(labelText: 'Canal'),
                 items: const [
@@ -522,6 +504,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
               ),
               const SizedBox(height: 10),
               DropdownButtonFormField<int?>(
+                isExpanded: true,
                 initialValue: _selectedRecipient,
                 decoration: const InputDecoration(
                   labelText: 'Destinataire (optionnel)',
@@ -672,7 +655,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                             }
                             if (value == 'delete') {
                               if (isReadOnlyMode) {
-                                _showMessage('Mode lecture seule: suppression non autorisee.');
+                                _showMessage('Mode lecture seule: suppression non autorisée.');
                                 return;
                               }
                               await _confirmDelete(
@@ -680,7 +663,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                                 message: 'Supprimer cette annonce ?',
                                 onDelete: () => _delete(
                                   '/announcements/${_asInt(row['id'])}/',
-                                  'Annonce supprimee',
+                                  'Annonce supprimée',
                                 ),
                               );
                             }
@@ -747,7 +730,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                             }
                             if (value == 'delete') {
                               if (isReadOnlyMode) {
-                                _showMessage('Mode lecture seule: suppression non autorisee.');
+                                _showMessage('Mode lecture seule: suppression non autorisée.');
                                 return;
                               }
                               await _confirmDelete(
@@ -755,7 +738,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                                 message: 'Supprimer cette notification ?',
                                 onDelete: () => _delete(
                                   '/notifications/${_asInt(row['id'])}/',
-                                  'Notification supprimee',
+                                  'Notification supprimée',
                                 ),
                               );
                             }
@@ -825,7 +808,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                             }
                             if (value == 'delete') {
                               if (isReadOnlyMode) {
-                                _showMessage('Mode lecture seule: suppression non autorisee.');
+                                _showMessage('Mode lecture seule: suppression non autorisée.');
                                 return;
                               }
                               await _confirmDelete(
@@ -833,7 +816,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
                                 message: 'Supprimer cette configuration SMS ?',
                                 onDelete: () => _delete(
                                   '/sms-providers/${_asInt(row['id'])}/',
-                                  'Configuration SMS supprimee',
+                                  'Configuration SMS supprimée',
                                 ),
                               );
                             }
