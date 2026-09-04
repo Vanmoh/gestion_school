@@ -7,6 +7,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
 from django.utils import timezone
 
+from apps.accounts.access import affinement_autorise
 from apps.common.presence import presence_en_ligne
 from apps.school.models import Etablissement
 
@@ -19,15 +20,8 @@ from .models import ChatMessage, ChatPresence, Conversation, ConversationPartici
 # qu'un eleve ne puisse pas faire surgir une fenetre chez le directeur en
 # pleine reunion. Eleves et parents gardent le message ordinaire, qui attend
 # qu'on le lise.
-ROLES_POUVANT_APPELER_L_ATTENTION = frozenset({
-    "super_admin",
-    "director",
-    "promoter",
-    "censor",
-    "accountant",
-    "teacher",
-    "supervisor",
-})
+# La liste vit desormais dans access.AFFINEMENTS, avec les trois autres
+# regles qui portent sur un geste precis a l'interieur d'un module ouvert.
 
 
 class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
@@ -204,7 +198,7 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
 
         if action == "attention":
             conversation_id = content.get("conversation_id")
-            if self.user.role not in ROLES_POUVANT_APPELER_L_ATTENTION:
+            if not affinement_autorise(self.user.role, "appel_attention"):
                 await self.send_json({
                     "event": "error",
                     "detail": "L'appel d'attention est reserve au personnel.",

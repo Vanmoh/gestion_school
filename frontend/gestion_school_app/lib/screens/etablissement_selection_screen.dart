@@ -5,6 +5,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../features/personnalisation/domain/personnalisation.dart';
+import '../features/personnalisation/presentation/personnalisation_controller.dart';
 import '../models/etablissement.dart';
 import '../widgets/etablissement_identity.dart';
 import 'etablissement_details_screen.dart';
@@ -40,6 +43,15 @@ class _PublicEtablissementEntryPageState
     try {
       final provider = ref.read(etablissementProvider);
       await provider.hydrate();
+
+      // L'identite de l'ecole apres le contexte local, dans la meme chaine
+      // que la liste: c'est ce portail qui porte son nom, son sigle et son
+      // logo, et il s'affiche avant toute connexion.
+      //
+      // Dans la chaine et non lancee de cote: un appel qui survit a l'ecran
+      // laisse un minuteur en vol, et le montage de l'application n'est plus
+      // testable -- Flutter refuse de conclure un test sur un minuteur actif.
+      await ref.read(personnalisationProvider).charger();
       // Le chargement vit dans le provider: les deux ecrans qui en ont
       // besoin le demandaient chacun de son cote, avec deux gestions
       // d'erreur qui ont fini par diverger.
@@ -600,7 +612,11 @@ class _ContactLine extends StatelessWidget {
 }
 
 /// En-tete: enonce la tache, puis donne l'outil pour l'accomplir.
-class _PortalHeader extends StatelessWidget {
+///
+/// `ConsumerWidget` pour lire l'identite de l'ecole: le nom et le sigle
+/// affiches ici etaient ecrits en dur, et servir une autre ecole demandait de
+/// recompiler l'application.
+class _PortalHeader extends ConsumerWidget {
   final int total;
   final TextEditingController searchController;
   final FocusNode searchFocusNode;
@@ -618,8 +634,9 @@ class _PortalHeader extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
+    final marque = ref.watch(personnalisationProvider).valeur;
     final textTheme = Theme.of(context).textTheme;
 
     return LayoutBuilder(
@@ -646,9 +663,18 @@ class _PortalHeader extends StatelessWidget {
                         colors: [scheme.primary, scheme.secondary],
                       ),
                     ),
-                    child: const Text(
-                      'GS',
-                      style: TextStyle(
+                    child: Text(
+                      // Deux lettres au plus: la pastille est un carre de
+                      // trente pixels, un sigle entier y deborderait.
+                      (marque.sigle.isNotEmpty ? marque.sigle : 'GS')
+                          .substring(
+                            0,
+                            marque.sigle.isNotEmpty && marque.sigle.length >= 2
+                                ? 2
+                                : (marque.sigle.isNotEmpty ? 1 : 2),
+                          )
+                          .toUpperCase(),
+                      style: const TextStyle(
                         color: Colors.white,
                         fontSize: 13,
                         fontWeight: FontWeight.w800,
@@ -663,7 +689,10 @@ class _PortalHeader extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          'Gestion Scolaire',
+                          Personnalisation.ou(
+                            marque.nomEcole,
+                            'Gestion Scolaire',
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: textTheme.titleSmall?.copyWith(
@@ -672,7 +701,10 @@ class _PortalHeader extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          'Espace multi-établissements',
+                          Personnalisation.ou(
+                            marque.sousTitrePortail,
+                            'Espace multi-établissements',
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: textTheme.labelSmall?.copyWith(
@@ -691,7 +723,10 @@ class _PortalHeader extends StatelessWidget {
               // Seul "votre établissement" porte le degrade: le contraste entre
               // la partie neutre et la partie accentuee fait lire le titre en
               // deux temps, comme dans la maquette.
-              _PortalTitle(fontSize: wide ? 32 : 23),
+              _PortalTitle(
+                fontSize: wide ? 32 : 23,
+                personnalise: marque.titrePortail,
+              ),
               const SizedBox(height: 6),
               Text(
                 total <= 1
@@ -847,7 +882,11 @@ class _SecureBadgeState extends State<_SecureBadge>
 class _PortalTitle extends StatelessWidget {
   final double fontSize;
 
-  const _PortalTitle({required this.fontSize});
+  /// Le titre regle par l'ecole. Vide, l'ecran garde « Choisissez votre
+  /// etablissement » -- et son degrade sur la seconde moitie.
+  final String personnalise;
+
+  const _PortalTitle({required this.fontSize, this.personnalise = ''});
 
   @override
   Widget build(BuildContext context) {
@@ -858,6 +897,24 @@ class _PortalTitle extends StatelessWidget {
       letterSpacing: -0.7,
       height: 1.12,
     );
+
+    if (personnalise.isNotEmpty) {
+      return Semantics(
+        header: true,
+        label: personnalise,
+        child: ExcludeSemantics(
+          child: ShaderMask(
+            blendMode: BlendMode.srcIn,
+            shaderCallback: (bounds) => LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [scheme.primary, scheme.tertiary],
+            ).createShader(bounds),
+            child: Text(personnalise, style: style),
+          ),
+        ),
+      );
+    }
 
     return Semantics(
       header: true,

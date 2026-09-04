@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -141,7 +143,7 @@ class _LibraryDocumentsPageState extends ConsumerState<LibraryDocumentsPage> {
 
   String _message(Object error, String repli) {
     if (error is DioException) {
-      final data = error.response?.data;
+      final data = _corpsLisible(error.response?.data);
       if (data is Map && data['detail'] != null) {
         return data['detail'].toString();
       }
@@ -151,6 +153,25 @@ class _LibraryDocumentsPageState extends ConsumerState<LibraryDocumentsPage> {
       }
     }
     return '$repli $error';
+  }
+
+  /// Le corps d'une reponse, quelle que soit la forme sous laquelle Dio l'a
+  /// rendu.
+  ///
+  /// Le telechargement d'un PDF demande `ResponseType.bytes`, et Dio applique
+  /// ce choix a la reponse d'erreur comme aux autres: le message soigne du
+  /// serveur arrivait donc en liste d'octets, jamais en Map, et l'ecran
+  /// affichait a sa place un `DioException` brut. « Ce document n'a pas encore
+  /// ete rapatrie » devenait « bad response [503] ».
+  Object? _corpsLisible(Object? data) {
+    if (data is! List<int>) return data;
+    try {
+      return jsonDecode(utf8.decode(data));
+    } catch (_) {
+      // Un corps qui n'est pas du JSON -- un PDF tronque, une page HTML
+      // d'erreur: le repli generique reste plus utile qu'un texte illisible.
+      return null;
+    }
   }
 
   void _signaler(String message) {

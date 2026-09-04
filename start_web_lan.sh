@@ -287,6 +287,11 @@ flutter build web --release --no-wasm-dry-run --no-web-resources-cdn \
   --pwa-strategy="$PWA_STRATEGY" \
   "${DART_DEFINES[@]}"
 
+# Bloquant, et c'est voulu: servir un build qui ira chercher pdf.js ou une
+# police sur Internet, c'est servir une application dont les apercus PDF
+# tournent sans fin. Mieux vaut ne pas demarrer que le decouvrir en classe.
+"$ROOT_DIR/tools/verifier_autonomie_hors_ligne.sh" "$APP_DIR/build/web"
+
 if [[ "$PWA_STRATEGY" == "none" ]]; then
   echo "Serveur anti-cache actif (headers no-store)"
   exec python3 "$ROOT_DIR/tools/no_cache_static_server.py" \

@@ -27,7 +27,11 @@ class _Transport implements HttpClientAdapter {
   /// lignes.
   final bool avecReglement;
 
-  _Transport({this.avecReglement = false});
+  /// Sert un bulletin de paie deja signe au niveau 1: les boutons de
+  /// signature vivent dans la ligne, et un tableau vide n'en montre aucun.
+  final bool avecBulletinPaie;
+
+  _Transport({this.avecReglement = false, this.avecBulletinPaie = false});
 
   @override
   Future<ResponseBody> fetch(
@@ -102,6 +106,27 @@ class _Transport implements HttpClientAdapter {
         ],
       });
     }
+    if (avecBulletinPaie && options.path.contains('/teacher-payrolls')) {
+      // Sans ligne, le tableau rend son message « aucun bulletin » et ne dit
+      // rien des boutons de signature qui vivent dans chaque ligne.
+      return _json(const {
+        'count': 1,
+        'results': [
+          {
+            'id': 11,
+            'teacher_full_name': 'Awa Traoré',
+            'month': '2026-03',
+            'hours_attributed': '20.00',
+            'hours_worked': '18.00',
+            'hourly_rate': '3000.00',
+            'amount': '54000.00',
+            // Niveau 1 signe: c'est l'etape ou les deux boutons se
+            // distinguent, le N2 n'apparaissant qu'apres le N1.
+            'validation_stage': 'level_one',
+          },
+        ],
+      });
+    }
     if (avecReglement && options.path.contains('/payments')) {
       return _json(const {
         'count': 1,
@@ -155,6 +180,7 @@ ModulePermissions _droits({
   required AccessLevel finance,
   required AccessLevel payroll,
   bool financeScoped = false,
+  Map<String, bool> capacites = const {},
 }) {
   return ModulePermissions(
     role: 'test',
@@ -162,6 +188,7 @@ ModulePermissions _droits({
       'finance': _module('finance', finance, scoped: financeScoped),
       'payroll': _module('payroll', payroll),
     },
+    capabilities: capacites,
   );
 }
 
@@ -170,13 +197,17 @@ Future<_Transport> _monter(
   ModulePermissions droits, {
   Size taille = const Size(2600, 3400),
   bool avecReglement = false,
+  bool avecBulletinPaie = false,
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = taille;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
 
-  final transport = _Transport(avecReglement: avecReglement);
+  final transport = _Transport(
+    avecReglement: avecReglement,
+    avecBulletinPaie: avecBulletinPaie,
+  );
   final dio = Dio(BaseOptions(baseUrl: 'http://test.local/api'))
     ..httpClientAdapter = transport;
 
@@ -567,6 +598,61 @@ void main() {
 
       expect(find.text('Awa Traoré'), findsWidgets);
       expect(find.text('Tous les enseignants'), findsWidgets);
+    });
+  });
+
+  group('la double validation vient de la matrice', () {
+    // Ces trois droits etaient recopies dans la page en clair — « censeur ou
+    // super-admin » pour le niveau 1, « comptable ou super-admin » pour le
+    // niveau 2. Ils disaient la meme chose que le serveur, et rien ne
+    // garantissait qu'ils continuent.
+
+    testWidgets('le signataire du niveau 1 voit son bouton, pas l_autre', (
+      tester,
+    ) async {
+      await _monter(
+        tester,
+        _droits(
+          finance: AccessLevel.none,
+          payroll: AccessLevel.write,
+          capacites: const {Capacites.validationPaieNiveau1: true},
+        ),
+        avecBulletinPaie: true,
+      );
+
+      expect(find.text('Valider N1'), findsWidgets);
+      expect(find.text('Valider N2'), findsNothing);
+    });
+
+    testWidgets('le signataire du niveau 2 voit le sien', (tester) async {
+      await _monter(
+        tester,
+        _droits(
+          finance: AccessLevel.none,
+          payroll: AccessLevel.write,
+          capacites: const {Capacites.validationPaieNiveau2: true},
+        ),
+        avecBulletinPaie: true,
+      );
+
+      expect(find.text('Valider N2'), findsWidgets);
+      expect(find.text('Valider N1'), findsNothing);
+    });
+
+    testWidgets('sans capacité, la paie se lit sans se signer', (tester) async {
+      // Le directeur controle la paie en lecture: il n'y signe ni l'un ni
+      // l'autre niveau.
+      await _monter(
+        tester,
+        _droits(finance: AccessLevel.none, payroll: AccessLevel.write),
+        avecBulletinPaie: true,
+      );
+
+      expect(find.text('Valider N1'), findsNothing);
+      expect(find.text('Valider N2'), findsNothing);
+      // L'ecran reste celui de la paie: c'est un bouton en moins, pas un
+      // module ferme.
+      expect(find.text('Paie horaire enseignants'), findsOneWidget);
     });
   });
 }

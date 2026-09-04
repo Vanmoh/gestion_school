@@ -39,9 +39,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
-from apps.accounts.access import can_delete, can_read, can_write, is_scoped
+from apps.accounts.access import affinement_autorise, can_delete, can_read, can_write, is_scoped
 from apps.accounts.models import UserRole
-from apps.accounts.permissions import HasModuleAccess, IsSuperAdmin
+from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import StandardResultsSetPagination
 from apps.common.models import ActivityLog
 from .dashboard_cache import STATS_CACHE_SECONDS, stats_cache_key
@@ -6763,11 +6763,11 @@ class ExpenseViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
 
     @staticmethod
     def _can_validate_level_one(role):
-        return role in {UserRole.CENSOR, UserRole.SUPER_ADMIN}
+        return affinement_autorise(role, "validation_paie_niveau_1")
 
     @staticmethod
     def _can_validate_level_two(role):
-        return role in {UserRole.ACCOUNTANT, UserRole.SUPER_ADMIN}
+        return affinement_autorise(role, "validation_paie_niveau_2")
 
 
 
@@ -6888,7 +6888,8 @@ class ExpenseViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         permission_classes=[permissions.IsAuthenticated, HasModuleAccess],
     )
     def reset_validation(self, request, pk=None):
-        if getattr(request.user, "role", "") != UserRole.SUPER_ADMIN:
+        role = getattr(request.user, "role", "")
+        if not affinement_autorise(role, "annulation_validation_depense"):
             raise ValidationError({"detail": "Seul le super admin peut reinitialiser la validation."})
 
         expense = self.get_object()
@@ -7148,11 +7149,11 @@ class TeacherPayrollViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
 
     @staticmethod
     def _can_validate_level_one(role):
-        return role in {UserRole.CENSOR, UserRole.SUPER_ADMIN}
+        return affinement_autorise(role, "validation_paie_niveau_1")
 
     @staticmethod
     def _can_validate_level_two(role):
-        return role in {UserRole.ACCOUNTANT, UserRole.SUPER_ADMIN}
+        return affinement_autorise(role, "validation_paie_niveau_2")
 
     @action(detail=False, methods=["post"], permission_classes=[permissions.IsAuthenticated, HasModuleAccess])
     def generate_monthly(self, request):
@@ -7312,7 +7313,8 @@ class TeacherPayrollViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         permission_classes=[permissions.IsAuthenticated],
     )
     def reset_validation(self, request, pk=None):
-        if getattr(request.user, "role", "") != UserRole.SUPER_ADMIN:
+        role = getattr(request.user, "role", "")
+        if not affinement_autorise(role, "annulation_validation_paie"):
             raise ValidationError({"detail": "Seul le super admin peut réinitialiser la validation."})
 
         payroll = self.get_object()
@@ -7798,6 +7800,19 @@ class LibraryDocumentViewSet(_LibraryEtagereMixin, BaseModelViewSet):
         return reponse
 
     def _relay_source(self, document, etag=None):
+        if not getattr(settings, "LIBRARY_RELAY_SOURCE", True):
+            # Ni requete ni attente: la source est hors de portee, et patienter
+            # ne changerait que la duree de l'echec. Le lecteur apprend tout de
+            # suite pourquoi, et l'exploitant ce qu'il lui reste a faire.
+            return Response(
+                {
+                    "detail": "Ce document n'a pas encore ete rapatrie sur le "
+                    "serveur de l'ecole: il ne peut pas etre ouvert sans "
+                    "Internet."
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         parsed = urlparse(document.source_url or "")
         if parsed.scheme != "https" or parsed.hostname not in self.PROXY_ALLOWED_HOSTS:
             raise ValidationError(
@@ -7805,7 +7820,10 @@ class LibraryDocumentViewSet(_LibraryEtagereMixin, BaseModelViewSet):
             )
 
         try:
-            amont = urlopen(document.source_url, timeout=30)  # noqa: S310 - hote borne
+            amont = urlopen(  # noqa: S310 - hote borne
+                document.source_url,
+                timeout=getattr(settings, "LIBRARY_RELAY_TIMEOUT", 10),
+            )
         except (HTTPError, URLError) as exc:
             raise ValidationError(
                 {"detail": f"Document indisponible a la source: {exc}"}

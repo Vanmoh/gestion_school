@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/constants/branding.dart';
 import 'core/network/api_client.dart';
+import 'core/permissions/libelles_de_module.dart';
 import 'core/permissions/module_permissions.dart';
 import 'core/providers/navigation_intents.dart';
 import 'core/theme/app_theme.dart';
@@ -23,6 +24,8 @@ import 'features/auth/domain/auth_user.dart';
 import 'features/auth/presentation/login_page.dart';
 import 'features/canteen/presentation/canteen_page.dart';
 import 'features/chat/data/canal_temps_reel.dart';
+import 'features/personnalisation/presentation/personnalisation_controller.dart';
+import 'features/personnalisation/presentation/personnalisation_page.dart';
 import 'features/chat/presentation/chat_panel.dart';
 import 'features/backup/presentation/backup_restore_page.dart';
 import 'features/promotion/presentation/promotion_page.dart';
@@ -55,7 +58,9 @@ import 'features/users/presentation/users_controller.dart';
 import 'features/users/presentation/users_page.dart';
 import 'core/providers/saisie_en_cours.dart';
 
-final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
+// Le choix clair/sombre a ete retire: l'application se presente en sombre
+// partout, et la seule chose qui varie d'une ecole a l'autre est sa couleur
+// d'accent, reglee dans la personnalisation.
 
 class _AppScrollBehavior extends MaterialScrollBehavior {
   const _AppScrollBehavior();
@@ -188,19 +193,29 @@ Widget selectableTextLayer(BuildContext context, Widget? child) {
   );
 }
 
-class GestionSchoolApp extends ConsumerWidget {
+class GestionSchoolApp extends ConsumerStatefulWidget {
   const GestionSchoolApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final themeMode = ref.watch(themeModeProvider);
+  ConsumerState<GestionSchoolApp> createState() => _GestionSchoolAppState();
+}
+
+class _GestionSchoolAppState extends ConsumerState<GestionSchoolApp> {
+  // Le chargement de l'identite appartient aux ecrans qui la portent -- le
+  // portail et la connexion -- et non a la racine: lancer un appel reseau au
+  // montage de `MaterialApp` laisse un minuteur en vol que rien n'attend, et
+  // toute la coquille devient intestable.
+
+  @override
+  Widget build(BuildContext context) {
+    final personnalisation = ref.watch(personnalisationProvider).valeur;
 
     return MaterialApp(
-      title: SchoolBranding.appName,
+      title: personnalisation.nomApplication,
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      darkTheme: AppTheme.dark,
-      themeMode: themeMode,
+      theme: AppTheme.sombre(personnalisation.couleur),
+      themeMode: ThemeMode.dark,
+      darkTheme: AppTheme.sombre(personnalisation.couleur),
       scrollBehavior: const _AppScrollBehavior(),
       builder: selectableTextLayer,
       routes: {
@@ -552,9 +567,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   /// Bandeau au-dessus d'un module consultable mais non modifiable.
   ///
-  /// Le menu portait deja la mention « (Lecture seule) », mais elle etait
-  /// facile a manquer une fois la page ouverte, et rien n'empechait de
-  /// remplir un formulaire pour se voir refuser a l'envoi.
+  /// C'est desormais le seul endroit qui l'annonce: le menu portait la
+  /// mention en suffixe, ou elle tronquait le nom du module sans empecher
+  /// personne de remplir un formulaire pour se voir refuser a l'envoi.
   Widget _withReadOnlyRibbon(_AdminMenuItem item, Widget view) {
     // Tableau de bord et rapports ne se saisissent pas: le bandeau n'y
     // apprendrait rien.
@@ -567,7 +582,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _ReadOnlyRibbon(label: item.label),
+        _ReadOnlyRibbon(label: item.labelPour(_permissions.role)),
         Expanded(child: view),
       ],
     );
@@ -1204,9 +1219,11 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
             final selected = _selectedKey == item.keyName;
             return _SidebarItem(
               icon: item.icon,
-              label: _isItemReadOnly(item.keyName)
-                  ? '${item.label} (Lecture seule)'
-                  : item.label,
+              // Sans mention « (Lecture seule) »: la barre est etroite, et le
+              // suffixe tronquait le nom du module lui-meme -- « Tableau de
+              // bord (Lecture s... ». Le bandeau en tete de page le dit une
+              // fois la page ouverte, la ou l'information sert.
+              label: item.labelPour(_permissions.role),
               compact: compact,
               selected: selected,
               hovered: _hoveredKey == item.keyName,
@@ -1341,22 +1358,18 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       return Scaffold(
         appBar: AppBar(
           title: Text(
-            selectedItem.label,
+            selectedItem.labelPour(_permissions.role),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
           actions: [
-            IconButton(
-              onPressed: () {
-                final current = ref.read(themeModeProvider);
-                ref
-                    .read(themeModeProvider.notifier)
-                    .state = current == ThemeMode.dark
-                    ? ThemeMode.light
-                    : ThemeMode.dark;
-              },
-              icon: const Icon(Icons.dark_mode_outlined),
-            ),
+            if (_permissions.canWrite('personnalisation'))
+              IconButton(
+                key: const Key('ouvrir-personnalisation-mobile'),
+                tooltip: 'Personnalisation',
+                onPressed: () => PersonnalisationPage.ouvrir(context),
+                icon: const Icon(Icons.settings_outlined),
+              ),
             IconButton(
               tooltip: 'Informations session',
               onPressed: () => _showConnectionInfo(user, selectedEtablissement),
@@ -1796,26 +1809,28 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  IconButton.filledTonal(
-                                    style: IconButton.styleFrom(
-                                      backgroundColor: Colors.white.withValues(
-                                        alpha: 0.1,
+                                  // La personnalisation engage l'application
+                                  // entiere, tous etablissements confondus.
+                                  // Le droit vient de la matrice et non du
+                                  // role lu ici: le serveur en est seul juge,
+                                  // et deux regles ecrites a deux endroits
+                                  // finissent par diverger.
+                                  if (_permissions.canWrite(
+                                    'personnalisation',
+                                  )) ...[
+                                    const SizedBox(width: 8),
+                                    IconButton.filledTonal(
+                                      key: const Key('ouvrir-personnalisation'),
+                                      style: IconButton.styleFrom(
+                                        backgroundColor: Colors.white
+                                            .withValues(alpha: 0.1),
                                       ),
+                                      tooltip: 'Personnalisation',
+                                      onPressed: () =>
+                                          PersonnalisationPage.ouvrir(context),
+                                      icon: const Icon(Icons.settings_outlined),
                                     ),
-                                    tooltip: 'Paramètres de thème',
-                                    onPressed: () {
-                                      final current = ref.read(
-                                        themeModeProvider,
-                                      );
-                                      ref
-                                          .read(themeModeProvider.notifier)
-                                          .state = current == ThemeMode.dark
-                                          ? ThemeMode.light
-                                          : ThemeMode.dark;
-                                    },
-                                    icon: const Icon(Icons.settings_outlined),
-                                  ),
+                                  ],
                                 ],
                               ),
                             ),
@@ -2005,6 +2020,14 @@ class _AdminMenuItem {
     this.extraKeys = const [],
     this.clesRequises = const [],
   });
+
+  /// Le nom de l'ecran tel que ce profil doit le lire.
+  ///
+  /// Voir `core/permissions/libelles_de_module.dart`: le libellé ci-dessus
+  /// est celui de l'administration, et il fait chercher une liste complete a
+  /// qui l'ecran n'en montre qu'une tranche.
+  String labelPour(String role) =>
+      libelleDeModule(keyName, role, parDefaut: label);
 
   /// Toutes les cles qui rendent cette entree accessible.
   List<String> get allKeys => [keyName, ...extraKeys];

@@ -689,6 +689,81 @@ class LibraryDocumentApiTests(APITestCase):
         amont.assert_not_called()
 
 
+@override_settings(LIBRARY_RELAY_SOURCE=False)
+class LibraryRelaisFermeTests(APITestCase):
+    """Le serveur d'une ecole sans Internet.
+
+    Le relais y echouait de toute facon, mais il echouait mal: `urlopen`
+    faisait patienter le lecteur le temps de son delai d'attente avant de
+    rendre une erreur technique, et immobilisait pendant ce temps un worker
+    qui aurait servi d'autres pages. Ferme, il ne coute plus rien et dit ce
+    qu'il faut faire.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.etablissement = Etablissement.objects.create(name="LTOB")
+        cls.collection = LibraryCollection.objects.create(
+            code="TSExp", label="Terminale Sciences Expérimentales", position=5
+        )
+        cls.maths = LibraryCategory.objects.create(
+            collection=cls.collection, name="Mathematiques", position=0
+        )
+        cls.suites = LibraryDocument.objects.create(
+            category=cls.maths,
+            title="Suites-numeriques",
+            source_url="https://bkalan.ml/api/files/WhatsApp/TSExp/Mathematiques/BK_Suites.pdf",
+        )
+        cls.directeur = User.objects.create_user(
+            username="dir_hors_ligne",
+            password="Pass1234!",
+            role=UserRole.DIRECTOR,
+            etablissement=cls.etablissement,
+        )
+
+    def test_le_relais_ferme_repond_sans_toucher_au_reseau(self):
+        self.client.force_authenticate(self.directeur)
+        with patch("apps.school.views.urlopen") as amont:
+            reponse = self.client.get(f"/api/library-documents/{self.suites.id}/file/")
+
+        self.assertEqual(reponse.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        # L'assertion qui porte le sens: c'est l'appel evite qui rend la main
+        # au lecteur tout de suite au lieu de le faire patienter.
+        amont.assert_not_called()
+        self.assertIn("rapatrie", reponse.data["detail"])
+
+    @override_settings(MEDIA_ROOT="/tmp/gs-library-tests")
+    def test_le_relais_ferme_ne_gene_pas_un_document_rapatrie(self):
+        self.suites.file.save("BK_Suites.pdf", ContentFile(b"%PDF-1.4 local"), save=False)
+        self.suites.is_downloaded = True
+        self.suites.save(update_fields=["file", "is_downloaded"])
+        self.addCleanup(self.suites.file.delete, save=False)
+
+        self.client.force_authenticate(self.directeur)
+        reponse = self.client.get(f"/api/library-documents/{self.suites.id}/file/")
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+        self.assertEqual(b"".join(reponse.streaming_content), b"%PDF-1.4 local")
+
+    def test_un_document_non_rapatrie_s_annonce_illisible(self):
+        """L'ecran grise la ligne avant le clic, il ne l'apprend pas apres."""
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.get("/api/library-documents/?collection=TSExp")
+
+        lignes = reponse.data.get("results", reponse.data)
+        self.assertEqual([ligne["is_readable"] for ligne in lignes], [False])
+
+    @override_settings(LIBRARY_RELAY_SOURCE=True)
+    def test_le_relais_ouvert_laisse_le_document_lisible(self):
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.get("/api/library-documents/?collection=TSExp")
+
+        lignes = reponse.data.get("results", reponse.data)
+        self.assertEqual([ligne["is_readable"] for ligne in lignes], [True])
+
+
 class LibraryRedirectionStockageTests(APITestCase):
     """La redirection vers le stockage: active, elle epargne le conteneur.
 

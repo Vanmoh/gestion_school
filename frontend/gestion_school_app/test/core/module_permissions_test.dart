@@ -40,6 +40,17 @@ Map<String, dynamic> _censorPayload() => {
     'students': ['/students', '/parents'],
     'finance': ['/payments', '/expenses'],
   },
+  // Le serveur sert toutes les capacites, y compris celles a false: le client
+  // doit distinguer « refuse » de « inconnu de cette version ».
+  'capabilities': {
+    'validation_paie_niveau_1': true,
+    'validation_paie_niveau_2': false,
+    'annulation_validation_paie': false,
+    'annulation_validation_depense': false,
+    'saisie_conduite': true,
+    'appel_attention': true,
+    'exports_sensibles': false,
+  },
 };
 
 void main() {
@@ -58,6 +69,25 @@ void main() {
     test('un module inconnu est refuse, pas suppose ouvert', () {
       expect(permissions.canRead('module_qui_nexiste_pas'), isFalse);
       expect(permissions.canWrite('module_qui_nexiste_pas'), isFalse);
+    });
+
+    test('les gestes affines se lisent a part des modules', () {
+      // Le censeur ecrit dans la paie, mais n'y valide que le niveau 1: la
+      // case « payroll: E » ne sait pas dire cette moitie-la.
+      expect(permissions.can(Capacites.validationPaieNiveau1), isTrue);
+      expect(permissions.can(Capacites.validationPaieNiveau2), isFalse);
+      expect(permissions.can(Capacites.saisieConduite), isTrue);
+      expect(permissions.can(Capacites.exportsSensibles), isFalse);
+      expect(permissions.can(Capacites.appelAttention), isTrue);
+      // Il signe le niveau 1, donc il ne defait pas sa propre signature.
+      expect(permissions.can(Capacites.annulationValidationPaie), isFalse);
+    });
+
+    test('un geste inconnu est refuse, comme un module inconnu', () {
+      // Une version du client plus recente que le serveur ne doit pas
+      // afficher un bouton que celui-ci refusera.
+      expect(permissions.can('geste_qui_nexiste_pas'), isFalse);
+      expect(ModulePermissions.empty.can(Capacites.exportsSensibles), isFalse);
     });
   });
 

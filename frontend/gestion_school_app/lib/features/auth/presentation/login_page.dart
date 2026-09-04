@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../personnalisation/domain/personnalisation.dart';
+import '../../personnalisation/presentation/personnalisation_controller.dart';
 import 'package:dio/dio.dart';
 import '../../../core/constants/branding.dart';
 import '../../../core/constants/api_constants.dart';
@@ -47,17 +50,24 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     final selectedEtablissement = etablissementState.selected;
     final scheme = Theme.of(context).colorScheme;
 
-    final headerName = selectedEtablissement?.name ?? SchoolBranding.schoolName;
+    // L'identite reglee par l'ecole remplace les constantes qui vivaient dans
+    // le code: le nom, le logo et le telephone y etaient figes a la
+    // compilation, et servir une autre ecole demandait de recompiler.
+    final marque = ref.watch(personnalisationProvider).valeur;
+
+    final headerName =
+        selectedEtablissement?.name ??
+        Personnalisation.ou(marque.nomEcole, SchoolBranding.schoolName);
     final headerSecondary =
         (selectedEtablissement?.address != null &&
             selectedEtablissement!.address!.trim().isNotEmpty)
         ? selectedEtablissement.address!.trim()
-        : '${SchoolBranding.schoolShort} (${SchoolBranding.level})';
+        : Personnalisation.ou(marque.adresse, marque.nomCourt);
     final contactLabel =
         (selectedEtablissement?.phone != null &&
             selectedEtablissement!.phone!.trim().isNotEmpty)
         ? 'Tél: ${selectedEtablissement.phone!}'
-        : 'Tél: ${SchoolBranding.phone}';
+        : 'Tél: ${Personnalisation.ou(marque.telephone, SchoolBranding.phone)}';
 
     ref.listen(authControllerProvider, (previous, next) async {
       next.whenOrNull(
@@ -296,6 +306,22 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                             );
                                           },
                                     )
+                                  else if (marque.logoUrl.isNotEmpty)
+                                    Image.network(
+                                      marque.logoUrl,
+                                      height: logoHeight,
+                                      fit: BoxFit.contain,
+                                      alignment: Alignment.centerLeft,
+                                      // Un logo introuvable ne doit pas
+                                      // barrer l'ecran de connexion: on
+                                      // retombe sur l'image livree.
+                                      errorBuilder: (_, _, _) => Image.asset(
+                                        SchoolBranding.logoAsset,
+                                        height: logoHeight,
+                                        fit: BoxFit.contain,
+                                        alignment: Alignment.centerLeft,
+                                      ),
+                                    )
                                   else
                                     Image.asset(
                                       SchoolBranding.logoAsset,
@@ -347,20 +373,31 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 14),
-                                  Text(
-                                    'STI: ${SchoolBranding.streamsSti.join(' • ')}',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodyMedium,
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'STG: ${SchoolBranding.streamsStg.join(' • ')}',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodyMedium,
-                                  ),
+                                  // Les filieres du lycee technique tenaient
+                                  // ici, en dur: elles ne disent rien d'une
+                                  // ecole primaire ou d'un institut. L'ecole
+                                  // ecrit desormais ce qui la presente.
+                                  if (marque.titreConnexion.isNotEmpty) ...[
+                                    const SizedBox(height: 14),
+                                    Text(
+                                      marque.titreConnexion,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                    ),
+                                  ],
+                                  if (marque.sousTitreConnexion.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      marque.sousTitreConnexion,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodyMedium,
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),

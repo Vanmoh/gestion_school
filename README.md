@@ -134,6 +134,8 @@ Pour éviter définitivement le scénario "modifications non visibles" (cache na
 Ce mode stable applique:
 - build web avec `--pwa-strategy=none` (pas de service worker)
 - serveur statique avec en-têtes `Cache-Control: no-store`
+- vérification que le build ne dépend d'aucune ressource Internet
+  (`tools/verifier_autonomie_hors_ligne.sh`, bloquante — voir plus bas)
 - arrêt automatique du processus qui occupait déjà le port web
 - garde-fou runtime MySQL (vérifie classes/élèves/matières/profs + scope directeur)
 - auto-réparation idempotente si incohérence détectée
@@ -181,6 +183,27 @@ Si tu veux explicitement garder le comportement PWA:
 ```bash
 ./start_web_lan.sh --pwa
 ```
+
+#### Fonctionner sans Internet
+
+Le serveur d'une école n'a pas d'accès extérieur, et trois dépendances s'y
+étaient glissées sans que rien ne les signale :
+
+- le paquet `printing` allait chercher **pdf.js sur unpkg.com** et attendait
+  ce script sans délai maximal : tout aperçu de bulletin, d'emploi du temps
+  ou de liste de classe tournait indéfiniment (imprimer et télécharger, eux,
+  fonctionnaient). Les fichiers sont désormais dans le dépôt
+  (`frontend/gestion_school_app/web/pdfjs/`, voir son `PROVENANCE.md`) ;
+- le moteur web téléchargeait les **polices Noto de secours** sur
+  `fonts.gstatic.com` pour les glyphes absents d'Inter — un emoji tapé dans
+  le chat devenait un carré vide. `NotoEmoji` est maintenant embarquée ;
+- la **bibliothèque** relayait depuis `bkalan.ml` les documents non
+  rapatriés. Voir `docs/OPERATIONS_BIBLIOTHEQUE.md` §8 : rapatrier le fonds,
+  puis fermer le relais (`LIBRARY_RELAY_SOURCE=False`).
+
+`tools/verifier_autonomie_hors_ligne.sh` refuse de servir un build qui
+rouvrirait l'une de ces portes, et `test/core/autonomie_hors_ligne_test.dart`
+surveille les sources.
 
 ### 2.3) Rebuild web complet en une commande
 Quand tu veux forcer un cycle complet (stop serveur web local + `flutter clean` + rebuild + relance), utilise:

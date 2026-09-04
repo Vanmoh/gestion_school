@@ -28,10 +28,28 @@ class ReportsPermissionsApiTests(APITestCase):
             etablissement=self.etablissement,
         )
 
-    def test_teacher_cannot_access_reports_context(self):
+    def test_l_enseignant_entre_dans_les_rapports(self):
+        """La matrice lui accorde « rapports » en lecture: il doit entrer.
+
+        Une liste de roles ecrite dans la vue le refusait, alors que son
+        entree de menu s'affichait: l'ecran s'ouvrait sur une erreur.
+        """
         self.client.force_authenticate(self.teacher)
         response = self.client.get("/api/reports/context/")
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_l_enseignant_n_y_voit_ni_eleve_hors_classe_ni_paiement(self):
+        """Entrer n'est pas tout voir: l'etoile de la matrice s'applique.
+
+        Cet enseignant n'a aucune affectation, donc aucun eleve; et les
+        finances lui sont fermees, donc aucun paiement -- meme si le meme
+        ecran les sert au comptable.
+        """
+        self.client.force_authenticate(self.teacher)
+        response = self.client.get("/api/reports/context/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["students"], [])
+        self.assertEqual(response.data["payments"], [])
 
     def test_teacher_cannot_export_payments_excel(self):
         self.client.force_authenticate(self.teacher)
