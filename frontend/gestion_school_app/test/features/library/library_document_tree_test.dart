@@ -134,6 +134,43 @@ void main() {
     expect(find.text('3.0 Mo'), findsOneWidget);
   });
 
+  testWidgets('un document non rapatrie ne s_ouvre pas hors ligne', (
+    tester,
+  ) async {
+    // Serveur d'ecole sans Internet: le fichier n'est pas sur place et la
+    // source est hors de portee. La source ne l'a pourtant jamais refuse --
+    // c'est ce qui distingue ce cas du precedent, et ce que doit dire la
+    // ligne.
+    await _pump(
+      tester,
+      documents: const [
+        LibraryDocument(
+          id: 201,
+          title: 'Annales-2020',
+          categoryId: 11,
+          categoryName: 'Mathematiques',
+          sizeBytes: 0,
+          isDownloaded: false,
+          importError: '',
+          isReadable: false,
+        ),
+      ],
+    );
+
+    await tester.tap(find.text('Mathematiques'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('non rapatrié sur ce serveur'), findsOneWidget);
+    expect(find.textContaining('indisponible à la source'), findsNothing);
+    final bouton = tester.widget<IconButton>(
+      find.ancestor(
+        of: find.byIcon(Icons.open_in_new),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(bouton.onPressed, isNull);
+  });
+
   testWidgets('un document mort a la source ne s_ouvre pas', (tester) async {
     await _pump(tester);
 

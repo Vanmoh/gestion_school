@@ -394,8 +394,12 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
   Future<void> _createTimeEntry() async {
     final role = ref.read(authControllerProvider).value?.role;
     if (_isReadOnlyRole(role)) {
+      // Le message nommait le directeur. Il s'affiche pourtant a tout profil
+      // en lecture seule: le comptable, qui vient verifier les heures avant
+      // de payer, lisait qu'il etait directeur.
       _showMessage(
-        'Acces refuse: le role Directeur est en lecture seule sur Emargement enseignants.',
+        'Accès refusé: votre profil consulte l\'émargement des enseignants '
+        'sans pouvoir y saisir de pointage.',
       );
       return;
     }
@@ -513,7 +517,8 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
               border: Border.all(color: const Color(0xFFF1C27D)),
             ),
             child: const Text(
-              'Mode lecture seule: le role Directeur peut consulter, mais ne peut pas enregistrer de pointage.',
+              'Mode lecture seule: vous consultez les heures pointées, '
+              'mais vous ne pouvez pas en enregistrer.',
             ),
           ),
         ],

@@ -77,16 +77,29 @@ class ModulePermissions {
   /// que toute cette matrice sert a supprimer.
   final Map<String, List<String>> paths;
 
+  /// Gestes precis a l'interieur d'un module deja ouvert: valider la paie au
+  /// niveau 1, noter la conduite, lancer un export nominatif.
+  ///
+  /// La matrice n'a que quatre niveaux par module et ne sait pas les
+  /// exprimer. Sans cette table, un bouton d'export s'affichait pour tous et
+  /// ne refusait qu'au clic.
+  final Map<String, bool> capabilities;
+
   const ModulePermissions({
     required this.role,
     required this.modules,
     this.paths = const {},
+    this.capabilities = const {},
   });
 
   static const ModulePermissions empty = ModulePermissions(
     role: '',
     modules: {},
   );
+
+  /// Un geste inconnu du serveur est refuse: comme pour les modules, on
+  /// echoue ferme plutot que d'afficher un bouton qui rendra 403.
+  bool can(String capability) => capabilities[capability] ?? false;
 
   /// Route CRUD simple: la collection ou un element ("/grades/", "/grades/12/").
   static final RegExp _crudTail = RegExp(r'^/?$|^/\d+/?$');
@@ -124,8 +137,13 @@ class ModulePermissions {
   factory ModulePermissions.fromJson(Map<String, dynamic> json) {
     final rawModules = (json['modules'] as Map?) ?? const {};
     final rawPaths = (json['paths'] as Map?) ?? const {};
+    final rawCapabilities = (json['capabilities'] as Map?) ?? const {};
     return ModulePermissions(
       role: (json['role'] ?? '').toString(),
+      capabilities: {
+        for (final entry in rawCapabilities.entries)
+          entry.key.toString(): entry.value == true,
+      },
       modules: {
         for (final entry in rawModules.entries)
           entry.key.toString(): ModulePermission.fromJson(
@@ -241,3 +259,26 @@ final currentPermissionsProvider = Provider<ModulePermissions>((ref) {
   return ref.watch(modulePermissionsProvider).valueOrNull ??
       ModulePermissions.empty;
 });
+
+/// Les gestes affines, nommes une fois.
+///
+/// Les clefs viennent de `AFFINEMENTS` cote serveur; les ecrire en toutes
+/// lettres a chaque bouton aurait remis une chaine litterale a corriger
+/// partout le jour ou l'une d'elles change.
+class Capacites {
+  Capacites._();
+
+  /// Exports nominatifs et financiers: journal des paiements et des
+  /// depenses, classeur Excel, liste imprimable du personnel.
+  static const exportsSensibles = 'exports_sensibles';
+  static const validationPaieNiveau1 = 'validation_paie_niveau_1';
+  static const validationPaieNiveau2 = 'validation_paie_niveau_2';
+
+  /// Defaire une double validation efface la trace de qui avait signe:
+  /// aucun des deux signataires ne s'en charge lui-meme.
+  static const annulationValidationPaie = 'annulation_validation_paie';
+  static const annulationValidationDepense = 'annulation_validation_depense';
+
+  static const saisieConduite = 'saisie_conduite';
+  static const appelAttention = 'appel_attention';
+}

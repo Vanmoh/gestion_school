@@ -1,38 +1,6 @@
 import 'package:flutter/material.dart';
 
 class AppTheme {
-  static const _lightScheme = ColorScheme(
-    brightness: Brightness.light,
-    primary: Color(0xFF4F46E5),
-    onPrimary: Colors.white,
-    primaryContainer: Color(0xFFE4E3FF),
-    onPrimaryContainer: Color(0xFF1B1666),
-    secondary: Color(0xFF8B5CF6),
-    onSecondary: Colors.white,
-    secondaryContainer: Color(0xFFEDE4FF),
-    onSecondaryContainer: Color(0xFF2A1361),
-    error: Color(0xFFB42318),
-    onError: Colors.white,
-    errorContainer: Color(0xFFFEE4E2),
-    onErrorContainer: Color(0xFF7A271A),
-    surface: Color(0xFFF6F8FC),
-    onSurface: Color(0xFF121826),
-    tertiary: Color(0xFF0EA5E9),
-    onTertiary: Colors.white,
-    surfaceContainerLowest: Color(0xFFFFFFFF),
-    surfaceContainerLow: Color(0xFFF4F6FB),
-    surfaceContainer: Color(0xFFEFF3FA),
-    surfaceContainerHigh: Color(0xFFE7EDF7),
-    surfaceContainerHighest: Color(0xFFDCE5F3),
-    onSurfaceVariant: Color(0xFF556174),
-    outline: Color(0xFFACB7C8),
-    outlineVariant: Color(0xFFD0D8E5),
-    shadow: Color(0xFF000000),
-    scrim: Color(0xFF000000),
-    inverseSurface: Color(0xFF1E2431),
-    onInverseSurface: Color(0xFFF5F7FC),
-    inversePrimary: Color(0xFFB3B8FF),
-  );
 
   static const _darkScheme = ColorScheme(
     brightness: Brightness.dark,
@@ -79,7 +47,15 @@ class AppTheme {
     // GoogleFonts.interTextTheme la telechargeait a chaque premier lancement,
     // apres le demarrage de Flutter: le texte s'affichait d'abord dans la
     // police de secours, puis tout etait redessine a l'arrivee du fichier.
-    final inter = colored.apply(fontFamily: 'Inter');
+    // NotoEmoji prend le relais sur les glyphes qu'Inter ne porte pas. Le
+    // moteur web allait les chercher sur fonts.gstatic.com, absent du reseau
+    // d'une ecole: apres trois tentatives, un emoji tape dans le chat ou un
+    // caractere d'un nom devenait un carre vide. Une police embarquee n'est
+    // consultee que si elle est nommee ici.
+    final inter = colored.apply(
+      fontFamily: 'Inter',
+      fontFamilyFallback: const ['NotoEmoji'],
+    );
     return inter.copyWith(
       headlineMedium: inter.headlineMedium?.copyWith(
         fontWeight: FontWeight.w700,
@@ -386,6 +362,25 @@ class AppTheme {
     );
   }
 
-  static final ThemeData light = _build(_lightScheme);
-  static final ThemeData dark = _build(_darkScheme);
+  /// Le thème de l'application, teinté de la couleur de l'école.
+  ///
+  /// Un seul thème désormais : le choix clair/sombre a été retiré, et la
+  /// seule chose qui varie d'une école à l'autre est sa couleur d'accent.
+  /// Les fonds, eux, restent ceux du sombre — c'est le socle sur lequel
+  /// chaque écran a été dessiné.
+  ///
+  /// Les thèmes construits sont gardés en mémoire : `MaterialApp` reconstruit
+  /// à chaque image, et rebâtir un `ThemeData` complet à chacune ferait
+  /// saccader toute l'application.
+  static final Map<int, ThemeData> _parCouleur = <int, ThemeData>{};
+
+  static ThemeData sombre(Color accent) {
+    return _parCouleur.putIfAbsent(
+      accent.toARGB32(),
+      () => _build(_darkScheme.copyWith(primary: accent, secondary: accent)),
+    );
+  }
+
+  /// Le thème par défaut, avant que l'identité de l'école soit connue.
+  static ThemeData get dark => sombre(_darkScheme.primary);
 }

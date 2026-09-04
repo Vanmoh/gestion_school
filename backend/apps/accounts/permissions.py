@@ -10,15 +10,13 @@ from .access import (
 )
 
 
-class IsRole(BasePermission):
-    allowed_roles = []
-
-    def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role in self.allowed_roles
-
-
-class IsSuperAdmin(IsRole):
-    allowed_roles = ["super_admin"]
+# `IsRole` et `IsSuperAdmin` vivaient ici. Elles etaient les deux dernieres
+# des treize classes de permission ad hoc que la matrice a remplacees, et plus
+# aucune vue ne les appliquait -- seul un import oublie les gardait en vie.
+# Les laisser, c'etait laisser a portee de main le moyen de recreer la
+# divergence: une vue qui autorise selon sa propre liste, sans que la matrice
+# ni /auth/permissions/ n'en sachent rien. Pour restreindre a un seul role,
+# c'est une colonne de MODULES qu'il faut ecrire, ou un affinement.
 
 
 class HasModuleAccess(BasePermission):

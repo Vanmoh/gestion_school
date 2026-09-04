@@ -10,6 +10,13 @@ class LibraryDocument {
   final String categoryName;
   final int sizeBytes;
   final bool isDownloaded;
+
+  /// Ce document s'ouvrira-t-il sur ce serveur, aujourd'hui.
+  ///
+  /// Faux quand le fichier n'est pas rapatrie et que le serveur ne relaie pas
+  /// la source -- le cas d'une ecole sans Internet. Le serveur le calcule, lui
+  /// seul connaissant son reglage.
+  final bool isReadable;
   final String importError;
   final String description;
 
@@ -28,6 +35,10 @@ class LibraryDocument {
     required this.sizeBytes,
     required this.isDownloaded,
     required this.importError,
+    // Vrai par defaut: c'est ce que repond une API qui ne connait pas encore
+    // le champ, et un document qu'on croit lisible a tort echoue au clic --
+    // l'inverse le rendrait inaccessible sans raison.
+    this.isReadable = true,
     // Valeurs du fonds importe: c'est le cas historique, et un document de
     // test n'a pas a les repeter pour dire qu'il en vient.
     this.description = '',
@@ -43,6 +54,9 @@ class LibraryDocument {
       categoryName: json['category_name']?.toString() ?? '',
       sizeBytes: (json['size_bytes'] as num?)?.toInt() ?? 0,
       isDownloaded: json['is_downloaded'] == true,
+      isReadable: json.containsKey('is_readable')
+          ? json['is_readable'] == true
+          : true,
       importError: json['import_error']?.toString() ?? '',
       description: json['description']?.toString() ?? '',
       origin: json['origin']?.toString() ?? 'import',

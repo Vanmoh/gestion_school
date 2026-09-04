@@ -375,6 +375,34 @@
       };
     })();
   </script>
+  <!--
+    pdf.js servi par nous, jamais par unpkg.com.
+
+    Le paquet printing va chercher https://unpkg.com/pdfjs-dist@3.2.146/ au
+    premier apercu, puis attend le chargement du script sans delai maximal
+    (printing_web.dart, lignes 70 a 113). Sans Internet le script n'arrive
+    jamais, l'attente ne se termine jamais, et tout PdfPreview tourne
+    indefiniment: bulletins, emploi du temps, listes de classe, pieces
+    jointes du chat. Imprimer et telecharger n'empruntent pas ce chemin et
+    fonctionnaient deja.
+
+    Deux verrous, et il en faut deux:
+    - dartPdfJsBaseUrl deroute l'injection vers notre copie si elle a lieu
+      (ligne 97);
+    - le prechargement ci-dessous rend `_hasPdfJsLib` vrai (ligne 58), et
+      l'injection n'a alors pas lieu du tout. C'est la ceinture; la premiere
+      reste la bretelle, pour le jour ou le paquet changera son test.
+
+    Chemins relatifs: ils se resolvent contre <base href> et survivent donc a
+    un service sous sous-chemin. `defer` garde l'ordre du document, donc
+    pdf.js s'execute avant flutter_bootstrap.js. Le `onerror` est explicite
+    parce que l'echec de chargement d'un <script> ne remonte pas jusqu'au
+    veilleur `window.addEventListener('error')` pose plus haut.
+  -->
+  <script>window.dartPdfJsBaseUrl = 'pdfjs/';</script>
+  <script defer src="pdfjs/pdf.min.js"
+          onload="window.pdfjsLib && (pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs/pdf.worker.min.js');"
+          onerror="console.error('pdf.js local introuvable (web/pdfjs/): les apercus PDF ne fonctionneront pas hors ligne.');"></script>
   <script src="flutter_bootstrap.js" defer></script>
 </body>
 </html>

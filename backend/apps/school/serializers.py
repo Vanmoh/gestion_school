@@ -7,6 +7,7 @@ from django.db import models
 from django.utils import timezone
 from rest_framework import serializers
 from .term_utils import normalize_term
+from apps.accounts.access import affinement_autorise
 from apps.accounts.models import UserRole
 from .models import (
     AcademicYear,
@@ -912,7 +913,7 @@ class StudentSerializer(serializers.ModelSerializer):
         if "conduite" in attrs:
             request = self.context.get("request")
             role = getattr(getattr(request, "user", None), "role", "")
-            if role not in {UserRole.CENSOR, UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
+            if not affinement_autorise(role, "saisie_conduite"):
                 raise serializers.ValidationError(
                     {"conduite": "Seuls le censeur, le surveillant et le super admin peuvent modifier la conduite."}
                 )
@@ -1108,7 +1109,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
         if "conduite" in attrs:
             role = getattr(getattr(request, "user", None), "role", "")
-            if role not in {UserRole.CENSOR, UserRole.SUPERVISOR, UserRole.SUPER_ADMIN}:
+            if not affinement_autorise(role, "saisie_conduite"):
                 raise serializers.ValidationError(
                     {"conduite": "Seuls le censeur, le surveillant et le super admin peuvent modifier la conduite."}
                 )
@@ -1927,6 +1928,7 @@ class LibraryDocumentSerializer(serializers.ModelSerializer):
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
     origin = serializers.CharField(read_only=True)
     uploaded_by_name = serializers.SerializerMethodField(read_only=True)
+    is_readable = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = LibraryDocument
@@ -1939,6 +1941,7 @@ class LibraryDocumentSerializer(serializers.ModelSerializer):
             "collection_label",
             "size_bytes",
             "is_downloaded",
+            "is_readable",
             "import_error",
             "source_url",
             "file",
@@ -1954,6 +1957,18 @@ class LibraryDocumentSerializer(serializers.ModelSerializer):
         if auteur is None:
             return ""
         return auteur.get_full_name().strip() or auteur.username
+
+    def get_is_readable(self, obj):
+        """Ce document s'ouvrira-t-il, sur ce serveur, aujourd'hui.
+
+        Un document non rapatrie ne s'ouvre que si le relais vers la source
+        est ouvert. Sur un serveur sans Internet il ne l'est pas, et la liste
+        doit le dire avant le clic: l'ecran grise deja les documents que la
+        source refuse, il grise desormais aussi ceux qu'elle seule detient.
+        """
+        if obj.is_downloaded and obj.file:
+            return True
+        return bool(getattr(settings, "LIBRARY_RELAY_SOURCE", True))
 
     def validate_title(self, value):
         nettoye = (value or "").strip()

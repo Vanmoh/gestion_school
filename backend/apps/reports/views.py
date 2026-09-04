@@ -23,6 +23,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from apps.accounts.permissions import HasModuleAccess
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from apps.accounts.access import affinement_autorise, can_read
 from apps.accounts.models import UserRole
 from apps.school.models import (
     AcademicYear,
@@ -1400,22 +1401,24 @@ def _effective_etablissement_id(request):
     return getattr(user, "etablissement_id", None)
 
 
-def _ensure_reports_module_access(request) -> None:
-    role = getattr(request.user, "role", "")
-    if role not in {
-        UserRole.SUPER_ADMIN,
-        UserRole.DIRECTOR,
-        UserRole.ACCOUNTANT,
-        UserRole.PARENT,
-        UserRole.STUDENT,
-    }:
-        raise PermissionDenied("Accès refusé au module rapports.")
-
-
 def _ensure_sensitive_export_access(request) -> None:
     role = getattr(request.user, "role", "")
-    if role not in {UserRole.SUPER_ADMIN, UserRole.DIRECTOR, UserRole.ACCOUNTANT}:
+    if not affinement_autorise(role, "exports_sensibles"):
         raise PermissionDenied("Accès refusé: export sensible réservé à l'administration/finance.")
+
+
+def _classrooms_de_l_enseignant(user):
+    """Les classes ou cet enseignant intervient.
+
+    L'etoile de la matrice ("L*" sur reports) ne restreint rien par
+    elle-meme: elle documente une portee que la vue doit appliquer. Sans
+    cette fonction, un enseignant admis au module recevrait la liste
+    complete des eleves de l'etablissement.
+    """
+    return TeacherAssignment.objects.filter(teacher__user_id=user.id).values_list(
+        "classroom_id",
+        flat=True,
+    )
 
 
 def _allowed_students_queryset(request):
@@ -1432,6 +1435,8 @@ def _allowed_students_queryset(request):
         return queryset.filter(user_id=user.id)
     if role == UserRole.PARENT:
         return queryset.filter(parent__user_id=user.id)
+    if role == UserRole.TEACHER:
+        return queryset.filter(classroom_id__in=_classrooms_de_l_enseignant(user))
 
     target_etablissement_id = _effective_etablissement_id(request)
     if target_etablissement_id:
@@ -1454,6 +1459,12 @@ def _allowed_payments_queryset(request):
         "received_by",
     ).filter(is_cancelled=False)
     role = getattr(user, "role", "")
+
+    # Le module rapports s'ouvre a des roles qui n'ont pas les finances:
+    # censeur, surveillant, enseignant y viennent pour les bulletins et les
+    # listes de classe, pas pour les encaissements.
+    if not can_read(role, "finance"):
+        return queryset.none()
 
     if role == UserRole.STUDENT:
         return queryset.filter(fee__student__user_id=user.id)
@@ -1972,8 +1983,6 @@ class ReportsContextView(APIView):
     permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
-        _ensure_reports_module_access(request)
-
         students = _allowed_students_queryset(request).order_by(
             "user__last_name",
             "user__first_name",

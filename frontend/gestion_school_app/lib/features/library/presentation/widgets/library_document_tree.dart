@@ -160,8 +160,12 @@ class LibraryDocumentTree extends StatelessWidget {
     final enCours = documentEnCours == document.id;
 
     // Les documents que la source refuse restent au catalogue, mais ils ne
-    // s'ouvriront pas: le dire vaut mieux qu'un echec au clic.
-    final indisponible = !document.isDownloaded && document.importError.isNotEmpty;
+    // s'ouvriront pas: le dire vaut mieux qu'un echec au clic. Sur un serveur
+    // sans Internet, c'est vrai de tout document non rapatrie, que la source
+    // l'ait refuse ou non -- `isReadable` porte ce second cas.
+    final refuseALaSource =
+        !document.isDownloaded && document.importError.isNotEmpty;
+    final indisponible = refuseALaSource || !document.isReadable;
 
     final details = <String>[
       if (matiere && document.categoryName.isNotEmpty) document.categoryName,
@@ -169,7 +173,10 @@ class LibraryDocumentTree extends StatelessWidget {
       if (document.estDepose && document.uploadedByName.isNotEmpty)
         'ajouté par ${document.uploadedByName}',
       if (document.description.isNotEmpty) document.description,
-      if (indisponible) 'indisponible à la source',
+      if (refuseALaSource)
+        'indisponible à la source'
+      else if (indisponible)
+        'non rapatrié sur ce serveur',
     ];
 
     return ListTile(

@@ -372,10 +372,16 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
 
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
-    return Container(
+    // Le fond vient d'un Material et non du Container: une ligne de
+    // liste peint sa surbrillance sur le Material le plus proche, et
+    // un fond pose par-dessus la rendait invisible -- on cliquait
+    // sans retour visuel.
+    return Material(
+      color: colorScheme.surfaceContainerLowest,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: colorScheme.outlineVariant.withValues(alpha: 0.5),
@@ -389,6 +395,7 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
           child,
         ],
       ),
+    ),
     );
   }
 
