@@ -83,6 +83,21 @@ flutter:
           weight: 600
         - asset: assets/fonts/Inter-Bold.ttf
           weight: 700
+    # Repli pour les glyphes qu'Inter ne porte pas -- un emoji tape dans le
+    # chat, un caractere d'un nom. CanvasKit va sinon chercher la police Noto
+    # correspondante sur fonts.gstatic.com: injoignable sur le serveur d'une
+    # ecole, il reessaie trois fois puis affiche un carre vide.
+    #
+    # La variante monochrome (865 Ko) et non NotoColorEmoji (11 Mo): le moteur
+    # attend le chargement de toutes les familles declarees avant d'afficher
+    # quoi que ce soit, et le serveur local repond `no-store`, donc ce poids
+    # se paierait a chaque ouverture de page. Passer a la couleur ne tient
+    # qu'a remplacer le fichier et ce nom.
+    #
+    # Licence SIL OFL 1.1: assets/fonts/OFL-NotoEmoji.txt.
+    - family: NotoEmoji
+      fonts:
+        - asset: assets/fonts/NotoEmoji-Regular.ttf
 
 flutter_launcher_icons:
   android: true

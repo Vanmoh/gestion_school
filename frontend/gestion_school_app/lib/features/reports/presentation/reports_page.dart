@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 
 import '../../../core/network/api_client.dart';
 import '../../../core/network/chargement_tolerant.dart';
+import '../../../core/permissions/module_permissions.dart';
 import '../../../core/widgets/indicateur.dart';
 
 class ReportsPage extends ConsumerStatefulWidget {
@@ -766,11 +767,19 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
             'Telecharge un fichier .xlsx avec l\'historique des paiements.',
           ),
           const SizedBox(height: 12),
-          FilledButton.tonalIcon(
-            onPressed: _busy ? null : _downloadPaymentsExcel,
-            icon: const Icon(Icons.table_view_outlined),
-            label: const Text('Exporter Excel'),
-          ),
+          if (ref.watch(currentPermissionsProvider).can(
+            Capacites.exportsSensibles,
+          ))
+            FilledButton.tonalIcon(
+              onPressed: _busy ? null : _downloadPaymentsExcel,
+              icon: const Icon(Icons.table_view_outlined),
+              label: const Text('Exporter Excel'),
+            )
+          else
+            const Text(
+              'Export réservé à la direction et à la comptabilité.',
+              style: TextStyle(fontStyle: FontStyle.italic),
+            ),
         ],
       ),
     );

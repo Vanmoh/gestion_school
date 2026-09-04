@@ -91,9 +91,14 @@ final _reponses = <String, dynamic>{
   ],
 };
 
-ModulePermissions _droits(AccessLevel niveau) {
+ModulePermissions _droits(AccessLevel niveau, {bool exports = true}) {
   return ModulePermissions(
     role: 'director',
+    // La liste des enseignants est un export nominatif: elle depend d'une
+    // capacite, et non du seul niveau d'acces au module. Sans elle, le bouton
+    // ne s'affiche pas -- ce qui est le comportement voulu, mais laissait le
+    // test chercher un bouton qu'il n'avait pas demande.
+    capabilities: {Capacites.exportsSensibles: exports},
     modules: {
       'teachers': ModulePermission(
         key: 'teachers',
@@ -109,6 +114,7 @@ ModulePermissions _droits(AccessLevel niveau) {
 Future<_FauxTransport> _pumpPage(
   WidgetTester tester, {
   AccessLevel niveau = AccessLevel.write,
+  bool exports = true,
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
   final transport = _FauxTransport(_reponses);
@@ -123,7 +129,9 @@ Future<_FauxTransport> _pumpPage(
     ProviderScope(
       overrides: [
         dioProvider.overrideWithValue(dio),
-        currentPermissionsProvider.overrideWithValue(_droits(niveau)),
+        currentPermissionsProvider.overrideWithValue(
+          _droits(niveau, exports: exports),
+        ),
       ],
       child: const MaterialApp(home: Scaffold(body: TeachersPage())),
     ),
@@ -256,6 +264,20 @@ void main() {
     // signalerait une regression de la refonte.
     expect(find.byType(DropdownButtonFormField<int?>), findsNothing);
     expect(find.text('Liste des enseignants'), findsOneWidget);
+  });
+
+  testWidgets('sans droit d_export, la liste imprimable n_est pas proposee', (
+    tester,
+  ) async {
+    // Le PDF nomme chaque agent et porte ses coordonnees. Le censeur et le
+    // promoteur lisent la fiche enseignant sans pouvoir en sortir ce fichier:
+    // le bouton s'affichait pour eux et le serveur le refusait au clic.
+    await _pumpPage(tester, exports: false);
+
+    expect(find.text('Liste des enseignants'), findsNothing);
+    // Le reste de l'ecran ne bouge pas: c'est un bouton en moins, pas un
+    // module ferme.
+    expect(find.textContaining('Recherchez un enseignant'), findsOneWidget);
   });
 
   testWidgets('un bouton permet d_ajouter un enseignant inexistant', (

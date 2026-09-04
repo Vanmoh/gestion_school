@@ -21,14 +21,16 @@ from django.db.models.deletion import ProtectedError
 from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from rest_framework import permissions, status, viewsets
+from rest_framework.permissions import AllowAny
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import AuditLogPagination
-from .models import ActivityLog, BackupArchive
-from .serializers import ActivityLogSerializer, BackupArchiveSerializer
+from .models import ActivityLog, BackupArchive, PersonnalisationPlateforme
+from .serializers import ActivityLogSerializer, BackupArchiveSerializer, PersonnalisationSerializer
 
 
 def _pdf_text(value) -> str:
@@ -1347,3 +1349,48 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+class PersonnalisationView(APIView):
+    """L'identite de l'ecole: lisible par tous, modifiable par le seul super admin.
+
+    La lecture est ouverte parce que les deux ecrans qui en ont le plus
+    besoin -- la connexion et le portail de selection -- s'affichent avant
+    qu'on soit authentifie. Ce qu'elle expose est de toute facon ce que
+    n'importe quel visiteur lit sur la page d'accueil.
+
+    L'ecriture passe par la matrice, sur un module « personnalisation »
+    ouvert au seul super admin -- directeur compris: ces reglages valent pour
+    tous les etablissements a la fois, et le directeur d'un site n'a pas a
+    decider de ce que lisent les autres.
+    """
+
+    access_module = "personnalisation"
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        # Meme partage que le portail de selection: on lit sans compte, on
+        # ecrit avec les droits. La matrice garde la main sur l'ecriture.
+        if self.request.method in permissions.SAFE_METHODS:
+            return [AllowAny()]
+        return [permissions.IsAuthenticated(), HasModuleAccess()]
+
+    def get(self, request):
+        personnalisation = PersonnalisationPlateforme.actuelle()
+        return Response(
+            PersonnalisationSerializer(
+                personnalisation, context={"request": request}
+            ).data
+        )
+
+    def patch(self, request):
+        personnalisation = PersonnalisationPlateforme.actuelle()
+        serializer = PersonnalisationSerializer(
+            personnalisation,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)

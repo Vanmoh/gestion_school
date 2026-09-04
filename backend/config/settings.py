@@ -254,6 +254,27 @@ LIBRARY_STORAGE_REDIRECT = config(
     "LIBRARY_STORAGE_REDIRECT", cast=bool, default=False
 )
 
+# Relayer depuis sa source (bkalan.ml) un document pas encore rapatrie.
+#
+# Actif par defaut: c'est tout l'interet du mode hybride, et le serveur cloud
+# a Internet. A fermer sur le serveur d'une ecole qui n'en a pas.
+#
+# Le relais y echoue de toute facon, mais il echoue mal: `urlopen` fait
+# patienter le lecteur le temps de son delai d'attente avant de rendre une
+# erreur technique, et immobilise un worker qui servirait d'autres pages.
+# Ferme, la vue repond tout de suite et dit quoi faire -- rapatrier le
+# document avec `manage.py import_bkalan`. Le catalogue annonce alors ces
+# documents comme illisibles avant meme le clic (champ `is_readable`).
+#
+# Marche a suivre: docs/OPERATIONS_BIBLIOTHEQUE.md, §8.
+LIBRARY_RELAY_SOURCE = config("LIBRARY_RELAY_SOURCE", cast=bool, default=True)
+
+# Delai d'attente du relais, en secondes.
+#
+# 30 s etait le delai d'un telechargement, pas celui d'une source muette: un
+# reseau qui ne repond pas immobilisait un worker une demi-minute par clic.
+LIBRARY_RELAY_TIMEOUT = config("LIBRARY_RELAY_TIMEOUT", cast=int, default=10)
+
 # Poids maximal d'un PDF televerse depuis l'application.
 #
 # 50 Mo laisse passer un manuel scanne entier tout en fermant la porte a la

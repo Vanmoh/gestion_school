@@ -294,6 +294,17 @@ MODULES = {
         "group": "administration",
         "access": _row("A", "-", "A", "-", "-", "-", "-", "-", "-"),
     },
+    # Le nom, le logo et les libelles que porte l'application. Au seul super
+    # admin, directeur compris: ces reglages valent pour tous les
+    # etablissements a la fois, et le directeur d'un site n'a pas a decider
+    # de ce que lisent les autres. La lecture, elle, reste ouverte a tous --
+    # l'ecran de connexion et le portail la demandent avant toute session,
+    # et la vue le prevoit.
+    "personnalisation": {
+        "label": "Personnalisation",
+        "group": "administration",
+        "access": _row("A", "-", "-", "-", "-", "-", "-", "-", "-"),
+    },
     # Ouvert a tous: la messagerie s'autorise objet par objet (membre de la
     # conversation, administrateur du groupe). La matrice ne fait ici
     # qu'ouvrir le module, elle ne remplace pas ces controles.
@@ -354,6 +365,80 @@ MODULES = {
 }
 
 MODULE_KEYS = tuple(MODULES.keys())
+
+
+# --- Affinements internes aux modules --------------------------------------
+# La matrice repond a "qui entre dans ce module". Elle ne sait pas dire "y
+# ecrit ceci mais pas cela": ses cases n'ont que quatre niveaux, et certaines
+# regles portent sur un geste precis a l'interieur d'un module deja ouvert.
+#
+# Ces regles existaient deja, chacune ecrite a la main dans la vue qui s'en
+# servait -- quatre listes de roles qu'aucun lecteur de la matrice ne pouvait
+# soupconner. Les reunir ici ne change aucun droit: cela rend la matrice a
+# nouveau lisible d'un seul endroit, et permet au frontend de masquer un
+# bouton au lieu de le laisser refuser au clic.
+
+AFFINEMENTS = {
+    "exports_sensibles": {
+        "label": "Exports nominatifs et financiers",
+        "module": "reports",
+        "roles": frozenset({SUPER_ADMIN, DIRECTOR, ACCOUNTANT}),
+    },
+    "validation_paie_niveau_1": {
+        "label": "Valider la paie au niveau 1",
+        "module": "payroll",
+        "roles": frozenset({SUPER_ADMIN, CENSOR}),
+    },
+    "validation_paie_niveau_2": {
+        "label": "Valider la paie au niveau 2",
+        "module": "payroll",
+        "roles": frozenset({SUPER_ADMIN, ACCOUNTANT}),
+    },
+    # Defaire une double validation, c'est effacer la trace de qui avait
+    # signe. Les deux signataires ne peuvent donc pas s'en charger eux-memes.
+    "annulation_validation_paie": {
+        "label": "Annuler une validation de paie",
+        "module": "payroll",
+        "roles": frozenset({SUPER_ADMIN}),
+    },
+    "annulation_validation_depense": {
+        "label": "Annuler une validation de depense",
+        "module": "finance",
+        "roles": frozenset({SUPER_ADMIN}),
+    },
+    "saisie_conduite": {
+        "label": "Noter la conduite",
+        "module": "discipline",
+        "roles": frozenset({SUPER_ADMIN, CENSOR, SUPERVISOR}),
+    },
+    # Le message ordinaire attend qu'on le lise; l'appel d'attention, lui,
+    # interrompt. Il reste au personnel, pour qu'un eleve ne fasse pas surgir
+    # une fenetre chez le directeur en pleine reunion.
+    "appel_attention": {
+        "label": "Appeler l'attention dans la messagerie",
+        "module": "chat",
+        "roles": frozenset(
+            {SUPER_ADMIN, PROMOTER, DIRECTOR, CENSOR, ACCOUNTANT, SUPERVISOR, TEACHER}
+        ),
+    },
+}
+
+
+def affinement_autorise(role: str, cle: str) -> bool:
+    """Ce role dispose-t-il de ce geste precis?
+
+    Le module doit rester la premiere porte: un affinement affine, il
+    n'ouvre pas. Un role sans lecture sur le module se voit donc refuser
+    meme s'il figure dans la liste.
+    """
+    regle = AFFINEMENTS[cle]
+    if not can_read(role, regle["module"]):
+        return False
+    return role in regle["roles"]
+
+
+def affinements_du_role(role: str) -> dict:
+    return {cle: affinement_autorise(role, cle) for cle in AFFINEMENTS}
 
 
 # --- Lecture de la matrice -------------------------------------------------
@@ -420,4 +505,7 @@ def role_payload(role: str) -> dict:
         "role_label": ROLE_LABELS.get(role, role),
         "groups": [{"key": key, "label": label} for key, label in MODULE_GROUPS],
         "modules": modules,
+        # Le frontend s'en sert pour masquer un bouton plutot que de le
+        # presenter a quelqu'un qui se fera refuser au clic.
+        "capabilities": affinements_du_role(role),
     }

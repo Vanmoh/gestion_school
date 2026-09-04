@@ -240,3 +240,62 @@ l'ISBN.
 **L'ISBN est unique par établissement**, plus globalement : deux écoles
 possèdent le même manuel. Un doublon dans la même école est refusé avec un
 message sur le champ `isbn`, pas par une erreur d'intégrité.
+
+## 8. Serveur d'école sans Internet
+
+Sur le réseau d'un établissement, la source `bkalan.ml` est hors de portée.
+Le mode hybride — servir le fichier local, relayer le reste depuis la source
+— n'y a plus de second terme : le relais ne peut aboutir. Il échouait
+pourtant mal. `urlopen` faisait patienter le lecteur le temps de son délai
+d'attente avant de rendre une erreur technique, et immobilisait pendant ce
+temps un worker qui aurait servi d'autres pages.
+
+**Deux gestes, et l'ordre compte.**
+
+### 1. Rapatrier, pendant qu'Internet est encore là
+
+```sh
+docker compose -f infra/docker-compose.yml exec backend \
+  python manage.py import_bkalan                     # ce qui manque
+docker compose -f infra/docker-compose.yml exec backend \
+  python manage.py import_bkalan --retenter-erreurs  # les 43 de la §5
+```
+
+**Après une resynchronisation de la base depuis la production**
+(`tools/sync_local_db.sh`), attendez-vous à voir `is_downloaded=False` sur la
+totalité du fonds alors que les PDF sont bien sur le disque : la production,
+elle, ne les a pas, et c'est son état qui vient d'écraser le vôtre. Rien
+n'est perdu — la commande adopte les fichiers déjà rangés au bon endroit sans
+les retélécharger (1218 documents adoptés, 0 octet transféré, au dernier
+passage). Ne pas la relancer laisserait le catalogue croire que l'école ne
+possède rien.
+
+Contrôle de ce qui est réellement sur place :
+
+```sh
+docker compose -f infra/docker-compose.yml exec backend python manage.py shell -c "
+from apps.school.models import LibraryDocument as D
+print(D.objects.count(), 'au catalogue,', D.objects.filter(is_downloaded=True).count(), 'rapatriés')"
+```
+
+### 2. Fermer le relais
+
+`LIBRARY_RELAY_SOURCE=False` — déjà posé dans `backend/.env.example`, qui est
+l'environnement que lit `infra/docker-compose.yml` pour les conteneurs.
+Attention : c'est bien `.env.example` et non `.env`, sans quoi le réglage
+n'atteint pas le conteneur.
+
+La vue répond alors **503 immédiatement**, avec une phrase adressée au
+lecteur et non une trace technique. Et le catalogue n'attend pas le clic : le
+champ `is_readable` du sérialiseur passe à `False` pour tout document non
+rapatrié, et l'écran grise la ligne en annonçant « non rapatrié sur ce
+serveur » — à distinguer d'« indisponible à la source », qui reste réservé
+aux documents que BKalan refuse (§5).
+
+**Fermer avant d'avoir rapatrié** rend le fonds illisible ; c'est visible dans
+le catalogue grâce à `is_readable`, mais l'ordre inverse évite de le
+découvrir devant une classe.
+
+`LIBRARY_RELAY_TIMEOUT` (défaut 10 s) borne l'attente quand le relais reste
+ouvert : 30 s était le délai d'un téléchargement, pas celui d'une source
+muette.
