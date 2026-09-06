@@ -10,6 +10,7 @@ import '../features/personnalisation/domain/personnalisation.dart';
 import '../features/personnalisation/presentation/personnalisation_controller.dart';
 import '../models/etablissement.dart';
 import '../widgets/etablissement_identity.dart';
+import '../widgets/fond_ecran_public.dart';
 import 'etablissement_details_screen.dart';
 
 class PublicEtablissementEntryPage extends ConsumerStatefulWidget {
@@ -227,6 +228,7 @@ class _HoverLift extends StatefulWidget {
   final Color hoverBorderColor;
   final Color glowColor;
   final VoidCallback onTap;
+
   /// Chemin de secours vers les details au doigt: le bouton dedie n'apparait
   /// qu'au survol, geste dont un ecran tactile ne dispose pas.
   final VoidCallback? onLongPress;
@@ -344,6 +346,12 @@ class _EtablissementSelectionScreenState
   final FocusNode _searchFocusNode = FocusNode();
   String _searchQuery = '';
 
+  /// Position du curseur, pour que l'eclairage du fond le suive.
+  ///
+  /// Nulle tant que la souris n'a pas bouge -- et pour toujours au doigt, ou
+  /// il n'y a pas de curseur a suivre.
+  Alignment? _curseur;
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -368,10 +376,8 @@ class _EtablissementSelectionScreenState
   void _openDetails(Etablissement etab) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => EtablissementDetailsScreen(
-          etablissement: etab,
-          onSelect: _select,
-        ),
+        builder: (_) =>
+            EtablissementDetailsScreen(etablissement: etab, onSelect: _select),
       ),
     );
   }
@@ -421,17 +427,17 @@ class _EtablissementSelectionScreenState
                   ),
                 ),
                 const SizedBox(height: 6),
-                _ContactLine(
+                EtabContactLine(
                   icon: Icons.apartment_rounded,
                   value: etabDisplayName(contact),
                 ),
                 if ((contact.phone ?? '').trim().isNotEmpty)
-                  _ContactLine(
+                  EtabContactLine(
                     icon: Icons.call_outlined,
                     value: contact.phone!.trim(),
                   ),
                 if ((contact.email ?? '').trim().isNotEmpty)
-                  _ContactLine(
+                  EtabContactLine(
                     icon: Icons.mail_outline_rounded,
                     value: contact.email!.trim(),
                   ),
@@ -452,6 +458,7 @@ class _EtablissementSelectionScreenState
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final marque = ref.watch(personnalisationProvider).valeur;
     final provider = ref.watch(etablissementProvider);
     final all = provider.etablissements;
     final resume = provider.selected;
@@ -493,88 +500,113 @@ class _EtablissementSelectionScreenState
         },
         child: Focus(
           autofocus: true,
-          child: Stack(
-            children: [
-              const Positioned.fill(child: EtabAmbientBackdrop()),
-              SafeArea(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    EtabContentBand(
-                      child: _PortalHeader(
-                        total: all.length,
-                        searchController: _searchController,
-                        searchFocusNode: _searchFocusNode,
-                        searchQuery: _searchQuery,
-                        onSearchChanged: (value) =>
-                            setState(() => _searchQuery = value.trim()),
-                        onClearSearch: () {
-                          _searchController.clear();
-                          setState(() => _searchQuery = '');
-                        },
-                      ),
-                    ),
-                    Expanded(
-                      child: filtered.isEmpty
-                          ? _EmptyResults(
-                              query: _searchQuery,
-                              erreur: widget.loadError,
-                              onRetry: widget.onRetry,
-                            )
-                          : EtabContentBand(
-                              child: LayoutBuilder(
-                                builder: (context, constraints) {
-                                  final wide = constraints.maxWidth >= 720;
-                                  final horizontal = wide ? 28.0 : 16.0;
-
-                                  return ListView(
-                                    padding: EdgeInsets.fromLTRB(
-                                      horizontal,
-                                      4,
-                                      horizontal,
-                                      24,
-                                    ),
-                                    children: [
-                                      if (showResume) ...[
-                                        const EtabSectionLabel('Reprendre'),
-                                        EtabStaggeredReveal(
-                                          key: ValueKey('resume-${resume.id}'),
-                                          index: 0,
-                                          child: _ResumeCard(
-                                            etab: resume,
-                                            onTap: () => _select(resume),
-                                            onDetails: () =>
-                                                _openDetails(resume),
-                                          ),
-                                        ),
-                                        const SizedBox(height: 6),
-                                      ],
-                                      EtabSectionLabel(
-                                        showResume
-                                            ? 'Autres établissements'
-                                            : 'Tous les établissements',
-                                      ),
-                                      _EtablissementGrid(
-                                        etablissements: others,
-                                        maxWidth:
-                                            constraints.maxWidth -
-                                            horizontal * 2,
-                                        onSelected: _select,
-                                        onDetails: _openDetails,
-                                        onRequestAccess: () =>
-                                            _requestAccess(all),
-                                      ),
-                                    ],
-                                  );
-                                },
-                              ),
-                            ),
-                    ),
-                    const EtabSecureFooter(),
-                  ],
+          child: MouseRegion(
+            onHover: (evenement) {
+              final taille = MediaQuery.sizeOf(context);
+              if (taille.isEmpty) return;
+              setState(() {
+                _curseur = Alignment(
+                  (evenement.position.dx / taille.width) * 2 - 1,
+                  (evenement.position.dy / taille.height) * 2 - 1,
+                );
+              });
+            },
+            onExit: (_) => setState(() => _curseur = null),
+            child: Stack(
+              children: [
+                // Le meme fond que l'ecran de connexion, qui suit dans le
+                // parcours: halos, image de la plateforme et lueur qui repond au
+                // curseur. Les deux ecrans se ressemblaient a peine alors qu'on
+                // passe de l'un a l'autre en un clic.
+                Positioned.fill(
+                  child: FondEcranPublic(
+                    photoUrl: marque.imageFondUrl,
+                    curseur: _curseur,
+                    ancrageLueur: const Alignment(0, -0.35),
+                  ),
                 ),
-              ),
-            ],
+                SafeArea(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      EtabContentBand(
+                        child: _PortalHeader(
+                          total: all.length,
+                          searchController: _searchController,
+                          searchFocusNode: _searchFocusNode,
+                          searchQuery: _searchQuery,
+                          onSearchChanged: (value) =>
+                              setState(() => _searchQuery = value.trim()),
+                          onClearSearch: () {
+                            _searchController.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                        ),
+                      ),
+                      Expanded(
+                        child: filtered.isEmpty
+                            ? _EmptyResults(
+                                query: _searchQuery,
+                                erreur: widget.loadError,
+                                onRetry: widget.onRetry,
+                              )
+                            : EtabContentBand(
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final wide = constraints.maxWidth >= 720;
+                                    final horizontal = wide ? 28.0 : 16.0;
+
+                                    return ListView(
+                                      padding: EdgeInsets.fromLTRB(
+                                        horizontal,
+                                        4,
+                                        horizontal,
+                                        24,
+                                      ),
+                                      children: [
+                                        if (showResume) ...[
+                                          const EtabSectionLabel('Reprendre'),
+                                          EtabStaggeredReveal(
+                                            key: ValueKey(
+                                              'resume-${resume.id}',
+                                            ),
+                                            index: 0,
+                                            child: _ResumeCard(
+                                              etab: resume,
+                                              onTap: () => _select(resume),
+                                              onDetails: () =>
+                                                  _openDetails(resume),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 6),
+                                        ],
+                                        EtabSectionLabel(
+                                          showResume
+                                              ? 'Autres établissements'
+                                              : 'Tous les établissements',
+                                        ),
+                                        _EtablissementGrid(
+                                          etablissements: others,
+                                          maxWidth:
+                                              constraints.maxWidth -
+                                              horizontal * 2,
+                                          onSelected: _select,
+                                          onDetails: _openDetails,
+                                          onRequestAccess: () =>
+                                              _requestAccess(all),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ),
+                      ),
+                      const EtabSecureFooter(),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -583,34 +615,6 @@ class _EtablissementSelectionScreenState
 }
 
 /// Une coordonnee dans la boite "Demander un acces".
-class _ContactLine extends StatelessWidget {
-  final IconData icon;
-  final String value;
-
-  const _ContactLine({required this.icon, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        children: [
-          Icon(icon, size: 15, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              value,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// En-tete: enonce la tache, puis donne l'outil pour l'accomplir.
 ///
 /// `ConsumerWidget` pour lire l'identite de l'ecole: le nom et le sigle
@@ -719,7 +723,12 @@ class _PortalHeader extends ConsumerWidget {
                   _SecureBadge(scheme: scheme, textTheme: textTheme),
                 ],
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 20),
+              // La meme salutation que l'ecran de connexion, qui suit dans le
+              // parcours: une page qui salue suivie d'une page qui ne salue
+              // pas se remarque.
+              const SalutationDuJour(),
+              const SizedBox(height: 10),
               // Seul "votre établissement" porte le degrade: le contraste entre
               // la partie neutre et la partie accentuee fait lire le titre en
               // deux temps, comme dans la maquette.
@@ -892,8 +901,11 @@ class _PortalTitle extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final style = Theme.of(context).textTheme.headlineSmall?.copyWith(
+      // Sora, comme le nom de l'ecole sur l'ecran de connexion: c'est la
+      // police des titres de ces deux ecrans publics.
+      fontFamily: 'Sora',
       fontSize: fontSize,
-      fontWeight: FontWeight.w800,
+      fontWeight: FontWeight.w700,
       letterSpacing: -0.7,
       height: 1.12,
     );
@@ -923,7 +935,10 @@ class _PortalTitle extends StatelessWidget {
         child: Wrap(
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Text('Choisissez ', style: style?.copyWith(color: scheme.onSurface)),
+            Text(
+              'Choisissez ',
+              style: style?.copyWith(color: scheme.onSurface),
+            ),
             ShaderMask(
               blendMode: BlendMode.srcIn,
               shaderCallback: (bounds) => LinearGradient(
@@ -1293,10 +1308,7 @@ class _DashedBorderPainter extends CustomPainter {
 
     final path = Path()
       ..addRRect(
-        RRect.fromRectAndRadius(
-          Offset.zero & size,
-          Radius.circular(radius),
-        ),
+        RRect.fromRectAndRadius(Offset.zero & size, Radius.circular(radius)),
       );
 
     const dash = 5.0;
@@ -1398,7 +1410,10 @@ class _EtablissementTile extends StatelessWidget {
                         Expanded(
                           child: Align(
                             alignment: Alignment.topRight,
-                            child: EtabTypeTag(label: etabTag(etab), ramp: ramp),
+                            child: EtabTypeTag(
+                              label: etabTag(etab),
+                              ramp: ramp,
+                            ),
                           ),
                         ),
                       ],
@@ -1578,4 +1593,3 @@ class _EmptyResults extends StatelessWidget {
     );
   }
 }
-

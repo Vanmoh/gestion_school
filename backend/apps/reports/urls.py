@@ -1,8 +1,12 @@
 from django.urls import path
 from .views import (
     BatchPaymentReceiptsPdfView,
+    BulletinDeliveryMarkSentView,
     BulletinPdfView,
+    BulletinShareDownloadView,
+    BulletinWhatsAppView,
     ClassBulletinsPdfView,
+    ClassBulletinsWhatsAppView,
     ClassRosterPdfView,
     ClassStudentCardsPdfView,
     ExpenseJournalExportView,
@@ -24,6 +28,31 @@ urlpatterns = [
         "bulletins/class/<int:classroom_id>/<int:academic_year_id>/<str:term>/",
         ClassBulletinsPdfView.as_view(),
         name="class-bulletins-pdf",
+    ),
+    # Envoi des bulletins aux familles par WhatsApp. GET dit ce qui est
+    # possible, POST prepare les liens: un ecran qui s'affiche ne doit pas
+    # ouvrir une ligne d'historique.
+    path(
+        "bulletin/<int:student_id>/<int:academic_year_id>/<str:term>/whatsapp/",
+        BulletinWhatsAppView.as_view(),
+        name="bulletin-whatsapp",
+    ),
+    path(
+        "bulletins/class/<int:classroom_id>/<int:academic_year_id>/<str:term>/whatsapp/",
+        ClassBulletinsWhatsAppView.as_view(),
+        name="class-bulletins-whatsapp",
+    ),
+    path(
+        "bulletin-deliveries/<int:delivery_id>/sent/",
+        BulletinDeliveryMarkSentView.as_view(),
+        name="bulletin-delivery-mark-sent",
+    ),
+    # Cible du lien recu par la famille. Publique: un parent n'a pas de
+    # compte. La signature et l'expiration tiennent lieu de cle d'acces.
+    path(
+        "bulletin-partage/<int:student_id>/<int:academic_year_id>/<str:term>/<int:expire>/<str:signature>/",
+        BulletinShareDownloadView.as_view(),
+        name="bulletin-partage",
     ),
     path("receipt/<int:payment_id>/", PaymentReceiptPdfView.as_view(), name="payment-receipt-pdf"),
     path("receipts/batch/", BatchPaymentReceiptsPdfView.as_view(), name="payment-receipts-batch-pdf"),

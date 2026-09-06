@@ -30,6 +30,13 @@ class Etablissement {
   final String? phone;
   final String? email;
   final String? logoUrl;
+
+  /// Photo de l'ecole, affichee en fond de l'ecran de connexion.
+  ///
+  /// Distincte du logo, qui est un dessin cadre serre sur fond blanc: on ne
+  /// peut pas l'etaler en pleine page. Facultative -- sans elle, l'ecran de
+  /// connexion garde son fond dessine.
+  final String? coverUrl;
   final String? stampImageUrl;
   final String? principalSignatureImageUrl;
   final String? cashierSignatureImageUrl;
@@ -48,6 +55,7 @@ class Etablissement {
     this.phone,
     this.email,
     this.logoUrl,
+    this.coverUrl,
     this.stampImageUrl,
     this.principalSignatureImageUrl,
     this.cashierSignatureImageUrl,
@@ -68,6 +76,7 @@ class Etablissement {
       phone: json['phone'],
       email: json['email'],
       logoUrl: json['logo'],
+      coverUrl: json['cover_image'],
       stampImageUrl: json['stamp_image'],
       principalSignatureImageUrl: json['principal_signature_image'],
       cashierSignatureImageUrl: json['cashier_signature_image'],
@@ -76,7 +85,8 @@ class Etablissement {
       parentSignatureLabel: json['parent_signature_label'],
       principalSignaturePosition: json['principal_signature_position'],
       stampPosition: json['stamp_position'],
-      principalSignatureScale: (json['principal_signature_scale'] as num?)?.toInt(),
+      principalSignatureScale: (json['principal_signature_scale'] as num?)
+          ?.toInt(),
       stampScale: (json['stamp_scale'] as num?)?.toInt(),
     );
   }
@@ -89,6 +99,7 @@ class Etablissement {
       'phone': phone,
       'email': email,
       'logo': logoUrl,
+      'cover_image': coverUrl,
       'stamp_image': stampImageUrl,
       'principal_signature_image': principalSignatureImageUrl,
       'cashier_signature_image': cashierSignatureImageUrl,
@@ -118,6 +129,8 @@ class Etablissement {
   String? get logoUrlForDisplay {
     return _cacheBustedAsset(logoUrl);
   }
+
+  String? get coverUrlForDisplay => _cacheBustedAsset(coverUrl);
 
   String? get stampImageUrlForDisplay => _cacheBustedAsset(stampImageUrl);
 

@@ -53,6 +53,7 @@ from .models import (
     AttendanceSheetValidation,
     Book,
     Borrow,
+    BulletinPublication,
     CanteenMenu,
     CanteenService,
     CanteenSubscription,
@@ -105,6 +106,7 @@ from .models import (
 from .serializers import (
     AcademicYearSerializer,
     AnnouncementSerializer,
+    BulletinPublicationSerializer,
     AttendanceSerializer,
     BookSerializer,
     BorrowSerializer,
@@ -3440,6 +3442,161 @@ class TimetablePublicationViewSet(EtablissementScopeMixin, viewsets.ReadOnlyMode
             return qs
 
         return qs.filter(classroom__etablissement=getattr(user, "etablissement", None))
+
+
+class BulletinPublicationViewSet(EtablissementScopeMixin, viewsets.ReadOnlyModelViewSet):
+    """La validation des bulletins, classe par classe et periode par periode.
+
+    En lecture seule par les routes ordinaires: valider n'est pas modifier un
+    objet, c'est un acte date et signe. Les deux actions ci-dessous le
+    portent, et le serializer refuse par ailleurs qu'on poste soi-meme la
+    date ou l'auteur.
+    """
+
+    access_module = "bulletin_validation"
+    queryset = (
+        BulletinPublication.objects.select_related(
+            "classroom",
+            "academic_year",
+            "published_by",
+        )
+        .all()
+        .order_by("classroom__name", "term")
+    )
+    serializer_class = BulletinPublicationSerializer
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+    filterset_fields = ["classroom", "academic_year", "term", "is_published"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset()
+        requested_etablissement = self._requested_etablissement()
+
+        # « L* » sur la matrice: l'enseignant lit l'etat de ses seules
+        # classes. Sans ce filtre, l'etoile ne documenterait rien et il
+        # verrait le calendrier de validation de tout l'etablissement.
+        if getattr(user, "role", None) == UserRole.TEACHER:
+            return queryset.filter(
+                classroom_id__in=TeacherAssignment.objects.filter(
+                    teacher__user_id=user.id
+                ).values_list("classroom_id", flat=True)
+            )
+
+        if requested_etablissement is not None:
+            return queryset.filter(classroom__etablissement=requested_etablissement)
+
+        if self._has_requested_scope():
+            return queryset.none()
+
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN:
+            return queryset
+
+        return queryset.filter(classroom__etablissement=getattr(user, "etablissement", None))
+
+    def _cible(self, request):
+        """La classe, l'annee et la periode visees, ou une erreur explicite."""
+        classroom_id = request.data.get("classroom") or request.query_params.get("classroom")
+        academic_year_id = request.data.get("academic_year") or request.query_params.get("academic_year")
+        term = request.data.get("term") or request.query_params.get("term")
+
+        if not classroom_id or not academic_year_id or not term:
+            raise ValidationError(
+                {"detail": "classroom, academic_year et term sont requis."}
+            )
+
+        normalized_term = normalize_term(str(term))
+        if not normalized_term:
+            raise ValidationError(
+                {"detail": "Période invalide. Utilisez uniquement T1, T2 ou T3."}
+            )
+
+        # La classe est cherchee dans le perimetre de l'utilisateur et non
+        # dans toute la base: sans cela, un identifiant tape a la main
+        # validerait les bulletins d'une autre ecole.
+        classroom = get_object_or_404(self._classes_autorisees(), id=classroom_id)
+        academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
+        return classroom, academic_year, normalized_term
+
+    def _classes_autorisees(self):
+        user = self.request.user
+        queryset = ClassRoom.objects.all()
+        requested_etablissement = self._requested_etablissement()
+
+        if requested_etablissement is not None:
+            return queryset.filter(etablissement=requested_etablissement)
+        if self._has_requested_scope():
+            return queryset.none()
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN:
+            return queryset
+        return queryset.filter(etablissement=getattr(user, "etablissement", None))
+
+    @action(detail=False, methods=["post"])
+    def publish(self, request):
+        """Arrete les bulletins d'une classe pour une periode."""
+        classroom, academic_year, term = self._cible(request)
+
+        publication, _ = BulletinPublication.objects.get_or_create(
+            classroom=classroom,
+            academic_year=academic_year,
+            term=term,
+        )
+        publication.valider(par=request.user, notes=request.data.get("notes") or "")
+        return Response(BulletinPublicationSerializer(publication).data)
+
+    @action(detail=False, methods=["post"])
+    def unpublish(self, request):
+        """Rouvre la periode.
+
+        Les bulletins deja envoyes aux familles ne sont pas rappeles -- rien
+        ne rappelle un message WhatsApp. Rouvrir sert a corriger avant le
+        prochain envoi, pas a effacer le precedent.
+        """
+        classroom, academic_year, term = self._cible(request)
+
+        publication = BulletinPublication.objects.filter(
+            classroom=classroom,
+            academic_year=academic_year,
+            term=term,
+        ).first()
+        if publication is None:
+            return Response(
+                {"detail": "Cette période n'a jamais été validée pour cette classe."},
+                status=404,
+            )
+
+        publication.annuler()
+        return Response(BulletinPublicationSerializer(publication).data)
+
+    @action(detail=False, methods=["get"])
+    def status(self, request):
+        """L'etat d'une classe pour une periode, meme sans ligne en base."""
+        classroom, academic_year, term = self._cible(request)
+
+        publication = BulletinPublication.objects.filter(
+            classroom=classroom,
+            academic_year=academic_year,
+            term=term,
+        ).first()
+
+        if publication is None:
+            # Une periode jamais validee n'a pas de ligne: rendre 404 ferait
+            # traiter « pas encore validee » comme une erreur par chaque
+            # ecran appelant.
+            return Response(
+                {
+                    "classroom": classroom.id,
+                    "classroom_name": classroom.name,
+                    "academic_year": academic_year.id,
+                    "academic_year_name": academic_year.name,
+                    "term": term,
+                    "is_published": False,
+                    "published_by_name": "",
+                    "published_at": None,
+                    "notes": "",
+                }
+            )
+
+        return Response(BulletinPublicationSerializer(publication).data)
 
 
 class ParentProfileViewSet(BaseModelViewSet):

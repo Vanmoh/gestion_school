@@ -50,6 +50,10 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
 
   Uint8List? _logoBytes;
   String? _logoFileName;
+  // Photo de l'ecole, affichee en fond de son ecran de connexion. Facultative:
+  // sans elle, l'ecran garde son fond dessine.
+  Uint8List? _coverBytes;
+  String? _coverFileName;
   Uint8List? _stampBytes;
   String? _stampFileName;
   Uint8List? _principalSignatureBytes;
@@ -208,6 +212,15 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     );
   }
 
+  Future<void> _pickCover() async {
+    await _pickImage(
+      onPicked: (bytes, fileName) {
+        _coverBytes = bytes;
+        _coverFileName = fileName;
+      },
+    );
+  }
+
   Future<void> _pickStamp() async {
     await _pickImage(
       onPicked: (bytes, fileName) {
@@ -251,6 +264,8 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     _stampPosition = 'right';
     _logoBytes = null;
     _logoFileName = null;
+    _coverBytes = null;
+    _coverFileName = null;
     _stampBytes = null;
     _stampFileName = null;
     _principalSignatureBytes = null;
@@ -370,6 +385,11 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
           'logo': MultipartFile.fromBytes(
             _logoBytes!,
             filename: _logoFileName ?? 'logo.png',
+          ),
+        if (_coverBytes != null)
+          'cover_image': MultipartFile.fromBytes(
+            _coverBytes!,
+            filename: _coverFileName ?? 'couverture.jpg',
           ),
         if (_stampBytes != null)
           'stamp_image': MultipartFile.fromBytes(
@@ -597,6 +617,15 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                       _logoFileName == null
                           ? 'Choisir logo'
                           : 'Logo: $_logoFileName',
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _pickCover,
+                    icon: const Icon(Icons.photo_library_outlined),
+                    label: Text(
+                      _coverFileName == null
+                          ? 'Choisir photo d\'accueil'
+                          : 'Photo: $_coverFileName',
                     ),
                   ),
                   OutlinedButton.icon(

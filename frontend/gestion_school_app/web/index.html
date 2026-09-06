@@ -18,7 +18,7 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="Gestion d'etablissement scolaire: eleves, notes, emplois du temps, presences, paiements et bulletins.">
   <meta
     name="viewport"
     content="width=device-width, initial-scale=1, minimum-scale=0.5, maximum-scale=5, user-scalable=yes, viewport-fit=cover"
@@ -27,13 +27,14 @@
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="gestion_school_app">
+  <meta name="apple-mobile-web-app-title" content="Gestion Scolaire">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>gestion_school_app</title>
+  <title>Gestion Scolaire</title>
+  <meta name="theme-color" content="#0F172A">
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
@@ -46,16 +47,58 @@
       touch-action: pan-x pan-y pinch-zoom !important;
     }
 
+    /* Les valeurs du theme sombre de l'application, a l'identique.
+       Cet ecran etait bleu clair (#eef4fb, accent #2563eb) alors que tout ce
+       qui suit est nuit et violet: l'ouverture commencait donc par un flash
+       blanc, suivi d'une inversion complete de luminosite en une seule image.
+       Voir lib/core/theme/app_theme.dart, _darkScheme. */
+    /* Les polices de l'application, des le premier trait.
+       L'ecran de demarrage se contentait de "Segoe UI", Tahoma, Verdana: trois
+       polices systeme dont aucune n'est celle de l'application, et dont le
+       rendu change d'une machine a l'autre. Celles-ci sont deja dans le build
+       -- le moteur les chargera de toute facon -- donc les nommer ici ne
+       telecharge rien de plus.
+       `font-display: swap`: le texte s'affiche tout de suite dans la police
+       systeme et bascule des l'arrivee du fichier, plutot que de faire
+       attendre un ecran vide. */
+    @font-face {
+      font-family: 'Inter';
+      src: url('assets/assets/fonts/Inter-Regular.ttf') format('truetype');
+      font-weight: 400;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: 'Inter';
+      src: url('assets/assets/fonts/Inter-SemiBold.ttf') format('truetype');
+      font-weight: 600;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: 'Inter';
+      src: url('assets/assets/fonts/Inter-Bold.ttf') format('truetype');
+      font-weight: 700;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: 'Sora';
+      src: url('assets/assets/fonts/Sora-Bold.ttf') format('truetype');
+      font-weight: 700;
+      font-display: swap;
+    }
+
     :root {
-      --bg-1: #eef4fb;
-      --bg-2: #dfe9f6;
-      --ink-strong: #123a64;
-      --ink-soft: #3f5f80;
-      --accent: #2563eb;
-      --accent-2: #1d4ed8;
-      --chip-bg: rgba(18, 58, 100, 0.08);
-      --surface: rgba(255, 255, 255, 0.82);
-      --surface-border: rgba(37, 99, 235, 0.2);
+      --bg-1: #0F172A;                          /* surface */
+      --bg-2: #131D33;                          /* surfaceContainerLow */
+      --ink-strong: #E7ECF9;                    /* onSurface */
+      --ink-soft: #9BA9C3;                      /* onSurfaceVariant */
+      --accent: #8B5CF6;                        /* primary */
+      --accent-2: #6366F1;                      /* secondary */
+      --chip-bg: rgba(139, 92, 246, 0.12);
+      --surface: rgba(13, 20, 38, 0.86);        /* surfaceContainerLowest */
+      --surface-border: rgba(51, 68, 95, 0.8);  /* outlineVariant */
     }
 
     #boot-status {
@@ -67,11 +110,11 @@
       justify-content: center;
       overflow: hidden;
       background:
-        radial-gradient(1100px 500px at -10% -20%, #ffffff 0%, transparent 58%),
-        radial-gradient(900px 480px at 110% 120%, #d4e3f8 0%, transparent 58%),
-        linear-gradient(160deg, var(--bg-1) 0%, var(--bg-2) 100%);
+        radial-gradient(1100px 500px at -10% -20%, rgba(139, 92, 246, 0.10) 0%, transparent 58%),
+        radial-gradient(900px 480px at 110% 120%, rgba(56, 189, 248, 0.08) 0%, transparent 58%),
+        linear-gradient(160deg, var(--bg-1) 0%, var(--bg-2) 55%, var(--bg-1) 100%);
       color: var(--ink-strong);
-      font-family: "Segoe UI", Tahoma, Verdana, sans-serif;
+      font-family: 'Inter', "Segoe UI", Tahoma, Verdana, sans-serif;
       text-align: center;
       padding: 20px;
       z-index: 9999;
@@ -91,7 +134,7 @@
       height: min(54vw, 640px);
       left: -16vw;
       top: -18vw;
-      background: radial-gradient(circle, rgba(37, 99, 235, 0.17) 0%, rgba(37, 99, 235, 0) 70%);
+      background: radial-gradient(circle, rgba(139, 92, 246, 0.18) 0%, rgba(139, 92, 246, 0) 70%);
       animation: float-slow 8s ease-in-out infinite;
     }
 
@@ -100,8 +143,52 @@
       height: min(44vw, 520px);
       right: -12vw;
       bottom: -16vw;
-      background: radial-gradient(circle, rgba(29, 78, 216, 0.16) 0%, rgba(29, 78, 216, 0) 70%);
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.14) 0%, rgba(56, 189, 248, 0) 70%);
       animation: float-slow 9.5s ease-in-out infinite reverse;
+    }
+
+    /* Sortie en fondu. Le bloc etait retire par un `remove()` sec: l'ecran
+       disparaissait d'un coup et l'application apparaissait en une seule
+       image. */
+    #boot-status.partir {
+      opacity: 0;
+      transition: opacity 260ms ease-out;
+      pointer-events: none;
+    }
+
+    /* Image de fond de l'ecole, posee par le script depuis ce que le
+       navigateur a memorise a la visite precedente. Le voile la laisse voir
+       sans que le texte cesse d'etre lisible. */
+    #boot-status .fond {
+      position: absolute;
+      inset: 0;
+      background-size: cover;
+      background-position: center;
+      opacity: 0;
+      transition: opacity 500ms ease-out;
+      pointer-events: none;
+    }
+
+    #boot-status .fond::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(160deg,
+        rgba(15, 23, 42, 0.72) 0%,
+        rgba(15, 23, 42, 0.52) 55%,
+        rgba(15, 23, 42, 0.78) 100%);
+    }
+
+    /* Quand l'ecole a depose un logo, il remplace le pictogramme dessine. */
+    #boot-status .logo.avec-logo {
+      background: rgba(255, 255, 255, 0.94);
+      background-size: contain;
+      background-position: center;
+      background-repeat: no-repeat;
+    }
+
+    #boot-status .logo.avec-logo svg {
+      display: none;
     }
 
     #boot-status .panel {
@@ -113,8 +200,9 @@
       background: var(--surface);
       backdrop-filter: blur(9px);
       box-shadow:
-        0 22px 70px rgba(13, 55, 103, 0.17),
-        inset 0 1px 0 rgba(255, 255, 255, 0.9);
+        0 24px 70px rgba(0, 0, 0, 0.45),
+        0 0 40px -12px rgba(139, 92, 246, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
       animation: panel-in 550ms ease-out;
     }
 
@@ -133,10 +221,11 @@
       place-items: center;
       color: #fff;
       background: linear-gradient(140deg, var(--accent), var(--accent-2));
-      box-shadow: 0 10px 24px rgba(37, 99, 235, 0.34);
+      box-shadow: 0 10px 24px rgba(139, 92, 246, 0.38);
     }
 
     #boot-status .title {
+      font-family: 'Sora', 'Inter', "Segoe UI", sans-serif;
       font-size: clamp(30px, 4.2vw, 44px);
       font-weight: 800;
       letter-spacing: 0.3px;
@@ -204,20 +293,20 @@
     #boot-status .pill {
       padding: 8px 12px;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.8);
-      border: 1px solid rgba(18, 58, 100, 0.12);
+      background: rgba(139, 92, 246, 0.10);
+      border: 1px solid rgba(139, 92, 246, 0.26);
       color: var(--ink-soft);
       font-size: 12px;
       font-weight: 700;
     }
 
     #boot-status.error .title {
-      color: #9f1d35;
+      color: #FDA29B;
     }
 
     #boot-status.error .logo {
-      background: linear-gradient(140deg, #c6284f, #9f1d35);
-      box-shadow: 0 10px 24px rgba(159, 29, 53, 0.3);
+      background: linear-gradient(140deg, #7A2018, #601410);
+      box-shadow: 0 10px 24px rgba(253, 162, 155, 0.22);
     }
 
     @keyframes pulse {
@@ -266,6 +355,7 @@
   </style>
 
   <div id="boot-status" role="status" aria-live="polite">
+    <div class="fond" id="boot-fond" aria-hidden="true"></div>
     <div class="panel">
       <div class="identity">
         <div class="logo" aria-hidden="true">
@@ -319,10 +409,105 @@
       }
 
       function removeBootStatus() {
-        if (statusEl) {
+        if (!statusEl || statusEl.classList.contains('partir')) {
+          return;
+        }
+        statusEl.classList.add('partir');
+        // Le noeud part apres le fondu. `once` evite qu'un second evenement
+        // -- la transition du fond, par exemple -- ne rappelle le retrait.
+        statusEl.addEventListener('transitionend', function () {
           statusEl.remove();
+        }, { once: true });
+        // Filet: si la transition ne se declenche pas (onglet en arriere-plan,
+        // mouvement reduit), le noeud resterait sur l'ecran pour toujours.
+        window.setTimeout(function () {
+          statusEl.remove();
+        }, 500);
+      }
+
+      /* L'identite de l'ecole, telle que la visite precedente l'a laissee.
+         Ce script s'execute avant Flutter: interroger l'API ici retarderait le
+         premier trait, et le stockage des jetons est chiffre donc illisible.
+         L'application ecrit donc ces quelques valeurs en clair, sous une cle a
+         elle, et l'ecran de demarrage les relit. Rien au premier lancement:
+         les libelles d'origine suffisent, et l'ecole paraitra des la fois
+         suivante. */
+      function poserLIdentite() {
+        let marque = null;
+        try {
+          const brut = window.localStorage.getItem('gs.marque');
+          if (!brut) {
+            return;
+          }
+          marque = JSON.parse(brut);
+        } catch (erreur) {
+          // Navigation privee, ou valeur abimee: on garde les libelles ecrits
+          // dans la page.
+          return;
+        }
+        if (!marque) {
+          return;
+        }
+
+        if (marque.nom) {
+          const titre = statusEl ? statusEl.querySelector('.title') : null;
+          if (titre) {
+            titre.textContent = marque.nom;
+          }
+          document.title = marque.nom;
+        }
+
+        if (marque.couleur && /^#[0-9a-fA-F]{6}$/.test(marque.couleur)) {
+          document.documentElement.style.setProperty('--accent', marque.couleur);
+        }
+
+        if (marque.logo) {
+          const pastille = statusEl ? statusEl.querySelector('.logo') : null;
+          if (pastille) {
+            const image = new Image();
+            image.onload = function () {
+              pastille.style.backgroundImage = 'url("' + marque.logo + '")';
+              pastille.classList.add('avec-logo');
+            };
+            // Un logo introuvable laisse le pictogramme dessine en place.
+            image.src = marque.logo;
+          }
         }
       }
+
+      /* L'image de fond de l'ecole, telle que la visite precedente l'a laissee.
+         Ce script s'execute avant Flutter: interroger l'API ici retarderait le
+         premier trait, et le stockage des jetons est chiffre donc illisible.
+         L'application ecrit donc cette seule adresse en clair, sous une cle a
+         elle, et l'ecran de demarrage la relit. Rien au premier lancement: le
+         fond degrade suffit, et l'image sera la des la fois suivante. */
+      function poserLeFond() {
+        const noeud = document.getElementById('boot-fond');
+        if (!noeud) {
+          return;
+        }
+        let adresse = '';
+        try {
+          const brut = window.localStorage.getItem('gs.marque');
+          adresse = brut ? (JSON.parse(brut).fond || '') : '';
+        } catch (erreur) {
+          // Navigation privee, stockage refuse: on garde le fond dessine.
+          return;
+        }
+        if (!adresse) {
+          return;
+        }
+        const image = new Image();
+        image.onload = function () {
+          noeud.style.backgroundImage = 'url("' + adresse + '")';
+          noeud.style.opacity = '1';
+        };
+        // Une adresse perimee ne doit rien casser: on n'affiche simplement rien.
+        image.src = adresse;
+      }
+
+      poserLIdentite();
+      poserLeFond();
 
       function ensureBootstrapScript() {
         if (retryInjected || hasMountedFlutter()) {

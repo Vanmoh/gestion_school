@@ -259,6 +259,16 @@ MODULES = {
         "group": "academique",
         "access": _row("A", "L", "A", "L", "-", "-", "-", "-", "-"),
     },
+    # Arreter les bulletins d'une periode est une decision de la direction et
+    # de la pedagogie, pas une consequence de saisir des notes: l'enseignant
+    # a « grades » en ecriture sur ses classes et n'a pas a decider que le
+    # trimestre est clos. Il le lit en revanche pour ses classes -- c'est ce
+    # qui lui dit que ses moyennes ne bougeront plus.
+    "bulletin_validation": {
+        "label": "Validation des bulletins",
+        "group": "academique",
+        "access": _row("A", "L", "A", "E", "-", "-", "L*", "-", "-"),
+    },
     "exams": {
         "label": "Examens",
         "group": "academique",
@@ -293,6 +303,16 @@ MODULES = {
         "label": "Passerelle SMS",
         "group": "administration",
         "access": _row("A", "-", "A", "-", "-", "-", "-", "-", "-"),
+    },
+    # Separe de "reports": un enseignant lit les bulletins de ses classes
+    # (« L* » sur reports) et n'a pas pour autant a les diffuser aux
+    # familles. Envoyer est un acte de l'ecole, pas une consequence de
+    # pouvoir consulter. Le parent et l'eleve n'y figurent pas non plus: ils
+    # sont les destinataires de l'envoi, pas ses auteurs.
+    "bulletin_whatsapp": {
+        "label": "Envoi des bulletins aux familles",
+        "group": "administration",
+        "access": _row("A", "L", "A", "E", "-", "-", "-", "-", "-"),
     },
     # Le nom, le logo et les libelles que porte l'application. Au seul super
     # admin, directeur compris: ces reglages valent pour tous les
