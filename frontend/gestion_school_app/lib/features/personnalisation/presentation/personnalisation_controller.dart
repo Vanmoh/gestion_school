@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/web/memoire_demarrage.dart';
 import '../data/personnalisation_repository.dart';
 import '../domain/personnalisation.dart';
 
@@ -59,6 +60,16 @@ class PersonnalisationController extends ChangeNotifier {
     try {
       _valeur = await _repository.charger();
       _chargee = true;
+      // L'ecran de demarrage HTML s'affiche avant Flutter et ne peut donc rien
+      // demander au serveur. On lui laisse l'identite de l'ecole pour la
+      // prochaine ouverture; sans elle il garde ses libelles d'origine.
+      memoriserLaMarque(
+        nomEcole: _valeur.nomEcole,
+        nomApplication: _valeur.nomApplication,
+        logoUrl: _valeur.logoUrl,
+        imageFondUrl: _valeur.imageFondUrl,
+        couleur: _valeur.couleurPrincipale,
+      );
     } catch (_) {
       // L'application doit rester utilisable sans son identité: mieux vaut
       // les libellés d'origine qu'un écran de connexion en erreur.
@@ -74,11 +85,15 @@ class PersonnalisationController extends ChangeNotifier {
     Map<String, dynamic> champs, {
     Uint8List? logo,
     String? nomDuLogo,
+    Uint8List? imageFond,
+    String? nomDeLImageFond,
   }) async {
     _valeur = await _repository.enregistrer(
       champs,
       logo: logo,
       nomDuLogo: nomDuLogo,
+      imageFond: imageFond,
+      nomDeLImageFond: nomDeLImageFond,
     );
     _chargee = true;
     notifyListeners();

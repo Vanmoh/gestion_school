@@ -57,6 +57,7 @@ import 'features/timetable/presentation/timetable_module_page.dart';
 import 'features/users/presentation/users_controller.dart';
 import 'features/users/presentation/users_page.dart';
 import 'core/providers/saisie_en_cours.dart';
+import 'core/web/memoire_demarrage.dart';
 
 // Le choix clair/sombre a ete retire: l'application se presente en sombre
 // partout, et la seule chose qui varie d'une ecole a l'autre est sa couleur
@@ -207,6 +208,18 @@ class _GestionSchoolAppState extends ConsumerState<GestionSchoolApp> {
   // toute la coquille devient intestable.
 
   @override
+  void initState() {
+    super.initState();
+    // L'ecran de demarrage HTML s'efface des que l'application a peint.
+    // `index.html` sait le retirer seul, mais en sondant le document toutes
+    // les 350 ms: le lui dire supprime cette attente et enchaine les deux
+    // ecrans par un fondu.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      masquerEcranDeDemarrage();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final personnalisation = ref.watch(personnalisationProvider).valeur;
 
@@ -226,19 +239,19 @@ class _GestionSchoolAppState extends ConsumerState<GestionSchoolApp> {
         '/home/admin': (_) =>
             const RequireEtablissementSelection(child: _AdminShell()),
         '/home/accountant': (_) =>
-          const RequireEtablissementSelection(child: _AdminShell()),
+            const RequireEtablissementSelection(child: _AdminShell()),
         '/home/teacher': (_) =>
-          const RequireEtablissementSelection(child: _AdminShell()),
+            const RequireEtablissementSelection(child: _AdminShell()),
         '/home/censor': (_) =>
-          const RequireEtablissementSelection(child: _AdminShell()),
+            const RequireEtablissementSelection(child: _AdminShell()),
         '/home/supervisor': (_) =>
-          const RequireEtablissementSelection(child: _AdminShell()),
+            const RequireEtablissementSelection(child: _AdminShell()),
         '/home/promoter': (_) =>
-          const RequireEtablissementSelection(child: _AdminShell()),
+            const RequireEtablissementSelection(child: _AdminShell()),
         '/home/parent': (_) =>
-          const RequireEtablissementSelection(child: _AdminShell()),
+            const RequireEtablissementSelection(child: _AdminShell()),
         '/home/student': (_) =>
-          const RequireEtablissementSelection(child: _AdminShell()),
+            const RequireEtablissementSelection(child: _AdminShell()),
         // L'ancienne adresse reste servie: un lien memorise ou une intention
         // de navigation enregistree ne doit pas tomber dans le vide.
         '/attendance': (_) =>
@@ -254,7 +267,7 @@ class _GestionSchoolAppState extends ConsumerState<GestionSchoolApp> {
         '/payments': (_) =>
             const _GlobalFeatureRefreshHost(child: PaymentsPage()),
         '/timetable': (_) =>
-          const _GlobalFeatureRefreshHost(child: TimetableModulePage()),
+            const _GlobalFeatureRefreshHost(child: TimetableModulePage()),
         '/reports': (_) =>
             const _GlobalFeatureRefreshHost(child: ReportsPage()),
         '/users': (_) => const _GlobalFeatureRefreshHost(child: UsersPage()),
@@ -271,7 +284,6 @@ class _AdminShell extends ConsumerStatefulWidget {
 }
 
 class _AdminShellState extends ConsumerState<_AdminShell> {
-
   String _selectedKey = 'dashboard';
   // Etablissement pour lequel les annees ont ete chargees: en changer doit
   // recharger la liste, une annee n'ayant de sens que dans son ecole.
@@ -286,6 +298,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   final Map<int, int> _chatUnreadByConversation = <int, int>{};
   final Set<String> _seenShellMessageKeys = <String>{};
   Timer? _chatUnreadTimer;
+
   /// La connexion temps reel, partagee avec le panneau de discussion.
   ///
   /// Il y en avait deux: celle-ci pour compter les non-lus, et une seconde
@@ -302,7 +315,8 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   String _shellAsString(dynamic value) => value?.toString() ?? '';
 
-  String _shellMessageKey(int conversationId, int messageId) => '$conversationId:$messageId';
+  String _shellMessageKey(int conversationId, int messageId) =>
+      '$conversationId:$messageId';
 
   static const _items = [
     _AdminMenuItem(
@@ -465,12 +479,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     _AdminMenuGroup(
       keyName: 'pedagogie',
       title: 'Pédagogie',
-      itemKeys: [
-        'students',
-        'teachers',
-        'attendance',
-        'discipline',
-      ],
+      itemKeys: ['students', 'teachers', 'attendance', 'discipline'],
       collapsible: true,
     ),
     _AdminMenuGroup(
@@ -527,8 +536,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   /// `_firstVisibleKey` retombe sur "dashboard" pour ne jamais rendre une
   /// selection nulle: il ne permet donc pas de distinguer "aucun droit" de
   /// "le tableau de bord seulement".
-  bool get _hasVisibleItem =>
-      _items.any(_isEntryVisible);
+  bool get _hasVisibleItem => _items.any(_isEntryVisible);
 
   String _firstVisibleKey() {
     for (final item in _items) {
@@ -668,10 +676,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       if (!mounted) {
         return;
       }
-      Navigator.of(context).pushNamedAndRemoveUntil(
-        '/login',
-        (route) => false,
-      );
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
     } finally {
       _handlingSessionExpiry = false;
     }
@@ -703,13 +708,10 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       final storage = ref.read(tokenStorageProvider);
       final token = await storage.accessToken();
       if (token == null || token.isEmpty) {
-        _chatWsReconnectTimer ??= Timer(
-          const Duration(seconds: 2),
-          () {
-            _chatWsReconnectTimer = null;
-            _initChatUnreadRealtime();
-          },
-        );
+        _chatWsReconnectTimer ??= Timer(const Duration(seconds: 2), () {
+          _chatWsReconnectTimer = null;
+          _initChatUnreadRealtime();
+        });
         return;
       }
       final storedBase = (await storage.apiBaseUrl()) ?? '';
@@ -745,7 +747,8 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         final conversationId = _shellAsInt(data['conversation_id']);
         final messageId = _shellAsInt(data['message_id']);
         final currentUserId = ref.read(authControllerProvider).value?.id;
-        final isExternalMessage = currentUserId != null && senderId > 0 && senderId != currentUserId;
+        final isExternalMessage =
+            currentUserId != null && senderId > 0 && senderId != currentUserId;
         if (isExternalMessage && conversationId > 0 && messageId > 0) {
           final messageKey = _shellMessageKey(conversationId, messageId);
           if (!_seenShellMessageKeys.contains(messageKey)) {
@@ -753,7 +756,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
             if (!_chatPanelOpen && mounted) {
               final senderName = _shellAsString(data['sender_name']).trim();
               final contentPreview = _shellAsString(data['content']).trim();
-              final title = senderName.isNotEmpty ? senderName : 'Nouveau message';
+              final title = senderName.isNotEmpty
+                  ? senderName
+                  : 'Nouveau message';
               // Deux secondes: l'annonce dit qu'un message est arrive, elle
               // n'a pas a rester au bas de l'ecran pendant qu'on travaille.
               // Le compteur de l'icone, lui, ne s'efface pas: la conversation
@@ -763,7 +768,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                 ..showSnackBar(
                   SnackBar(
                     content: Text(
-                      contentPreview.isEmpty ? title : '$title: $contentPreview',
+                      contentPreview.isEmpty
+                          ? title
+                          : '$title: $contentPreview',
                     ),
                     duration: const Duration(seconds: 2),
                     action: SnackBarAction(
@@ -817,7 +824,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
         if (row is Map) {
           final conversationId = _shellAsInt(row['id']);
           final raw = row['unread_count'];
-          final unreadCount = raw is int ? raw : int.tryParse(raw?.toString() ?? '') ?? 0;
+          final unreadCount = raw is int
+              ? raw
+              : int.tryParse(raw?.toString() ?? '') ?? 0;
           if (conversationId > 0) {
             nextUnreadByConversation[conversationId] = unreadCount;
           }
@@ -1001,7 +1010,10 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
   }
 
-  void _showConnectionInfo(AuthUser user, Etablissement? selectedEtablissement) {
+  void _showConnectionInfo(
+    AuthUser user,
+    Etablissement? selectedEtablissement,
+  ) {
     if (!mounted) {
       return;
     }
@@ -1118,10 +1130,17 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                 ListTile(
                   leading: const Icon(Icons.point_of_sale_rounded),
                   title: const Text('Encaisser maintenant'),
-                  subtitle: const Text('Ouvre directement la fenetre d\'encaissement guidee.'),
+                  subtitle: const Text(
+                    'Ouvre directement la fenetre d\'encaissement guidee.',
+                  ),
                   onTap: () {
                     Navigator.of(context).pop();
-                    ref.read(financeOpenGuidedPaymentIntentProvider.notifier).state = true;
+                    ref
+                            .read(
+                              financeOpenGuidedPaymentIntentProvider.notifier,
+                            )
+                            .state =
+                        true;
                     _navigateToShellItem('finance');
                   },
                 ),
@@ -1252,7 +1271,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final user = ref.watch(authControllerProvider).value;
-    final pendingShellNavigationKey = ref.watch(adminShellNavigationKeyProvider);
+    final pendingShellNavigationKey = ref.watch(
+      adminShellNavigationKeyProvider,
+    );
     final etabProvider = ref.watch(etablissementProvider);
     final selectedEtablissement = etabProvider.selected;
     final permissions = ref.watch(modulePermissionsProvider);
@@ -1947,7 +1968,9 @@ class _TopBarIconBubble extends StatelessWidget {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(10),
                     color: Colors.white.withValues(alpha: 0.1),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.14),
+                    ),
                   ),
                   child: Icon(
                     icon,
@@ -1961,8 +1984,14 @@ class _TopBarIconBubble extends StatelessWidget {
                   right: -3,
                   top: -3,
                   child: Container(
-                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    constraints: const BoxConstraints(
+                      minWidth: 16,
+                      minHeight: 16,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 1,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFFEF4444),
                       borderRadius: BorderRadius.circular(999),
@@ -2163,7 +2192,6 @@ class _SidebarItem extends StatelessWidget {
   }
 }
 
-
 /// Ecran d'attente quand la matrice de droits n'a pas pu etre chargee.
 ///
 /// Sans elle on ne sait pas quels modules afficher: mieux vaut le dire et
@@ -2198,9 +2226,7 @@ class _PermissionsUnavailable extends StatelessWidget {
                 Icon(Icons.lock_outline_rounded, size: 40, color: scheme.error),
                 const SizedBox(height: 12),
                 Text(
-                  _serverTooOld
-                      ? 'Serveur non a jour'
-                      : 'Droits indisponibles',
+                  _serverTooOld ? 'Serveur non a jour' : 'Droits indisponibles',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),

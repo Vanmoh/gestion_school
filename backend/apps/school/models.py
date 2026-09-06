@@ -32,6 +32,16 @@ class Etablissement(TimeStampedModel):
     phone = models.CharField(max_length=30, blank=True)
     email = models.EmailField(blank=True)
     logo = models.ImageField(upload_to="etablissements/logos/", blank=True, null=True)
+    # Photo de l'ecole, affichee en fond de l'ecran de connexion.
+    #
+    # Distincte du logo: celui-ci est un dessin sur fond blanc, cadre serre,
+    # que l'on ne peut pas etaler en pleine page. Une facade, une cour ou une
+    # salle de classe donne a l'ecran d'accueil le visage de l'etablissement
+    # au lieu d'un fond uni. Facultative: sans elle, l'ecran garde son fond
+    # dessine.
+    cover_image = models.ImageField(
+        upload_to="etablissements/couvertures/", blank=True, null=True
+    )
     stamp_image = models.ImageField(upload_to="etablissements/stamps/", blank=True, null=True)
     principal_signature_image = models.ImageField(upload_to="etablissements/signatures/", blank=True, null=True)
     cashier_signature_image = models.ImageField(upload_to="etablissements/signatures/", blank=True, null=True)
@@ -485,10 +495,141 @@ class TimetablePublication(TimeStampedModel):
 
 
 
+class BulletinPublication(TimeStampedModel):
+    """L'arret des bulletins d'une classe pour une periode.
+
+    Rien ne distinguait jusqu'ici un bulletin en cours de saisie d'un
+    bulletin arrete: la meme classe rendait le meme document le lendemain
+    d'un conseil ou trois semaines avant, et l'ecole n'avait pour s'y
+    retrouver que la memoire de qui avait saisi quoi.
+
+    Tant que rien ne s'y appuyait, l'absence ne se voyait pas -- on imprimait
+    ce qu'on voulait, quand on voulait. Envoyer les bulletins aux familles a
+    change cela: un envoi ne se rappelle pas, et une moyenne qui bouge apres
+    coup se paie en visites au secretariat.
+
+    L'impression reste libre. C'est la diffusion aux familles qui exige la
+    validation, et elle seule: le secretariat doit pouvoir sortir un brouillon
+    pour le conseil de classe sans avoir rien arrete.
+    """
+
+    classroom = models.ForeignKey(
+        ClassRoom,
+        on_delete=models.CASCADE,
+        related_name="bulletin_publications",
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name="bulletin_publications",
+    )
+    term = models.CharField(max_length=20)
+    is_published = models.BooleanField(default=False)
+    published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="published_bulletins",
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
+    # Ce que la direction veut faire savoir sur cet arret: « conseil du 12 »,
+    # « moyennes de EPS a completer ». Sans lui, une validation arrive sans
+    # sa raison et se discute mal trois mois plus tard.
+    notes = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        unique_together = ("classroom", "academic_year", "term")
+        ordering = ("classroom__name", "term")
+        indexes = [
+            models.Index(
+                fields=["academic_year", "term", "is_published"],
+                name="bulletinpub_year_term_idx",
+            ),
+        ]
+
+    def __str__(self):
+        etat = "Validé" if self.is_published else "En cours"
+        return f"{self.classroom.name} {self.term}: {etat}"
+
+    def valider(self, *, par=None, notes: str = ""):
+        self.is_published = True
+        self.published_by = par
+        self.published_at = timezone.now()
+        self.notes = str(notes or "")[:255]
+        self.save(update_fields=[
+            "is_published",
+            "published_by",
+            "published_at",
+            "notes",
+            "updated_at",
+        ])
+        return self
+
+    def annuler(self):
+        """Rouvre la periode a la saisie.
+
+        L'auteur et la date sont effaces avec elle: les garder ferait lire
+        « validé par le directeur » sur une periode qui ne l'est plus.
+        """
+        self.is_published = False
+        self.published_by = None
+        self.published_at = None
+        self.notes = ""
+        self.save(update_fields=[
+            "is_published",
+            "published_by",
+            "published_at",
+            "notes",
+            "updated_at",
+        ])
+        return self
+
+
 class ParentProfile(TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="parent_profile")
     profession = models.CharField(max_length=120, blank=True)
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="parents", null=True, blank=True)
+
+    # Distinct de `user.phone`, qui est un champ libre de repertoire: celui-ci
+    # est compose par un programme et n'admet donc qu'une seule forme, E.164.
+    # Les fondre aurait impose ce format a toutes les fiches existantes, dont
+    # beaucoup portent deux numeros ou une note (« bureau »), et bloque leur
+    # simple reenregistrement.
+    whatsapp_phone = models.CharField(max_length=20, blank=True)
+
+    # Le consentement est porte par le parent et non par l'ecole: un bulletin
+    # est une donnee scolaire d'un mineur, et son passage sur un service tiers
+    # se demande avant, pas apres. Sans lui, aucun envoi n'est prepare.
+    whatsapp_consent = models.BooleanField(default=False)
+    whatsapp_consent_date = models.DateTimeField(null=True, blank=True)
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        from apps.school.phone_utils import est_au_format_e164
+
+        numero = (self.whatsapp_phone or "").strip()
+        if numero and not est_au_format_e164(numero):
+            raise ValidationError(
+                {"whatsapp_phone": "Numéro WhatsApp attendu au format international, par exemple +22376123456."}
+            )
+
+    def save(self, *args, **kwargs):
+        # Horodate le consentement au moment ou il est donne, et l'efface
+        # quand il est retire: une date qui survit au retrait laisserait
+        # croire, six mois plus tard, que la famille avait accepte.
+        if self.whatsapp_consent and self.whatsapp_consent_date is None:
+            self.whatsapp_consent_date = timezone.now()
+        elif not self.whatsapp_consent:
+            self.whatsapp_consent_date = None
+        super().save(*args, **kwargs)
+
+    @property
+    def joignable_sur_whatsapp(self) -> bool:
+        """Le parent a-t-il un numero utilisable et un consentement donne."""
+        from apps.school.phone_utils import est_au_format_e164
+
+        return bool(self.whatsapp_consent and est_au_format_e164(self.whatsapp_phone))
 
     def __str__(self):
         return self.user.get_full_name() or self.user.username
@@ -1469,6 +1610,122 @@ class SmsProviderConfig(TimeStampedModel):
     api_token = models.CharField(max_length=255)
     sender_id = models.CharField(max_length=50, blank=True)
     is_active = models.BooleanField(default=False)
+
+
+class BulletinDeliveryChannel(models.TextChoices):
+    """Par quel moyen le bulletin est parti chez la famille."""
+
+    # L'ecole clique sur un lien wa.me, WhatsApp s'ouvre pre-rempli, un
+    # humain envoie. Aucun compte Meta Business, aucun cout, aucun delai
+    # d'approbation -- et donc le seul canal disponible tout de suite.
+    MANUAL_LINK = "manual_link", "Lien WhatsApp assisté"
+    # Envoi automatique par la WhatsApp Cloud API. Le canal existe ici pour
+    # que l'historique n'ait pas a etre remanie le jour ou la passerelle
+    # sera ouverte; rien ne l'emprunte encore.
+    CLOUD_API = "cloud_api", "WhatsApp Cloud API"
+
+
+class BulletinDeliveryStatus(models.TextChoices):
+    PREPARED = "prepared", "Préparé"
+    SENT = "sent", "Envoyé"
+    FAILED = "failed", "Échec"
+    READ = "read", "Consulté"
+
+
+class BulletinDelivery(TimeStampedModel):
+    """Trace d'un bulletin adresse a une famille.
+
+    Sans elle, l'envoi n'existe que dans le souvenir de qui a clique: rien ne
+    dit qui a recu quoi, ni ce qu'il reste a envoyer sur une classe de
+    soixante eleves interrompue par la sonnerie. C'est aussi ce qui permet de
+    reperer un second envoi involontaire avant qu'il ne parte.
+
+    Le numero est fige a la preparation plutot que relu dans la fiche parent:
+    un numero corrige en janvier ne doit pas reecrire l'histoire de ce qui est
+    parti en decembre, et sur quel telephone.
+    """
+
+    etablissement = models.ForeignKey(
+        'Etablissement',
+        on_delete=models.PROTECT,
+        related_name="bulletin_deliveries",
+        null=True,
+        blank=True,
+    )
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="bulletin_deliveries")
+    # SET_NULL et non CASCADE: la trace de l'envoi doit survivre a la
+    # suppression de la fiche du parent, sans quoi l'historique se vide au
+    # premier menage dans les comptes.
+    parent = models.ForeignKey(
+        ParentProfile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bulletin_deliveries",
+    )
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="bulletin_deliveries")
+    term = models.CharField(max_length=20)
+    channel = models.CharField(
+        max_length=20,
+        choices=BulletinDeliveryChannel.choices,
+        default=BulletinDeliveryChannel.MANUAL_LINK,
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=BulletinDeliveryStatus.choices,
+        default=BulletinDeliveryStatus.PREPARED,
+    )
+    phone = models.CharField(max_length=20)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+    failure_reason = models.CharField(max_length=255, blank=True)
+    # Identifiant rendu par la passerelle. Vide sur le canal assiste, qui ne
+    # passe par aucune passerelle: c'est un humain qui appuie sur envoyer.
+    provider_message_id = models.CharField(max_length=120, blank=True)
+    prepared_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="prepared_bulletin_deliveries",
+    )
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+        indexes = [
+            models.Index(
+                fields=["student", "academic_year", "term"],
+                name="bulletindeliv_stu_year_idx",
+            ),
+            models.Index(fields=["etablissement", "status"], name="bulletindeliv_etab_stat_idx"),
+        ]
+
+    def __str__(self):
+        eleve = self.student.user.get_full_name().strip() if self.student and self.student.user else ""
+        return f"{eleve or self.student_id} | {self.term} | {self.get_status_display()}"
+
+    def marquer_envoye(self, *, provider_message_id: str = ""):
+        self.status = BulletinDeliveryStatus.SENT
+        self.sent_at = timezone.now()
+        self.failure_reason = ""
+        if provider_message_id:
+            self.provider_message_id = provider_message_id
+        self.save(update_fields=[
+            "status",
+            "sent_at",
+            "failure_reason",
+            "provider_message_id",
+            "updated_at",
+        ])
+        return self
+
+    def marquer_echoue(self, motif: str):
+        self.status = BulletinDeliveryStatus.FAILED
+        # Le motif est tronque plutot que refuse: un envoi qui echoue ne doit
+        # pas echouer une seconde fois en enregistrant sa propre cause.
+        self.failure_reason = str(motif or "")[:255]
+        self.save(update_fields=["status", "failure_reason", "updated_at"])
+        return self
 
 
 class Book(TimeStampedModel):

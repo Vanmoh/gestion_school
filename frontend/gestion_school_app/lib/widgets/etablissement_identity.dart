@@ -262,6 +262,42 @@ class EtabSectionLabel extends StatelessWidget {
   }
 }
 
+/// Une coordonnee de l'ecole: une icone, une valeur.
+///
+/// Deux ecrans disent la meme chose -- « adressez-vous a l'administration,
+/// voici comment la joindre »: la demande d'acces au portail, et le mot de
+/// passe oublie a la connexion. Ni l'un ni l'autre n'a de formulaire a
+/// proposer, faute de libre-service cote serveur; ils n'ont que ce contact.
+/// Deux ecrans qui tiennent le meme discours doivent avoir la meme forme,
+/// d'ou ce widget partage plutot qu'une copie de vingt lignes.
+///
+/// Pas de bouton « copier »: `app.dart` enveloppe deja le Navigator dans une
+/// SelectionArea, le numero se selectionne tel quel.
+class EtabContactLine extends StatelessWidget {
+  final IconData icon;
+  final String value;
+
+  const EtabContactLine({super.key, required this.icon, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 15, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(value, style: Theme.of(context).textTheme.bodySmall),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Teintes d'identite: deux ecoles au logo generique restent distinguables.
 const List<List<Color>> _identityRamps = <List<Color>>[
   [Color(0xFF8B5CF6), Color(0xFF6366F1)],
@@ -505,5 +541,99 @@ class EtabSecureFooter extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// « Bonjour » ou « Bonsoir », et la date du jour.
+///
+/// Partagee par le portail et la connexion: les deux ecrans se suivent, et
+/// une page qui salue suivie d'une page qui ne salue pas se remarque.
+///
+/// Une page de connexion sans repere temporel a l'air d'une capture d'ecran.
+/// Deux lignes suffisent a la rendre vivante, et elles disent au passage a
+/// l'utilisateur que le poste est bien a l'heure -- ce qui n'a rien d'acquis
+/// sur une machine d'ecole restee eteinte des semaines.
+class SalutationDuJour extends StatelessWidget {
+  const SalutationDuJour({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final maintenant = DateTime.now();
+    final heure = maintenant.hour;
+    final salutation = heure < 12
+        ? 'Bonjour'
+        : (heure < 17 ? 'Bon après-midi' : 'Bonsoir');
+    final date = _dateEnFrancais(maintenant);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 6,
+          height: 6,
+          decoration: BoxDecoration(
+            color: scheme.tertiary,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: scheme.tertiary.withValues(alpha: 0.6),
+                blurRadius: 6,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            '$salutation · $date',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: scheme.onSurfaceVariant,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Les noms sont ecrits ici plutot que tires d'`intl`.
+  ///
+  /// `DateFormat('EEEE d MMMM', 'fr_FR')` exige `initializeDateFormatting`,
+  /// que l'application n'appelle nulle part -- elle n'emploie jusqu'ici que
+  /// des formats numeriques. Sans cette initialisation, la ligne leve une
+  /// exception a l'affichage; avec, elle ajoute des donnees de locale au
+  /// demarrage pour dix-neuf mots. Autant les ecrire.
+  String _dateEnFrancais(DateTime date) {
+    const jours = [
+      'Lundi',
+      'Mardi',
+      'Mercredi',
+      'Jeudi',
+      'Vendredi',
+      'Samedi',
+      'Dimanche',
+    ];
+    const mois = [
+      'janvier',
+      'février',
+      'mars',
+      'avril',
+      'mai',
+      'juin',
+      'juillet',
+      'août',
+      'septembre',
+      'octobre',
+      'novembre',
+      'décembre',
+    ];
+    final jour = jours[date.weekday - 1];
+    // « 1er » et non « 1 »: c'est la seule irregularite du francais ici.
+    final quantieme = date.day == 1 ? '1er' : '${date.day}';
+    return '$jour $quantieme ${mois[date.month - 1]}';
   }
 }

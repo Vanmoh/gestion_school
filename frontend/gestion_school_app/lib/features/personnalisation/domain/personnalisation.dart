@@ -17,6 +17,13 @@ class Personnalisation {
   final String sigle;
   final String logoUrl;
 
+  /// Image de fond des ecrans publics -- portail et connexion.
+  ///
+  /// Celle de la plateforme, valable avant qu'un etablissement soit choisi.
+  /// Une ecole qui depose sa propre photo la voit primer sur son ecran de
+  /// connexion; le portail, lui, precede ce choix et garde celle-ci.
+  final String imageFondUrl;
+
   final String telephone;
   final String email;
   final String adresse;
@@ -35,6 +42,7 @@ class Personnalisation {
     this.nomEcole = '',
     this.sigle = '',
     this.logoUrl = '',
+    this.imageFondUrl = '',
     this.telephone = '',
     this.email = '',
     this.adresse = '',
@@ -56,6 +64,7 @@ class Personnalisation {
       nomEcole: texte('nom_ecole'),
       sigle: texte('sigle'),
       logoUrl: texte('logo_url'),
+      imageFondUrl: texte('image_fond_url'),
       telephone: texte('telephone'),
       email: texte('email'),
       adresse: texte('adresse'),
@@ -76,6 +85,7 @@ class Personnalisation {
     'nom_ecole': nomEcole,
     'sigle': sigle,
     'logo_url': logoUrl,
+    'image_fond_url': imageFondUrl,
     'telephone': telephone,
     'email': email,
     'adresse': adresse,
@@ -114,6 +124,7 @@ class Personnalisation {
     String? nomEcole,
     String? sigle,
     String? logoUrl,
+    String? imageFondUrl,
     String? telephone,
     String? email,
     String? adresse,
@@ -130,6 +141,7 @@ class Personnalisation {
       nomEcole: nomEcole ?? this.nomEcole,
       sigle: sigle ?? this.sigle,
       logoUrl: logoUrl ?? this.logoUrl,
+      imageFondUrl: imageFondUrl ?? this.imageFondUrl,
       telephone: telephone ?? this.telephone,
       email: email ?? this.email,
       adresse: adresse ?? this.adresse,

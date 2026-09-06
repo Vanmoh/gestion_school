@@ -54,6 +54,7 @@ class PersonnalisationSerializer(serializers.ModelSerializer):
     """
 
     logo_url = serializers.SerializerMethodField(read_only=True)
+    image_fond_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = PersonnalisationPlateforme
@@ -73,9 +74,12 @@ class PersonnalisationSerializer(serializers.ModelSerializer):
             "message_accueil",
             "pied_de_page",
             "couleur_principale",
+            "image_fond",
+            "image_fond_url",
         ]
         extra_kwargs = {
             "logo": {"write_only": True, "required": False},
+            "image_fond": {"write_only": True, "required": False},
             # Vider un libelle est une action legitime: c'est ainsi qu'on
             # rend a un ecran sa formulation d'origine. Sans cela, DRF les
             # refuse avant meme d'arriver a la validation.
@@ -94,9 +98,19 @@ class PersonnalisationSerializer(serializers.ModelSerializer):
         }
 
     def get_logo_url(self, obj):
-        if not obj.logo:
+        return self._absolue(obj.logo)
+
+    def get_image_fond_url(self, obj):
+        return self._absolue(obj.image_fond)
+
+    def _absolue(self, champ):
+        """Le client tourne sur un autre hote que l'API.
+
+        Le chemin relatif que rend `ImageField` y donnerait une image cassee.
+        """
+        if not champ:
             return ""
-        url = obj.logo.url
+        url = champ.url
         requete = self.context.get("request")
         return requete.build_absolute_uri(url) if requete else url
 

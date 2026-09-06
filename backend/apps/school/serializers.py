@@ -15,6 +15,7 @@ from .models import (
     Attendance,
     Book,
     Borrow,
+    BulletinPublication,
     CanteenMenu,
     CanteenService,
     CanteenSubscription,
@@ -124,6 +125,7 @@ class AcademicYearSerializer(serializers.ModelSerializer):
 
 class EtablissementSerializer(serializers.ModelSerializer):
     logo = serializers.ImageField(required=False, allow_null=True)
+    cover_image = serializers.ImageField(required=False, allow_null=True)
     stamp_image = serializers.ImageField(required=False, allow_null=True)
     principal_signature_image = serializers.ImageField(required=False, allow_null=True)
     cashier_signature_image = serializers.ImageField(required=False, allow_null=True)
@@ -140,6 +142,7 @@ class EtablissementSerializer(serializers.ModelSerializer):
             'phone',
             'email',
             'logo',
+            'cover_image',
             'stamp_image',
             'principal_signature_image',
             'cashier_signature_image',
@@ -772,6 +775,35 @@ class TimetablePublicationSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class BulletinPublicationSerializer(serializers.ModelSerializer):
+    classroom_name = serializers.SerializerMethodField(read_only=True)
+    academic_year_name = serializers.SerializerMethodField(read_only=True)
+    published_by_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_classroom_name(self, obj):
+        classroom = obj.classroom
+        return classroom.name if classroom else ""
+
+    def get_academic_year_name(self, obj):
+        annee = obj.academic_year
+        return annee.name if annee else ""
+
+    def get_published_by_name(self, obj):
+        user = obj.published_by
+        if not user:
+            return ""
+        full_name = user.get_full_name().strip()
+        return full_name or user.username
+
+    class Meta:
+        model = BulletinPublication
+        fields = "__all__"
+        # Ecrits par l'action de validation et non par le formulaire: postes
+        # a la main, ils feraient signer l'arret d'une periode par quelqu'un
+        # d'autre, a une date choisie.
+        read_only_fields = ("is_published", "published_by", "published_at")
+
+
 class ParentProfileSerializer(serializers.ModelSerializer):
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
     user_full_name = serializers.SerializerMethodField(read_only=True)
@@ -794,6 +826,29 @@ class ParentProfileSerializer(serializers.ModelSerializer):
 
     def get_user_last_name(self, obj):
         return obj.user.last_name if obj.user else ""
+
+    def validate_whatsapp_phone(self, value):
+        """Normalise le numero saisi, ou refuse la saisie.
+
+        Le secretariat tape « 76 12 34 56 » -- c'est ainsi qu'un numero
+        s'ecrit ici, et lui imposer le format international a la main
+        produirait surtout des fiches vides. La normalisation est donc faite
+        par le serveur, qui refuse seulement ce qu'il ne peut pas trancher:
+        une case portant deux numeros, ou un numero incomplet.
+        """
+        from apps.school.phone_utils import normaliser_numero
+
+        brut = str(value or "").strip()
+        if not brut:
+            return ""
+
+        numero = normaliser_numero(brut)
+        if numero is None:
+            raise serializers.ValidationError(
+                "Numéro inexploitable. Saisissez un seul numéro, par exemple "
+                "76 12 34 56 ou +223 76 12 34 56."
+            )
+        return numero
 
     class Meta:
         model = ParentProfile

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class TokenStorage {
@@ -14,6 +15,23 @@ class TokenStorage {
   // avec des selecteurs qui ne s'accordaient jamais.
   static const _selectedAcademicYearKey = 'selected_academic_year';
   static const _reminderHistoryKey = 'finance_reminder_history';
+
+  /// Vide les caches memoire.
+  ///
+  /// Ils sont statiques: une valeur lue une fois vaut pour tout le processus,
+  /// ce qui est voulu en production -- le stockage securise echoue sur
+  /// certaines plateformes, et cette memoire est le filet.
+  ///
+  /// En test, tous les cas d'un meme fichier partagent le processus: sans
+  /// cette purge, le premier etablissement lu s'impose a tous les cas
+  /// suivants, quel que soit le stockage simule qu'ils installent. Un test
+  /// passait alors seul et echouait en groupe, ce qui est la pire facon de
+  /// s'en apercevoir.
+  @visibleForTesting
+  static void purgerCacheMemoire() {
+    _memoryCache.clear();
+    _fallbackMemory.clear();
+  }
 
   Future<void> _safeWrite(String key, String value) async {
     _memoryCache[key] = value;

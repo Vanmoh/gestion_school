@@ -3,7 +3,7 @@ import io
 import tempfile
 import unicodedata
 from urllib.parse import quote
-from datetime import date
+from datetime import date, datetime, timezone as fuseau_utc
 from pathlib import Path
 
 from django.conf import settings
@@ -27,6 +27,10 @@ from apps.accounts.access import affinement_autorise, can_read
 from apps.accounts.models import UserRole
 from apps.school.models import (
     AcademicYear,
+    BulletinDelivery,
+    BulletinDeliveryChannel,
+    BulletinDeliveryStatus,
+    BulletinPublication,
     ClassRoom,
     Etablissement,
     ExamPlanning,
@@ -46,6 +50,19 @@ from apps.reports.card_verification import (
     signature_valide as signature_carte_valide,
 )
 from apps.reports.card_verification import signer as signer_carte
+from apps.reports.bulletin_delivery import (
+    generer_pdf_bulletin,
+    horodatage_d_expiration,
+    lien_de_telechargement,
+    lien_expire,
+    lien_wa_me,
+    nom_de_fichier_bulletin,
+    texte_du_message,
+)
+from apps.reports.bulletin_delivery import (
+    signature_valide as signature_bulletin_valide,
+)
+from apps.school.phone_utils import est_au_format_e164
 from apps.school.serializers import AcademicYearSerializer, PaymentSerializer, StudentSerializer
 from apps.school.term_utils import normalize_term
 
@@ -2816,6 +2833,669 @@ def _build_receipts_pdf(payments: list[Payment]) -> FPDF:
         pdf.add_page()
         _render_payment_receipt_page(pdf, payment)
     return pdf
+
+
+class _BulletinWhatsAppBase(APIView):
+    """Ce que partagent la preparation d'un envoi et celle d'une classe."""
+
+    access_module = "bulletin_whatsapp"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def _annee(self, academic_year_id: int) -> AcademicYear:
+        return get_object_or_404(AcademicYear, id=academic_year_id)
+
+    def _periode_valide(self, term: str):
+        normalized_term = normalize_term(term)
+        if not normalized_term:
+            raise ValidationError({"detail": "Période invalide. Utilisez uniquement T1, T2 ou T3."})
+        return normalized_term
+
+    def _periode_validee(
+        self,
+        student: Student,
+        academic_year: AcademicYear,
+        normalized_term: str,
+        *,
+        publications=None,
+    ) -> bool:
+        """La classe de cet eleve a-t-elle arrete ses bulletins pour la periode.
+
+        `publications` porte, pour une classe entiere, l'etat deja lu une
+        fois -- meme raison que `eleves_notes`: ne pas relire la meme ligne
+        soixante fois.
+
+        Une periode sans ligne en base n'est pas validee. C'est le defaut
+        volontaire: la fonction s'ouvre sur des annees deja saisies, et
+        l'inverse aurait fait partir d'un coup tous les bulletins de
+        l'historique a la premiere mise a jour.
+        """
+        if publications is not None:
+            return student.classroom_id in publications
+
+        return BulletinPublication.objects.filter(
+            classroom_id=student.classroom_id,
+            academic_year_id=academic_year.id,
+            term=normalized_term,
+            is_published=True,
+        ).exists()
+
+    def _obstacle(
+        self,
+        student: Student,
+        academic_year: AcademicYear,
+        normalized_term: str,
+        *,
+        eleves_notes=None,
+        publications=None,
+    ) -> str:
+        """Ce qui empeche d'envoyer ce bulletin, ou une chaine vide.
+
+        Trois refus, dans l'ordre ou ils se corrigent: rattacher un parent,
+        renseigner son numero et recueillir son accord, saisir les notes. Un
+        seul message par eleve -- la liste d'une classe doit se lire d'un
+        coup d'oeil, pas se decortiquer.
+
+        `eleves_notes` porte, pour une classe entiere, les eleves qui ont au
+        moins une note. Sans lui, chaque eleve declenche sa propre requete:
+        soixante allers-retours en base pour afficher une liste, sur les 0,1
+        CPU du plan d'hebergement.
+        """
+        # D'abord la periode, ensuite la famille: tant que les bulletins ne
+        # sont pas arretes, corriger un numero ne sert a rien, et le dire en
+        # second ferait courir le secretariat apres des contacts avant de
+        # decouvrir que rien ne pouvait partir.
+        if student.classroom_id is None:
+            return "Cet élève n'est affecté à aucune classe."
+        if not self._periode_validee(student, academic_year, normalized_term, publications=publications):
+            return (
+                f"Les bulletins du {normalized_term} ne sont pas encore validés "
+                "pour cette classe."
+            )
+
+        parent = getattr(student, "parent", None)
+        if parent is None:
+            return "Aucun parent rattaché à cet élève."
+
+        numero = (getattr(parent, "whatsapp_phone", "") or "").strip()
+        if not numero:
+            return "Numéro WhatsApp du parent absent."
+        if not est_au_format_e164(numero):
+            return "Numéro WhatsApp du parent invalide."
+        if not getattr(parent, "whatsapp_consent", False):
+            return "Le parent n'a pas donné son accord pour recevoir les bulletins par WhatsApp."
+
+        # Un bulletin sans note est une feuille vide a en-tete: l'envoyer
+        # coute la confiance de la famille et une visite au secretariat.
+        if eleves_notes is None:
+            a_des_notes = Grade.objects.filter(
+                student_id=student.id,
+                academic_year_id=academic_year.id,
+                term=normalized_term,
+            ).exists()
+        else:
+            a_des_notes = student.id in eleves_notes
+        if not a_des_notes:
+            return f"Aucune note saisie pour {normalized_term}: le bulletin serait vide."
+
+        return ""
+
+    def _derniere_livraison(
+        self,
+        student: Student,
+        academic_year: AcademicYear,
+        normalized_term: str,
+        *,
+        livraisons=None,
+    ):
+        """Le dernier envoi prepare pour ce bulletin, s'il y en a un.
+
+        `livraisons` est l'index deja construit pour toute une classe. Comme
+        `eleves_notes` sur `_obstacle`, il epargne une requete par eleve.
+        """
+        if livraisons is not None:
+            return livraisons.get(student.id)
+
+        return (
+            BulletinDelivery.objects.filter(
+                student_id=student.id,
+                academic_year_id=academic_year.id,
+                term=normalized_term,
+            )
+            .order_by("-created_at", "-id")
+            .first()
+        )
+
+    def _preparer(self, request, student: Student, academic_year: AcademicYear, normalized_term: str) -> dict:
+        """Fabrique le lien d'envoi et enregistre la trace.
+
+        Rien n'est genere ici: ni PDF, ni fichier stocke. Le bulletin est
+        produit au moment ou la famille ouvre le lien, ce qui evite d'ecrire
+        soixante PDF sur le stockage a chaque classe preparee -- dont la
+        plupart pour des liens qui expireront sans avoir servi.
+        """
+        parent = student.parent
+        numero = (parent.whatsapp_phone or "").strip()
+
+        expire = horodatage_d_expiration()
+        lien = lien_de_telechargement(
+            student_id=student.id,
+            academic_year_id=academic_year.id,
+            term=normalized_term,
+            request=request,
+            expire=expire,
+        )
+
+        message = texte_du_message(
+            nom_eleve=(student.user.get_full_name().strip() or student.user.username) if student.user else "votre enfant",
+            nom_classe=student.classroom.name if student.classroom else "",
+            periode=normalized_term,
+            annee=academic_year.name,
+            nom_ecole=_school_identity_for_student(student)["name"],
+            lien=lien,
+        )
+
+        livraison = BulletinDelivery.objects.create(
+            etablissement=getattr(student, "etablissement", None),
+            student=student,
+            parent=parent,
+            academic_year=academic_year,
+            term=normalized_term,
+            channel=BulletinDeliveryChannel.MANUAL_LINK,
+            status=BulletinDeliveryStatus.PREPARED,
+            phone=numero,
+            prepared_by=request.user if request.user.is_authenticated else None,
+        )
+
+        return {
+            "delivery_id": livraison.id,
+            "student_id": student.id,
+            "student_name": (student.user.get_full_name().strip() or student.user.username) if student.user else "",
+            "phone": numero,
+            "whatsapp_url": lien_wa_me(numero, message),
+            "message": message,
+            "download_url": lien,
+            "expires_at": datetime.fromtimestamp(expire, tz=fuseau_utc.utc).isoformat(),
+        }
+
+    def _etat(
+        self,
+        student: Student,
+        academic_year: AcademicYear,
+        normalized_term: str,
+        *,
+        eleves_notes=None,
+        livraisons=None,
+        publications=None,
+    ) -> dict:
+        """Ce que l'ecran affiche pour un eleve, sans rien preparer."""
+        obstacle = self._obstacle(
+            student,
+            academic_year,
+            normalized_term,
+            eleves_notes=eleves_notes,
+            publications=publications,
+        )
+        derniere = self._derniere_livraison(
+            student,
+            academic_year,
+            normalized_term,
+            livraisons=livraisons,
+        )
+        return {
+            "student_id": student.id,
+            "student_name": (student.user.get_full_name().strip() or student.user.username) if student.user else "",
+            "matricule": student.matricule,
+            "classroom_name": student.classroom.name if student.classroom else "",
+            # L'ecran s'en sert pour ouvrir la fiche du parent et corriger un
+            # numero absent sans quitter la liste: c'est la moitie des lignes
+            # bloquees, et les renvoyer vers un autre module ferait
+            # abandonner l'envoi.
+            "parent_id": student.parent_id,
+            "parent_consent": bool(getattr(student.parent, "whatsapp_consent", False)) if student.parent else False,
+            "parent_name": (
+                (student.parent.user.get_full_name().strip() or student.parent.user.username)
+                if student.parent and student.parent.user
+                else ""
+            ),
+            "phone": (getattr(student.parent, "whatsapp_phone", "") or "") if student.parent else "",
+            "can_send": not obstacle,
+            "blocked_reason": obstacle,
+            "last_status": derniere.status if derniere else "",
+            "last_sent_at": derniere.sent_at.isoformat() if derniere and derniere.sent_at else None,
+            "already_sent": bool(derniere and derniere.status in {
+                BulletinDeliveryStatus.SENT,
+                BulletinDeliveryStatus.READ,
+            }),
+        }
+
+
+class BulletinWhatsAppView(_BulletinWhatsAppBase):
+    """Prepare l'envoi du bulletin d'un eleve a son parent.
+
+    GET dit ce qui est possible, POST fabrique le lien et ouvre une trace.
+    La separation compte: un ecran qui affiche l'etat ne doit pas creer une
+    ligne d'historique a chaque fois qu'on le regarde.
+    """
+
+    def get(self, request, student_id: int, academic_year_id: int, term: str):
+        normalized_term = self._periode_valide(term)
+        academic_year = self._annee(academic_year_id)
+        student = get_object_or_404(
+            Student.objects.select_related("user", "classroom", "parent", "parent__user", "etablissement"),
+            id=student_id,
+        )
+        _ensure_student_access(request, student)
+        return Response(self._etat(student, academic_year, normalized_term))
+
+    def post(self, request, student_id: int, academic_year_id: int, term: str):
+        normalized_term = self._periode_valide(term)
+        academic_year = self._annee(academic_year_id)
+        student = get_object_or_404(
+            Student.objects.select_related("user", "classroom", "parent", "parent__user", "etablissement"),
+            id=student_id,
+        )
+        _ensure_student_access(request, student)
+
+        obstacle = self._obstacle(student, academic_year, normalized_term)
+        if obstacle:
+            raise ValidationError({"detail": obstacle})
+
+        # Un renvoi reste possible, mais jamais par inadvertance: la
+        # confirmation est explicite. Sur une classe reprise le lendemain,
+        # c'est ce qui evite que trente familles recoivent deux fois le meme
+        # bulletin.
+        if not _est_vrai(request.data.get("force")):
+            derniere = self._derniere_livraison(student, academic_year, normalized_term)
+            if derniere and derniere.status in {BulletinDeliveryStatus.SENT, BulletinDeliveryStatus.READ}:
+                envoye_le = derniere.sent_at.strftime("%d/%m/%Y à %H:%M") if derniere.sent_at else "déjà"
+                return Response(
+                    {
+                        "detail": f"Ce bulletin a déjà été envoyé le {envoye_le}. Confirmez pour l'envoyer à nouveau.",
+                        "already_sent": True,
+                        "last_sent_at": derniere.sent_at.isoformat() if derniere.sent_at else None,
+                    },
+                    status=409,
+                )
+
+        return Response(self._preparer(request, student, academic_year, normalized_term), status=201)
+
+
+class ClassBulletinsWhatsAppView(_BulletinWhatsAppBase):
+    """L'envoi des bulletins d'une classe entiere, eleve par eleve.
+
+    GET dresse l'etat de la classe -- qui est joignable, qui ne l'est pas et
+    pourquoi, qui a deja recu. POST prepare les liens de ceux qui peuvent
+    partir et rend compte des autres, sans jamais s'arreter au premier eleve
+    bloque: une classe se traite en une fois, pas en soixante allers-retours.
+    """
+
+    def _classe_et_eleves(self, request, classroom_id: int):
+        classroom = get_object_or_404(ClassRoom, id=classroom_id)
+        target_etablissement_id = _effective_etablissement_id(request)
+        if getattr(request.user, "role", "") == UserRole.SUPER_ADMIN and target_etablissement_id is None:
+            raise PermissionDenied("Selectionnez un etablissement actif.")
+        if target_etablissement_id and classroom.etablissement_id != target_etablissement_id:
+            raise PermissionDenied("Accès refusé aux bulletins de cette classe.")
+
+        students = list(
+            _allowed_students_queryset(request)
+            .filter(classroom_id=classroom.id, is_archived=False)
+            .select_related("etablissement")
+            .order_by("user__last_name", "user__first_name", "id")
+        )
+        return classroom, students
+
+    def _index_de_classe(self, students, academic_year: AcademicYear, normalized_term: str):
+        """Les notes et les envois de toute la classe, en deux requetes.
+
+        L'etat d'un eleve demande trois lectures en base -- « la periode
+        est-elle validee », « a-t-il des notes », « a-t-il deja recu ».
+        Prises eleve par eleve, elles font cent quatre-vingts requetes pour
+        une classe de soixante, le temps que l'ecran s'ouvre. Prises une fois
+        pour toutes, elles en font trois.
+        """
+        identifiants = [student.id for student in students]
+        if not identifiants:
+            return set(), {}, set()
+
+        eleves_notes = set(
+            Grade.objects.filter(
+                student_id__in=identifiants,
+                academic_year_id=academic_year.id,
+                term=normalized_term,
+            ).values_list("student_id", flat=True)
+        )
+
+        # Tri croissant et ecrasement au fil de la boucle: la derniere
+        # livraison lue pour un eleve est celle qui reste, sans avoir a
+        # trier par eleve ni a ouvrir une requete par ligne.
+        livraisons = {}
+        for livraison in BulletinDelivery.objects.filter(
+            student_id__in=identifiants,
+            academic_year_id=academic_year.id,
+            term=normalized_term,
+        ).order_by("created_at", "id"):
+            livraisons[livraison.student_id] = livraison
+
+        classes = {student.classroom_id for student in students if student.classroom_id}
+        publications = set(
+            BulletinPublication.objects.filter(
+                classroom_id__in=classes,
+                academic_year_id=academic_year.id,
+                term=normalized_term,
+                is_published=True,
+            ).values_list("classroom_id", flat=True)
+        )
+
+        return eleves_notes, livraisons, publications
+
+    def get(self, request, classroom_id: int, academic_year_id: int, term: str):
+        normalized_term = self._periode_valide(term)
+        academic_year = self._annee(academic_year_id)
+        classroom, students = self._classe_et_eleves(request, classroom_id)
+
+        eleves_notes, livraisons, publications = self._index_de_classe(
+            students, academic_year, normalized_term
+        )
+        etats = [
+            self._etat(
+                student,
+                academic_year,
+                normalized_term,
+                eleves_notes=eleves_notes,
+                livraisons=livraisons,
+                publications=publications,
+            )
+            for student in students
+        ]
+        publication = BulletinPublication.objects.filter(
+            classroom_id=classroom.id,
+            academic_year_id=academic_year.id,
+            term=normalized_term,
+        ).select_related("published_by").first()
+
+        return Response(
+            {
+                "classroom_id": classroom.id,
+                "classroom_name": classroom.name,
+                "term": normalized_term,
+                "academic_year": academic_year.name,
+                # Porte au niveau de la classe et pas seulement sur chaque
+                # eleve: quand la periode n'est pas validee, soixante lignes
+                # repetent le meme motif, et l'ecran doit pouvoir le dire une
+                # fois avec le bouton qui le corrige.
+                "period_published": publication is not None and publication.is_published,
+                "period_published_at": (
+                    publication.published_at.isoformat()
+                    if publication is not None and publication.published_at
+                    else None
+                ),
+                "period_published_by": (
+                    (
+                        publication.published_by.get_full_name().strip()
+                        or publication.published_by.username
+                    )
+                    if publication is not None and publication.published_by
+                    else ""
+                ),
+                "ready_count": sum(1 for etat in etats if etat["can_send"]),
+                "blocked_count": sum(1 for etat in etats if not etat["can_send"]),
+                "students": etats,
+            }
+        )
+
+    def post(self, request, classroom_id: int, academic_year_id: int, term: str):
+        normalized_term = self._periode_valide(term)
+        academic_year = self._annee(academic_year_id)
+        classroom, students = self._classe_et_eleves(request, classroom_id)
+
+        force = _est_vrai(request.data.get("force"))
+        demandes = request.data.get("student_ids")
+        if isinstance(demandes, list) and demandes:
+            voulus = {int(valeur) for valeur in demandes if str(valeur).isdigit()}
+            students = [student for student in students if student.id in voulus]
+
+        eleves_notes, livraisons, publications = self._index_de_classe(
+            students, academic_year, normalized_term
+        )
+
+        prets: list[dict] = []
+        ignores: list[dict] = []
+
+        for student in students:
+            obstacle = self._obstacle(
+                student,
+                academic_year,
+                normalized_term,
+                eleves_notes=eleves_notes,
+                publications=publications,
+            )
+            if obstacle:
+                ignores.append(
+                    {
+                        "student_id": student.id,
+                        "student_name": (
+                            (student.user.get_full_name().strip() or student.user.username)
+                            if student.user
+                            else ""
+                        ),
+                        "reason": obstacle,
+                    }
+                )
+                continue
+
+            if not force:
+                derniere = self._derniere_livraison(
+                    student,
+                    academic_year,
+                    normalized_term,
+                    livraisons=livraisons,
+                )
+                if derniere and derniere.status in {BulletinDeliveryStatus.SENT, BulletinDeliveryStatus.READ}:
+                    ignores.append(
+                        {
+                            "student_id": student.id,
+                            "student_name": (
+                                (student.user.get_full_name().strip() or student.user.username)
+                                if student.user
+                                else ""
+                            ),
+                            "reason": "Bulletin déjà envoyé pour cette période.",
+                            "already_sent": True,
+                        }
+                    )
+                    continue
+
+            prets.append(self._preparer(request, student, academic_year, normalized_term))
+
+        return Response(
+            {
+                "classroom_id": classroom.id,
+                "classroom_name": classroom.name,
+                "term": normalized_term,
+                "academic_year": academic_year.name,
+                "prepared": prets,
+                "skipped": ignores,
+            },
+            status=201 if prets else 200,
+        )
+
+
+class BulletinDeliveryMarkSentView(APIView):
+    """Enregistre qu'un envoi prepare est bien parti.
+
+    Sur le canal assiste, c'est un humain qui appuie sur « envoyer » dans
+    WhatsApp: le serveur ne peut pas le constater, il le tient de l'ecran.
+    La trace vaut donc declaration de l'ecole, pas accuse de reception du
+    telephone -- et l'ecran doit le dire ainsi.
+    """
+
+    access_module = "bulletin_whatsapp"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def post(self, request, delivery_id: int):
+        livraison = get_object_or_404(
+            BulletinDelivery.objects.select_related("student", "student__user"),
+            id=delivery_id,
+        )
+        _ensure_student_access(request, livraison.student)
+
+        target_etablissement_id = _effective_etablissement_id(request)
+        if target_etablissement_id and livraison.etablissement_id not in (None, target_etablissement_id):
+            raise PermissionDenied("Accès refusé à cet envoi.")
+
+        motif = str(request.data.get("failure_reason") or "").strip()
+        if motif:
+            livraison.marquer_echoue(motif)
+        else:
+            livraison.marquer_envoye()
+
+        return Response(
+            {
+                "delivery_id": livraison.id,
+                "status": livraison.status,
+                "sent_at": livraison.sent_at.isoformat() if livraison.sent_at else None,
+                "failure_reason": livraison.failure_reason,
+            }
+        )
+
+
+class BulletinShareDownloadView(APIView):
+    """Le bulletin, servi au parent depuis le lien recu par WhatsApp.
+
+    Publique par necessite: la famille n'a pas de compte, et un lien qui
+    demanderait une connexion ne serait jamais ouvert. La signature et la
+    date d'expiration tiennent lieu de cle -- les identifiants d'eleve ne
+    s'enumerent pas, et un lien transfere cesse de repondre au bout de
+    quelques jours.
+
+    Le PDF est regenere a la demande plutot que fige a l'envoi: rien ne
+    traine sur le stockage, et une note corrigee entre-temps profite au
+    parent au lieu de lui laisser une version fausse.
+    """
+
+    authentication_classes = ()
+    permission_classes = [AllowAny]
+
+    def get(self, request, student_id: int, academic_year_id: int, term: str, expire: int, signature: str):
+        if not signature_bulletin_valide(student_id, academic_year_id, term, expire, signature):
+            return HttpResponse(
+                _page_lien_bulletin(
+                    "Lien non reconnu",
+                    "Ce lien n'a pas été émis par l'établissement.",
+                ),
+                content_type="text/html; charset=utf-8",
+                status=404,
+            )
+
+        if lien_expire(expire):
+            return HttpResponse(
+                _page_lien_bulletin(
+                    "Lien expiré",
+                    "Ce lien n'est plus valable. Contactez l'établissement pour en recevoir un nouveau.",
+                ),
+                content_type="text/html; charset=utf-8",
+                status=410,
+            )
+
+        normalized_term = normalize_term(term)
+        if not normalized_term:
+            return HttpResponse(
+                _page_lien_bulletin("Lien non reconnu", "Ce lien ne désigne aucune période valide."),
+                content_type="text/html; charset=utf-8",
+                status=404,
+            )
+
+        student = (
+            Student.objects.select_related("user", "classroom", "parent", "parent__user", "etablissement")
+            .filter(id=student_id)
+            .first()
+        )
+        if student is None:
+            return HttpResponse(
+                _page_lien_bulletin("Lien non reconnu", "Ce lien ne correspond à aucun élève."),
+                content_type="text/html; charset=utf-8",
+                status=404,
+            )
+
+        pdf_bytes = generer_pdf_bulletin(
+            student=student,
+            academic_year_id=academic_year_id,
+            normalized_term=normalized_term,
+        )
+
+        # Le premier telechargement fait passer l'envoi de « envoye » a
+        # « consulte ». C'est la seule chose que le canal assiste sait de ce
+        # qui se passe apres l'envoi, et elle vaut d'etre gardee: elle dit a
+        # l'ecole quelles familles rappeler.
+        #
+        # Le lien ne porte pas l'identifiant de la livraison mais la periode:
+        # quand un bulletin a ete envoye deux fois, c'est donc le dernier
+        # envoi qui est marque consulte, meme si la famille a ouvert le lien
+        # du premier. C'est le releve que l'ecole regarde, et l'inverse --
+        # signer chaque lien par livraison -- allongerait une URL qui voyage
+        # dans une conversation.
+        livraison = (
+            BulletinDelivery.objects.filter(
+                student_id=student.id,
+                academic_year_id=academic_year_id,
+                term=normalized_term,
+            )
+            .exclude(status=BulletinDeliveryStatus.FAILED)
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        if livraison is not None and livraison.read_at is None:
+            livraison.status = BulletinDeliveryStatus.READ
+            livraison.read_at = timezone.now()
+            livraison.save(update_fields=["status", "read_at", "updated_at"])
+
+        reponse = HttpResponse(pdf_bytes, content_type="application/pdf")
+        nom = nom_de_fichier_bulletin(student, normalized_term)
+        repli_ascii = (
+            unicodedata.normalize("NFKD", nom).encode("ascii", "ignore").decode("ascii")
+        ) or "bulletin.pdf"
+        # `inline`: le parent ouvre le bulletin dans son telephone au lieu de
+        # le voir tomber dans un dossier de telechargements qu'il ne trouvera
+        # pas.
+        reponse["Content-Disposition"] = (
+            f'inline; filename="{repli_ascii}"; filename*=UTF-8\'\'{quote(nom)}'
+        )
+        reponse["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        reponse["X-Robots-Tag"] = "noindex, nofollow"
+        return reponse
+
+
+def _page_lien_bulletin(titre: str, detail: str) -> str:
+    """Page d'erreur d'un lien de bulletin, lisible sur un telephone.
+
+    Elle ne nomme aucun eleve: un lien perdu ou transfere ne doit rien
+    apprendre a celui qui l'ouvre.
+    """
+    return (
+        "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<meta name=\"robots\" content=\"noindex, nofollow\">"
+        f"<title>{escape(titre)}</title>"
+        "<style>body{font-family:system-ui,sans-serif;margin:0;padding:2rem;"
+        "background:#f6f7f9;color:#1f2933;display:flex;min-height:100vh;"
+        "align-items:center;justify-content:center;text-align:center}"
+        "div{max-width:26rem}h1{font-size:1.25rem;margin:0 0 .75rem}"
+        "p{margin:0;line-height:1.5;color:#52606d}</style></head><body><div>"
+        f"<h1>{escape(titre)}</h1><p>{escape(detail)}</p>"
+        "</div></body></html>"
+    )
+
+
+def _est_vrai(valeur) -> bool:
+    """Lecture tolerante d'un drapeau envoye par le frontend.
+
+    Le meme drapeau arrive en booleen JSON depuis l'application et en chaine
+    « true » depuis un formulaire ou une requete manuelle.
+    """
+    if isinstance(valeur, bool):
+        return valeur
+    return str(valeur or "").strip().lower() in {"1", "true", "vrai", "oui", "yes"}
 
 
 class PaymentReceiptPdfView(APIView):

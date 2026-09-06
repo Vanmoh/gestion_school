@@ -6,6 +6,7 @@ from .views import (
     AttendanceViewSet,
     BookViewSet,
     BorrowViewSet,
+    BulletinPublicationViewSet,
     CanteenMenuViewSet,
     CanteenServiceViewSet,
     CanteenSubscriptionViewSet,
@@ -76,6 +77,7 @@ router.register(r"teacher-payrolls", TeacherPayrollViewSet)
 router.register(r"announcements", AnnouncementViewSet)
 router.register(r"notifications", NotificationViewSet)
 router.register(r"sms-providers", SmsProviderConfigViewSet)
+router.register(r"bulletin-publications", BulletinPublicationViewSet)
 router.register(r"books", BookViewSet)
 # Le fonds numerique vit dans le meme module de droits que les ouvrages
 # physiques ("library"), sur des routes distinctes: un PDF ne se prete pas.
