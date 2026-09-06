@@ -421,6 +421,27 @@ SCHOOL_LOGO_PATH = config(
     default=str(BASE_DIR.parent / "frontend" / "gestion_school_app" / "assets" / "images" / "logo_ecole.png"),
 )
 
+# Indicatif applique aux numeros saisis sans lui (« 76 12 34 56 »), sans le
+# « + ». Le Mali par defaut, ou sont les etablissements servis; une ecole
+# ailleurs le change sans toucher au code. Voir apps/school/phone_utils.py.
+DEFAULT_PHONE_COUNTRY_CODE = config("DEFAULT_PHONE_COUNTRY_CODE", default="223")
+
+# Nombre de chiffres d'un numero du pays ci-dessus, hors indicatif (huit au
+# Mali). Sert a refuser un numero recopie a moitie, que la seule regle E.164
+# laisse passer. Mettre 0 pour ne rien controler.
+NATIONAL_PHONE_LENGTH = config("NATIONAL_PHONE_LENGTH", cast=int, default=8)
+
+# Duree de validite du lien de telechargement d'un bulletin envoye a une
+# famille. Assez long pour qu'un parent ouvre le message le lendemain, assez
+# court pour qu'un lien transfere ne circule pas toute l'annee.
+BULLETIN_LINK_TTL_HOURS = config("BULLETIN_LINK_TTL_HOURS", cast=int, default=72)
+
+# Base publique des liens envoyes aux familles (« https://api.ecole.ml »).
+# Vide, le lien est construit a partir de la requete qui le demande -- ce qui
+# suffit tant que l'API repond sur le domaine que les parents peuvent
+# joindre, et se regle ici quand ce n'est pas le cas.
+PUBLIC_BASE_URL = config("PUBLIC_BASE_URL", default="").strip().rstrip("/")
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),

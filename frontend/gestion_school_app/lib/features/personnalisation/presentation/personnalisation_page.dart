@@ -24,10 +24,7 @@ class PersonnalisationPage extends ConsumerStatefulWidget {
       context: context,
       builder: (_) => const Dialog(
         insetPadding: EdgeInsets.all(16),
-        child: SizedBox(
-          width: 760,
-          child: PersonnalisationPage(),
-        ),
+        child: SizedBox(width: 760, child: PersonnalisationPage()),
       ),
     );
   }
@@ -57,6 +54,10 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
   /// Le logo choisi, pas encore envoyé. Nul tant qu'on n'en change pas :
   /// modifier un numéro de téléphone ne doit pas effacer l'image en place.
   Uint8List? _logoChoisi;
+
+  /// L'image de fond choisie, pas encore envoyée.
+  Uint8List? _fondChoisi;
+  String? _nomDuFond;
   String? _nomDuLogo;
 
   bool _enregistrement = false;
@@ -142,6 +143,35 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
     });
   }
 
+  Future<void> _choisirLImageDeFond() async {
+    final choix = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp'],
+      withData: true,
+    );
+    if (choix == null || choix.files.isEmpty) return;
+
+    final fichier = choix.files.first;
+    final octets = fichier.bytes;
+    if (octets == null || octets.isEmpty) {
+      _dire('Fichier illisible.');
+      return;
+    }
+    // Six mégaoctets, contre deux pour le logo: c'est une photo pleine page,
+    // pas une vignette. Au-delà, chaque ouverture du portail la retélécharge
+    // -- le serveur d'école répond `no-store` -- et l'écran met une seconde
+    // de trop à s'habiller.
+    if (octets.length > 6 * 1024 * 1024) {
+      _dire('Image trop lourde : 6 Mo au maximum.');
+      return;
+    }
+
+    setState(() {
+      _fondChoisi = octets;
+      _nomDuFond = fichier.name;
+    });
+  }
+
   Future<void> _enregistrer() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
@@ -167,11 +197,15 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
             },
             logo: _logoChoisi,
             nomDuLogo: _nomDuLogo,
+            imageFond: _fondChoisi,
+            nomDeLImageFond: _nomDuFond,
           );
       if (!mounted) return;
       setState(() {
         _logoChoisi = null;
         _nomDuLogo = null;
+        _fondChoisi = null;
+        _nomDuFond = null;
       });
       _dire('Personnalisation enregistrée.', succes: true);
     } on DioException catch (erreur) {
@@ -189,7 +223,9 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
     if (donnees is Map) {
       if (donnees['detail'] != null) return donnees['detail'].toString();
       final premier = donnees.values.firstOrNull;
-      if (premier is List && premier.isNotEmpty) return premier.first.toString();
+      if (premier is List && premier.isNotEmpty) {
+        return premier.first.toString();
+      }
       if (premier != null) return premier.toString();
     }
     return 'Enregistrement impossible.';
@@ -259,6 +295,8 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
                 children: [
                   _section(context, 'Identité'),
                   _logo(context, personnalisation),
+                  const SizedBox(height: 18),
+                  _imageDeFond(context, personnalisation),
                   const SizedBox(height: 12),
                   _paire(
                     _champ(
@@ -267,7 +305,11 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
                       aide: 'Titre de l’onglet du navigateur.',
                       obligatoire: true,
                     ),
-                    _champ(_sigle, 'Sigle', aide: 'Abrégé, quand la place manque.'),
+                    _champ(
+                      _sigle,
+                      'Sigle',
+                      aide: 'Abrégé, quand la place manque.',
+                    ),
                   ),
                   _champ(
                     _nomEcole,
@@ -294,7 +336,8 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
                   _champ(
                     _titrePortail,
                     'Titre',
-                    aide: 'Vide, l’écran garde « Choisissez votre établissement ».',
+                    aide:
+                        'Vide, l’écran garde « Choisissez votre établissement ».',
                   ),
                   _champ(_sousTitrePortail, 'Sous-titre'),
                   _champ(_messageAccueil, 'Message d’accueil', lignes: 2),
@@ -375,9 +418,10 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
                         fit: BoxFit.contain,
                         // Un logo introuvable ne doit pas casser l'écran de
                         // réglages: c'est justement là qu'on vient le corriger.
-                        errorBuilder: (_, _, _) =>
-                            Icon(Icons.image_not_supported_outlined,
-                                color: scheme.outline),
+                        errorBuilder: (_, _, _) => Icon(
+                          Icons.image_not_supported_outlined,
+                          color: scheme.outline,
+                        ),
                       )
                     : Icon(Icons.school_outlined, color: scheme.outline)),
         ),
@@ -406,11 +450,75 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
     );
   }
 
+  /// L'image de fond des écrans publics.
+  ///
+  /// Aperçu large et non carré comme celui du logo : c'est une photo qu'on
+  /// juge à son cadrage, et un carré ne dirait rien de ce qu'on verra.
+  Widget _imageDeFond(BuildContext context, Personnalisation p) {
+    final scheme = Theme.of(context).colorScheme;
+    final apercu = _fondChoisi;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        AspectRatio(
+          aspectRatio: 16 / 5,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: scheme.outlineVariant),
+              color: scheme.surfaceContainerHighest,
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: apercu != null
+                ? Image.memory(apercu, fit: BoxFit.cover)
+                : (p.imageFondUrl.isNotEmpty
+                      ? Image.network(
+                          p.imageFondUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Icon(
+                            Icons.image_not_supported_outlined,
+                            color: scheme.outline,
+                          ),
+                        )
+                      : Center(
+                          child: Icon(
+                            Icons.photo_size_select_actual_outlined,
+                            color: scheme.outline,
+                          ),
+                        )),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            OutlinedButton.icon(
+              key: const Key('choisir-image-fond'),
+              onPressed: _enregistrement ? null : _choisirLImageDeFond,
+              icon: const Icon(Icons.wallpaper_outlined, size: 18),
+              label: Text(
+                apercu == null ? 'Choisir une image de fond' : 'Changer',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                apercu == null
+                    ? 'Portail et connexion, sous un voile sombre. Large '
+                          'plutôt que haute, 1600 px au minimum, 6 Mo au plus.'
+                    : 'Nouvelle image prête : ${_nomDuFond ?? ''}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _couleurPrincipale(BuildContext context) {
     final saisie = _couleur.text.trim();
-    final apercu = Personnalisation(
-      couleurPrincipale: saisie,
-    ).couleur;
+    final apercu = Personnalisation(couleurPrincipale: saisie).couleur;
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,

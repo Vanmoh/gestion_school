@@ -1,15 +1,42 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../personnalisation/domain/personnalisation.dart';
-import '../../personnalisation/presentation/personnalisation_controller.dart';
-import 'package:dio/dio.dart';
-import '../../../core/constants/branding.dart';
 import '../../../core/constants/api_constants.dart';
 import '../../../core/network/api_client.dart';
 import '../../../models/etablissement.dart';
+import '../../../widgets/etablissement_identity.dart';
+import '../../../widgets/fond_ecran_public.dart';
+import '../../personnalisation/domain/personnalisation.dart';
+import '../../personnalisation/presentation/personnalisation_controller.dart';
 import '../domain/auth_user.dart';
 import 'auth_controller.dart';
+import 'widgets/login_brand_panel.dart';
+import 'widgets/login_form_card.dart';
+import 'widgets/login_mot_de_passe_dialog.dart';
+import 'widgets/login_reglages_dialog.dart';
+
+/// Deux colonnes a partir de cette largeur. Seuil inchange: c'est celui que
+/// le test de mise en page eprouve depuis le debordement de 2026-08.
+const double _kDeuxColonnes = 980;
+
+/// Fenetre courte: le logo cede la place au texte plutot que l'inverse.
+const double _kHauteurCourte = 700;
+
+/// La carte ne s'etire pas: au-dela, une ligne de saisie devient penible a
+/// suivre de l'oeil.
+const double _kLargeurCarte = 460;
+
+/// Largeur maximale de l'ensemble marque + carte.
+///
+/// Sans elle, sur un ecran de 1920 la marque restait collee au bord gauche et
+/// un gouffre la separait de la carte, a droite: deux ilots aux extremites
+/// d'un vide. Le contenu se centre desormais, comme au portail.
+const double _kLargeurContenu = 1240;
+
+/// Ou poser le message produit par [_LoginPageState._friendlyErrorMessage].
+enum _ChampEnErreur { identifiant, motDePasse, aucun }
 
 class LoginPage extends ConsumerStatefulWidget {
   const LoginPage({super.key});
@@ -19,19 +46,34 @@ class LoginPage extends ConsumerStatefulWidget {
 }
 
 class _LoginPageState extends ConsumerState<LoginPage> {
+  final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _usernameFocus = FocusNode();
+  final _passwordFocus = FocusNode();
+
   bool _obscurePassword = true;
-  bool _testingApiConnection = false;
   bool _wrongScopeDialogOpen = false;
   String _activeApiUrl = ApiConstants.baseUrl;
 
-  @override
-  void dispose() {
-    _usernameController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
+  /// Messages du serveur, ranges sous le champ qu'ils concernent.
+  String? _erreurIdentifiant;
+  String? _erreurMotDePasse;
+  String? _erreurGenerale;
+  bool _erreurReseau = false;
+
+  /// Fondu de sortie, joue juste avant de quitter l'ecran.
+  ///
+  /// La bascule vers le tableau de bord etait seche: la page disparaissait
+  /// d'un coup, sur une machine d'ecole qui met parfois une seconde a dessiner
+  /// l'ecran suivant. Un fondu court adoucit la couture sans faire attendre.
+  bool _sortie = false;
+
+  /// Position du curseur, pour que l'eclairage du fond le suive.
+  ///
+  /// Nulle tant que la souris n'a pas bouge -- et pour toujours au doigt, ou
+  /// il n'y a pas de curseur a suivre.
+  Alignment? _curseur;
 
   @override
   void initState() {
@@ -41,6 +83,20 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     Future.microtask(
       () => ref.read(authControllerProvider.notifier).restoreSession(),
     );
+    // `app.dart` place ce chargement sur les deux ecrans qui portent la marque
+    // -- le portail et la connexion -- mais la connexion ne l'avait jamais
+    // fait: le telephone et le courriel de l'ecole y etaient donc vides, ce
+    // que le panneau « mot de passe oublie » ne peut plus se permettre.
+    Future.microtask(() => ref.read(personnalisationProvider).charger());
+  }
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    _usernameFocus.dispose();
+    _passwordFocus.dispose();
+    super.dispose();
   }
 
   @override
@@ -48,26 +104,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     final authState = ref.watch(authControllerProvider);
     final etablissementState = ref.watch(etablissementProvider);
     final selectedEtablissement = etablissementState.selected;
-    final scheme = Theme.of(context).colorScheme;
 
     // L'identite reglee par l'ecole remplace les constantes qui vivaient dans
     // le code: le nom, le logo et le telephone y etaient figes a la
     // compilation, et servir une autre ecole demandait de recompiler.
     final marque = ref.watch(personnalisationProvider).valeur;
-
-    final headerName =
-        selectedEtablissement?.name ??
-        Personnalisation.ou(marque.nomEcole, SchoolBranding.schoolName);
-    final headerSecondary =
-        (selectedEtablissement?.address != null &&
-            selectedEtablissement!.address!.trim().isNotEmpty)
-        ? selectedEtablissement.address!.trim()
-        : Personnalisation.ou(marque.adresse, marque.nomCourt);
-    final contactLabel =
-        (selectedEtablissement?.phone != null &&
-            selectedEtablissement!.phone!.trim().isNotEmpty)
-        ? 'Tél: ${selectedEtablissement.phone!}'
-        : 'Tél: ${Personnalisation.ou(marque.telephone, SchoolBranding.phone)}';
 
     ref.listen(authControllerProvider, (previous, next) async {
       next.whenOrNull(
@@ -82,6 +123,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 selectedEtablissementId != userEtablissementId;
 
             if (wrongScopedLogin) {
+              // On ne propose pas d'enregistrer un identifiant qu'on vient de
+              // refuser.
+              TextInput.finishAutofillContext(shouldSave: false);
               await ref.read(authControllerProvider.notifier).logout();
               if (!mounted) {
                 return;
@@ -98,12 +142,24 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               }
               return;
             }
-            Navigator.of(context).pushReplacementNamed(user.homeRoute);
+            // Sans cet appel, le groupe de remplissage reste ouvert et ni le
+            // navigateur ni Android ne proposent jamais d'enregistrer le mot
+            // de passe: le gestionnaire attend la fin du formulaire, pas la
+            // navigation.
+            TextInput.finishAutofillContext();
+            // Le navigateur est saisi avant l'attente: s'en servir apres
+            // reviendrait a traverser le contexte d'un ecran peut-etre demonte.
+            final navigateur = Navigator.of(context);
+            final immobile = etabReduceMotion(context);
+            setState(() => _sortie = true);
+            if (!immobile) {
+              await Future<void>.delayed(const Duration(milliseconds: 220));
+            }
+            if (!mounted) return;
+            navigateur.pushReplacementNamed(user.homeRoute);
           }
         },
-        error: (error, _) {
-          _showMessage(_friendlyErrorMessage(error));
-        },
+        error: (error, _) => _reporterErreur(error),
       );
     });
 
@@ -112,581 +168,406 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
 
     if (selectedEtablissement == null) {
-      return Scaffold(
-        body: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520),
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.school_outlined, size: 52),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'Choisissez d\'abord un établissement',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      const Text(
-                        'La connexion s\'ouvre avec les informations de l\'établissement sélectionné.',
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 20),
-                      FilledButton.icon(
-                        onPressed: () {
-                          Navigator.of(
-                            context,
-                          ).pushNamedAndRemoveUntil('/', (route) => false);
-                        },
-                        icon: const Icon(Icons.arrow_back),
-                        label: const Text('Choisir un établissement'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
+      return _EcranSansEtablissement();
     }
 
     return Scaffold(
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  scheme.surface,
-                  scheme.surfaceContainerHighest.withValues(alpha: 0.42),
-                ],
-              ),
-            ),
-          ),
-          Positioned(
-            top: -80,
-            left: -40,
-            child: Container(
-              width: 280,
-              height: 280,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: scheme.primary.withValues(alpha: 0.15),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: -110,
-            right: -70,
-            child: Container(
-              width: 320,
-              height: 320,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: scheme.tertiary.withValues(alpha: 0.12),
-              ),
-            ),
-          ),
-          Positioned.fill(
-            child: IgnorePointer(
-              child: Align(
-                alignment: Alignment.center,
-                child: Text(
-                  headerName,
-                  style: Theme.of(context).textTheme.displayMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 12,
-                    color: scheme.primary.withValues(alpha: 0.035),
-                  ),
+      body: AnimatedOpacity(
+        opacity: _sortie ? 0 : 1,
+        duration: etabReduceMotion(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        child: MouseRegion(
+          onHover: (evenement) {
+            final taille = MediaQuery.sizeOf(context);
+            if (taille.isEmpty) return;
+            setState(() {
+              _curseur = Alignment(
+                (evenement.position.dx / taille.width) * 2 - 1,
+                (evenement.position.dy / taille.height) * 2 - 1,
+              );
+            });
+          },
+          onExit: (_) => setState(() => _curseur = null),
+          child: Stack(
+            children: [
+              // Le fond prolonge celui du portail -- memes halos, teintes par
+              // l'etablissement -- et y ajoute la profondeur qui manquait sur un
+              // grand ecran. Il fige son mouvement quand le systeme demande moins
+              // d'animations.
+              Positioned.fill(
+                child: FondEcranPublic(
+                  tints: etabRamp(selectedEtablissement),
+                  // La photo de l'ecole d'abord, celle de la plateforme ensuite:
+                  // on est ici chez un etablissement precis, et sa facade parle
+                  // mieux que l'image commune.
+                  photoUrl:
+                      (selectedEtablissement.coverUrlForDisplay ?? '')
+                          .isNotEmpty
+                      ? selectedEtablissement.coverUrlForDisplay
+                      : marque.imageFondUrl,
+                  // Sur grand ecran la photo tient la moitie gauche, celle de la
+                  // marque, et laisse la carte sur le fond sombre: du texte de
+                  // saisie pose sur une photo se lit mal, meme voilee.
+                  largeurPhoto:
+                      MediaQuery.sizeOf(context).width >= _kDeuxColonnes
+                      ? 0.62
+                      : 1,
+                  curseur: _curseur,
+                  ancrageLueur:
+                      MediaQuery.sizeOf(context).width >= _kDeuxColonnes
+                      ? const Alignment(0.55, 0)
+                      : Alignment.center,
                 ),
               ),
-            ),
-          ),
-          SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final wide = constraints.maxWidth >= 980;
-                // Sur une fenetre courte le bloc de gauche (logo + textes +
-                // pastilles) depassait la hauteur disponible. On reduit
-                // d'abord le logo, le defilement prend le relais ensuite.
-                final short = constraints.maxHeight < 760;
-                final logoHeight = short ? 120.0 : 190.0;
+              SafeArea(
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final deuxColonnes =
+                              constraints.maxWidth >= _kDeuxColonnes;
+                          final dense = constraints.maxHeight < _kHauteurCourte;
 
-                return Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Row(
-                    children: [
-                      if (wide)
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.only(right: 32),
-                            child: _centeredScrollable(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Icon(
-                                        Icons.bolt_rounded,
-                                        color: scheme.primary,
-                                        size: 32,
+                          return Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              deuxColonnes ? 40 : 24,
+                              24,
+                              deuxColonnes ? 40 : 24,
+                              12,
+                            ),
+                            child: Center(
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: _kLargeurContenu,
+                                ),
+                                child: deuxColonnes
+                                    ? _deuxColonnes(
+                                        etablissement: selectedEtablissement,
+                                        marque: marque,
+                                        authState: authState,
+                                        dense: dense,
+                                      )
+                                    : _uneColonne(
+                                        etablissement: selectedEtablissement,
+                                        marque: marque,
+                                        authState: authState,
                                       ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Text(
-                                          'Connexion ${selectedEtablissement.name}',
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .headlineSmall
-                                              ?.copyWith(
-                                                fontWeight: FontWeight.w800,
-                                                letterSpacing: 1.5,
-                                              ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      IconButton(
-                                        tooltip:
-                                            'Choisir un autre établissement',
-                                        onPressed: () {
-                                          Navigator.of(
-                                            context,
-                                          ).pushNamedAndRemoveUntil(
-                                            '/',
-                                            (route) => false,
-                                          );
-                                        },
-                                        icon: const Icon(
-                                          Icons.swap_horiz_rounded,
-                                        ),
-                                      ),
-                                      IconButton(
-                                        tooltip: 'Configurer URL API',
-                                        onPressed: _openApiSettingsDialog,
-                                        icon: const Icon(
-                                          Icons.wifi_tethering_rounded,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 18),
-                                  if (selectedEtablissement.logoUrlForDisplay !=
-                                          null &&
-                                      selectedEtablissement
-                                          .logoUrlForDisplay!
-                                          .isNotEmpty)
-                                    Image.network(
-                                      selectedEtablissement.logoUrlForDisplay!,
-                                      height: logoHeight,
-                                      fit: BoxFit.contain,
-                                      alignment: Alignment.centerLeft,
-                                      errorBuilder:
-                                          (context, error, stackTrace) {
-                                            return Image.asset(
-                                              SchoolBranding.logoAsset,
-                                              height: logoHeight,
-                                              fit: BoxFit.contain,
-                                              alignment: Alignment.centerLeft,
-                                            );
-                                          },
-                                    )
-                                  else if (marque.logoUrl.isNotEmpty)
-                                    Image.network(
-                                      marque.logoUrl,
-                                      height: logoHeight,
-                                      fit: BoxFit.contain,
-                                      alignment: Alignment.centerLeft,
-                                      // Un logo introuvable ne doit pas
-                                      // barrer l'ecran de connexion: on
-                                      // retombe sur l'image livree.
-                                      errorBuilder: (_, _, _) => Image.asset(
-                                        SchoolBranding.logoAsset,
-                                        height: logoHeight,
-                                        fit: BoxFit.contain,
-                                        alignment: Alignment.centerLeft,
-                                      ),
-                                    )
-                                  else
-                                    Image.asset(
-                                      SchoolBranding.logoAsset,
-                                      height: logoHeight,
-                                      fit: BoxFit.contain,
-                                      alignment: Alignment.centerLeft,
-                                      cacheWidth: 640,
-                                      filterQuality: FilterQuality.medium,
-                                    ),
-                                  const SizedBox(height: 20),
-                                  Text(
-                                    headerName,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .headlineMedium
-                                        ?.copyWith(fontWeight: FontWeight.w700),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Text(
-                                    headerSecondary,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleMedium,
-                                  ),
-                                  const SizedBox(height: 18),
-                                  Wrap(
-                                    spacing: 10,
-                                    runSpacing: 10,
-                                    children: [
-                                      _featurePill(
-                                        context,
-                                        icon: Icons.verified_user_outlined,
-                                        label: 'Connexion sécurisée',
-                                      ),
-                                      _featurePill(
-                                        context,
-                                        icon: Icons.sync_alt,
-                                        label: 'Multi-plateforme',
-                                      ),
-                                      _featurePill(
-                                        context,
-                                        icon: Icons.analytics_outlined,
-                                        label: 'Pilotage en temps réel',
-                                      ),
-                                      _featurePill(
-                                        context,
-                                        icon: Icons.call_outlined,
-                                        label: contactLabel,
-                                      ),
-                                    ],
-                                  ),
-                                  // Les filieres du lycee technique tenaient
-                                  // ici, en dur: elles ne disent rien d'une
-                                  // ecole primaire ou d'un institut. L'ecole
-                                  // ecrit desormais ce qui la presente.
-                                  if (marque.titreConnexion.isNotEmpty) ...[
-                                    const SizedBox(height: 14),
-                                    Text(
-                                      marque.titreConnexion,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                    ),
-                                  ],
-                                  if (marque.sousTitreConnexion.isNotEmpty) ...[
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      marque.sousTitreConnexion,
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.bodyMedium,
-                                    ),
-                                  ],
-                                ],
                               ),
                             ),
-                          ),
-                        ),
-                      Expanded(
-                        child: _centeredScrollable(
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 460),
-                            child: TweenAnimationBuilder<double>(
-                              tween: Tween(begin: 0.94, end: 1),
-                              duration: const Duration(milliseconds: 350),
-                              curve: Curves.easeOutCubic,
-                              builder: (context, value, child) {
-                                return Transform.scale(
-                                  scale: value,
-                                  child: child,
-                                );
-                              },
-                              child: Card(
-                                elevation: 10,
-                                shadowColor: scheme.shadow.withValues(
-                                  alpha: 0.24,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(24),
-                                  side: BorderSide(
-                                    color: scheme.outlineVariant.withValues(
-                                      alpha: 0.7,
-                                    ),
-                                  ),
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(26),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Container(
-                                            width: 40,
-                                            height: 40,
-                                            decoration: BoxDecoration(
-                                              color: scheme.primary.withValues(
-                                                alpha: 0.12,
-                                              ),
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
-                                            child: Icon(
-                                              Icons.lock_person_outlined,
-                                              color: scheme.primary,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  selectedEtablissement.name,
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .headlineSmall
-                                                      ?.copyWith(
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                      ),
-                                                ),
-                                                Text(
-                                                  'Connexion sécurisée',
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .bodyMedium
-                                                      ?.copyWith(
-                                                        color: scheme
-                                                            .onSurfaceVariant,
-                                                      ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          IconButton(
-                                            tooltip: 'Configurer URL API',
-                                            onPressed: _openApiSettingsDialog,
-                                            icon: const Icon(
-                                              Icons.wifi_tethering_rounded,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 20),
-                                      TextField(
-                                        controller: _usernameController,
-                                        textInputAction: TextInputAction.next,
-                                        decoration: InputDecoration(
-                                          labelText: 'Nom utilisateur',
-                                          prefixIcon: const Icon(
-                                            Icons.person_outline,
-                                          ),
-                                          filled: true,
-                                          fillColor: scheme
-                                              .surfaceContainerHighest
-                                              .withValues(alpha: 0.28),
-                                          border: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              14,
-                                            ),
-                                            borderSide: BorderSide.none,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 12),
-                                      TextField(
-                                        controller: _passwordController,
-                                        obscureText: _obscurePassword,
-                                        onSubmitted: (_) =>
-                                            _submitLogin(authState.isLoading),
-                                        decoration: InputDecoration(
-                                          labelText: 'Mot de passe',
-                                          prefixIcon: const Icon(
-                                            Icons.lock_outline,
-                                          ),
-                                          suffixIcon: IconButton(
-                                            onPressed: () {
-                                              setState(() {
-                                                _obscurePassword =
-                                                    !_obscurePassword;
-                                              });
-                                            },
-                                            icon: Icon(
-                                              _obscurePassword
-                                                  ? Icons.visibility_outlined
-                                                  : Icons
-                                                        .visibility_off_outlined,
-                                            ),
-                                          ),
-                                          filled: true,
-                                          fillColor: scheme
-                                              .surfaceContainerHighest
-                                              .withValues(alpha: 0.28),
-                                          border: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              14,
-                                            ),
-                                            borderSide: BorderSide.none,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 20),
-                                      FilledButton.icon(
-                                        onPressed: authState.isLoading
-                                            ? null
-                                            : () => _submitLogin(false),
-                                        icon: authState.isLoading
-                                            ? const SizedBox(
-                                                width: 16,
-                                                height: 16,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                    ),
-                                              )
-                                            : const Icon(Icons.login_rounded),
-                                        label: Text(
-                                          authState.isLoading
-                                              ? 'Connexion en cours...'
-                                              : 'Se connecter',
-                                        ),
-                                        style: FilledButton.styleFrom(
-                                          minimumSize: const Size.fromHeight(
-                                            50,
-                                          ),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              14,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 12),
-                                      Text(
-                                        'Accès réservé aux utilisateurs autorisés • ${selectedEtablissement.name}',
-                                        textAlign: TextAlign.center,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(
-                                              color: scheme.onSurfaceVariant,
-                                            ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        'API: $_activeApiUrl',
-                                        textAlign: TextAlign.center,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .labelMedium
-                                            ?.copyWith(
-                                              color: scheme.onSurfaceVariant,
-                                            ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      OutlinedButton.icon(
-                                        onPressed: _testingApiConnection
-                                            ? null
-                                            : _testApiConnection,
-                                        icon: _testingApiConnection
-                                            ? const SizedBox(
-                                                width: 16,
-                                                height: 16,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                    ),
-                                              )
-                                            : const Icon(
-                                                Icons.wifi_find_rounded,
-                                              ),
-                                        label: const Text(
-                                          'Tester connexion API',
-                                        ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      TextButton.icon(
-                                        onPressed: () {
-                                          Navigator.of(
-                                            context,
-                                          ).pushNamedAndRemoveUntil(
-                                            '/',
-                                            (route) => false,
-                                          );
-                                        },
-                                        icon: const Icon(Icons.arrow_back),
-                                        label: const Text(
-                                          'Changer d\'établissement',
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
+                          );
+                        },
                       ),
-                    ],
+                    ),
+                    const EtabSecureFooter(),
+                  ],
+                ),
+              ),
+              // Sur grand ecran le bouton vit dans le coin; en colonne unique il
+              // rejoint l'en-tete de marque, sans quoi il chevaucherait la carte
+              // sur un telephone etroit.
+              if (MediaQuery.sizeOf(context).width >= _kDeuxColonnes)
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: _boutonReglages(selectedEtablissement),
+                    ),
                   ),
-                );
-              },
-            ),
+                ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  /// Centre [child] verticalement tant que la hauteur le permet, puis le rend
-  /// defilant des qu'il depasse.
-  ///
-  /// Les deux colonnes de la page de connexion vivaient dans un Row sans
-  /// defilement: sur une fenetre courte, le bloc de gauche debordait de
-  /// quelques pixels au lieu de pouvoir etre parcouru.
-  /// [crossAxisAlignment] doit refleter l'alignement horizontal attendu:
-  /// `stretch` pour un bloc qui occupe toute la largeur, `center` pour un
-  /// contenu de largeur bornee que l'on veut garder centre.
-  Widget _centeredScrollable({
-    required Widget child,
-    CrossAxisAlignment crossAxisAlignment = CrossAxisAlignment.center,
+  Widget _deuxColonnes({
+    required Etablissement etablissement,
+    required Personnalisation marque,
+    required AsyncValue<AuthUser?> authState,
+    required bool dense,
   }) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return SingleChildScrollView(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: constraints.maxHeight),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: crossAxisAlignment,
-              children: [child],
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // `Expanded` pour la marque et largeur fixe pour la carte: deux
+        // `Expanded` donnaient 50/50, et la carte plafonnee a 460 laissait un
+        // vide fantome a sa droite.
+        Expanded(
+          child: _CentreDefilant(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            child: LoginBrandPanel(
+              etablissement: etablissement,
+              logoDeMarque: marque.logoUrl,
+              titre: marque.titreConnexion,
+              sousTitre: marque.sousTitreConnexion,
+              contact: _contactCourt(etablissement, marque),
+              dense: dense,
             ),
+          ),
+        ),
+        const SizedBox(width: 40),
+        SizedBox(
+          width: _kLargeurCarte,
+          child: _CentreDefilant(
+            child: _carte(
+              etablissement,
+              marque,
+              authState,
+              autofocus: true,
+              avecIdentite: true,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _uneColonne({
+    required Etablissement etablissement,
+    required Personnalisation marque,
+    required AsyncValue<AuthUser?> authState,
+  }) {
+    return _CentreDefilant(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: _kLargeurCarte),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            LoginBrandHeader(
+              etablissement: etablissement,
+              action: _boutonReglages(etablissement),
+            ),
+            const SizedBox(height: 18),
+            _carte(
+              etablissement,
+              marque,
+              authState,
+              autofocus: false,
+              // L'en-tete de marque, juste au-dessus, porte deja l'identite.
+              avecIdentite: false,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _carte(
+    Etablissement etablissement,
+    Personnalisation marque,
+    AsyncValue<AuthUser?> authState, {
+    required bool autofocus,
+    required bool avecIdentite,
+  }) {
+    // Une entree en opacite et en echelle, jamais en taille: le test de mise
+    // en page echantillonne l'ecran a 100 ms, donc en pleine animation. Une
+    // hauteur animee y serait mesuree a mi-course et pourrait deborder.
+    final immobile = etabReduceMotion(context);
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: immobile ? Duration.zero : const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
+      builder: (context, valeur, child) {
+        return Opacity(
+          opacity: valeur.clamp(0, 1),
+          child: Transform.translate(
+            offset: Offset(0, 14 * (1 - valeur)),
+            child: child,
           ),
         );
       },
+      child: LoginFormCard(
+        formKey: _formKey,
+        etablissement: etablissement,
+        identifiantController: _usernameController,
+        motDePasseController: _passwordController,
+        identifiantFocus: _usernameFocus,
+        motDePasseFocus: _passwordFocus,
+        motDePasseMasque: _obscurePassword,
+        onBasculerVisibilite: () =>
+            setState(() => _obscurePassword = !_obscurePassword),
+        enCours: authState.isLoading,
+        onSoumettre: () => _submitLogin(authState.isLoading),
+        onMotDePasseOublie: () =>
+            _ouvrirMotDePasseOublie(etablissement, marque),
+        erreurIdentifiant: () => _erreurIdentifiant,
+        erreurMotDePasse: () => _erreurMotDePasse,
+        erreurGenerale: _erreurGenerale,
+        erreurReseau: _erreurReseau,
+        urlApi: _activeApiUrl,
+        onOuvrirReglages: () => _ouvrirReglages(etablissement),
+        autofocus: autofocus,
+        avecIdentite: avecIdentite,
+        onIdentifiantModifie: (_) {
+          if (_erreurIdentifiant != null) {
+            setState(() => _erreurIdentifiant = null);
+          }
+        },
+        onMotDePasseModifie: (_) {
+          if (_erreurMotDePasse != null) {
+            setState(() => _erreurMotDePasse = null);
+          }
+        },
+      ),
     );
+  }
+
+  Widget _boutonReglages(Etablissement etablissement) {
+    return IconButton(
+      tooltip: 'Réglages techniques',
+      onPressed: () => _ouvrirReglages(etablissement),
+      icon: const Icon(Icons.tune_rounded),
+    );
+  }
+
+  /// Le telephone de l'ecole, pret a etre affiche en pastille.
+  String? _contactCourt(Etablissement etablissement, Personnalisation marque) {
+    final numero = _telephoneRetenu(etablissement, marque);
+    return numero == null ? null : 'Tél: $numero';
+  }
+
+  /// L'etablissement d'abord, la personnalisation ensuite. Rien apres.
+  ///
+  /// Pas de repli sur le numero livre avec l'application: c'est celui de
+  /// l'ecole d'origine, et l'afficher a une autre enverrait ses parents
+  /// appeler un etablissement qui ne les connait pas. Mieux vaut avouer qu'on
+  /// ne connait pas le contact.
+  String? _telephoneRetenu(
+    Etablissement etablissement,
+    Personnalisation marque,
+  ) {
+    final propre = (etablissement.phone ?? '').trim();
+    if (propre.isNotEmpty) return propre;
+    return marque.telephone.trim().isEmpty ? null : marque.telephone.trim();
+  }
+
+  String? _emailRetenu(Etablissement etablissement, Personnalisation marque) {
+    final propre = (etablissement.email ?? '').trim();
+    if (propre.isNotEmpty) return propre;
+    return marque.email.trim().isEmpty ? null : marque.email.trim();
+  }
+
+  Future<void> _ouvrirMotDePasseOublie(
+    Etablissement etablissement,
+    Personnalisation marque,
+  ) {
+    return showDialog<void>(
+      context: context,
+      builder: (_) => LoginMotDePasseOublieDialog(
+        etablissement: etablissement,
+        telephone: _telephoneRetenu(etablissement, marque),
+        email: _emailRetenu(etablissement, marque),
+      ),
+    );
+  }
+
+  Future<void> _ouvrirReglages(Etablissement etablissement) async {
+    final tokenStorage = ref.read(tokenStorageProvider);
+
+    final action = await showDialog<LoginReglagesAction>(
+      context: context,
+      builder: (_) => LoginReglagesDialog(
+        etablissement: etablissement,
+        urlApi: _activeApiUrl,
+        onEnregistrer: (saisie) async {
+          final normalisee = _normalizeApiBaseUrl(saisie);
+          if (normalisee == null) return null;
+          await tokenStorage.saveApiBaseUrl(normalisee);
+          await _loadActiveApiUrl();
+          return normalisee;
+        },
+        onTester: _testApiConnection,
+      ),
+    );
+
+    if (!mounted) return;
+    // Depiler le dialogue avant de naviguer: l'inverse laisse une route
+    // orpheline au-dessus du nouvel ecran.
+    if (action == LoginReglagesAction.changerEtablissement) {
+      Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+    }
+  }
+
+  void _submitLogin(bool loading) {
+    if (loading) {
+      return;
+    }
+    FocusScope.of(context).unfocus();
+
+    // Les messages du serveur sont effaces AVANT la validation. Sans cela, les
+    // validators les retournent encore: un utilisateur qui reessaie sans rien
+    // retaper -- le serveur etait tombe, il est revenu -- verrait la
+    // validation echouer et aucune requete ne partirait. Le formulaire
+    // resterait bloque par un message qui ne decrit plus rien.
+    setState(() {
+      _erreurIdentifiant = null;
+      _erreurMotDePasse = null;
+      _erreurGenerale = null;
+      _erreurReseau = false;
+    });
+
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
+
+    ref
+        .read(authControllerProvider.notifier)
+        .login(_usernameController.text.trim(), _passwordController.text);
+  }
+
+  /// Ou poser le message d'erreur.
+  ///
+  /// 400 et 401 ne distinguent pas le nom du mot de passe -- le serveur repond
+  /// la meme chose dans les deux cas. Repeter la phrase sous les deux champs
+  /// serait du bruit: on la pose sous le mot de passe, le seul des deux qu'on
+  /// retape en pratique. Un refus de compte, une panne serveur ou un delai
+  /// depasse ne concernent aucun champ: ils vont dans le bandeau.
+  _ChampEnErreur _champConcerne(Object error) {
+    if (error is DioException) {
+      final status = error.response?.statusCode;
+      if (status == 400 || status == 401) {
+        return _ChampEnErreur.motDePasse;
+      }
+    }
+    return _ChampEnErreur.aucun;
+  }
+
+  void _reporterErreur(Object error) {
+    if (!mounted) return;
+    final message = _friendlyErrorMessage(error);
+    final champ = _champConcerne(error);
+
+    setState(() {
+      switch (champ) {
+        case _ChampEnErreur.motDePasse:
+          _erreurMotDePasse = message;
+        case _ChampEnErreur.identifiant:
+          _erreurIdentifiant = message;
+        case _ChampEnErreur.aucun:
+          _erreurGenerale = message;
+      }
+      _erreurReseau =
+          error is DioException &&
+          error.type == DioExceptionType.connectionError;
+    });
+
+    // Rejoue les validators pour que le champ montre le message a l'instant,
+    // sans attendre une frappe.
+    _formKey.currentState?.validate();
+    if (champ == _ChampEnErreur.motDePasse) {
+      _passwordController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _passwordController.text.length,
+      );
+      _passwordFocus.requestFocus();
+    }
   }
 
   String _userEtablissementLabel(AuthUser user) {
@@ -754,24 +635,22 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       barrierDismissible: true,
       builder: (dialogContext) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-          ),
-          titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
-          contentPadding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-          actionsPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
           title: Row(
             children: [
               Container(
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFF3E8),
+                  // Les deux couleurs posees ici etaient claires et ecrites en
+                  // dur (un beige et un brun): sur le theme sombre elles
+                  // formaient une tache, et elles ignoraient l'accent de
+                  // l'ecole.
+                  color: scheme.errorContainer,
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.account_balance_rounded,
-                  color: Color(0xFFB54708),
+                  color: scheme.onErrorContainer,
                   size: 20,
                 ),
               ),
@@ -791,7 +670,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Ce compte est rattache a cet établissement :',
+                'Ce compte est rattaché à cet établissement :',
                 style: Theme.of(dialogContext).textTheme.bodyMedium,
               ),
               const SizedBox(height: 10),
@@ -852,15 +731,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     );
   }
 
-  void _submitLogin(bool loading) {
-    if (loading) {
-      return;
-    }
-    ref
-        .read(authControllerProvider.notifier)
-        .login(_usernameController.text.trim(), _passwordController.text);
-  }
-
   Future<void> _loadActiveApiUrl() async {
     final tokenStorage = ref.read(tokenStorageProvider);
     final storedBaseUrl = await tokenStorage.apiBaseUrl();
@@ -877,127 +747,37 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
 
+    final scheme = Theme.of(context).colorScheme;
     final messenger = ScaffoldMessenger.of(context);
-    const successColor = Color(0xFF197A43);
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          backgroundColor: isSuccess ? successColor : null,
+          backgroundColor: isSuccess ? scheme.tertiaryContainer : null,
           content: Text(
             message,
-            style: isSuccess ? const TextStyle(color: Colors.white) : null,
+            style: isSuccess
+                ? TextStyle(color: scheme.onTertiaryContainer)
+                : null,
           ),
         ),
       );
   }
 
-  Future<void> _testApiConnection() async {
-    setState(() => _testingApiConnection = true);
+  /// Le test rend son verdict au lieu de l'afficher: il est demande depuis un
+  /// dialogue modal, sous lequel une SnackBar passerait derriere le voile.
+  Future<ResultatTestApi> _testApiConnection() async {
     final dio = ref.read(dioProvider);
-
     try {
       final response = await dio.get(
         ApiConstants.login,
         options: Options(validateStatus: (_) => true),
       );
-
       final status = response.statusCode ?? 0;
-      final reachable = status > 0;
-      if (mounted) {
-        _showMessage(
-          reachable
-              ? 'API joignable ($_activeApiUrl) • code $status'
-              : 'API non joignable ($_activeApiUrl)',
-          isSuccess: reachable,
-        );
-      }
+      return (joignable: status > 0, code: status > 0 ? status : null);
     } on DioException catch (_) {
-      if (mounted) {
-        _showMessage('API non joignable: $_activeApiUrl');
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _testingApiConnection = false);
-      }
+      return (joignable: false, code: null);
     }
-  }
-
-  Future<void> _openApiSettingsDialog() async {
-    final tokenStorage = ref.read(tokenStorageProvider);
-    final storedBaseUrl = await tokenStorage.apiBaseUrl();
-    final controller = TextEditingController(
-      text: storedBaseUrl ?? ApiConstants.baseUrl,
-    );
-
-    if (!mounted) {
-      controller.dispose();
-      return;
-    }
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Configuration API'),
-          content: SizedBox(
-            width: 540,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: controller,
-                  decoration: const InputDecoration(
-                    labelText: 'URL API',
-                    hintText: 'http://IP_DU_PC:8000/api',
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  'Exemple: http://IP_DU_PC:8000/api',
-                  style: Theme.of(dialogContext).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Annuler'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final normalized = _normalizeApiBaseUrl(controller.text);
-                if (normalized == null) {
-                  if (mounted) {
-                    _showMessage(
-                      'URL invalide. Exemple: http://IP_DU_PC:8000/api',
-                    );
-                  }
-                  return;
-                }
-
-                await tokenStorage.saveApiBaseUrl(normalized);
-                await _loadActiveApiUrl();
-
-                if (!dialogContext.mounted || !mounted) {
-                  return;
-                }
-                Navigator.of(dialogContext).pop();
-                _showMessage(
-                  'URL API enregistrée: $normalized',
-                  isSuccess: true,
-                );
-              },
-              child: const Text('Enregistrer'),
-            ),
-          ],
-        );
-      },
-    );
-
-    controller.dispose();
   }
 
   String? _normalizeApiBaseUrl(String input) {
@@ -1025,39 +805,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
     final authority = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
     return '${uri.scheme}://$authority$path';
-  }
-
-  Widget _featurePill(
-    BuildContext context, {
-    required IconData icon,
-    required String label,
-  }) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.32),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: scheme.primary),
-          const SizedBox(width: 6),
-          // Flexible: un label long (le numero de telephone) depassait la
-          // largeur offerte par le Wrap parent.
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   String _friendlyErrorMessage(Object error) {
@@ -1093,5 +840,92 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
 
     return 'Connexion impossible. Veuillez réessayer.';
+  }
+}
+
+/// Aucun etablissement choisi: la connexion n'a rien a afficher.
+class _EcranSansEtablissement extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.school_outlined, size: 52),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Choisissez d\'abord un établissement',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'La connexion s\'ouvre avec les informations de l\'établissement sélectionné.',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton.icon(
+                      onPressed: () {
+                        Navigator.of(
+                          context,
+                        ).pushNamedAndRemoveUntil('/', (route) => false);
+                      },
+                      icon: const Icon(Icons.arrow_back),
+                      label: const Text('Choisir un établissement'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Centre [child] verticalement tant que la hauteur le permet, puis le rend
+/// defilant des qu'il depasse.
+///
+/// Les deux colonnes vivaient dans un Row sans defilement: sur une fenetre
+/// courte, le bloc de gauche debordait de quelques pixels au lieu de pouvoir
+/// etre parcouru. C'est ce widget, et lui seul, qui rend tenable une fenetre
+/// de 520 px de haut.
+class _CentreDefilant extends StatelessWidget {
+  final Widget child;
+  final CrossAxisAlignment crossAxisAlignment;
+
+  const _CentreDefilant({
+    required this.child,
+    this.crossAxisAlignment = CrossAxisAlignment.center,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: crossAxisAlignment,
+              children: [child],
+            ),
+          ),
+        );
+      },
+    );
   }
 }

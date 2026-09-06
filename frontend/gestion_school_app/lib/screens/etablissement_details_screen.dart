@@ -553,10 +553,7 @@ class _SelectBarState extends State<_SelectBar> {
           backgroundColor: ramp.first,
           foregroundColor: Colors.white,
           minimumSize: const Size.fromHeight(46),
-          textStyle: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-          ),
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),

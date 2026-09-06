@@ -63,6 +63,86 @@ void main() {
     });
   });
 
+  group('l_ecran de demarrage suit l_application', () {
+    // Il etait bleu clair (#eef4fb, accent #2563eb) alors que tout ce qui
+    // suit est nuit et violet: l'ouverture commencait par un flash blanc,
+    // puis inversait la luminosite en une seule image.
+    test('plus aucune couleur claire hors commentaire', () {
+      // Commentaires HTML *et* CSS: citer l'ancien bleu pour expliquer
+      // pourquoi on l'a quitte n'est pas l'appliquer.
+      final page = File('web/index.html')
+          .readAsStringSync()
+          .replaceAll(RegExp(r'<!--[\s\S]*?-->'), '')
+          .replaceAll(RegExp(r'/\*[\s\S]*?\*/'), '');
+
+      for (final teinte in const [
+        '#eef4fb',
+        '#dfe9f6',
+        '#123a64',
+        '#3f5f80',
+        '#2563eb',
+        '#1d4ed8',
+        '#d4e3f8',
+      ]) {
+        expect(page, isNot(contains(teinte)), reason: teinte);
+      }
+    });
+
+    test('il porte les couleurs du theme sombre', () {
+      final page = File('web/index.html').readAsStringSync();
+
+      // Les valeurs exactes de `_darkScheme`.
+      expect(page, contains('#0F172A'));
+      expect(page, contains('#8B5CF6'));
+      expect(page, contains('#E7ECF9'));
+    });
+
+    test('il part en fondu, et non d_un coup', () {
+      final page = File('web/index.html').readAsStringSync();
+
+      expect(page, contains('#boot-status.partir'));
+      expect(page, contains('transition: opacity'));
+      // Le filet qui retire le noeud si la transition ne se declenche pas --
+      // onglet en arriere-plan, mouvement reduit.
+      expect(page, contains('statusEl.remove()'));
+    });
+
+    test('il lit l_identite memorisee', () {
+      final page = File('web/index.html').readAsStringSync();
+
+      // Une seule cle porte le nom, le logo, l'image de fond et la couleur:
+      // un seul point d'ecriture cote Dart, un seul de lecture ici.
+      expect(page, contains('gs.marque'));
+      // Les adresses sont posees en CSS depuis le script: un attribut `src`
+      // ou `href` absolu ferait tomber le controle des ressources tierces.
+      expect(page, contains('backgroundImage'));
+    });
+
+    test('il porte les polices de l_application', () {
+      final page = File('web/index.html').readAsStringSync();
+
+      // Deja dans le build -- le moteur les chargera de toute facon -- donc
+      // les nommer ici ne telecharge rien de plus.
+      expect(page, contains("url('assets/assets/fonts/Inter-Regular.ttf')"));
+      expect(page, contains("url('assets/assets/fonts/Sora-Bold.ttf')"));
+      expect(page, contains('font-display: swap'));
+    });
+
+    test('plus rien ne vient du gabarit Flutter', () {
+      final page = File('web/index.html').readAsStringSync();
+      final manifeste = File('web/manifest.json').readAsStringSync();
+
+      for (final reste in const [
+        'gestion_school_app',
+        'A new Flutter project.',
+        '#0175C2',
+      ]) {
+        expect(page, isNot(contains(reste)), reason: reste);
+        expect(manifeste, isNot(contains(reste)), reason: reste);
+      }
+    });
+  });
+
   test('index.html ne charge aucune ressource d_un tiers', () {
     final page = File('web/index.html').readAsStringSync();
 

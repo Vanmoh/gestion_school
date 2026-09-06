@@ -10,6 +10,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/network/chargement_tolerant.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../../core/widgets/indicateur.dart';
+import 'bulletin_whatsapp_page.dart';
 
 class ReportsPage extends ConsumerStatefulWidget {
   const ReportsPage({super.key});
@@ -134,6 +135,43 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
     });
   }
 
+  /// Ouvre l'envoi des bulletins aux familles pour la classe affichee.
+  ///
+  /// La classe est celle de l'eleve selectionne plutot qu'un choix separe:
+  /// l'ecran en compte deja quatre (annee, trimestre, recherche, eleve), et
+  /// un cinquieme controle qui redit ce que la selection dit deja n'aurait
+  /// servi qu'a se contredire.
+  void _ouvrirEnvoiWhatsApp() {
+    if (_selectedStudentId == null || _selectedYearId == null) {
+      _showMessage('Sélectionnez un élève et une année académique.');
+      return;
+    }
+
+    final eleve = _students.firstWhere(
+      (row) => _asInt(row['id']) == _selectedStudentId,
+      orElse: () => <String, dynamic>{},
+    );
+    final classroomId = _asInt(eleve['classroom'] ?? eleve['classroom_id']);
+    if (classroomId <= 0) {
+      _showMessage(
+        'Cet élève n\'est affecté à aucune classe: affectez-le avant '
+        'd\'envoyer les bulletins.',
+      );
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => BulletinWhatsAppPage(
+          classroomId: classroomId,
+          classroomName: _studentClassName(eleve),
+          academicYearId: _selectedYearId!,
+          term: _term,
+        ),
+      ),
+    );
+  }
+
   Future<void> _printReceipt() async {
     if (_selectedPaymentId == null) {
       _showMessage('Sélectionnez un paiement.');
@@ -252,6 +290,9 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
+    final peutEnvoyerAuxFamilles = ref
+        .watch(currentPermissionsProvider)
+        .canWrite('bulletin_whatsapp');
 
     final bulletinSearch = _bulletinSearchController.text.trim().toLowerCase();
     final bulletinRows = _students.where((row) {
@@ -480,10 +521,24 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
             ],
           ),
           const SizedBox(height: 8),
-          FilledButton.icon(
-            onPressed: _busy ? null : _printBulletin,
-            icon: const Icon(Icons.picture_as_pdf),
-            label: const Text('Imprimer le bulletin sélectionné'),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: _busy ? null : _printBulletin,
+                icon: const Icon(Icons.picture_as_pdf),
+                label: const Text('Imprimer le bulletin sélectionné'),
+              ),
+              // Visible seulement pour qui a le droit de diffuser: lire un
+              // bulletin n'emporte pas celui de l'envoyer aux familles.
+              if (peutEnvoyerAuxFamilles)
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _ouvrirEnvoiWhatsApp,
+                  icon: const Icon(Icons.chat_outlined),
+                  label: const Text('Envoyer aux familles (WhatsApp)'),
+                ),
+            ],
           ),
         ],
       ),

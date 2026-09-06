@@ -67,6 +67,12 @@ class RoutedViewsCoverageTests(APITestCase):
         # n'expose aucune identite et exige la signature de la carte.
         # Voir apps/reports/tests/test_student_card.py.
         "StudentCardVerifyView",
+        # Cible du lien de bulletin envoye a une famille par WhatsApp: un
+        # parent n'a pas de compte, et un lien qui demanderait une connexion
+        # ne serait jamais ouvert. La signature HMAC et l'expiration du lien
+        # tiennent lieu de cle d'acces.
+        # Voir apps/reports/tests/test_bulletin_whatsapp.py.
+        "BulletinShareDownloadView",
         "SpectacularAPIView",
         "SpectacularSwaggerView",
         "RedirectView",  # admin Django

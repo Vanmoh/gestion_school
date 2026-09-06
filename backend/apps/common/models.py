@@ -168,6 +168,15 @@ class PersonnalisationPlateforme(TimeStampedModel):
         default="#6D5BFF",
         help_text="Couleur d'accent, au format #RRGGBB.",
     )
+    image_fond = models.ImageField(
+        upload_to="personnalisation/fonds/",
+        null=True,
+        blank=True,
+        help_text=(
+            "Image de fond du portail et de la connexion, sous un voile "
+            "sombre. Large plutot que haute, 1600 px minimum."
+        ),
+    )
 
     class Meta:
         verbose_name = "Personnalisation de la plateforme"

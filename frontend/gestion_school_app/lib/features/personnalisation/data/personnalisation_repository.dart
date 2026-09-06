@@ -26,21 +26,33 @@ class PersonnalisationRepository {
   /// Enregistre les champs fournis. Réservé au super admin, le serveur en
   /// est seul juge.
   ///
-  /// [logo] remplace l'image ; le laisser nul garde celle en place — on ne
-  /// veut pas qu'un simple changement de téléphone efface le logo.
+  /// [logo] et [imageFond] remplacent l'image correspondante ; les laisser
+  /// nuls garde celle en place — on ne veut pas qu'un simple changement de
+  /// téléphone efface le logo ou la photo de fond.
   Future<Personnalisation> enregistrer(
     Map<String, dynamic> champs, {
     Uint8List? logo,
     String? nomDuLogo,
+    Uint8List? imageFond,
+    String? nomDeLImageFond,
   }) async {
+    final aUnLogo = logo != null && logo.isNotEmpty;
+    final aUnFond = imageFond != null && imageFond.isNotEmpty;
+
     final Object corps;
-    if (logo != null && logo.isNotEmpty) {
+    if (aUnLogo || aUnFond) {
       corps = FormData.fromMap(<String, dynamic>{
         ...champs,
-        'logo': MultipartFile.fromBytes(
-          logo,
-          filename: nomDuLogo ?? 'logo.png',
-        ),
+        if (aUnLogo)
+          'logo': MultipartFile.fromBytes(
+            logo,
+            filename: nomDuLogo ?? 'logo.png',
+          ),
+        if (aUnFond)
+          'image_fond': MultipartFile.fromBytes(
+            imageFond,
+            filename: nomDeLImageFond ?? 'fond.jpg',
+          ),
       });
     } else {
       corps = champs;
