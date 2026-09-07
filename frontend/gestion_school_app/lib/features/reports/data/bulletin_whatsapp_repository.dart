@@ -91,6 +91,47 @@ class BulletinWhatsAppRepository {
     );
   }
 
+  /// Arrete les bulletins d'une classe pour une periode.
+  ///
+  /// Sans cet arret, aucun bulletin de la classe ne part: une moyenne qui
+  /// bouge apres un envoi se paie en visites au secretariat, et un message
+  /// WhatsApp ne se rappelle pas.
+  Future<void> validerLaPeriode({
+    required int classroomId,
+    required int academicYearId,
+    required String term,
+    String notes = '',
+  }) async {
+    await dio.post(
+      '/bulletin-publications/publish/',
+      data: {
+        'classroom': classroomId,
+        'academic_year': academicYearId,
+        'term': term,
+        if (notes.trim().isNotEmpty) 'notes': notes.trim(),
+      },
+    );
+  }
+
+  /// Rouvre la periode a la saisie.
+  ///
+  /// Les bulletins deja envoyes ne sont pas rappeles: rouvrir sert a
+  /// corriger avant le prochain envoi, pas a effacer le precedent.
+  Future<void> rouvrirLaPeriode({
+    required int classroomId,
+    required int academicYearId,
+    required String term,
+  }) async {
+    await dio.post(
+      '/bulletin-publications/unpublish/',
+      data: {
+        'classroom': classroomId,
+        'academic_year': academicYearId,
+        'term': term,
+      },
+    );
+  }
+
   /// Corrige le numero WhatsApp d'un parent et son accord.
   ///
   /// Depuis l'ecran d'envoi, et non depuis un autre module: un numero absent

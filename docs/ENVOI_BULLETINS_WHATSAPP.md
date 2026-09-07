@@ -3,8 +3,9 @@
 ## 1. Ce que fait la fonction aujourd'hui
 
 Depuis **Rapports > Envoyer aux familles (WhatsApp)**, l'ecole ouvre la liste
-d'une classe. Pour chaque eleve, l'ecran dit si le bulletin peut partir et,
-sinon, ce qui manque. Un clic sur « Envoyer » ouvre WhatsApp avec le message
+d'une classe. Un bandeau y dit si les bulletins de la periode sont arretes --
+sans quoi rien ne part (voir §4). Pour chaque eleve, l'ecran dit ensuite si le
+bulletin peut partir et, sinon, ce qui manque. Un clic sur « Envoyer » ouvre WhatsApp avec le message
 deja redige ; l'utilisateur appuie sur envoyer, revient dans l'application et
 confirme le depart.
 
@@ -37,6 +38,8 @@ L'ecran refuse d'envoyer, et le dit sur la ligne de l'eleve :
 
 | Motif affiche | Ce qu'il faut faire |
 | --- | --- |
+| Les bulletins de la periode ne sont pas valides | Valider la periode (voir §4) |
+| Cet eleve n'est affecte a aucune classe | L'affecter depuis le module Eleves |
 | Aucun parent rattache a cet eleve | Rattacher un parent depuis le module Eleves |
 | Numero WhatsApp du parent absent / invalide | « Corriger le contact » sur la ligne |
 | Le parent n'a pas donne son accord | Recueillir l'accord, puis cocher la case |
@@ -45,7 +48,36 @@ L'ecran refuse d'envoyer, et le dit sur la ligne de l'eleve :
 Un bulletin deja envoye pour la meme periode n'est pas renvoye sans
 confirmation explicite.
 
-## 4. Numeros de telephone
+## 4. Validation de la periode
+
+Aucun bulletin ne part d'une periode qui n'a pas ete arretee. La validation
+se fait classe par classe et periode par periode, depuis le bandeau en haut
+de l'ecran d'envoi -- ou par l'API `/api/bulletin-publications/` :
+
+- `POST /api/bulletin-publications/publish/` avec `classroom`, `academic_year`,
+  `term` et un `notes` facultatif ;
+- `POST /api/bulletin-publications/unpublish/` avec les memes trois champs ;
+- `GET /api/bulletin-publications/status/?classroom=&academic_year=&term=`
+  repond meme quand la periode n'a jamais ete validee.
+
+Trois choses a savoir :
+
+1. **Le defaut est « non validee »**, y compris pour les periodes qui n'ont
+   aucune ligne en base. C'est volontaire : la fonction s'ouvre sur des annees
+   deja saisies, et l'inverse aurait fait partir d'un coup tous les bulletins
+   de l'historique a la premiere mise a jour.
+2. **L'impression reste libre.** Seule la diffusion aux familles exige la
+   validation : le secretariat doit pouvoir sortir un brouillon pour le
+   conseil de classe sans avoir rien arrete.
+3. **Rouvrir une periode ne rappelle rien.** Un message WhatsApp deja parti
+   ne revient pas ; la reouverture sert a corriger avant le prochain envoi.
+
+Le module d'acces est `bulletin_validation`, distinct de `grades` : un
+enseignant saisit les notes de ses classes (`grades` en ecriture) et n'a pas
+a decider que le trimestre est clos. Il lit en revanche l'etat de ses propres
+classes -- c'est ce qui lui dit que ses moyennes ne bougeront plus.
+
+## 5. Numeros de telephone
 
 Les numeros sont conserves au format international (`+22376123456`). Le
 secretariat saisit comme il en a l'habitude (« 76 12 34 56 ») ; c'est le
@@ -62,14 +94,16 @@ depuis le repertoire existant (`User.phone`) et **liste dans les logs les
 fiches a corriger a la main**. Elle ne donne aucun consentement : connaitre un
 numero n'est pas une autorisation d'envoi.
 
-## 5. Droits
+## 6. Droits
 
-Le module `bulletin_whatsapp` est distinct de `reports` : un enseignant lit
-les bulletins de ses classes sans pouvoir les diffuser aux familles. Il est
+Deux modules, deux actes distincts. `bulletin_validation` arrete les
+bulletins d'une periode ; `bulletin_whatsapp` les diffuse. Ce dernier est
+separe de `reports` : un enseignant lit les bulletins de ses classes sans
+pouvoir les envoyer aux familles. Il est
 ouvert au super-administrateur et au directeur (administration), au censeur
 (ecriture), et en lecture au promoteur.
 
-## 6. Reglages
+## 7. Reglages
 
 Voir `backend/.env.example` :
 
@@ -84,7 +118,7 @@ Voir `backend/.env.example` :
 Le lien est signe par HMAC derive de `SECRET_KEY`. Une rotation de cette cle
 invalide les liens deja envoyes -- sans gravite, ils durent trois jours.
 
-## 7. Suivi des envois
+## 8. Suivi des envois
 
 Chaque preparation ouvre une ligne `BulletinDelivery` : eleve, parent, numero
 **fige au jour de l'envoi**, periode, statut, motif d'echec. Les statuts sont
@@ -95,7 +129,7 @@ le canal assiste, le serveur ne voit pas le message partir. `read`, en
 revanche, est constate : c'est le premier telechargement du lien par la
 famille. C'est ce statut qui dit quelles familles rappeler.
 
-## 8. Passer a l'envoi automatique (etape 2)
+## 9. Passer a l'envoi automatique (etape 2)
 
 Le canal `cloud_api` existe deja dans le modele et n'est emprunte par rien.
 Quand les demarches Meta auront abouti, il restera a :

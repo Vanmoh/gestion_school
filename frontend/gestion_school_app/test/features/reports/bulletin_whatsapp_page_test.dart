@@ -32,8 +32,15 @@ class _Transport implements HttpClientAdapter {
   /// qui ne va pas au lieu de rester vide.
   final int? codeDePanne;
 
-  _Transport({this.refuseSecondEnvoi = false, this.codeDePanne})
-    : preparationsAcceptees = 0;
+  /// La periode est-elle arretee: sans cela, aucun bulletin de la classe ne
+  /// peut partir, quel que soit l'etat des contacts.
+  final bool periodeValidee;
+
+  _Transport({
+    this.refuseSecondEnvoi = false,
+    this.codeDePanne,
+    this.periodeValidee = true,
+  }) : preparationsAcceptees = 0;
 
   @override
   Future<ResponseBody> fetch(
@@ -57,13 +64,16 @@ class _Transport implements HttpClientAdapter {
     }
 
     if (options.path.contains('/whatsapp/') && options.method == 'GET') {
-      return _json(const {
+      return _json({
         'classroom_id': 7,
         'classroom_name': '6ème A',
         'term': 'T1',
         'academic_year': '2025-2026',
-        'ready_count': 1,
-        'blocked_count': 2,
+        'ready_count': periodeValidee ? 1 : 0,
+        'blocked_count': periodeValidee ? 2 : 3,
+        'period_published': periodeValidee,
+        'period_published_at': periodeValidee ? '2026-09-05T10:00:00Z' : null,
+        'period_published_by': periodeValidee ? 'Le Directeur' : '',
         'students': [
           {
             'student_id': 30,
@@ -74,8 +84,11 @@ class _Transport implements HttpClientAdapter {
             'parent_name': 'Fatoumata Traoré',
             'parent_consent': true,
             'phone': '+22376123456',
-            'can_send': true,
-            'blocked_reason': '',
+            'can_send': periodeValidee,
+            'blocked_reason': periodeValidee
+                ? ''
+                : 'Les bulletins du T1 ne sont pas encore validés pour cette '
+                      'classe.',
             'last_status': '',
             'already_sent': false,
           },
@@ -137,6 +150,10 @@ class _Transport implements HttpClientAdapter {
       });
     }
 
+    if (options.path.contains('/bulletin-publications/')) {
+      return _json(const {'id': 3, 'is_published': true});
+    }
+
     if (options.path.contains('/parents/')) {
       return _json(const {'id': 6});
     }
@@ -156,7 +173,10 @@ class _Transport implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-ModulePermissions _droits({AccessLevel eleves = AccessLevel.write}) {
+ModulePermissions _droits({
+  AccessLevel eleves = AccessLevel.write,
+  AccessLevel validation = AccessLevel.write,
+}) {
   return ModulePermissions(
     role: 'director',
     modules: {
@@ -174,6 +194,13 @@ ModulePermissions _droits({AccessLevel eleves = AccessLevel.write}) {
         level: eleves,
         scoped: false,
       ),
+      'bulletin_validation': ModulePermission(
+        key: 'bulletin_validation',
+        label: 'Validation des bulletins',
+        group: 'academique',
+        level: validation,
+        scoped: false,
+      ),
     },
     capabilities: const {},
   );
@@ -183,7 +210,9 @@ Future<_Transport> _monter(
   WidgetTester tester, {
   bool refuseSecondEnvoi = false,
   AccessLevel eleves = AccessLevel.write,
+  AccessLevel validation = AccessLevel.write,
   int? codeDePanne,
+  bool periodeValidee = true,
 }) async {
   tester.view.physicalSize = const Size(1400, 2400);
   tester.view.devicePixelRatio = 1.0;
@@ -192,6 +221,7 @@ Future<_Transport> _monter(
   final transport = _Transport(
     refuseSecondEnvoi: refuseSecondEnvoi,
     codeDePanne: codeDePanne,
+    periodeValidee: periodeValidee,
   );
   final dio = Dio(BaseOptions(baseUrl: 'http://test.local/api'))
     ..httpClientAdapter = transport;
@@ -200,7 +230,9 @@ Future<_Transport> _monter(
     ProviderScope(
       overrides: [
         dioProvider.overrideWithValue(dio),
-        currentPermissionsProvider.overrideWithValue(_droits(eleves: eleves)),
+        currentPermissionsProvider.overrideWithValue(
+          _droits(eleves: eleves, validation: validation),
+        ),
       ],
       child: const MaterialApp(
         home: BulletinWhatsAppPage(
@@ -324,6 +356,74 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
 
     expect(transport.corps.any((corps) => corps['force'] == true), isTrue);
+  });
+
+  testWidgets('une période non validée est annoncée en haut, une seule fois', (
+    tester,
+  ) async {
+    // Le motif se répète sur chacune des soixante lignes: sans un bandeau
+    // qui le dise une fois, on cherche la cause partout sauf là où elle est.
+    await _monter(tester, periodeValidee: false);
+
+    expect(find.text('Bulletins du T1 non validés'), findsOneWidget);
+    expect(
+      find.widgetWithText(FilledButton, 'Valider les bulletins'),
+      findsOneWidget,
+    );
+    // Rien ne peut partir tant que la période n'est pas arrêtée.
+    expect(find.widgetWithText(FilledButton, 'Envoyer'), findsNothing);
+  });
+
+  testWidgets('valider la période débloque la classe', (tester) async {
+    final transport = await _monter(tester, periodeValidee: false);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Valider les bulletins'));
+    await tester.pumpAndSettle();
+
+    // La confirmation est explicite: un bulletin envoyé ne se rappelle pas.
+    expect(find.textContaining('ne se rappelle pas'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Valider'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(
+      transport.chemins.any(
+        (chemin) => chemin.contains('/bulletin-publications/publish/'),
+      ),
+      isTrue,
+    );
+  });
+
+  testWidgets('une période validée dit par qui, et se rouvre en retrait', (
+    tester,
+  ) async {
+    await _monter(tester);
+
+    expect(find.text('Bulletins du T1 validés'), findsOneWidget);
+    expect(find.textContaining('Le Directeur'), findsOneWidget);
+    // Rouvrir est l'exception: bouton discret, jamais un bouton plein.
+    expect(
+      find.widgetWithText(TextButton, 'Rouvrir la période'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('sans droit de validation, l_écran explique qui peut le faire', (
+    tester,
+  ) async {
+    // Un bouton refusé au clic laisse croire à une panne; l'absence de
+    // bouton sans explication fait appeler l'administrateur.
+    await _monter(
+      tester,
+      periodeValidee: false,
+      validation: AccessLevel.read,
+    );
+
+    expect(find.text('Valider les bulletins'), findsNothing);
+    expect(
+      find.textContaining('revient à la direction ou au censeur'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('quand le serveur tombe, l_écran le dit et propose de réessayer', (
