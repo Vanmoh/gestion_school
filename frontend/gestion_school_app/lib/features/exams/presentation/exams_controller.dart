@@ -134,6 +134,40 @@ class ExamMutationController extends StateNotifier<AsyncValue<void>> {
     }
   }
 
+  /// Ouvre les résultats d'une session aux familles.
+  ///
+  /// Rend le message du serveur plutôt que rien: l'écran doit pouvoir dire
+  /// ce qui s'est passé, y compris un refus (une session sans note).
+  Future<String?> publierLesResultats(int sessionId) async {
+    state = const AsyncValue.loading();
+    String? message;
+    state = await AsyncValue.guard(() async {
+      message = await ref
+          .read(examsRepositoryProvider)
+          .publierLesResultats(sessionId);
+    });
+    if (!state.hasError) {
+      ref.invalidate(examSessionsProvider);
+      ref.invalidate(examResultsProvider);
+    }
+    return message;
+  }
+
+  Future<String?> retirerLesResultats(int sessionId) async {
+    state = const AsyncValue.loading();
+    String? message;
+    state = await AsyncValue.guard(() async {
+      message = await ref
+          .read(examsRepositoryProvider)
+          .retirerLesResultats(sessionId);
+    });
+    if (!state.hasError) {
+      ref.invalidate(examSessionsProvider);
+      ref.invalidate(examResultsProvider);
+    }
+    return message;
+  }
+
   Future<void> createInvigilation({
     required int planning,
     required int supervisor,

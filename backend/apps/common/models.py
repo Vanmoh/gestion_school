@@ -219,3 +219,56 @@ class PersonnalisationPlateforme(TimeStampedModel):
         """La personnalisation en vigueur, creee au premier appel."""
         instance, _ = cls.objects.get_or_create(pk=cls.SINGLETON_PK)
         return instance
+
+
+class DeviceToken(TimeStampedModel):
+    """Le jeton d'un appareil, pour lui adresser une notification push.
+
+    Un compte en a autant que d'appareils: un parent consulte souvent depuis
+    son telephone et depuis celui du foyer. La notification part vers tous.
+
+    Le jeton est renouvele par Firebase sans prevenir (reinstallation,
+    restauration, mise a jour): il est donc la cle, et non l'utilisateur --
+    le meme jeton peut passer d'un compte a l'autre sur un telephone
+    partage, et doit alors suivre le dernier connecte.
+    """
+
+    class Platform(models.TextChoices):
+        ANDROID = "android", "Android"
+        IOS = "ios", "iOS"
+        WEB = "web", "Web"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="device_tokens",
+    )
+    token = models.CharField(max_length=255, unique=True)
+    platform = models.CharField(
+        max_length=10, choices=Platform.choices, default=Platform.ANDROID
+    )
+    is_active = models.BooleanField(default=True)
+    # Sert au menage: un jeton qu'aucune application n'a rafraichi depuis des
+    # mois designe un appareil dont l'application a ete desinstallee.
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-last_seen_at", "-id")
+        indexes = [
+            models.Index(fields=["user", "is_active"], name="devicetoken_user_actif_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.user} | {self.get_platform_display()}"
+
+    def desactiver(self):
+        """Ferme le jeton sans l'effacer.
+
+        L'effacer le ferait reapparaitre au premier envoi suivant, puisque
+        rien ne dirait qu'il est mort. Ferme, il reste connu et ignore.
+        """
+        if not self.is_active:
+            return self
+        self.is_active = False
+        self.save(update_fields=["is_active", "updated_at"])
+        return self

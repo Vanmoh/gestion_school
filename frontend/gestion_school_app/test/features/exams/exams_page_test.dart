@@ -23,13 +23,18 @@ const _session = ExamSessionItem(
   academicYearId: 1,
   startDate: '2025-12-01',
   endDate: '2025-12-06',
+  resultatsSaisis: 1,
 );
 
 class _FauxDepot extends ExamsRepository {
-  _FauxDepot() : super(Dio());
+  /// La session servie: publiée ou non, avec ou sans note saisie. C'est elle
+  /// qui décide de l'état du bouton de publication.
+  final ExamSessionItem session;
+
+  _FauxDepot({this.session = _session}) : super(Dio());
 
   @override
-  Future<List<ExamSessionItem>> fetchSessions() async => const [_session];
+  Future<List<ExamSessionItem>> fetchSessions() async => [session];
 
   @override
   Future<List<ExamPlanningItem>> fetchPlannings() async => const [
@@ -100,7 +105,11 @@ ModulePermissions _droits(AccessLevel niveau) {
   );
 }
 
-Future<void> _monter(WidgetTester tester, AccessLevel niveau) async {
+Future<void> _monter(
+  WidgetTester tester,
+  AccessLevel niveau, {
+  ExamSessionItem session = _session,
+}) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = const Size(1500, 2200);
   tester.view.devicePixelRatio = 1.0;
@@ -109,7 +118,7 @@ Future<void> _monter(WidgetTester tester, AccessLevel niveau) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        examsRepositoryProvider.overrideWithValue(_FauxDepot()),
+        examsRepositoryProvider.overrideWithValue(_FauxDepot(session: session)),
         currentPermissionsProvider.overrideWithValue(_droits(niveau)),
       ],
       child: const MaterialApp(home: Scaffold(body: ExamsPage())),
@@ -158,5 +167,70 @@ void main() {
     await _monter(tester, AccessLevel.write);
 
     expect(find.textContaining('Composition du premier trimestre'), findsWidgets);
+  });
+
+  group('la publication des résultats', () {
+    // Les notes étaient lisibles par les familles dès la saisie: un élève
+    // voyait passer un chiffre avant que le jury ne l'ait arrêté.
+
+    testWidgets('une session non publiée propose de la publier', (
+      tester,
+    ) async {
+      await _monter(tester, AccessLevel.write);
+
+      expect(find.text('Publication des résultats'), findsOneWidget);
+      expect(
+        find.textContaining('1 note(s) saisie(s), non publiées'),
+        findsOneWidget,
+      );
+      expect(_estActif(tester, 'Publier'), isTrue);
+    });
+
+    testWidgets('une session sans note ne se publie pas', (tester) async {
+      // Publier le vide ferait chercher aux familles ce qui n'existe pas.
+      await _monter(
+        tester,
+        AccessLevel.write,
+        session: const ExamSessionItem(
+          id: 1,
+          title: 'Session vide',
+          term: 'T1',
+          academicYearId: 1,
+          startDate: '2025-12-01',
+          endDate: '2025-12-06',
+          resultatsSaisis: 0,
+        ),
+      );
+
+      expect(_estActif(tester, 'Publier'), isFalse);
+    });
+
+    testWidgets('une session publiée propose de la retirer', (tester) async {
+      await _monter(
+        tester,
+        AccessLevel.write,
+        session: const ExamSessionItem(
+          id: 1,
+          title: 'Composition du premier trimestre',
+          term: 'T1',
+          academicYearId: 1,
+          startDate: '2025-12-01',
+          endDate: '2025-12-06',
+          resultatsPublies: true,
+          resultatsSaisis: 1,
+        ),
+      );
+
+      expect(find.textContaining('Publiés • 1 note(s)'), findsOneWidget);
+      expect(_estActif(tester, 'Retirer'), isTrue);
+    });
+
+    testWidgets('en lecture seule, la publication reste fermée', (
+      tester,
+    ) async {
+      await _monter(tester, AccessLevel.read);
+
+      expect(_estActif(tester, 'Publier'), isFalse);
+    });
   });
 }

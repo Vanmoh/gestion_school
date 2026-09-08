@@ -31,7 +31,15 @@ class _Transport implements HttpClientAdapter {
   /// signature vivent dans la ligne, et un tableau vide n'en montre aucun.
   final bool avecBulletinPaie;
 
-  _Transport({this.avecReglement = false, this.avecBulletinPaie = false});
+  /// Sert un bareme: la liste vide rend son encart d'invitation, qui ne dit
+  /// rien de la facon dont une ligne se presente.
+  final bool avecBareme;
+
+  _Transport({
+    this.avecReglement = false,
+    this.avecBulletinPaie = false,
+    this.avecBareme = false,
+  });
 
   @override
   Future<ResponseBody> fetch(
@@ -40,6 +48,32 @@ class _Transport implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     chemins.add(options.path);
+    if (options.path.contains('/fee-schedules')) {
+      if (!avecBareme) {
+        return _json(const {'count': 0, 'results': []});
+      }
+      return _json(const {
+        'count': 1,
+        'results': [
+          {
+            'id': 7,
+            'academic_year': 1,
+            'classroom': 3,
+            'classroom_name': '6A',
+            'fee_type': 'monthly',
+            'fee_type_display': 'Frais mensuels',
+            'label': 'Scolarité',
+            'amount': '10000.00',
+            'first_due_date': '2025-10-05',
+            'occurrences': 9,
+            'echeances': ['2025-10-05'],
+            'montant_total': '90000.00',
+            'eleves_concernes': 42,
+            'frais_generes': 0,
+          },
+        ],
+      });
+    }
     if (options.path.contains('/teacher-time-entries/synthese')) {
       // Filtrée sur un enseignant, la synthèse ne rend que lui — c'est ce qui
       // impose de garder la liste du menu à part.
@@ -198,6 +232,7 @@ Future<_Transport> _monter(
   Size taille = const Size(2600, 3400),
   bool avecReglement = false,
   bool avecBulletinPaie = false,
+  bool avecBareme = false,
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = taille;
@@ -207,6 +242,7 @@ Future<_Transport> _monter(
   final transport = _Transport(
     avecReglement: avecReglement,
     avecBulletinPaie: avecBulletinPaie,
+    avecBareme: avecBareme,
   );
   final dio = Dio(BaseOptions(baseUrl: 'http://test.local/api'))
     ..httpClientAdapter = transport;
@@ -221,6 +257,9 @@ Future<_Transport> _monter(
     ),
   );
   await tester.pump();
+  await tester.pump(const Duration(milliseconds: 600));
+  // Un temps de plus: l'onglet des baremes n'est construit qu'une fois les
+  // paiements charges, et sa propre requete part donc apres les precedentes.
   await tester.pump(const Duration(milliseconds: 600));
   return transport;
 }
@@ -305,7 +344,7 @@ void main() {
   });
 
   group('les onglets du module', () {
-    testWidgets('le comptable ouvre les quatre onglets', (tester) async {
+    testWidgets('le comptable ouvre les cinq onglets', (tester) async {
       await _monter(
         tester,
         _droits(finance: AccessLevel.admin, payroll: AccessLevel.write),
@@ -316,6 +355,7 @@ void main() {
       expect(find.widgetWithText(Tab, 'Encaissements'), findsOneWidget);
       expect(find.widgetWithText(Tab, 'Impayés & relances'), findsOneWidget);
       expect(find.widgetWithText(Tab, 'Dépenses'), findsOneWidget);
+      expect(find.widgetWithText(Tab, 'Barèmes'), findsOneWidget);
       expect(find.widgetWithText(Tab, 'Paie enseignants'), findsOneWidget);
     });
 
@@ -655,4 +695,87 @@ void main() {
       expect(find.text('Paie horaire enseignants'), findsOneWidget);
     });
   });
+
+  group('l_onglet des barèmes', () {
+    // Poser un barème engage toute une classe: c'était le blocage le plus
+    // concret avant une rentrée, et c'est une écriture qui ne se confie pas
+    // à un lecteur.
+
+    testWidgets('le lecteur seul ne voit pas l_onglet', (tester) async {
+      await _monter(
+        tester,
+        _droits(finance: AccessLevel.read, payroll: AccessLevel.none),
+      );
+
+      expect(find.widgetWithText(Tab, 'Barèmes'), findsNothing);
+    });
+
+    testWidgets('la famille ne le voit pas non plus', (tester) async {
+      await _monter(
+        tester,
+        _droits(
+          finance: AccessLevel.read,
+          payroll: AccessLevel.none,
+          financeScoped: true,
+        ),
+      );
+
+      expect(find.widgetWithText(Tab, 'Barèmes'), findsNothing);
+    });
+
+    testWidgets('sans barème, l_écran invite à en créer un', (tester) async {
+      await _monter(
+        tester,
+        _droits(finance: AccessLevel.admin, payroll: AccessLevel.none),
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Barèmes'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Aucun barème'), findsOneWidget);
+    });
+
+    testWidgets('un barème annonce ce qu_il produira', (tester) async {
+      await _monter(
+        tester,
+        _droits(finance: AccessLevel.admin, payroll: AccessLevel.none),
+        avecBareme: true,
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Barèmes'));
+      await tester.pumpAndSettle();
+
+      // Le total par élève, et non le seul montant d'une échéance: c'est ce
+      // qu'on relit avant d'appliquer.
+      expect(find.textContaining('90 000 FCFA par élève'), findsOneWidget);
+      expect(find.textContaining('42 élève(s)'), findsOneWidget);
+      expect(find.text('9 échéances'), findsOneWidget);
+    });
+
+    testWidgets('un barème jamais appliqué porte sa mention', (tester) async {
+      // Sans elle, on croit la rentrée faite alors qu'aucun frais n'existe.
+      await _monter(
+        tester,
+        _droits(finance: AccessLevel.admin, payroll: AccessLevel.none),
+        avecBareme: true,
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Barèmes'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Jamais appliqué'), findsOneWidget);
+    });
+
+    testWidgets('sans barème, « Tout appliquer » reste inerte', (tester) async {
+      await _monter(
+        tester,
+        _droits(finance: AccessLevel.admin, payroll: AccessLevel.none),
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Barèmes'));
+      await tester.pumpAndSettle();
+
+      final bouton = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Tout appliquer'),
+      );
+      expect(bouton.onPressed, isNull);
+    });
+  });
+
 }

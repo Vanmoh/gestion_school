@@ -13,6 +13,8 @@ W001_MEDIA_LOCAL = "gestion_school.W001"
 W002_CONN_MAX_AGE = "gestion_school.W002"
 W003_S3_REGION = "gestion_school.W003"
 W004_CHANNEL_LAYER = "gestion_school.W004"
+W005_COMPTES_DEMO = "gestion_school.W005"
+W006_PUSH_ABSENT = "gestion_school.W006"
 
 
 @register(deploy=True)
@@ -131,5 +133,88 @@ def realtime_channel_layer_is_reachable(app_configs, **kwargs):
                 "les messages mais ne les distribue jamais en direct."
             ),
             id=W004_CHANNEL_LAYER,
+        )
+    ]
+
+
+@register(deploy=True)
+def demonstration_accounts_are_gone_in_production(app_configs, **kwargs):
+    """Un compte de demonstration en production est une porte grande ouverte.
+
+    `seed_demo_data` cree huit comptes dont le mot de passe est ecrit dans le
+    depot -- `superadmin` compris, qui est super-utilisateur. Le garde-fou de
+    la commande refuse de semer par-dessus une ecole existante, mais il ne
+    voit rien a redire a une base neuve: c'est exactement la situation du
+    premier deploiement cloud, et le guide de mise en ligne indiquait bien
+    que le seed y avait ete applique.
+
+    Rien ne le signalait ensuite. Ce controle le dit a chaque demarrage, et
+    `manage.py purger_comptes_demo` fait le menage.
+
+    La requete est evitee en developpement: ces comptes y sont normaux, et le
+    controle ne doit pas toucher la base quand il n'a rien a dire.
+    """
+    if settings.DEBUG:
+        return []
+
+    from apps.common.comptes_demo import comptes_de_demonstration_presents
+
+    try:
+        noms = list(
+            comptes_de_demonstration_presents().values_list("username", flat=True)
+        )
+    except Exception:
+        # Base injoignable ou migrations pas encore passees: ce controle ne
+        # doit jamais etre la raison pour laquelle un demarrage echoue.
+        return []
+
+    if not noms:
+        return []
+
+    return [
+        CheckWarning(
+            "Des comptes de demonstration existent en production: "
+            f"{', '.join(sorted(noms))}.",
+            hint=(
+                "Leur mot de passe est publiquement connu (il figure dans le "
+                "depot). Supprimez-les avec `manage.py purger_comptes_demo` "
+                "-- ou `--desactiver` pour seulement les fermer si l'un "
+                "d'eux porte de vraies donnees."
+            ),
+            id=W005_COMPTES_DEMO,
+        )
+    ]
+
+
+@register(deploy=True)
+def push_notifications_are_configured(app_configs, **kwargs):
+    """Sans Firebase, aucune notification ne quitte l'application.
+
+    Le module Communication ecrit ses notifications en base; la tache
+    planifiee les distribue. Si le projet Firebase n'est pas renseigne, elles
+    restent consultables dans l'application mais aucune famille n'est
+    prevenue -- et rien ne le disait.
+
+    Un avertissement, pas une erreur: une ecole doit pouvoir tourner sans
+    push, en s'appuyant sur les annonces et les liens WhatsApp.
+    """
+    if settings.DEBUG:
+        return []
+
+    from apps.common.push import push_configure
+
+    if push_configure():
+        return []
+
+    return [
+        CheckWarning(
+            "Les notifications push ne sont pas configurees.",
+            hint=(
+                "Renseignez FCM_PROJECT_ID et le compte de service "
+                "(FCM_CREDENTIALS_FILE ou FCM_CREDENTIALS_JSON) pour que les "
+                "notifications atteignent les familles. Sans cela elles "
+                "restent visibles dans l'application, sans alerte."
+            ),
+            id=W006_PUSH_ABSENT,
         )
     ]

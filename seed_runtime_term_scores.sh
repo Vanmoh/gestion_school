@@ -10,7 +10,10 @@ TERMS=""
 SEED="20260423"
 API_BASE_URL="http://127.0.0.1:8000/api"
 API_USERNAME="superadmin"
-API_PASSWORD="Admin@12345"
+# Repris de l'environnement quand il y est: le mot de passe du compte de
+# demonstration se change (DEMO_ADMIN_PASSWORD cote seed), et ce script doit
+# suivre plutot que d'imposer sa propre copie.
+API_PASSWORD="${DEMO_ADMIN_PASSWORD:-Admin@12345}"
 CLASSROOM_ID="35"
 ACADEMIC_YEAR_ID="1"
 DRY_RUN="false"
@@ -28,7 +31,7 @@ Options:
   --seed=<int>              Seed pseudo-aleatoire deterministic (defaut: 20260423)
   --api-base-url=<url>      Base URL API pour validation (defaut: http://127.0.0.1:8000/api)
   --api-username=<user>     Identifiant API pour validation (defaut: superadmin)
-  --api-password=<pass>     Mot de passe API pour validation (defaut: Admin@12345)
+  --api-password=<pass>     Mot de passe API (defaut: \$DEMO_ADMIN_PASSWORD)
   --classroom-id=<id>       Classe a sonder via l'API apres injection (defaut: 35)
   --academic-year-id=<id>   Annee scolaire a sonder via l'API (defaut: 1)
   --close-term              Cloture automatiquement la periode apres seed

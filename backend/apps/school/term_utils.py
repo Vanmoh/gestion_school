@@ -1,6 +1,9 @@
 import re
 
-_ALLOWED_TERMS = {"T1", "T2", "T3"}
+# Ordonnee, contrairement a l'ensemble ci-dessous: la moyenne annuelle
+# parcourt les trimestres, et un parcours d'ensemble n'a pas d'ordre stable.
+TERMS = ("T1", "T2", "T3")
+_ALLOWED_TERMS = set(TERMS)
 _DIGIT_PATTERN = re.compile(r"^[123]$")
 
 

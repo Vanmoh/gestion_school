@@ -8,10 +8,20 @@ Objectif: mobile/web/desktop fonctionnent en 4G/5G sans tunnel et sans machine l
 - Migrations Django appliquées sur Supabase
 - Seed de données appliqué (`seed_demo_data`)
 
-Comptes seedés:
+⚠️ **Ce seed n'aurait pas dû être appliqué sur la base en ligne**: il crée
+huit comptes dont le mot de passe est écrit dans le dépôt, `superadmin`
+compris, qui est super-utilisateur. Avant toute ouverture aux utilisateurs:
 
-- `superadmin / Admin@12345`
-- `directeur / Password@123`
+```bash
+cd backend
+python manage.py purger_comptes_demo --dry-run
+python manage.py purger_comptes_demo
+```
+
+`seed_demo_data` refuse désormais de tourner avec `DEBUG=False`, et le
+contrôle de déploiement `gestion_school.W005` signale ces comptes à chaque
+démarrage tant qu'ils existent. Créez le compte d'administration réel avec
+`manage.py createsuperuser`.
 
 ## 2) Déployer sur Render (Blueprint)
 

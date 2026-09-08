@@ -1,5 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Depuis Android 13, une application ne peut plus afficher de
+         notification sans que l'utilisateur l'ait accordee explicitement.
+         Sans cette declaration, la demande d'autorisation n'a meme pas lieu
+         et les notifications push sont silencieusement ignorees. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
         android:label="gestion_school_app"
