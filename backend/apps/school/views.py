@@ -47,6 +47,7 @@ from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import StandardResultsSetPagination
 from apps.common.models import ActivityLog
 from .dashboard_cache import STATS_CACHE_SECONDS, stats_cache_key
+from . import planification
 from .term_utils import TERMS, normalize_term
 from .models import (
     AcademicYear,
@@ -2361,6 +2362,256 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
     ]
     ordering_fields = ["day_of_week", "start_time", "end_time"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+
+    # ----- generation automatique ------------------------------------------
+
+    @staticmethod
+    def _heure(valeur, defaut):
+        lue = parse_time(str(valeur or "").strip()) if valeur else None
+        return lue or defaut
+
+    def _classes_visees(self, request):
+        classroom_id = _entier_positif_ou_none(request.data.get("classroom"))
+        classes = ClassRoom.objects.select_related("etablissement", "academic_year")
+
+        etablissement = getattr(request.user, "etablissement", None)
+        requested = self.request.headers.get("X-Etablissement-Id")
+        if getattr(request.user, "role", None) == UserRole.SUPER_ADMIN and requested:
+            etablissement = Etablissement.objects.filter(
+                id=_entier_positif_ou_none(requested)
+            ).first()
+        if etablissement is not None:
+            classes = classes.filter(etablissement=etablissement)
+
+        if classroom_id:
+            classes = classes.filter(id=classroom_id)
+            if not classes.exists():
+                raise ValidationError({"classroom": "Classe introuvable dans cet établissement."})
+        return list(classes)
+
+    def _preparer(self, request, classes):
+        """Rassemble ce dont l'algorithme a besoin: besoins, grille, contraintes."""
+        besoins = []
+        for assignment in (
+            TeacherAssignment.objects.filter(classroom__in=classes)
+            .select_related("subject", "classroom", "teacher")
+        ):
+            seances = int(getattr(assignment.subject, "weekly_slots", 0) or 0)
+            if seances <= 0:
+                # Volume horaire non renseigne: la matiere n'est pas placee.
+                # Inventer un volume produirait un planning que personne n'a
+                # decide.
+                continue
+            besoins.append(
+                planification.Besoin(
+                    assignment_id=assignment.id,
+                    teacher_id=assignment.teacher_id,
+                    classroom_id=assignment.classroom_id,
+                    subject_id=assignment.subject_id,
+                    subject_name=assignment.subject.name,
+                    seances=seances,
+                )
+            )
+
+        grille = planification.construire_la_grille(
+            jours=[
+                jour
+                for jour in (request.data.get("days") or ["MON", "TUE", "WED", "THU", "FRI"])
+                if jour in planification.JOURS_OUVRES
+            ],
+            debut=self._heure(request.data.get("start_time"), time(8, 0)),
+            fin=self._heure(request.data.get("end_time"), time(17, 0)),
+            duree_minutes=int(request.data.get("slot_minutes") or 60),
+            pause_debut=self._heure(request.data.get("break_start"), time(12, 0)),
+            pause_fin=self._heure(request.data.get("break_end"), time(13, 0)),
+        )
+
+        # Les disponibilites declarees pendant la campagne.
+        disponibilites = {}
+        for slot in TeacherAvailabilitySlot.objects.filter(
+            teacher_id__in={besoin.teacher_id for besoin in besoins}
+        ):
+            disponibilites.setdefault(slot.teacher_id, []).append(
+                (
+                    planification.Creneau(slot.day_of_week, slot.start_time, slot.end_time),
+                    slot.kind,
+                )
+            )
+
+        # Ce qui est deja pose: une generation ne doit pas ecraser les
+        # creneaux saisis a la main, ni ceux d'une autre classe qui partage
+        # l'enseignant.
+        occupes_enseignants = {}
+        occupes_classes = {}
+        occupees_salles = {}
+        deja = TeacherScheduleSlot.objects.select_related("assignment")
+        if request.data.get("replace"):
+            # Remplacement demande: les creneaux des classes visees ne
+            # comptent plus comme occupes, ils vont disparaitre.
+            deja = deja.exclude(assignment__classroom__in=classes)
+        for slot in deja:
+            creneau = planification.Creneau(
+                slot.day_of_week, slot.start_time, slot.end_time
+            )
+            occupes_enseignants.setdefault(slot.assignment.teacher_id, []).append(creneau)
+            occupes_classes.setdefault(slot.assignment.classroom_id, []).append(creneau)
+            if slot.room:
+                occupees_salles.setdefault(slot.room, []).append(creneau)
+
+        return besoins, grille, disponibilites, occupes_enseignants, occupes_classes, occupees_salles
+
+    def _rendu(self, resultat, besoins, grille, applique):
+        noms = {}
+        for assignment in TeacherAssignment.objects.filter(
+            id__in={besoin.assignment_id for besoin in besoins}
+        ).select_related("subject", "classroom", "teacher__user"):
+            enseignant = assignment.teacher.user.get_full_name().strip() if assignment.teacher and assignment.teacher.user else ""
+            noms[assignment.id] = {
+                "subject": assignment.subject.name,
+                "classroom": assignment.classroom.name,
+                "teacher": enseignant,
+            }
+
+        return {
+            "applique": applique,
+            "creneaux_disponibles": len(grille),
+            "seances_demandees": sum(besoin.seances for besoin in besoins),
+            "placees": len(resultat.placements),
+            "non_placees": len(resultat.echecs),
+            "placements": [
+                {
+                    "assignment": placement.assignment_id,
+                    **noms.get(placement.assignment_id, {}),
+                    "day_of_week": placement.creneau.jour,
+                    "start_time": placement.creneau.debut.strftime("%H:%M"),
+                    "end_time": placement.creneau.fin.strftime("%H:%M"),
+                    "hors_disponibilite": placement.hors_disponibilite,
+                }
+                for placement in resultat.placements
+            ],
+            "echecs": [
+                {
+                    "assignment": echec.assignment_id,
+                    **noms.get(echec.assignment_id, {}),
+                    "motif": echec.motif,
+                }
+                for echec in resultat.echecs
+            ],
+        }
+
+    @action(detail=False, methods=["post"])
+    def simuler(self, request):
+        """Ce que la generation produirait, sans rien ecrire.
+
+        Un emploi du temps engage l'annee entiere: il se relit avant d'etre
+        pose, comme un bareme de frais.
+        """
+        classes = self._classes_visees(request)
+        if not classes:
+            raise ValidationError({"classroom": "Aucune classe à planifier."})
+
+        besoins, grille, dispos, occ_ens, occ_cls, occ_salles = self._preparer(
+            request, classes
+        )
+        if not besoins:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Aucune matière à placer: renseignez le nombre de séances "
+                        "hebdomadaires des matières (champ « séances/semaine »)."
+                    )
+                }
+            )
+
+        resultat = planification.generer(
+            besoins=besoins,
+            grille=grille,
+            disponibilites=dispos,
+            occupes_enseignants=occ_ens,
+            occupes_classes=occ_cls,
+            occupees_salles=occ_salles,
+            autoriser_hors_disponibilite=bool(
+                request.data.get("autoriser_hors_disponibilite", True)
+            ),
+            max_par_jour=int(request.data.get("max_par_jour") or 2),
+        )
+        return Response(self._rendu(resultat, besoins, grille, applique=False))
+
+    @action(detail=False, methods=["post"])
+    def generer(self, request):
+        """Place les seances et enregistre le planning.
+
+        Ce qui ne rentre pas est rendu dans `echecs` plutot que de faire
+        echouer l'ensemble: un planning refuse en bloc parce qu'une seule
+        seance ne rentre pas serait inutilisable, et l'administration
+        arbitre la poignee de cas restants a la main.
+        """
+        classes = self._classes_visees(request)
+        if not classes:
+            raise ValidationError({"classroom": "Aucune classe à planifier."})
+
+        besoins, grille, dispos, occ_ens, occ_cls, occ_salles = self._preparer(
+            request, classes
+        )
+        if not besoins:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Aucune matière à placer: renseignez le nombre de séances "
+                        "hebdomadaires des matières (champ « séances/semaine »)."
+                    )
+                }
+            )
+
+        resultat = planification.generer(
+            besoins=besoins,
+            grille=grille,
+            disponibilites=dispos,
+            occupes_enseignants=occ_ens,
+            occupes_classes=occ_cls,
+            occupees_salles=occ_salles,
+            autoriser_hors_disponibilite=bool(
+                request.data.get("autoriser_hors_disponibilite", True)
+            ),
+            max_par_jour=int(request.data.get("max_par_jour") or 2),
+        )
+
+        with transaction.atomic():
+            if request.data.get("replace"):
+                TeacherScheduleSlot.objects.filter(
+                    assignment__classroom__in=classes
+                ).delete()
+
+            TeacherScheduleSlot.objects.bulk_create(
+                [
+                    TeacherScheduleSlot(
+                        assignment_id=placement.assignment_id,
+                        day_of_week=placement.creneau.jour,
+                        start_time=placement.creneau.debut,
+                        end_time=placement.creneau.fin,
+                        room=placement.room,
+                        off_availability_reason=placement.hors_disponibilite,
+                    )
+                    for placement in resultat.placements
+                ],
+                batch_size=500,
+            )
+            ActivityLog.objects.create(
+                user=request.user,
+                etablissement=getattr(classes[0], "etablissement", None),
+                role=getattr(request.user, "role", "") or "",
+                action="Generation d'un emploi du temps",
+                method=request.method,
+                path=str(request.path)[:255],
+                module="timetable",
+                target=f"{len(classes)} classe(s)"[:120],
+                details=(
+                    f"{len(resultat.placements)} seance(s) placee(s), "
+                    f"{len(resultat.echecs)} non placee(s)."
+                ),
+            )
+
+        return Response(self._rendu(resultat, besoins, grille, applique=True))
 
 
 

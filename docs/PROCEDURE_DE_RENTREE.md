@@ -117,9 +117,31 @@ le changer.
 
 ## 8) Emplois du temps
 
-Écran **Emploi du temps**. La saisie détecte les conflits — même classe, même
-enseignant, même salle au même moment — et refuse le créneau en nommant celui
-qui gêne.
+Renseignez d'abord le **nombre de séances hebdomadaires** de chaque matière
+(écran Vie scolaire, champ « séances/semaine »). Sans lui, rien n'est placé:
+inventer un volume produirait un planning que personne n'a décidé.
+
+Puis, écran **Emploi du temps** → **Générer automatiquement**:
+
+1. Réglez la grille — jours ouvrés, heure de début et de fin, durée d'une
+   séance, pause méridienne;
+2. **Simuler** — l'écran annonce combien de séances sont placées, et nomme
+   celles qui ne rentrent pas avec leur raison;
+3. **Appliquer** une fois le résultat relu.
+
+La génération respecte les disponibilités déclarées par les enseignants
+pendant la campagne (préférée > possible > indisponible), ne met jamais un
+enseignant dans deux classes à la fois, et n'empile pas six heures de la même
+matière le lundi. En dernier recours elle peut poser une séance hors
+disponibilité — le créneau porte alors sa raison, visible par tous.
+
+Cochez **Remplacer le planning existant** pour repartir de zéro; sinon les
+créneaux déjà posés à la main sont conservés et évités.
+
+Ce qui ne rentre pas est rendu plutôt que tu: un planning refusé en bloc parce
+qu'une seule séance ne trouve pas sa place serait inutilisable. La poignée de
+cas restants se pose à la main, et la saisie détecte alors les conflits —
+même classe, même enseignant, même salle — en nommant celui qui gêne.
 
 Un import Excel existe aussi (**Imports académiques**).
 

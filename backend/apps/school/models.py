@@ -224,6 +224,15 @@ class Subject(TimeStampedModel):
     name = models.CharField(max_length=100)
     code = models.CharField(max_length=20)
     coefficient = models.DecimalField(max_digits=4, decimal_places=2, default=1)
+    # Nombre de seances par semaine, pour la generation de l'emploi du temps.
+    # Zero: la matiere n'est pas placee automatiquement -- c'est le defaut,
+    # pour qu'une base existante ne se retrouve pas avec un planning invente
+    # au premier lancement. La direction renseigne ce qu'elle veut voir
+    # placer.
+    weekly_slots = models.PositiveSmallIntegerField(
+        default=0,
+        validators=[MaxValueValidator(12)],
+    )
     classroom = models.ForeignKey(
         ClassRoom,
         on_delete=models.PROTECT,
