@@ -263,8 +263,15 @@ class DistributionDesNotificationsTests(TestCase):
 
 
 class DistributionSansConfigurationTests(TestCase):
+    """Un canal fermé laisse ses notifications en attente, sans bloquer le reste.
+
+    La tâche s'arrêtait autrefois net quand Firebase manquait; depuis qu'elle
+    dessert aussi le courriel et le SMS, elle ne peut plus: fermer le push
+    priverait les familles joignables par les deux autres canaux.
+    """
+
     @override_settings(FCM_PROJECT_ID="", FCM_CREDENTIALS_JSON="", FCM_CREDENTIALS_FILE="")
-    def test_sans_firebase_la_tache_ne_fait_rien_et_le_dit(self):
+    def test_sans_firebase_la_notification_push_reste_en_attente(self):
         parent = User.objects.create_user(
             username="parent_sans_fcm", password="Pass1234!", role=UserRole.PARENT
         )
@@ -279,7 +286,6 @@ class DistributionSansConfigurationTests(TestCase):
         resultat = envoyer_les_notifications_en_attente()
 
         self.assertEqual(resultat["envoyees"], 0)
-        self.assertIn("non configure", resultat["raison"])
         notification.refresh_from_db()
         self.assertFalse(notification.is_sent)
 

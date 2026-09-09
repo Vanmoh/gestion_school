@@ -253,13 +253,19 @@ rattrape les élèves inscrits en cours d'année.
 
 ## Notifications aux familles
 
-Le canal push est branché côté serveur et testé; il reste à créer le projet
-Firebase et à brancher le client Flutter:
+Les trois canaux du cahier des charges sont branchés côté serveur et testés —
+push, courriel et SMS. Marche à suivre pour chacun:
 [docs/NOTIFICATIONS_PUSH.md](docs/NOTIFICATIONS_PUSH.md).
 
+Il reste à créer le projet Firebase et à brancher le client Flutter pour que
+le push atteigne les téléphones; le courriel et le SMS, eux, fonctionnent dès
+qu'ils sont configurés.
+
 Sans configuration, l'application fonctionne: les notifications restent
-consultables dans l'écran Communication, simplement personne n'est alerté. Le
-contrôle `gestion_school.W006` le signale à chaque démarrage.
+consultables dans l'écran Communication, simplement personne n'est alerté. Un
+canal fermé n'empêche jamais les autres de partir, et les contrôles
+`gestion_school.W006` (push) et `W007` (courriel) le signalent à chaque
+démarrage.
 
 ## Moyennes, classement et bulletins
 
