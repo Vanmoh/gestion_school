@@ -48,6 +48,11 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
   /// penalite automatique, ce qui reste le cas par defaut.
   final _libraryPenaltyController = TextEditingController(text: '0');
 
+  /// Poids de la conduite dans la moyenne de la periode, bulletin et
+  /// classement compris. Deux par defaut, comme la valeur qui etait figee
+  /// dans le code; zero pour la noter sans qu'elle pese.
+  final _conduiteCoefficientController = TextEditingController(text: '2');
+
   Uint8List? _logoBytes;
   String? _logoFileName;
   // Photo de l'ecole, affichee en fond de son ecran de connexion. Facultative:
@@ -83,6 +88,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     _principalSignatureScaleController.dispose();
     _stampScaleController.dispose();
     _libraryPenaltyController.dispose();
+    _conduiteCoefficientController.dispose();
     super.dispose();
   }
 
@@ -260,6 +266,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     _principalSignatureScaleController.text = '100';
     _stampScaleController.text = '100';
     _libraryPenaltyController.text = '0';
+    _conduiteCoefficientController.text = '2';
     _principalSignaturePosition = 'right';
     _stampPosition = 'right';
     _logoBytes = null;
@@ -294,6 +301,8 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         _stampScaleController.text = (row['stamp_scale'] ?? 100).toString();
         _libraryPenaltyController.text =
           (row['library_penalty_per_day'] ?? 0).toString();
+        _conduiteCoefficientController.text =
+          (row['conduite_coefficient'] ?? 2).toString();
         _principalSignaturePosition =
           (row['principal_signature_position'] ?? 'right').toString();
         _stampPosition = (row['stamp_position'] ?? 'right').toString();
@@ -338,6 +347,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     final libraryPenalty = double.tryParse(
       _libraryPenaltyController.text.trim().replaceAll(',', '.'),
     );
+    final conduiteCoefficient = double.tryParse(
+      _conduiteCoefficientController.text.trim().replaceAll(',', '.'),
+    );
 
     if (name.isEmpty || address.isEmpty || phone.isEmpty || email.isEmpty) {
       _showMessage(
@@ -356,6 +368,12 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     }
     if (libraryPenalty == null || libraryPenalty < 0) {
       _showMessage('Penalite bibliotheque invalide (0 ou plus).');
+      return;
+    }
+    if (conduiteCoefficient == null ||
+        conduiteCoefficient < 0 ||
+        conduiteCoefficient > 10) {
+      _showMessage('Coefficient de conduite invalide (0 a 10).');
       return;
     }
 
@@ -381,6 +399,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         'principal_signature_scale': principalScale,
         'stamp_scale': stampScale,
         'library_penalty_per_day': libraryPenalty,
+        'conduite_coefficient': conduiteCoefficient,
         if (_logoBytes != null)
           'logo': MultipartFile.fromBytes(
             _logoBytes!,
@@ -754,6 +773,19 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                       decoration: const InputDecoration(
                         labelText: 'Penalite retard / jour',
                         helperText: 'Bibliotheque. 0 = aucune penalite.',
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 240,
+                    child: TextField(
+                      controller: _conduiteCoefficientController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Coefficient de conduite',
+                        helperText: 'Bulletin et classement. 0 = ne pese pas.',
                       ),
                     ),
                   ),

@@ -73,6 +73,13 @@ class ExamsApiTests(APITestCase):
             start_date=date(2026, 3, 2),
             end_date=date(2026, 3, 4),
         )
+        # Les familles ne lisent que des resultats publies -- la saisie se
+        # fait a couvert. Ces tests-ci portent sur le cloisonnement (chacun
+        # ne voit que les siens), pas sur la publication: on ouvre donc les
+        # deux sessions pour que le cloisonnement reste ce qui est mesure.
+        # La publication elle-meme est couverte par
+        # test_publication_des_examens.py.
+        ExamSession.objects.update(results_published=True)
 
         self.planning_maths = ExamPlanning.objects.create(
             session=self.composition,
@@ -239,6 +246,20 @@ class ExamsApiTests(APITestCase):
         trouves = self._resultats(self.client.get("/api/exam-results/"))
 
         self.assertEqual([row["id"] for row in trouves], [self.resultat_eleve.id])
+
+    def test_une_famille_ne_voit_rien_avant_publication(self):
+        """Le cas que la publication vient couvrir.
+
+        Le décor publie les sessions pour que les tests ci-dessus mesurent le
+        cloisonnement; celui-ci les referme pour vérifier l'autre moitié de
+        la règle.
+        """
+        ExamSession.objects.update(results_published=False)
+
+        self.client.force_authenticate(self.eleve.user)
+        trouves = self._resultats(self.client.get("/api/exam-results/"))
+
+        self.assertEqual(trouves, [])
 
     def test_a_student_cannot_record_a_result(self):
         """La matrice donne « L* » a l'eleve: il lit sa note, il ne l'ecrit pas."""

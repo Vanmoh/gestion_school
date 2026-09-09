@@ -52,6 +52,7 @@ class _BulletinWhatsAppPageState extends ConsumerState<BulletinWhatsAppPage> {
   final Set<int> _confirmes = {};
 
   int? _ligneOccupee;
+  bool _validationEnCours = false;
 
   BulletinWhatsAppRepository get _repo =>
       BulletinWhatsAppRepository(ref.read(dioProvider));
@@ -180,6 +181,68 @@ class _BulletinWhatsAppPageState extends ConsumerState<BulletinWhatsAppPage> {
     }
   }
 
+  Future<void> _changerLaValidation({required bool valider}) async {
+    if (valider) {
+      final confirme = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Valider les bulletins'),
+          content: Text(
+            'Les bulletins du ${widget.term} de ${widget.classroomName} '
+            'seront considérés comme arrêtés, et pourront partir aux '
+            'familles.\n\n'
+            'Vérifiez que toutes les notes sont saisies : un bulletin envoyé '
+            'ne se rappelle pas.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Valider'),
+            ),
+          ],
+        ),
+      );
+      if (confirme != true || !mounted) return;
+    }
+
+    setState(() => _validationEnCours = true);
+    try {
+      if (valider) {
+        await _repo.validerLaPeriode(
+          classroomId: widget.classroomId,
+          academicYearId: widget.academicYearId,
+          term: widget.term,
+        );
+      } else {
+        await _repo.rouvrirLaPeriode(
+          classroomId: widget.classroomId,
+          academicYearId: widget.academicYearId,
+          term: widget.term,
+        );
+      }
+      if (!mounted) return;
+      // Rechargement complet: valider une periode debloque toute la classe
+      // d'un coup, et rafraichir la seule ligne du bandeau laisserait
+      // soixante lignes afficher un motif qui n'a plus cours.
+      await _charger();
+      if (!mounted) return;
+      _message(
+        valider ? 'Bulletins validés.' : 'Période rouverte à la saisie.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      _message(
+        messageDErreur(error, parDefaut: 'Changement de validation impossible.'),
+      );
+    } finally {
+      if (mounted) setState(() => _validationEnCours = false);
+    }
+  }
+
   Future<void> _corrigerContact(BulletinWhatsAppEtat eleve) async {
     final parentId = eleve.parentId;
     if (parentId == null) {
@@ -272,6 +335,7 @@ class _BulletinWhatsAppPageState extends ConsumerState<BulletinWhatsAppPage> {
     final theme = Theme.of(context);
     final permissions = ref.watch(currentPermissionsProvider);
     final peutCorriger = permissions.canWrite('students');
+    final peutValider = permissions.canWrite('bulletin_validation');
 
     return Scaffold(
       appBar: AppBar(
@@ -317,6 +381,15 @@ class _BulletinWhatsAppPageState extends ConsumerState<BulletinWhatsAppPage> {
                 classe: classe,
                 envoyesDansLaSession: _confirmes.length,
                 term: widget.term,
+              ),
+              const SizedBox(height: 12),
+              _BandeauValidation(
+                classe: classe,
+                term: widget.term,
+                peutValider: peutValider,
+                occupe: _validationEnCours,
+                surValidation: () => _changerLaValidation(valider: true),
+                surReouverture: () => _changerLaValidation(valider: false),
               ),
               const SizedBox(height: 16),
               ...classe.eleves.map(
@@ -515,6 +588,123 @@ class _Bandeau extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// L'etat de validation de la periode, et de quoi en changer.
+///
+/// Il occupe le haut de l'ecran parce qu'il commande tout le reste: une
+/// periode non validee bloque la classe entiere, et le dire soixante fois
+/// sur soixante lignes ferait chercher la cause partout sauf la ou elle est.
+class _BandeauValidation extends StatelessWidget {
+  final BulletinWhatsAppClasse classe;
+  final String term;
+  final bool peutValider;
+  final bool occupe;
+  final VoidCallback surValidation;
+  final VoidCallback surReouverture;
+
+  const _BandeauValidation({
+    required this.classe,
+    required this.term,
+    required this.peutValider,
+    required this.occupe,
+    required this.surValidation,
+    required this.surReouverture,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final valide = classe.periodPublished;
+    final couleur = valide ? theme.colorScheme.primary : theme.colorScheme.error;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: couleur.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: couleur.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                valide ? Icons.verified_outlined : Icons.pending_actions_outlined,
+                color: couleur,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  valide
+                      ? 'Bulletins du $term validés'
+                      : 'Bulletins du $term non validés',
+                  style: theme.textTheme.titleSmall?.copyWith(color: couleur),
+                ),
+              ),
+              if (occupe)
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            valide ? _mentionDeValidation() : _mentionDeBlocage(),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          if (peutValider) ...[
+            const SizedBox(height: 12),
+            if (valide)
+              // En retrait: rouvrir est l'exception, et les bulletins deja
+              // partis ne reviennent pas.
+              TextButton.icon(
+                onPressed: occupe ? null : surReouverture,
+                icon: const Icon(Icons.lock_open, size: 18),
+                label: const Text('Rouvrir la période'),
+              )
+            else
+              FilledButton.icon(
+                onPressed: occupe ? null : surValidation,
+                icon: const Icon(Icons.verified, size: 18),
+                label: const Text('Valider les bulletins'),
+              ),
+          ] else if (!valide)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'La validation revient à la direction ou au censeur.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _mentionDeValidation() {
+    final date = classe.periodPublishedAt;
+    final quand = date == null
+        ? ''
+        : ' le ${date.day.toString().padLeft(2, '0')}/'
+              '${date.month.toString().padLeft(2, '0')}/${date.year}';
+    final qui = classe.periodPublishedBy.isEmpty
+        ? ''
+        : ' par ${classe.periodPublishedBy}';
+    return 'Arrêtés$quand$qui. Les bulletins peuvent partir aux familles.';
+  }
+
+  String _mentionDeBlocage() {
+    return 'Aucun bulletin de cette classe ne peut partir tant que la '
+        'période n\'est pas arrêtée.';
   }
 }
 

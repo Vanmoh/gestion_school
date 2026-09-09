@@ -25,6 +25,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from apps.accounts.access import affinement_autorise, can_read
 from apps.accounts.models import UserRole
+from apps.school import moyennes
 from apps.school.models import (
     AcademicYear,
     BulletinDelivery,
@@ -1780,11 +1781,15 @@ def _build_bulletin_rows(
     exam_note_by_subject: dict[int, float],
     class_average_by_subject: dict[int, float],
     conduite_note: float,
-    conduite_coef: float = 2.0,
+    conduite_coef: float = float(moyennes.CONDUITE_COEFFICIENT_PAR_DEFAUT),
     conduite_moyenne_classe: float | None = None,
 ):
-    weighted_sum = 0.0
-    coef_sum = 0.0
+    # Les deux dictionnaires alimentent le calcul canonique en fin de
+    # fonction. Les lignes, elles, restent construites ici: le bulletin
+    # imprime a besoin du detail (points, appreciation, moyenne de classe)
+    # dont le classement n'a que faire.
+    notes_finales_par_matiere: dict[int, object] = {}
+    coefficients_par_matiere: dict[int, object] = {}
     rows = [
         {
             "index": 1,
@@ -1799,26 +1804,20 @@ def _build_bulletin_rows(
         }
     ]
 
-    weighted_sum += round(conduite_note * conduite_coef, 2)
-    coef_sum += conduite_coef
-
     for index, subject in enumerate(subjects, start=2):
         coef = float(subject.coefficient)
         note_classe = student_note_by_subject.get(subject.id)
         note_examen = exam_note_by_subject.get(subject.id)
 
-        if note_classe is not None and note_examen is not None:
-            note_finale = round((note_classe + note_examen) / 2.0, 2)
-            effective_coef = coef
-        elif note_classe is not None:
-            note_finale = round(note_classe, 2)
-            effective_coef = coef
-        elif note_examen is not None:
-            note_finale = round(note_examen, 2)
-            effective_coef = coef
-        else:
+        # Le meme calcul que le classement, au chiffre pres: voir
+        # apps/school/moyennes.py. Les deux divergeaient.
+        note_finale_decimal = moyennes.note_finale_matiere(note_classe, note_examen)
+        if note_finale_decimal is None:
             note_finale = None
             effective_coef = 0.0
+        else:
+            note_finale = float(note_finale_decimal)
+            effective_coef = coef
 
         appreciation_score = note_finale
 
@@ -1826,8 +1825,8 @@ def _build_bulletin_rows(
         points = round(note_finale * coef, 2) if note_finale is not None else None
 
         if points is not None and effective_coef > 0:
-            weighted_sum += points
-            coef_sum += effective_coef
+            notes_finales_par_matiere[subject.id] = note_finale_decimal
+            coefficients_par_matiere[subject.id] = subject.coefficient
 
         rows.append(
             {
@@ -1843,8 +1842,13 @@ def _build_bulletin_rows(
             }
         )
 
-    average = round(weighted_sum / coef_sum, 2) if coef_sum else 0.0
-    return rows, average, coef_sum
+    moyenne, somme_coefficients = moyennes.moyenne_ponderee(
+        notes_finales_par_matiere=notes_finales_par_matiere,
+        coefficients_par_matiere=coefficients_par_matiere,
+        conduite_note=conduite_note,
+        conduite_coefficient=conduite_coef,
+    )
+    return rows, float(moyenne), float(somme_coefficients)
 
 
 def _subject_name_key(name: str) -> str:
@@ -2095,11 +2099,55 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
         )
         subject_ids.update(class_grades_qs.values_list("subject_id", flat=True))
 
-        class_avg_rows = class_grades_qs.values("subject_id").annotate(avg_note=Avg("value"))
+        # La moyenne de classe se calcule sur les notes finales, celles-la
+        # memes qui figurent dans la colonne de l'eleve. Elle ne portait que
+        # sur les notes de classe et laissait les compositions de cote: la
+        # colonne « Moyenne classe » se lisait a cote d'une note d'eleve qui,
+        # elle, les comptait -- deux nombres de nature differente, presentes
+        # cote a cote comme s'ils se comparaient.
+        class_exam_notes: dict[tuple[int, int], float] = {}
+        for exam_result in ExamResult.objects.filter(
+            student__classroom_id=classroom_id,
+            session__academic_year_id=academic_year_id,
+            session__term=normalized_term,
+        ).order_by(
+            "student_id",
+            "subject_id",
+            "-session__end_date",
+            "-session__start_date",
+            "-created_at",
+            "-id",
+        ):
+            class_exam_notes.setdefault(
+                (exam_result.student_id, exam_result.subject_id),
+                float(exam_result.score),
+            )
+        subject_ids.update(subject_id for _, subject_id in class_exam_notes)
+
+        class_class_notes: dict[tuple[int, int], float] = {}
+        for grade in class_grades_qs.order_by(
+            "student_id", "subject_id", "-created_at", "-id"
+        ):
+            class_class_notes.setdefault(
+                (grade.student_id, grade.subject_id), float(grade.value)
+            )
+
+        notes_finales_de_la_classe: dict[int, list[float]] = {}
+        for cle in set(class_class_notes) | set(class_exam_notes):
+            _, subject_id = cle
+            note_finale = moyennes.note_finale_matiere(
+                class_class_notes.get(cle), class_exam_notes.get(cle)
+            )
+            if note_finale is None:
+                continue
+            notes_finales_de_la_classe.setdefault(subject_id, []).append(
+                float(note_finale)
+            )
+
         class_average_by_subject = {
-            int(row["subject_id"]): float(row["avg_note"])
-            for row in class_avg_rows
-            if row.get("avg_note") is not None
+            subject_id: round(sum(notes) / len(notes), 2)
+            for subject_id, notes in notes_finales_de_la_classe.items()
+            if notes
         }
 
         subject_ids.update(
@@ -2143,7 +2191,10 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
     )
 
     conduite_note = float(student.conduite if student.conduite is not None else 18)
-    conduite_coef = 2.0
+    # Regle par etablissement, et non plus fige a 2 pour toutes les ecoles.
+    conduite_coef = float(
+        moyennes.coefficient_de_conduite(_student_etablissement(student))
+    )
     conduite_moyenne_classe = None
     if classroom_id:
         conduite_moyenne_classe = (
@@ -2166,11 +2217,15 @@ def _build_bulletin_payload(*, student: Student, academic_year_id: int, normaliz
 
     rank_value = None
     if classroom_id:
+        # `term=normalized_term` et non le dernier bilan enregistre: sans ce
+        # filtre, un bulletin du premier trimestre reimprime apres la cloture
+        # du second affichait le rang du second.
         history = (
             StudentAcademicHistory.objects.filter(
                 student_id=student.id,
                 academic_year_id=academic_year_id,
                 classroom_id=classroom_id,
+                term=normalized_term,
             )
             .order_by("-updated_at", "-id")
             .first()
@@ -2503,6 +2558,7 @@ class ClassBulletinsPdfView(APIView):
                 for student_id, rank in StudentAcademicHistory.objects.filter(
                     classroom_id=classroom.id,
                     academic_year_id=academic_year_id,
+                    term=normalized_term,
                     student_id__in=[student.id for student in students],
                 ).values_list("student_id", "rank")
                 if rank is not None and int(rank) > 0

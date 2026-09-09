@@ -60,6 +60,13 @@ class RoutedViewsCoverageTests(APITestCase):
         "TokenRefreshView",
         "CustomTokenRefreshView",
         "LogoutView",  # ferme sa propre session, ne touche aucune ressource
+        # Meme nature que LogoutView: elle rattache l'appareil du compte
+        # courant pour les notifications push, et ne lit ni n'ecrit aucune
+        # donnee de l'ecole. `IsAuthenticated` suffit, et la vue ne travaille
+        # que sur `request.user` -- un jeton pose par un compte ne peut etre
+        # ferme par un autre.
+        # Voir apps/common/tests/test_notifications_push.py.
+        "DeviceTokenView",
         "HealthCheckView",  # sonde d'infrastructure, n'expose aucune donnee
         "ModulePermissionsView",  # sert la matrice elle-meme
         # Cible du QR imprime sur la carte scolaire: celui qui controle au

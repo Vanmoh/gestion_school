@@ -457,6 +457,47 @@ SIMPLE_JWT = {
     "UPDATE_LAST_LOGIN": True,
 }
 
+# Courriel. Sans EMAIL_HOST, Django ecrit les messages sur la sortie standard
+# plutot que de les envoyer: c'est ce qu'on veut en developpement, et ce que
+# le controle de deploiement W007 signale ailleurs.
+#
+# Chez la plupart des fournisseurs, EMAIL_HOST_USER est l'adresse complete et
+# EMAIL_HOST_PASSWORD un mot de passe d'application -- pas le mot de passe du
+# compte, que la validation en deux etapes refuse de toute facon.
+EMAIL_HOST = config("EMAIL_HOST", default="").strip()
+EMAIL_PORT = config("EMAIL_PORT", cast=int, default=587)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", cast=bool, default=True)
+EMAIL_USE_SSL = config("EMAIL_USE_SSL", cast=bool, default=False)
+EMAIL_BACKEND = config(
+    "EMAIL_BACKEND",
+    default=(
+        "django.core.mail.backends.smtp.EmailBackend"
+        if EMAIL_HOST
+        else "django.core.mail.backends.console.EmailBackend"
+    ),
+)
+DEFAULT_FROM_EMAIL = config(
+    "DEFAULT_FROM_EMAIL", default=EMAIL_HOST_USER or "no-reply@gestion-school.local"
+)
+
+# Notifications push (Firebase Cloud Messaging, API HTTP v1).
+#
+# Le module Communication ecrivait ses notifications en base sans que rien ne
+# les expedie: les familles ne recevaient rien. Ces trois reglages ouvrent le
+# canal push; vides, l'application continue de fonctionner et les
+# notifications restent consultables dans l'application.
+#
+# Le compte de service se telecharge dans la console Firebase
+# (Parametres du projet > Comptes de service > Generer une nouvelle cle).
+# Sur un serveur d'ecole, monter le fichier et renseigner FCM_CREDENTIALS_FILE;
+# sur un hebergeur sans disque persistant, coller son contenu dans
+# FCM_CREDENTIALS_JSON.
+FCM_PROJECT_ID = config("FCM_PROJECT_ID", default="").strip()
+FCM_CREDENTIALS_FILE = config("FCM_CREDENTIALS_FILE", default="").strip()
+FCM_CREDENTIALS_JSON = config("FCM_CREDENTIALS_JSON", default="").strip()
+
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://redis:6379/0")
 CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://redis:6379/1")
 CELERY_ACCEPT_CONTENT = ["json"]
@@ -492,6 +533,14 @@ CELERY_BEAT_SCHEDULE = {
     "seances-non-assurees": {
         "task": "apps.school.tasks.signaler_les_seances_non_assurees",
         "schedule": crontab(hour=6, minute=30),
+    },
+    # Toutes les cinq minutes: une notification qui annonce un incident
+    # disciplinaire ou une echeance perd sa valeur si elle arrive le
+    # lendemain. Le passage est tres bon marche quand la file est vide --
+    # une requete indexee qui ne rend rien.
+    "distribution-des-notifications": {
+        "task": "apps.common.tasks.envoyer_les_notifications_en_attente",
+        "schedule": crontab(minute="*/5"),
     },
     # Le lundi matin: un reapprovisionnement se prepare en debut de semaine,
     # et une alerte quotidienne sur un stock qui bouge peu ne serait plus lue.

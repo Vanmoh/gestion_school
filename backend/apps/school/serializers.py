@@ -28,6 +28,7 @@ from .models import (
     ExamResult,
     ExamSession,
     Expense,
+    FeeSchedule,
     Grade,
     GradeValidation,
     LibraryCategory,
@@ -57,6 +58,8 @@ from .models import (
     TeacherScheduleSlot,
     TeacherTimeEntry,
     TeacherTimeEntryCoverage,
+    # Pas un modele: le decalage de mois des echeances d'un bareme.
+    _ajouter_des_mois,
     TimetablePublication,
     TeacherPayroll,
 )
@@ -157,6 +160,10 @@ class EtablissementSerializer(serializers.ModelSerializer):
             # l'API, la penalite automatique ne se reglerait que depuis
             # l'admin Django -- autant dire jamais, pour une ecole.
             'library_penalty_per_day',
+            # Poids de la conduite dans la moyenne, bulletin et classement
+            # confondus. Fige a 2 dans le code jusqu'ici: une ecole qui note
+            # la conduite sans la faire peser n'avait aucun moyen de le dire.
+            'conduite_coefficient',
         ]
 
     def validate_code(self, value):
@@ -980,22 +987,37 @@ class StudentSerializer(serializers.ModelSerializer):
 
 
 class StudentAcademicHistorySerializer(serializers.ModelSerializer):
+    periode = serializers.SerializerMethodField(read_only=True)
+
+    def get_periode(self, obj):
+        """Ce que l'ecran affiche: « Année » ou « T1 », jamais une case vide."""
+        return str(obj.term or "").strip() or "Année"
+
     def validate(self, attrs):
         student = attrs.get("student") or getattr(self.instance, "student", None)
         academic_year = attrs.get("academic_year") or getattr(self.instance, "academic_year", None)
         classroom = attrs.get("classroom") or getattr(self.instance, "classroom", None)
+        term = attrs.get("term")
+        if term is None:
+            term = getattr(self.instance, "term", "") or ""
 
         if student and academic_year and classroom:
+            # Le trimestre entre dans la cle: un eleve a bien un bilan par
+            # trimestre et un bilan d'annee, ce que la regle precedente
+            # interdisait.
             queryset = StudentAcademicHistory.objects.filter(
                 student=student,
                 academic_year=academic_year,
                 classroom=classroom,
+                term=term,
             )
             if self.instance:
                 queryset = queryset.exclude(pk=self.instance.pk)
             if queryset.exists():
+                periode = str(term or "").strip() or "l'année entière"
                 raise serializers.ValidationError(
-                    "Un historique existe déjà pour cet élève, cette année et cette classe."
+                    "Un historique existe déjà pour cet élève, cette année, "
+                    f"cette classe et cette période ({periode})."
                 )
         return attrs
 
@@ -1403,6 +1425,89 @@ class DisciplineIncidentSerializer(serializers.ModelSerializer):
         read_only_fields = ["resolved_at"]
 
 
+class FeeScheduleSerializer(serializers.ModelSerializer):
+    classroom_name = serializers.SerializerMethodField(read_only=True)
+    fee_type_display = serializers.SerializerMethodField(read_only=True)
+    echeances = serializers.SerializerMethodField(read_only=True)
+    montant_total = serializers.SerializerMethodField(read_only=True)
+    eleves_concernes = serializers.SerializerMethodField(read_only=True)
+    frais_generes = serializers.SerializerMethodField(read_only=True)
+
+    def get_classroom_name(self, obj):
+        return obj.classroom.name if obj.classroom else "Toutes les classes"
+
+    def get_fee_type_display(self, obj):
+        return obj.get_fee_type_display()
+
+    def get_echeances(self, obj):
+        return [echeance.isoformat() for echeance in obj.echeances()]
+
+    def get_montant_total(self, obj):
+        """Ce que le bareme represente par eleve, toutes echeances comprises.
+
+        C'est le chiffre que la direction verifie avant d'appliquer: une
+        erreur de montant multipliee par neuf mensualites et par la classe
+        entiere se rattrape mal une fois les frais poses.
+        """
+        return obj.amount * obj.occurrences
+
+    def get_eleves_concernes(self, obj):
+        return obj.eleves_concernes().count()
+
+    def get_frais_generes(self, obj):
+        return obj.fees.count()
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Le montant doit être supérieur à 0.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        academic_year = attrs.get("academic_year") or getattr(self.instance, "academic_year", None)
+        classroom = attrs.get("classroom") if "classroom" in attrs else getattr(self.instance, "classroom", None)
+        first_due_date = attrs.get("first_due_date") or getattr(self.instance, "first_due_date", None)
+        occurrences = attrs.get("occurrences") or getattr(self.instance, "occurrences", 1)
+
+        if classroom and academic_year and classroom.academic_year_id != academic_year.id:
+            raise serializers.ValidationError(
+                {"classroom": "Cette classe n'appartient pas à l'année scolaire choisie."}
+            )
+
+        if academic_year and first_due_date:
+            derniere = _ajouter_des_mois(first_due_date, int(occurrences) - 1)
+            # Les deux bornes sont verifiees: une echeance hors de l'annee
+            # scolaire sort des journaux et des relances, qui filtrent tous
+            # par annee.
+            if first_due_date < academic_year.start_date:
+                raise serializers.ValidationError(
+                    {
+                        "first_due_date": (
+                            "La première échéance précède le début de l'année scolaire "
+                            f"({academic_year.start_date})."
+                        )
+                    }
+                )
+            if derniere > academic_year.end_date:
+                raise serializers.ValidationError(
+                    {
+                        "occurrences": (
+                            f"La dernière échéance tomberait le {derniere}, après la fin "
+                            f"de l'année scolaire ({academic_year.end_date}). "
+                            "Réduisez le nombre d'échéances ou avancez la première."
+                        )
+                    }
+                )
+
+        return attrs
+
+    class Meta:
+        model = FeeSchedule
+        fields = "__all__"
+        read_only_fields = ("etablissement",)
+
+
 class StudentFeeSerializer(serializers.ModelSerializer):
     amount_paid = serializers.SerializerMethodField(read_only=True)
     balance = serializers.SerializerMethodField(read_only=True)
@@ -1461,6 +1566,18 @@ class StudentFeeSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudentFee
         fields = "__all__"
+        # `schedule` dit de quel bareme ce frais est issu; c'est
+        # `FeeSchedule.appliquer()` qui l'ecrit, jamais une saisie.
+        read_only_fields = ("schedule",)
+        # La contrainte d'unicite (eleve, bareme, echeance) reste en base --
+        # c'est elle qui protege de deux applications simultanees du meme
+        # bareme. Mais DRF la traduit aussi en validateur de serializer, et
+        # un validateur d'unicite exige tous les champs qu'il couvre:
+        # `schedule` devenait obligatoire a la creation d'un frais, alors
+        # qu'aucune saisie ne le renseigne. `read_only_fields` seul n'y
+        # suffit pas, le validateur reclamant le champ avant meme de
+        # regarder s'il est ecrivable.
+        validators = []
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -2256,6 +2373,17 @@ class CanteenServiceSerializer(serializers.ModelSerializer):
 
 
 class ExamSessionSerializer(serializers.ModelSerializer):
+    resultats_saisis = serializers.SerializerMethodField(read_only=True)
+
+    def get_resultats_saisis(self, obj):
+        """Combien de notes la session porte deja.
+
+        L'ecran en a besoin pour savoir s'il y a quelque chose a publier: le
+        bouton n'a aucun sens devant une session vide, et le serveur refuse
+        de toute facon.
+        """
+        return obj.results.count()
+
     def validate_term(self, value):
         normalized = normalize_term(value)
         if not normalized:
@@ -2265,6 +2393,14 @@ class ExamSessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExamSession
         fields = "__all__"
+        # La publication passe par ses deux actions, qui journalisent et
+        # verifient qu'il y a des notes. Laisser ecrire le champ ici
+        # rouvrirait un chemin qui ne fait ni l'un ni l'autre.
+        read_only_fields = (
+            "results_published",
+            "results_published_at",
+            "results_published_by",
+        )
 
 
 class ExamPlanningSerializer(serializers.ModelSerializer):

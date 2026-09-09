@@ -1,5 +1,7 @@
 from datetime import date, time, timedelta
 from decimal import Decimal
+from decouple import config
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
@@ -43,6 +45,17 @@ from apps.school.models import (
 )
 
 
+# Mots de passe des comptes de demonstration. Surchargeables par variable
+# d'environnement: une machine partagee, une demonstration devant un client
+# ou une base de recette n'ont pas a tourner sur les valeurs du depot.
+#
+# Ces comptes n'ont rien a faire en production, et trois choses s'y opposent
+# desormais: le refus de cette commande hors DEBUG, le controle de
+# deploiement W005 qui les signale, et `manage.py purger_comptes_demo`.
+MOT_DE_PASSE_ADMIN = config("DEMO_ADMIN_PASSWORD", default="Admin@12345")
+MOT_DE_PASSE_DEMO = config("DEMO_PASSWORD", default="Password@123")
+
+
 class Command(BaseCommand):
     help = "Seed demo data for GESTION SCHOOL"
 
@@ -66,6 +79,48 @@ class Command(BaseCommand):
     # que la base contient une vraie ecole, seulement qu'elle a deja ete
     # semee.
     CLASSES_DE_DEMONSTRATION = {"6A"}
+
+    @staticmethod
+    def _tourne_sur_une_base_de_test():
+        """Vrai quand la base courante est celle qu'un test runner a montee.
+
+        Django force DEBUG=False pendant les tests: sans cette exception, le
+        refus ci-dessous couperait la douzaine de tests qui sement leur decor
+        avec cette commande.
+
+        Le nom de la base est le signal disponible -- Django prefixe la
+        sienne par `test_` (PostgreSQL, MySQL) ou la monte en memoire
+        (SQLite). C'est heuristique, mais l'erreur possible va dans le bon
+        sens: au pire une vraie base nommee « test_... » echappe au refus, et
+        elle porte alors deja le nom de ce qu'elle est.
+        """
+        from django.db import connection
+
+        nom = str(connection.settings_dict.get("NAME") or "")
+        return nom.startswith("test_") or "memorydb" in nom or nom == ":memory:"
+
+    def _refuser_hors_developpement(self, forcer):
+        """Refuse de semer des comptes au mot de passe public en production.
+
+        Le garde-fou ci-dessous regarde si la base porte de vraies classes.
+        Il ne voit rien a redire a une base neuve -- et c'est exactement la
+        situation d'un premier deploiement: le guide de mise en ligne
+        indiquait de semer la base cloud, ce qui y a installe `superadmin`
+        avec le mot de passe que le README publiait.
+
+        Ce n'est pas le contenu de la base qui est en cause ici, c'est
+        l'endroit ou elle tourne.
+        """
+        if forcer or settings.DEBUG or self._tourne_sur_une_base_de_test():
+            return
+
+        raise CommandError(
+            "Refus: DEBUG=False, cette base a toutes les apparences d'une "
+            "production. La commande y creerait huit comptes dont le mot de "
+            "passe est ecrit dans le depot, `superadmin` compris. "
+            "Relancer avec --forcer si c'est bien une base jetable, et "
+            "purger ensuite avec `manage.py purger_comptes_demo`."
+        )
 
     def _refuser_si_base_peuplee(self, forcer):
         """Refuse de semer par-dessus une ecole reelle.
@@ -107,7 +162,9 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
-        self._refuser_si_base_peuplee(options.get("forcer", False))
+        forcer = options.get("forcer", False)
+        self._refuser_hors_developpement(forcer)
+        self._refuser_si_base_peuplee(forcer)
         today = timezone.now().date()
 
         admin_user, created = User.objects.get_or_create(
@@ -121,7 +178,7 @@ class Command(BaseCommand):
                 "is_superuser": True,
             },
         )
-        admin_user.set_password("Admin@12345")
+        admin_user.set_password(MOT_DE_PASSE_ADMIN)
         admin_user.is_active = True
         admin_user.is_staff = True
         admin_user.is_superuser = True
@@ -145,7 +202,7 @@ class Command(BaseCommand):
                 "role": UserRole.DIRECTOR,
             },
         )
-        director_user.set_password("Password@123")
+        director_user.set_password(MOT_DE_PASSE_DEMO)
         director_user.is_active = True
         director_user.save(update_fields=["password", "is_active"])
 
@@ -158,7 +215,7 @@ class Command(BaseCommand):
                 "role": UserRole.ACCOUNTANT,
             },
         )
-        accountant_user.set_password("Password@123")
+        accountant_user.set_password(MOT_DE_PASSE_DEMO)
         accountant_user.is_active = True
         accountant_user.save(update_fields=["password", "is_active"])
 
@@ -171,7 +228,7 @@ class Command(BaseCommand):
                 "role": UserRole.TEACHER,
             },
         )
-        teacher_user.set_password("Password@123")
+        teacher_user.set_password(MOT_DE_PASSE_DEMO)
         teacher_user.is_active = True
         teacher_user.save(update_fields=["password", "is_active"])
 
@@ -184,7 +241,7 @@ class Command(BaseCommand):
                 "role": UserRole.PARENT,
             },
         )
-        parent_user.set_password("Password@123")
+        parent_user.set_password(MOT_DE_PASSE_DEMO)
         parent_user.is_active = True
         parent_user.save(update_fields=["password", "is_active"])
 
@@ -197,7 +254,7 @@ class Command(BaseCommand):
                 "role": UserRole.SUPERVISOR,
             },
         )
-        supervisor_user.set_password("Password@123")
+        supervisor_user.set_password(MOT_DE_PASSE_DEMO)
         supervisor_user.is_active = True
         supervisor_user.save(update_fields=["password", "is_active"])
 
@@ -210,7 +267,7 @@ class Command(BaseCommand):
                 "role": UserRole.STUDENT,
             },
         )
-        student_user_1.set_password("Password@123")
+        student_user_1.set_password(MOT_DE_PASSE_DEMO)
         student_user_1.is_active = True
         student_user_1.save(update_fields=["password", "is_active"])
 
@@ -223,7 +280,7 @@ class Command(BaseCommand):
                 "role": UserRole.STUDENT,
             },
         )
-        student_user_2.set_password("Password@123")
+        student_user_2.set_password(MOT_DE_PASSE_DEMO)
         student_user_2.is_active = True
         student_user_2.save(update_fields=["password", "is_active"])
 
@@ -580,4 +637,19 @@ class Command(BaseCommand):
         )
 
         self.stdout.write(self.style.SUCCESS("Seed terminé avec succès."))
-        self.stdout.write(self.style.SUCCESS("Super admin -> username: superadmin / password: Admin@12345"))
+        # Les identifiants s'affichent ici, et nulle part dans le depot: un
+        # README les publiait, ce qui invitait a les essayer sur l'instance
+        # en ligne.
+        self.stdout.write("")
+        self.stdout.write(self.style.SUCCESS("Comptes de démonstration créés:"))
+        self.stdout.write(f"  superadmin   / {MOT_DE_PASSE_ADMIN}   (super-utilisateur)")
+        for nom in ("directeur", "comptable", "enseignant1", "parent1", "surveillant1", "eleve1", "eleve2"):
+            self.stdout.write(f"  {nom:<12} / {MOT_DE_PASSE_DEMO}")
+        self.stdout.write("")
+        self.stdout.write(
+            self.style.WARNING(
+                "Ces comptes ne doivent jamais exister ailleurs qu'en "
+                "développement. Sur une base en ligne: "
+                "manage.py purger_comptes_demo"
+            )
+        )

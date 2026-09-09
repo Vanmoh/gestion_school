@@ -362,13 +362,10 @@ printf "\nAccès API docs: http://localhost:8000/api/docs/\n"
 # annoncer sur une base reelle envoyait l'utilisateur essayer des mots de
 # passe qui n'ouvrent rien.
 if [[ "$DEMO_DATA_INJECTED" -eq 1 ]]; then
-  printf "Comptes de test:\n"
-  printf '%s\n' "- superadmin / Admin@12345"
-  printf '%s\n' "- directeur / Password@123"
-  printf '%s\n' "- comptable / Password@123"
-  printf '%s\n' "- enseignant1 / Password@123"
-  printf '%s\n' "- parent1 / Password@123"
-  printf '%s\n' "- eleve1 / Password@123"
+  # Les identifiants ne sont plus recopies ici: ils s'affichent dans la
+  # sortie de `seed_demo_data`, seul endroit qui les connaisse.
+  printf "Comptes de test: voir le récapitulatif affiché par seed_demo_data\n"
+  printf "plus haut dans cette sortie.\n"
 else
   printf "Base réelle: utilisez vos comptes habituels.\n"
 fi

@@ -17,6 +17,8 @@ from apps.school.models import (
     AcademicYear,
     ClassRoom,
     Etablissement,
+    ExamResult,
+    ExamSession,
     Grade,
     PromotionDecision,
     PromotionRun,
@@ -161,7 +163,10 @@ class PromotionApiTests(APITestCase):
         self._note(promu, self.maths, 15)
 
         redoublant = self._eleve("M002", "Bala")
-        self._note(redoublant, self.maths, 6)
+        # 3 et non 6: la conduite (18, coefficient 2) entre desormais dans la
+        # moyenne comme sur le bulletin, et 6 en maths (coefficient 4) donnent
+        # (6*4 + 18*2)/6 = 10,00 -- soit tout juste le seuil de passage.
+        self._note(redoublant, self.maths, 3)
 
         self.client.force_authenticate(self.directeur)
         reponse = self.client.post(
@@ -252,9 +257,9 @@ class PromotionApiTests(APITestCase):
     def test_average_is_weighted_by_subject_coefficient(self):
         """La moyenne simple et la moyenne ponderee ne decident pas pareil.
 
-        18 en sport (coef 1) et 8 en maths (coef 4) font 13 en simple et
-        10 en ponderee: sur un seuil a 10, un eleve passe dans un cas et
-        pas dans l'autre.
+        8 en maths (coef 4), 18 en sport (coef 1) et 18 de conduite (coef 2)
+        font 14,67 en moyenne simple contre 12,29 en ponderee: sur un seuil a
+        13, un eleve passe dans un cas et pas dans l'autre.
         """
         eleve = self._eleve("M001", "Awa")
         self._note(eleve, self.maths, 8)
@@ -266,7 +271,7 @@ class PromotionApiTests(APITestCase):
         )
 
         decision = self._decision(reponse.data["id"], eleve)
-        self.assertEqual(decision.average, Decimal("10.00"))
+        self.assertEqual(decision.average, Decimal("12.29"))
 
     def test_average_falls_back_to_the_recorded_history(self):
         """Une annee reprise d'un autre logiciel n'a pas de notes en base.
@@ -309,6 +314,69 @@ class PromotionApiTests(APITestCase):
         self.assertEqual(self._decision(run_id, premier).rank, 1)
         self.assertEqual(self._decision(run_id, second).rank, 2)
         self.assertEqual(self._decision(run_id, troisieme).rank, 3)
+
+    def test_la_composition_compte_dans_la_moyenne_de_passage(self):
+        """Une classe evaluee surtout en composition etait jugee a cote.
+
+        Le calcul n'agregeait que les notes de classe et ignorait purement et
+        simplement les resultats d'examen, que le bulletin et le classement
+        comptent pourtant. Un eleve dont la composition rattrapait l'annee
+        redoublait sur une moyenne qui n'etait pas la sienne.
+        """
+        eleve = self._eleve("M001", "Awa")
+        self._note(eleve, self.maths, 8)
+
+        session = ExamSession.objects.create(
+            title="Composition T1",
+            term="T1",
+            academic_year=self.annee_source,
+            start_date=date(2026, 1, 10),
+            end_date=date(2026, 1, 11),
+        )
+        ExamResult.objects.create(
+            session=session,
+            student=eleve,
+            subject=self.maths,
+            score=Decimal("16"),
+        )
+
+        self.client.force_authenticate(self.directeur)
+        reponse = self.client.post(
+            "/api/promotion-runs/simulate/", self._charge(), format="json"
+        )
+
+        decision = self._decision(reponse.data["id"], eleve)
+        # Devoirs 8 et composition 16 font 12 en maths (coef 4), avec la
+        # conduite 18 (coef 2): (12*4 + 18*2)/6 = 14,00.
+        self.assertEqual(decision.average, Decimal("14.00"))
+        self.assertEqual(decision.decision, "promoted")
+
+    def test_la_moyenne_annuelle_est_la_moyenne_des_trimestres_evalues(self):
+        """Un trimestre non encore saisi ne compte pas pour un zero.
+
+        Le comptabiliser ferait redoubler une classe entiere au seul motif
+        que son troisieme trimestre n'est pas termine.
+        """
+        eleve = self._eleve("M001", "Awa")
+        self._note(eleve, self.maths, 8)
+        Grade.objects.create(
+            student=eleve,
+            subject=self.maths,
+            classroom=self.sixieme,
+            academic_year=self.annee_source,
+            term="T2",
+            value=Decimal("16"),
+        )
+
+        self.client.force_authenticate(self.directeur)
+        reponse = self.client.post(
+            "/api/promotion-runs/simulate/", self._charge(), format="json"
+        )
+
+        decision = self._decision(reponse.data["id"], eleve)
+        # T1: (8*4 + 18*2)/6 = 11,33 -- T2: (16*4 + 18*2)/6 = 16,67.
+        # Le T3, non evalue, ne pese pas: (11,33 + 16,67) / 2 = 14,00.
+        self.assertEqual(decision.average, Decimal("14.00"))
 
     def test_conduite_below_threshold_blocks_an_otherwise_good_average(self):
         eleve = self._eleve("M001", "Awa", conduite="6")

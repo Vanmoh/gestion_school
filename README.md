@@ -73,13 +73,22 @@ cd backend
 /home/van/Documents/gestion_school/.venv/bin/python manage.py seed_demo_data
 ```
 
-Comptes de démonstration:
-- superadmin / Admin@12345
-- directeur / Password@123
-- comptable / Password@123
-- enseignant1 / Password@123
-- parent1 / Password@123
-- eleve1 / Password@123
+Les identifiants des comptes de démonstration s'affichent à la fin de
+`seed_demo_data` (et de `bootstrap.sh`). Ils ne sont volontairement plus
+écrits ici: publiés, ils invitaient à les essayer sur l'instance en ligne.
+
+Pour les changer: `DEMO_PASSWORD=... DEMO_ADMIN_PASSWORD=... python manage.py seed_demo_data`.
+
+⚠️ Ces comptes n'ont rien à faire en production. La commande refuse
+désormais de tourner avec `DEBUG=False`, le contrôle `gestion_school.W005`
+signale leur présence à chaque démarrage, et le ménage se fait avec:
+
+```bash
+cd backend
+python manage.py purger_comptes_demo --dry-run   # liste sans rien changer
+python manage.py purger_comptes_demo             # supprime
+python manage.py purger_comptes_demo --desactiver  # ferme sans effacer
+```
 
 ### 2) Flutter
 ```bash
@@ -230,6 +239,58 @@ Exemples:
 - Bulletin PDF: `GET /api/reports/bulletin/{student_id}/{academic_year_id}/{term}/`
 - Reçu PDF: `GET /api/reports/receipt/{payment_id}/`
 - Export Excel paiements: `GET /api/reports/payments/export-excel/`
+
+## Ouvrir une année scolaire
+
+Marche à suivre complète, de l'établissement vide à la première journée de
+classe: [docs/PROCEDURE_DE_RENTREE.md](docs/PROCEDURE_DE_RENTREE.md).
+
+L'étape qui bloquait la mise en service est réglée: les **barèmes de frais**
+(écran Finances → Barèmes) posent le tarif d'une classe et l'appliquent à tous
+ses élèves en un clic, au lieu de cinq mille saisies pour une école de cinq
+cents élèves. Réappliquer un barème ne crée que les frais manquants, ce qui
+rattrape les élèves inscrits en cours d'année.
+
+## Notifications aux familles
+
+Le canal push est branché côté serveur et testé; il reste à créer le projet
+Firebase et à brancher le client Flutter:
+[docs/NOTIFICATIONS_PUSH.md](docs/NOTIFICATIONS_PUSH.md).
+
+Sans configuration, l'application fonctionne: les notifications restent
+consultables dans l'écran Communication, simplement personne n'est alerté. Le
+contrôle `gestion_school.W006` le signale à chaque démarrage.
+
+## Moyennes, classement et bulletins
+
+Le bulletin et le classement passent par un seul calcul
+(`backend/apps/school/moyennes.py`). Ils divergeaient: le bulletin comptait la
+conduite avec un coefficient, le classement l'ignorait, et un élève pouvait
+donc être classé derrière un camarade dont le bulletin affichait une moyenne
+inférieure à la sienne.
+
+Le coefficient de la conduite se règle par établissement (écran
+Établissements, champ « Coefficient de conduite »). À zéro, la conduite reste
+notée et imprimée mais ne pèse plus sur la moyenne.
+
+Le bilan d'un élève est enregistré **par trimestre** : la clôture du T2
+n'écrase plus le rang du T1, et un bulletin de décembre réimprimé en juin
+porte toujours le rang de décembre. Un bilan sur la période vide désigne
+l'année entière — celui que la promotion écrit au moment du passage.
+
+Pour les années clôturées avant cette évolution, il n'existe qu'une ligne par
+élève, sans période : leurs anciens bulletins affichent « - » à la place du
+rang. La commande suivante reconstruit les bilans trimestriels à partir des
+notes, qui sont toujours en base :
+
+```bash
+cd backend
+python manage.py recalculer_rangs --etab-id=11 --dry-run
+python manage.py recalculer_rangs --etab-id=11
+```
+
+Sans option, elle traite toutes les années de tous les établissements.
+`--annee=2025-2026` et `--terms=T1,T2` restreignent la portée.
 
 ## Sauvegarde automatique
 - Commande manuelle: `python manage.py backup_db`

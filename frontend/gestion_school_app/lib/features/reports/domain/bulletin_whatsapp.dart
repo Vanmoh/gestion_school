@@ -162,6 +162,18 @@ class BulletinWhatsAppClasse {
   final String academicYear;
   final int readyCount;
   final int blockedCount;
+
+  /// Les bulletins de la periode sont-ils arretes pour cette classe.
+  ///
+  /// Porte au niveau de la classe et pas seulement sur chaque eleve: tant
+  /// que la periode n'est pas validee, soixante lignes repetent le meme
+  /// motif, et l'ecran doit pouvoir le dire une fois avec le bouton qui le
+  /// corrige.
+  final bool periodPublished;
+
+  final DateTime? periodPublishedAt;
+  final String periodPublishedBy;
+
   final List<BulletinWhatsAppEtat> eleves;
 
   const BulletinWhatsAppClasse({
@@ -170,6 +182,9 @@ class BulletinWhatsAppClasse {
     this.academicYear = '',
     this.readyCount = 0,
     this.blockedCount = 0,
+    this.periodPublished = false,
+    this.periodPublishedAt,
+    this.periodPublishedBy = '',
     this.eleves = const [],
   });
 
@@ -180,6 +195,9 @@ class BulletinWhatsAppClasse {
       academicYear: map['academic_year']?.toString() ?? '',
       readyCount: _asInt(map['ready_count']) ?? 0,
       blockedCount: _asInt(map['blocked_count']) ?? 0,
+      periodPublished: map['period_published'] == true,
+      periodPublishedAt: _asDate(map['period_published_at']),
+      periodPublishedBy: map['period_published_by']?.toString() ?? '',
       eleves: _rows(map['students']).map(BulletinWhatsAppEtat.fromMap).toList(),
     );
   }
