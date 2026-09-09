@@ -1,4 +1,5 @@
 
+from calendar import monthrange
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import re
@@ -8,6 +9,7 @@ from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
 from apps.common.models import TimeStampedModel
+from apps.school import moyennes
 
 
 # Nouveau modèle pour la gestion multi-établissements
@@ -80,6 +82,18 @@ class Etablissement(TimeStampedModel):
     # en voir apparaitre le jour de la mise a jour.
     library_penalty_per_day = models.DecimalField(
         max_digits=10, decimal_places=2, default=0
+    )
+    # Poids de la conduite dans la moyenne de la periode. La valeur etait
+    # figee a 2 dans le code du bulletin, et absente du classement: deux
+    # calculs pour un meme eleve. Elle se regle desormais par etablissement,
+    # et sert aux deux (voir apps/school/moyennes.py). A zero, la conduite
+    # est notee et imprimee mais ne pese plus sur la moyenne -- ce que
+    # certaines ecoles pratiquent.
+    conduite_coefficient = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=2,
+        validators=[MinValueValidator(0), MaxValueValidator(10)],
     )
 
     class Meta:
@@ -210,6 +224,15 @@ class Subject(TimeStampedModel):
     name = models.CharField(max_length=100)
     code = models.CharField(max_length=20)
     coefficient = models.DecimalField(max_digits=4, decimal_places=2, default=1)
+    # Nombre de seances par semaine, pour la generation de l'emploi du temps.
+    # Zero: la matiere n'est pas placee automatiquement -- c'est le defaut,
+    # pour qu'une base existante ne se retrouve pas avec un planning invente
+    # au premier lancement. La direction renseigne ce qu'elle veut voir
+    # placer.
+    weekly_slots = models.PositiveSmallIntegerField(
+        default=0,
+        validators=[MaxValueValidator(12)],
+    )
     classroom = models.ForeignKey(
         ClassRoom,
         on_delete=models.PROTECT,
@@ -721,11 +744,46 @@ class Student(TimeStampedModel):
 
 
 class StudentAcademicHistory(TimeStampedModel):
+    """Le bilan chiffre d'un eleve sur une periode, fige.
+
+    La periode manquait: le modele ne portait que (eleve, annee, classe), et
+    `recalculate_term_ranking` y faisait un `update_or_create`. La cloture du
+    T2 ecrasait donc la ligne du T1. Reimprimer un bulletin du premier
+    trimestre affichait le rang du second, et l'historique academique d'une
+    annee ne conservait en realite que son dernier trimestre clos.
+
+    `term` vide designe le bilan de l'annee entiere -- celui que la promotion
+    ecrit au moment du passage en classe superieure. T1/T2/T3 designent les
+    bilans trimestriels. Les deux cohabitent pour une meme annee: ils ne
+    repondent pas a la meme question.
+    """
+
+    ANNEE_ENTIERE = ""
+
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="history")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT)
     classroom = models.ForeignKey(ClassRoom, on_delete=models.PROTECT)
+    term = models.CharField(max_length=20, blank=True, default=ANNEE_ENTIERE)
     average = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     rank = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            # `update_or_create` ne protege de rien sans contrainte en base:
+            # deux clotures lancees en meme temps sur la meme classe
+            # inseraient chacune sa ligne, et le dossier de l'eleve afficherait
+            # deux rangs pour un meme trimestre.
+            models.UniqueConstraint(
+                fields=["student", "academic_year", "classroom", "term"],
+                name="historique_unique_par_periode",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["classroom", "academic_year", "term"],
+                name="histo_class_year_term_idx",
+            ),
+        ]
 
 
 class PromotionRunStatus(models.TextChoices):
@@ -1032,10 +1090,148 @@ class DisciplineIncident(TimeStampedModel):
         super().save(*args, **kwargs)
 
 
+def _ajouter_des_mois(depart: date, mois: int) -> date:
+    """Meme quantieme le mois suivant, ramene au dernier jour s'il n'existe pas.
+
+    Un bareme pose au 31 janvier produirait sinon un 31 fevrier. Le mois est
+    calcule en base zero pour eviter l'arithmetique modulo sur 1-12, source
+    classique d'un decalage d'un mois en decembre.
+    """
+    total = (depart.year * 12 + depart.month - 1) + mois
+    annee, mois_cible = divmod(total, 12)
+    mois_cible += 1
+    dernier_jour = monthrange(annee, mois_cible)[1]
+    return date(annee, mois_cible, min(depart.day, dernier_jour))
+
+
 class FeeType(models.TextChoices):
     REGISTRATION = "registration", "Frais inscription"
     MONTHLY = "monthly", "Frais mensuels"
     EXAM = "exam", "Frais examen"
+
+
+class FeeSchedule(TimeStampedModel):
+    """Le bareme de frais d'une classe: ce que chaque eleve devra payer.
+
+    Sans lui, ouvrir une annee voulait dire creer les frais un par un. Une
+    ecole de cinq cents eleves avec une inscription et neuf mensualites, cela
+    fait cinq mille saisies a la main: la comptable ne pouvait tout
+    simplement pas demarrer l'annee dans l'application.
+
+    Une ligne decrit un frais et sa recurrence. `occurrences` a 1 donne un
+    frais unique (l'inscription), a 9 donne neuf mensualites a un mois
+    d'intervalle a partir de `first_due_date`.
+
+    `classroom` vide vise toutes les classes de l'annee: les frais communs a
+    l'etablissement se posent alors en une ligne.
+    """
+
+    etablissement = models.ForeignKey(
+        'Etablissement',
+        on_delete=models.PROTECT,
+        related_name="fee_schedules",
+        null=True,
+        blank=True,
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear, on_delete=models.PROTECT, related_name="fee_schedules"
+    )
+    classroom = models.ForeignKey(
+        ClassRoom,
+        on_delete=models.CASCADE,
+        related_name="fee_schedules",
+        null=True,
+        blank=True,
+        help_text="Vide: le bareme s'applique a toutes les classes de l'annee.",
+    )
+    fee_type = models.CharField(max_length=20, choices=FeeType.choices)
+    # Ce que la ligne represente pour l'ecole (« Scolarite 1er versement »).
+    # Le type seul ne suffit pas quand deux baremes du meme type coexistent.
+    label = models.CharField(max_length=120, blank=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    first_due_date = models.DateField()
+    occurrences = models.PositiveSmallIntegerField(
+        default=1,
+        validators=[MinValueValidator(1), MaxValueValidator(12)],
+    )
+
+    class Meta:
+        ordering = ("classroom__name", "fee_type", "first_due_date")
+        indexes = [
+            models.Index(
+                fields=["academic_year", "classroom"],
+                name="feesched_year_class_idx",
+            ),
+        ]
+
+    def __str__(self):
+        portee = self.classroom.name if self.classroom else "toutes classes"
+        return f"{self.get_fee_type_display()} | {portee} | {self.amount}"
+
+    def echeances(self):
+        """Les dates d'echeance produites par cette ligne.
+
+        Le pas est d'un mois. Un 31 janvier suivi d'un mois donne le 28 (ou
+        29) fevrier et non une date inexistante: `_ajouter_des_mois` ramene
+        au dernier jour du mois vise.
+        """
+        return [
+            _ajouter_des_mois(self.first_due_date, rang)
+            for rang in range(self.occurrences)
+        ]
+
+    def eleves_concernes(self):
+        """Les eleves a qui ce bareme s'applique, non archives."""
+        queryset = Student.objects.filter(is_archived=False)
+        if self.classroom_id:
+            return queryset.filter(classroom_id=self.classroom_id)
+
+        classes = ClassRoom.objects.filter(academic_year=self.academic_year)
+        queryset = queryset.filter(classroom__in=classes)
+        if self.etablissement_id:
+            queryset = queryset.filter(etablissement_id=self.etablissement_id)
+        return queryset
+
+    def appliquer(self):
+        """Cree les frais manquants, et seulement eux.
+
+        L'operation se rejoue sans dommage: c'est ce qui permet de rattraper
+        un eleve inscrit en janvier sans redonner a toute la classe une
+        seconde serie de mensualites. Le couple (eleve, bareme, echeance)
+        porte une contrainte d'unicite en base, l'idempotence ne repose donc
+        pas seulement sur ce filtre.
+        """
+        eleves = list(self.eleves_concernes().only("id"))
+        echeances = self.echeances()
+        if not eleves or not echeances:
+            return {"crees": 0, "deja_en_place": 0, "eleves": len(eleves)}
+
+        existants = set(
+            StudentFee.objects.filter(
+                schedule=self, student__in=eleves
+            ).values_list("student_id", "due_date")
+        )
+
+        a_creer = [
+            StudentFee(
+                student=eleve,
+                academic_year=self.academic_year,
+                fee_type=self.fee_type,
+                amount_due=self.amount,
+                due_date=echeance,
+                schedule=self,
+            )
+            for eleve in eleves
+            for echeance in echeances
+            if (eleve.id, echeance) not in existants
+        ]
+        StudentFee.objects.bulk_create(a_creer, batch_size=500)
+
+        return {
+            "crees": len(a_creer),
+            "deja_en_place": len(eleves) * len(echeances) - len(a_creer),
+            "eleves": len(eleves),
+        }
 
 
 class StudentFee(TimeStampedModel):
@@ -1044,6 +1240,16 @@ class StudentFee(TimeStampedModel):
     fee_type = models.CharField(max_length=20, choices=FeeType.choices)
     amount_due = models.DecimalField(max_digits=12, decimal_places=2)
     due_date = models.DateField()
+    # D'ou vient ce frais. Vide: il a ete saisi a la main, cas particulier ou
+    # reprise. SET_NULL et non CASCADE: supprimer un bareme ne doit pas
+    # effacer des frais deja payes.
+    schedule = models.ForeignKey(
+        'FeeSchedule',
+        on_delete=models.SET_NULL,
+        related_name="fees",
+        null=True,
+        blank=True,
+    )
 
     @property
     def amount_paid(self):
@@ -1058,6 +1264,17 @@ class StudentFee(TimeStampedModel):
         indexes = [
             models.Index(fields=["student", "-due_date"], name="studentfee_student_due_idx"),
             models.Index(fields=["academic_year", "-due_date"], name="studentfee_year_due_idx"),
+        ]
+        constraints = [
+            # Rejouer un bareme ne doit jamais redonner deux fois la meme
+            # echeance au meme eleve. Le filtre de `appliquer()` s'en charge
+            # deja; cette contrainte tient aussi quand deux applications
+            # partent en meme temps.
+            models.UniqueConstraint(
+                fields=["student", "schedule", "due_date"],
+                condition=models.Q(schedule__isnull=False),
+                name="frais_unique_par_echeance_de_bareme",
+            ),
         ]
 
 
@@ -2032,11 +2249,56 @@ class CanteenService(TimeStampedModel):
     notes = models.CharField(max_length=255, blank=True)
 
 class ExamSession(TimeStampedModel):
+    """Une session d'examen, et la publication de ses resultats.
+
+    Les notes etaient visibles des la saisie: un eleve rafraichissait son
+    ecran pendant la correction et lisait une note avant que le jury ne
+    l'ait arretee. Une note corrigee ensuite -- erreur de report, copie
+    retrouvee -- avait deja circule dans la cour.
+
+    La publication est le geste qui manquait: la saisie se fait a couvert,
+    puis la direction ouvre les resultats aux familles d'un seul coup.
+    """
+
     title = models.CharField(max_length=100)
     term = models.CharField(max_length=2, default="T1")
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name="exam_sessions")
     start_date = models.DateField()
     end_date = models.DateField()
+    results_published = models.BooleanField(default=False)
+    results_published_at = models.DateTimeField(null=True, blank=True)
+    results_published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="published_exam_sessions",
+    )
+
+    def publier_les_resultats(self, *, user=None):
+        self.results_published = True
+        self.results_published_at = timezone.now()
+        self.results_published_by = user
+        self.save(
+            update_fields=[
+                "results_published",
+                "results_published_at",
+                "results_published_by",
+                "updated_at",
+            ]
+        )
+        return self
+
+    def depublier_les_resultats(self):
+        """Referme l'acces, sans effacer qui avait publie ni quand.
+
+        Une note publiee par erreur doit pouvoir etre retiree; la trace de la
+        premiere publication reste, c'est elle qui explique pourquoi une
+        famille a vu passer un chiffre.
+        """
+        self.results_published = False
+        self.save(update_fields=["results_published", "updated_at"])
+        return self
 
 
 class ExamPlanning(TimeStampedModel):
@@ -2149,62 +2411,86 @@ class StockMovement(TimeStampedModel):
         article.recalculer_quantite()
 
 
-def recalculate_term_ranking(classroom: ClassRoom, academic_year: AcademicYear, term: str):
-    students = Student.objects.filter(classroom=classroom, is_archived=False)
-    student_averages = []
-    for student in students:
-        grades = Grade.objects.filter(
+def moyenne_de_la_periode(student, classroom, academic_year, term) -> Decimal:
+    """La moyenne d'un eleve sur un trimestre, telle qu'elle sera imprimee.
+
+    Meme calcul que le bulletin, par construction: les deux passent par
+    apps/school/moyennes.py. Le classement s'en ecartait, faute de compter la
+    conduite -- un eleve pouvait etre classe derriere un camarade dont le
+    bulletin affichait une moyenne inferieure.
+    """
+    grades = (
+        Grade.objects.filter(
             student=student,
             classroom=classroom,
             academic_year=academic_year,
             term=term,
-        ).select_related("subject")
-        exam_results = ExamResult.objects.filter(
+        )
+        .select_related("subject")
+        .order_by("subject_id", "-created_at", "-id")
+    )
+    exam_results = (
+        ExamResult.objects.filter(
             student=student,
             session__academic_year=academic_year,
             session__term=term,
-        ).select_related("subject", "session")
-
-        class_note_by_subject = {}
-        subject_by_id = {}
-        for grade in grades.order_by("subject_id", "-created_at", "-id"):
-            class_note_by_subject.setdefault(grade.subject_id, Decimal(str(grade.value)))
-            subject_by_id.setdefault(grade.subject_id, grade.subject)
-
-        exam_note_by_subject = {}
-        for exam_result in exam_results.order_by(
+        )
+        .select_related("subject", "session")
+        .order_by(
             "subject_id",
             "-session__end_date",
             "-session__start_date",
             "-created_at",
             "-id",
-        ):
-            exam_note_by_subject.setdefault(exam_result.subject_id, Decimal(str(exam_result.score)))
-            subject_by_id.setdefault(exam_result.subject_id, exam_result.subject)
+        )
+    )
 
-        weighted_sum = Decimal("0")
-        coef_sum = Decimal("0")
+    class_note_by_subject = {}
+    exam_note_by_subject = {}
+    coefficients = {}
 
-        for subject_id, subject in subject_by_id.items():
-            coef = Decimal(str(subject.coefficient or 0))
-            if coef <= 0:
-                continue
+    for grade in grades:
+        class_note_by_subject.setdefault(grade.subject_id, grade.value)
+        coefficients.setdefault(grade.subject_id, grade.subject.coefficient)
 
-            class_note = class_note_by_subject.get(subject_id)
-            exam_note = exam_note_by_subject.get(subject_id)
+    for exam_result in exam_results:
+        exam_note_by_subject.setdefault(exam_result.subject_id, exam_result.score)
+        coefficients.setdefault(exam_result.subject_id, exam_result.subject.coefficient)
 
-            if class_note is not None:
-                weighted_sum += class_note * coef
-                coef_sum += coef
-            if exam_note is not None:
-                weighted_sum += exam_note * coef
-                coef_sum += coef
+    notes_finales = {
+        subject_id: moyennes.note_finale_matiere(
+            class_note_by_subject.get(subject_id),
+            exam_note_by_subject.get(subject_id),
+        )
+        for subject_id in coefficients
+    }
 
-        average = Decimal("0")
-        if coef_sum > 0:
-            average = (weighted_sum / coef_sum).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    moyenne, _ = moyennes.moyenne_ponderee(
+        notes_finales_par_matiere=notes_finales,
+        coefficients_par_matiere=coefficients,
+        conduite_note=student.conduite,
+        conduite_coefficient=moyennes.coefficient_de_conduite(
+            getattr(student, "etablissement", None)
+        ),
+    )
+    return moyenne
 
-        student_averages.append((student, average))
+
+def recalculate_term_ranking(classroom: ClassRoom, academic_year: AcademicYear, term: str):
+    """Fige le bilan de la classe pour ce trimestre, et la classe.
+
+    Le bilan est ecrit sur (eleve, annee, classe, trimestre): celui du T1
+    survit desormais a la cloture du T2, et un bulletin du premier trimestre
+    reimprime en juin porte toujours le rang de decembre.
+    """
+    students = Student.objects.filter(
+        classroom=classroom, is_archived=False
+    ).select_related("user", "etablissement")
+
+    student_averages = [
+        (student, moyenne_de_la_periode(student, classroom, academic_year, term))
+        for student in students
+    ]
 
     sorted_students = sorted(student_averages, key=lambda row: row[1], reverse=True)
     for index, (student, average) in enumerate(sorted_students, start=1):
@@ -2212,5 +2498,6 @@ def recalculate_term_ranking(classroom: ClassRoom, academic_year: AcademicYear, 
             student=student,
             academic_year=academic_year,
             classroom=classroom,
+            term=term,
             defaults={"average": average, "rank": index},
         )

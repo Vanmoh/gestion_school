@@ -4,13 +4,15 @@ from io import BytesIO
 import csv
 import io
 import os
+import re
+import unicodedata
 from django.contrib.auth import get_user_model
 
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Avg, Count, DecimalField, ExpressionWrapper, F, Prefetch, Q, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, TruncMonth
 from django.http import (
     FileResponse,
     HttpResponse,
@@ -45,7 +47,8 @@ from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import StandardResultsSetPagination
 from apps.common.models import ActivityLog
 from .dashboard_cache import STATS_CACHE_SECONDS, stats_cache_key
-from .term_utils import normalize_term
+from . import planification
+from .term_utils import TERMS, normalize_term
 from .models import (
     AcademicYear,
     Announcement,
@@ -67,6 +70,9 @@ from .models import (
     ExamResult,
     ExamSession,
     Expense,
+    FeeSchedule,
+    FeeType,
+    _ajouter_des_mois,
     Grade,
     GradeValidation,
     LibraryCategory,
@@ -101,6 +107,7 @@ from .models import (
     TeacherScheduleSlot,
     TimetablePublication,
     TeacherPayroll,
+    moyenne_de_la_periode,
     recalculate_term_ranking,
 )
 from .serializers import (
@@ -134,6 +141,7 @@ from .serializers import (
     StockItemSerializer,
     StockMovementSerializer,
     StudentAcademicHistorySerializer,
+    FeeScheduleSerializer,
     StudentFeeSerializer,
     StudentSerializer,
     SubjectSerializer,
@@ -568,6 +576,19 @@ def _load_import_rows(uploaded_file):
     raise ValidationError({"file": "Format non supporté. Utilisez CSV ou XLSX."})
 
 
+def _entier_positif_ou_none(value):
+    """Un identifiant lu d'une requete, ou None s'il n'en est pas un.
+
+    Au niveau du module plutot que dans une vue: deux ViewSets s'en servent
+    pour lire les memes parametres (classe, annee scolaire).
+    """
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _as_text(value):
     return str(value or "").strip()
 
@@ -651,6 +672,19 @@ IMPORT_TEMPLATE_DEFINITIONS = {
         "rows": [
             ["MAT001", "MAT", "Mathematiques", "13"],
             ["MAT002", "PHY", "Physique", "11.75"],
+        ],
+    },
+    "fees": {
+        "filename": "import_fees_template",
+        "headers": [
+            "student_matricule",
+            "fee_type",
+            "amount_due",
+            "due_date",
+        ],
+        "rows": [
+            ["MAT001", "registration", "25000", "2025-10-15"],
+            ["MAT002", "monthly", "10000", "2025-11-05"],
         ],
     },
     "timetable": {
@@ -2328,6 +2362,256 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
     ]
     ordering_fields = ["day_of_week", "start_time", "end_time"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+
+    # ----- generation automatique ------------------------------------------
+
+    @staticmethod
+    def _heure(valeur, defaut):
+        lue = parse_time(str(valeur or "").strip()) if valeur else None
+        return lue or defaut
+
+    def _classes_visees(self, request):
+        classroom_id = _entier_positif_ou_none(request.data.get("classroom"))
+        classes = ClassRoom.objects.select_related("etablissement", "academic_year")
+
+        etablissement = getattr(request.user, "etablissement", None)
+        requested = self.request.headers.get("X-Etablissement-Id")
+        if getattr(request.user, "role", None) == UserRole.SUPER_ADMIN and requested:
+            etablissement = Etablissement.objects.filter(
+                id=_entier_positif_ou_none(requested)
+            ).first()
+        if etablissement is not None:
+            classes = classes.filter(etablissement=etablissement)
+
+        if classroom_id:
+            classes = classes.filter(id=classroom_id)
+            if not classes.exists():
+                raise ValidationError({"classroom": "Classe introuvable dans cet établissement."})
+        return list(classes)
+
+    def _preparer(self, request, classes):
+        """Rassemble ce dont l'algorithme a besoin: besoins, grille, contraintes."""
+        besoins = []
+        for assignment in (
+            TeacherAssignment.objects.filter(classroom__in=classes)
+            .select_related("subject", "classroom", "teacher")
+        ):
+            seances = int(getattr(assignment.subject, "weekly_slots", 0) or 0)
+            if seances <= 0:
+                # Volume horaire non renseigne: la matiere n'est pas placee.
+                # Inventer un volume produirait un planning que personne n'a
+                # decide.
+                continue
+            besoins.append(
+                planification.Besoin(
+                    assignment_id=assignment.id,
+                    teacher_id=assignment.teacher_id,
+                    classroom_id=assignment.classroom_id,
+                    subject_id=assignment.subject_id,
+                    subject_name=assignment.subject.name,
+                    seances=seances,
+                )
+            )
+
+        grille = planification.construire_la_grille(
+            jours=[
+                jour
+                for jour in (request.data.get("days") or ["MON", "TUE", "WED", "THU", "FRI"])
+                if jour in planification.JOURS_OUVRES
+            ],
+            debut=self._heure(request.data.get("start_time"), time(8, 0)),
+            fin=self._heure(request.data.get("end_time"), time(17, 0)),
+            duree_minutes=int(request.data.get("slot_minutes") or 60),
+            pause_debut=self._heure(request.data.get("break_start"), time(12, 0)),
+            pause_fin=self._heure(request.data.get("break_end"), time(13, 0)),
+        )
+
+        # Les disponibilites declarees pendant la campagne.
+        disponibilites = {}
+        for slot in TeacherAvailabilitySlot.objects.filter(
+            teacher_id__in={besoin.teacher_id for besoin in besoins}
+        ):
+            disponibilites.setdefault(slot.teacher_id, []).append(
+                (
+                    planification.Creneau(slot.day_of_week, slot.start_time, slot.end_time),
+                    slot.kind,
+                )
+            )
+
+        # Ce qui est deja pose: une generation ne doit pas ecraser les
+        # creneaux saisis a la main, ni ceux d'une autre classe qui partage
+        # l'enseignant.
+        occupes_enseignants = {}
+        occupes_classes = {}
+        occupees_salles = {}
+        deja = TeacherScheduleSlot.objects.select_related("assignment")
+        if request.data.get("replace"):
+            # Remplacement demande: les creneaux des classes visees ne
+            # comptent plus comme occupes, ils vont disparaitre.
+            deja = deja.exclude(assignment__classroom__in=classes)
+        for slot in deja:
+            creneau = planification.Creneau(
+                slot.day_of_week, slot.start_time, slot.end_time
+            )
+            occupes_enseignants.setdefault(slot.assignment.teacher_id, []).append(creneau)
+            occupes_classes.setdefault(slot.assignment.classroom_id, []).append(creneau)
+            if slot.room:
+                occupees_salles.setdefault(slot.room, []).append(creneau)
+
+        return besoins, grille, disponibilites, occupes_enseignants, occupes_classes, occupees_salles
+
+    def _rendu(self, resultat, besoins, grille, applique):
+        noms = {}
+        for assignment in TeacherAssignment.objects.filter(
+            id__in={besoin.assignment_id for besoin in besoins}
+        ).select_related("subject", "classroom", "teacher__user"):
+            enseignant = assignment.teacher.user.get_full_name().strip() if assignment.teacher and assignment.teacher.user else ""
+            noms[assignment.id] = {
+                "subject": assignment.subject.name,
+                "classroom": assignment.classroom.name,
+                "teacher": enseignant,
+            }
+
+        return {
+            "applique": applique,
+            "creneaux_disponibles": len(grille),
+            "seances_demandees": sum(besoin.seances for besoin in besoins),
+            "placees": len(resultat.placements),
+            "non_placees": len(resultat.echecs),
+            "placements": [
+                {
+                    "assignment": placement.assignment_id,
+                    **noms.get(placement.assignment_id, {}),
+                    "day_of_week": placement.creneau.jour,
+                    "start_time": placement.creneau.debut.strftime("%H:%M"),
+                    "end_time": placement.creneau.fin.strftime("%H:%M"),
+                    "hors_disponibilite": placement.hors_disponibilite,
+                }
+                for placement in resultat.placements
+            ],
+            "echecs": [
+                {
+                    "assignment": echec.assignment_id,
+                    **noms.get(echec.assignment_id, {}),
+                    "motif": echec.motif,
+                }
+                for echec in resultat.echecs
+            ],
+        }
+
+    @action(detail=False, methods=["post"])
+    def simuler(self, request):
+        """Ce que la generation produirait, sans rien ecrire.
+
+        Un emploi du temps engage l'annee entiere: il se relit avant d'etre
+        pose, comme un bareme de frais.
+        """
+        classes = self._classes_visees(request)
+        if not classes:
+            raise ValidationError({"classroom": "Aucune classe à planifier."})
+
+        besoins, grille, dispos, occ_ens, occ_cls, occ_salles = self._preparer(
+            request, classes
+        )
+        if not besoins:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Aucune matière à placer: renseignez le nombre de séances "
+                        "hebdomadaires des matières (champ « séances/semaine »)."
+                    )
+                }
+            )
+
+        resultat = planification.generer(
+            besoins=besoins,
+            grille=grille,
+            disponibilites=dispos,
+            occupes_enseignants=occ_ens,
+            occupes_classes=occ_cls,
+            occupees_salles=occ_salles,
+            autoriser_hors_disponibilite=bool(
+                request.data.get("autoriser_hors_disponibilite", True)
+            ),
+            max_par_jour=int(request.data.get("max_par_jour") or 2),
+        )
+        return Response(self._rendu(resultat, besoins, grille, applique=False))
+
+    @action(detail=False, methods=["post"])
+    def generer(self, request):
+        """Place les seances et enregistre le planning.
+
+        Ce qui ne rentre pas est rendu dans `echecs` plutot que de faire
+        echouer l'ensemble: un planning refuse en bloc parce qu'une seule
+        seance ne rentre pas serait inutilisable, et l'administration
+        arbitre la poignee de cas restants a la main.
+        """
+        classes = self._classes_visees(request)
+        if not classes:
+            raise ValidationError({"classroom": "Aucune classe à planifier."})
+
+        besoins, grille, dispos, occ_ens, occ_cls, occ_salles = self._preparer(
+            request, classes
+        )
+        if not besoins:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Aucune matière à placer: renseignez le nombre de séances "
+                        "hebdomadaires des matières (champ « séances/semaine »)."
+                    )
+                }
+            )
+
+        resultat = planification.generer(
+            besoins=besoins,
+            grille=grille,
+            disponibilites=dispos,
+            occupes_enseignants=occ_ens,
+            occupes_classes=occ_cls,
+            occupees_salles=occ_salles,
+            autoriser_hors_disponibilite=bool(
+                request.data.get("autoriser_hors_disponibilite", True)
+            ),
+            max_par_jour=int(request.data.get("max_par_jour") or 2),
+        )
+
+        with transaction.atomic():
+            if request.data.get("replace"):
+                TeacherScheduleSlot.objects.filter(
+                    assignment__classroom__in=classes
+                ).delete()
+
+            TeacherScheduleSlot.objects.bulk_create(
+                [
+                    TeacherScheduleSlot(
+                        assignment_id=placement.assignment_id,
+                        day_of_week=placement.creneau.jour,
+                        start_time=placement.creneau.debut,
+                        end_time=placement.creneau.fin,
+                        room=placement.room,
+                        off_availability_reason=placement.hors_disponibilite,
+                    )
+                    for placement in resultat.placements
+                ],
+                batch_size=500,
+            )
+            ActivityLog.objects.create(
+                user=request.user,
+                etablissement=getattr(classes[0], "etablissement", None),
+                role=getattr(request.user, "role", "") or "",
+                action="Generation d'un emploi du temps",
+                method=request.method,
+                path=str(request.path)[:255],
+                module="timetable",
+                target=f"{len(classes)} classe(s)"[:120],
+                details=(
+                    f"{len(resultat.placements)} seance(s) placee(s), "
+                    f"{len(resultat.echecs)} non placee(s)."
+                ),
+            )
+
+        return Response(self._rendu(resultat, besoins, grille, applique=True))
 
 
 
@@ -4687,11 +4971,7 @@ class GradeViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
 
     @staticmethod
     def _parse_positive_int(value):
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
+        return _entier_positif_ou_none(value)
 
     @staticmethod
     def _normalize_term_or_none(value):
@@ -4764,6 +5044,7 @@ class GradeViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         history_count = StudentAcademicHistory.objects.filter(
             classroom=classroom,
             academic_year=academic_year,
+            term=term,
         ).count()
         return validation, history_count
 
@@ -6705,6 +6986,192 @@ class DisciplineIncidentViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         return super().partial_update(request, *args, **kwargs)
 
 
+def _type_de_frais_importe(valeur):
+    """Le type de frais, ecrit comme l'ecole l'ecrit.
+
+    Le fichier vient d'un tableur rempli a la main: « inscription »,
+    « Inscription », « registration » et « INSCRIPTION » designent la meme
+    chose et doivent toutes passer.
+    """
+    brut = _as_text(valeur).lower()
+    brut = unicodedata.normalize("NFD", brut)
+    brut = "".join(ch for ch in brut if unicodedata.category(ch) != "Mn")
+    brut = re.sub(r"[\s_-]+", "", brut)
+
+    correspondances = {
+        "registration": FeeType.REGISTRATION,
+        "inscription": FeeType.REGISTRATION,
+        "fraisinscription": FeeType.REGISTRATION,
+        "monthly": FeeType.MONTHLY,
+        "mensuel": FeeType.MONTHLY,
+        "mensualite": FeeType.MONTHLY,
+        "scolarite": FeeType.MONTHLY,
+        "fraismensuels": FeeType.MONTHLY,
+        "exam": FeeType.EXAM,
+        "examen": FeeType.EXAM,
+        "fraisexamen": FeeType.EXAM,
+    }
+    return correspondances.get(brut, "")
+
+
+class FeeScheduleViewSet(AnneeScolaireScopeMixin, EtablissementScopedModelViewSet):
+    """Les baremes de frais, et leur application en masse.
+
+    C'est ce qui manquait pour ouvrir une annee: sans lui, poser une
+    inscription et neuf mensualites sur cinq cents eleves demandait cinq
+    mille saisies a la main.
+    """
+
+    access_module = "finance"
+    queryset = FeeSchedule.objects.select_related(
+        "academic_year", "classroom", "etablissement"
+    ).all()
+    serializer_class = FeeScheduleSerializer
+    permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+    pagination_class = StandardResultsSetPagination
+    filterset_fields = ["academic_year", "classroom", "fee_type"]
+    ordering_fields = ["first_due_date", "amount", "fee_type"]
+    search_fields = ["label", "classroom__name"]
+
+    def get_queryset(self):
+        return self._filter_by_scope(super().get_queryset())
+
+    def perform_create(self, serializer):
+        serializer.save(etablissement=self._resolve_target_etablissement())
+
+    def perform_update(self, serializer):
+        serializer.save(etablissement=self._resolve_target_etablissement())
+
+    def destroy(self, request, *args, **kwargs):
+        """Un bareme s'efface, les frais qu'il a produits restent.
+
+        `StudentFee.schedule` est en SET_NULL: supprimer un bareme mal saisi
+        ne doit pas faire disparaitre des frais deja encaisses. Les frais
+        orphelins deviennent des frais saisis a la main, ce qu'ils sont
+        desormais.
+        """
+        bareme = self.get_object()
+        payes = Payment.objects.filter(
+            fee__schedule=bareme, is_cancelled=False
+        ).exists()
+        response = super().destroy(request, *args, **kwargs)
+        if payes:
+            # Information, pas refus: c'est la direction qui juge. Mais elle
+            # doit savoir que des encaissements sont rattaches a ce bareme.
+            response.data = {
+                "detail": (
+                    "Barème supprimé. Les frais déjà générés sont conservés, "
+                    "certains portent des paiements."
+                )
+            }
+            response.status_code = 200
+        return response
+
+    def _journaliser(self, bareme, resultat):
+        ActivityLog.objects.create(
+            user=self.request.user,
+            etablissement=bareme.etablissement,
+            role=getattr(self.request.user, "role", "") or "",
+            action="Application d'un bareme de frais",
+            method=self.request.method,
+            path=str(self.request.path)[:255],
+            module="finance",
+            target=f"FeeSchedule #{bareme.pk} ({bareme})"[:120],
+            details=(
+                f"{resultat['crees']} frais crees pour {resultat['eleves']} eleve(s) "
+                f"({bareme.get_fee_type_display()}, {bareme.occurrences} echeance(s))."
+            ),
+        )
+
+    @action(detail=True, methods=["post"])
+    def appliquer(self, request, pk=None):
+        """Cree les frais manquants pour les eleves vises par ce bareme.
+
+        L'action se rejoue: c'est ainsi qu'on rattrape un eleve inscrit en
+        cours d'annee sans redonner a toute la classe une seconde serie de
+        mensualites.
+        """
+        bareme = self.get_object()
+
+        with transaction.atomic():
+            resultat = bareme.appliquer()
+            self._journaliser(bareme, resultat)
+
+        return Response(
+            {
+                "detail": (
+                    f"{resultat['crees']} frais créé(s) pour "
+                    f"{resultat['eleves']} élève(s)."
+                ),
+                **resultat,
+            }
+        )
+
+    @action(detail=False, methods=["post"], url_path="appliquer-tout")
+    def appliquer_tout(self, request):
+        """Applique tous les baremes d'une annee, en une fois.
+
+        Le geste de la rentree: les baremes sont poses classe par classe,
+        puis appliques d'un coup une fois relus.
+        """
+        academic_year_id = request.data.get("academic_year")
+        baremes = self.get_queryset()
+        if academic_year_id not in (None, ""):
+            try:
+                baremes = baremes.filter(academic_year_id=int(academic_year_id))
+            except (TypeError, ValueError):
+                raise ValidationError({"academic_year": "Année scolaire invalide."})
+
+        baremes = list(baremes)
+        if not baremes:
+            return Response(
+                {"detail": "Aucun barème à appliquer.", "crees": 0, "baremes": 0}
+            )
+
+        total = {"crees": 0, "deja_en_place": 0}
+        with transaction.atomic():
+            for bareme in baremes:
+                resultat = bareme.appliquer()
+                total["crees"] += resultat["crees"]
+                total["deja_en_place"] += resultat["deja_en_place"]
+                self._journaliser(bareme, resultat)
+
+        return Response(
+            {
+                "detail": (
+                    f"{total['crees']} frais créé(s) à partir de "
+                    f"{len(baremes)} barème(s)."
+                ),
+                "baremes": len(baremes),
+                **total,
+            }
+        )
+
+    @action(detail=True, methods=["get"])
+    def apercu(self, request, pk=None):
+        """Ce que l'application produirait, sans rien ecrire.
+
+        Un bareme mal saisi multiplie son erreur par le nombre d'echeances et
+        par la classe entiere: il doit pouvoir se relire avant d'etre pose.
+        """
+        bareme = self.get_object()
+        eleves = bareme.eleves_concernes().count()
+        echeances = bareme.echeances()
+        deja = StudentFee.objects.filter(schedule=bareme).count()
+
+        return Response(
+            {
+                "eleves_concernes": eleves,
+                "echeances": [echeance.isoformat() for echeance in echeances],
+                "montant_par_echeance": bareme.amount,
+                "montant_par_eleve": bareme.amount * bareme.occurrences,
+                "montant_total": bareme.amount * bareme.occurrences * eleves,
+                "frais_deja_generes": deja,
+                "frais_a_creer": max(0, eleves * len(echeances) - deja),
+            }
+        )
+
+
 class StudentFeeViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "finance"
     queryset = StudentFee.objects.select_related("student", "student__user", "academic_year").all().order_by("-due_date", "-id")
@@ -6741,6 +7208,157 @@ class StudentFeeViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         target_etablissement = self._resolve_target_etablissement()
         if target_etablissement and student.etablissement_id != target_etablissement.id:
             raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
+
+    @action(detail=False, methods=["get"], url_path="import-template")
+    def import_template(self, request):
+        """Le fichier vierge a remplir, en CSV ou en XLSX."""
+        return _build_import_template_download_response(
+            "fees", request.query_params.get("format")
+        )
+
+    @action(detail=False, methods=["post"], url_path="import-fees")
+    def import_fees(self, request):
+        """Charge des frais individuels depuis un tableur.
+
+        Le bareme couvre le cas general -- toute une classe, meme montant.
+        Ce chemin-ci couvre le reste, qui existe dans toute ecole: un tarif
+        negocie, une bourse partielle, un eleve arrive en cours d'annee avec
+        un echeancier a lui.
+        """
+        academic_year_id = _entier_positif_ou_none(request.data.get("academic_year"))
+        if not academic_year_id:
+            raise ValidationError({"academic_year": "Année scolaire requise."})
+        academic_year = get_object_or_404(AcademicYear, id=academic_year_id)
+
+        rows = _load_import_rows(request.FILES.get("file") or request.data.get("file"))
+        if not rows:
+            raise ValidationError({"file": "Aucune ligne exploitable dans le fichier."})
+
+        etablissement = self._resolve_target_etablissement()
+        eleves = Student.objects.filter(is_archived=False)
+        if etablissement is not None:
+            eleves = eleves.filter(etablissement=etablissement)
+        eleves_par_matricule = {
+            matricule.strip().upper(): eleve_id
+            for eleve_id, matricule in eleves.values_list("id", "matricule")
+            if matricule
+        }
+
+        erreurs = []
+        a_creer = []
+        vus = set()
+
+        for index, row in enumerate(rows, start=2):
+            matricule = _as_text(
+                row.get("student_matricule") or row.get("matricule")
+            ).upper()
+            type_de_frais = _type_de_frais_importe(
+                row.get("fee_type") or row.get("type")
+            )
+            montant = _as_decimal(row.get("amount_due") or row.get("montant"))
+            echeance = _as_date(row.get("due_date") or row.get("echeance"))
+
+            if not matricule:
+                erreurs.append({"row": index, "error": "Matricule obligatoire."})
+                continue
+            eleve_id = eleves_par_matricule.get(matricule)
+            if eleve_id is None:
+                erreurs.append(
+                    {"row": index, "error": f"Aucun élève « {matricule} » dans cet établissement."}
+                )
+                continue
+            if not type_de_frais:
+                erreurs.append(
+                    {
+                        "row": index,
+                        "error": "Type de frais invalide (inscription, mensualite ou examen).",
+                    }
+                )
+                continue
+            if montant is None or montant <= 0:
+                erreurs.append({"row": index, "error": "Montant invalide."})
+                continue
+            if echeance is None:
+                erreurs.append(
+                    {"row": index, "error": "Échéance illisible (attendu AAAA-MM-JJ)."}
+                )
+                continue
+            if not (academic_year.start_date <= echeance <= academic_year.end_date):
+                erreurs.append(
+                    {
+                        "row": index,
+                        "error": (
+                            f"Échéance hors de l'année scolaire "
+                            f"({academic_year.start_date} - {academic_year.end_date})."
+                        ),
+                    }
+                )
+                continue
+
+            cle = (eleve_id, type_de_frais, echeance)
+            if cle in vus:
+                erreurs.append(
+                    {"row": index, "error": "Ligne en double dans le fichier."}
+                )
+                continue
+            vus.add(cle)
+
+            a_creer.append(
+                StudentFee(
+                    student_id=eleve_id,
+                    academic_year=academic_year,
+                    fee_type=type_de_frais,
+                    amount_due=montant,
+                    due_date=echeance,
+                )
+            )
+
+        # Rien n'est ecrit tant qu'une ligne est fausse: un import a moitie
+        # passe laisse une comptabilite dont personne ne sait ou elle en est.
+        if erreurs:
+            raise ValidationError(
+                {
+                    "detail": f"{len(erreurs)} ligne(s) en erreur, aucun frais créé.",
+                    "row_errors": erreurs[:50],
+                }
+            )
+
+        deja = set(
+            StudentFee.objects.filter(
+                academic_year=academic_year,
+                student_id__in=[frais.student_id for frais in a_creer],
+            ).values_list("student_id", "fee_type", "due_date")
+        )
+        nouveaux = [
+            frais
+            for frais in a_creer
+            if (frais.student_id, frais.fee_type, frais.due_date) not in deja
+        ]
+
+        with transaction.atomic():
+            StudentFee.objects.bulk_create(nouveaux, batch_size=500)
+            ActivityLog.objects.create(
+                user=request.user,
+                etablissement=etablissement,
+                role=getattr(request.user, "role", "") or "",
+                action="Import de frais",
+                method=request.method,
+                path=str(request.path)[:255],
+                module="finance",
+                target=f"StudentFee x{len(nouveaux)}"[:120],
+                details=(
+                    f"{len(nouveaux)} frais importes depuis un fichier "
+                    f"({academic_year.name})."
+                ),
+            )
+
+        return Response(
+            {
+                "detail": f"{len(nouveaux)} frais créé(s).",
+                "created": len(nouveaux),
+                "ignored": len(a_creer) - len(nouveaux),
+            }
+        )
 
     @staticmethod
     def _with_financial_annotations(queryset):
@@ -8446,7 +9064,70 @@ class ExamSessionViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     filterset_fields = ["academic_year", "term"]
     search_fields = ["title", "academic_year__name"]
     ordering_fields = ["start_date", "end_date", "title", "term"]
+    filterset_fields = ["academic_year", "term", "results_published"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+
+    def _journaliser(self, session, action, details):
+        ActivityLog.objects.create(
+            user=self.request.user,
+            etablissement=getattr(session.academic_year, "etablissement", None),
+            role=getattr(self.request.user, "role", "") or "",
+            action=action,
+            method=self.request.method,
+            path=str(self.request.path)[:255],
+            module="exams",
+            target=f"ExamSession #{session.pk} ({session.title})"[:120],
+            details=details,
+        )
+
+    @action(detail=True, methods=["post"])
+    def publier(self, request, pk=None):
+        """Ouvre les resultats de la session aux familles.
+
+        Refuse une session sans aucune note: publier le vide ferait chercher
+        aux familles des resultats qui n'existent pas encore.
+        """
+        session = self.get_object()
+        if not ExamResult.objects.filter(session=session).exists():
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Aucun résultat saisi pour cette session. "
+                        "Saisissez les notes avant de publier."
+                    )
+                }
+            )
+
+        session.publier_les_resultats(user=request.user)
+        self._journaliser(
+            session,
+            "Publication des resultats d'examen",
+            f"{ExamResult.objects.filter(session=session).count()} resultat(s) ouverts aux familles.",
+        )
+        return Response(
+            {
+                "detail": "Résultats publiés. Les familles peuvent les consulter.",
+                "results_published": True,
+                "results_published_at": session.results_published_at,
+            }
+        )
+
+    @action(detail=True, methods=["post"])
+    def depublier(self, request, pk=None):
+        """Referme l'acces, le temps d'une correction."""
+        session = self.get_object()
+        session.depublier_les_resultats()
+        self._journaliser(
+            session,
+            "Retrait des resultats d'examen",
+            "Resultats retires de la consultation des familles.",
+        )
+        return Response(
+            {
+                "detail": "Résultats retirés de la consultation des familles.",
+                "results_published": False,
+            }
+        )
 
 
 class ExamPlanningViewSet(BaseModelViewSet):
@@ -8577,10 +9258,17 @@ class ExamResultViewSet(BaseModelViewSet):
         user = self.request.user
         qs = super().get_queryset()
         role = getattr(user, "role", "")
+        # Les familles ne lisent que des resultats arretes. Sans ce filtre,
+        # un eleve rafraichissait son ecran pendant la correction et voyait
+        # une note avant le jury -- puis parfois une autre apres correction.
         if role == UserRole.STUDENT:
-            return qs.filter(student__user_id=user.id)
+            return qs.filter(
+                student__user_id=user.id, session__results_published=True
+            )
         if role == UserRole.PARENT:
-            return qs.filter(student__parent__user_id=user.id)
+            return qs.filter(
+                student__parent__user_id=user.id, session__results_published=True
+            )
 
         requested_id = self.request.headers.get("X-Etablissement-Id") or self.request.query_params.get("etablissement")
         if requested_id not in (None, ""):
@@ -9028,29 +9716,51 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
         return mapping
 
     def _compute_student_average(self, student, classroom, source_year):
-        grades = Grade.objects.filter(
-            student=student,
-            classroom=classroom,
-            academic_year=source_year,
-        ).select_related("subject")
+        """La moyenne de l'annee, celle sur laquelle se decide le passage.
 
-        weighted_sum = Decimal("0")
-        coef_sum = Decimal("0")
-        for grade in grades:
-            coef = Decimal(str(grade.subject.coefficient or 0))
-            if coef <= 0:
+        Elle se calcule comme la moyenne des trimestres reellement evalues,
+        chacun obtenu par le meme calcul que le bulletin (conduite comprise,
+        composition comprise). L'ancienne version melait toutes les notes de
+        classe de l'annee dans une seule moyenne ponderee et ignorait
+        purement et simplement les `ExamResult`: un eleve evalue surtout en
+        composition -- une classe d'examen -- etait juge sur une moyenne qui
+        n'etait pas la sienne, et pouvait redoubler pour cette seule raison.
+        """
+        moyennes_trimestrielles = []
+        for term in TERMS:
+            a_ete_evalue = Grade.objects.filter(
+                student=student,
+                classroom=classroom,
+                academic_year=source_year,
+                term=term,
+            ).exists() or ExamResult.objects.filter(
+                student=student,
+                session__academic_year=source_year,
+                session__term=term,
+            ).exists()
+            if not a_ete_evalue:
+                # Un trimestre sans la moindre note ne compte pas: le compter
+                # a zero ferait redoubler toute une classe dont le troisieme
+                # trimestre n'est pas encore saisi.
                 continue
-            weighted_sum += Decimal(str(grade.value)) * coef
-            coef_sum += coef
+            moyennes_trimestrielles.append(
+                moyenne_de_la_periode(student, classroom, source_year, term)
+            )
 
-        if coef_sum > 0:
-            return (weighted_sum / coef_sum).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if moyennes_trimestrielles:
+            somme = sum(moyennes_trimestrielles, Decimal("0"))
+            return (somme / Decimal(len(moyennes_trimestrielles))).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
 
+        # Repli: une annee reprise d'un autre logiciel n'a aucune note en
+        # base, seulement son bilan. Le bilan d'annee d'abord, puis les
+        # bilans trimestriels si la promotion tourne avant la cloture finale.
         history = StudentAcademicHistory.objects.filter(
             student=student,
             academic_year=source_year,
             classroom=classroom,
-        ).first()
+        ).order_by("term").first()
         if history is not None:
             return Decimal(str(history.average or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
@@ -9218,10 +9928,13 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
                 )
                 for decision in decisions:
                     student = decision.student
+                    # Le bilan de l'annee entiere, distinct des bilans
+                    # trimestriels que la cloture ecrit sur le meme eleve.
                     StudentAcademicHistory.objects.update_or_create(
                         student=student,
                         academic_year=source_year,
                         classroom=decision.source_classroom,
+                        term=StudentAcademicHistory.ANNEE_ENTIERE,
                         defaults={
                             "average": decision.average,
                             "rank": decision.rank,
@@ -9349,7 +10062,27 @@ class DashboardViewSet(viewsets.ViewSet):
         expenses_qs = Expense.objects.filter(date__gte=month_start)
         if active_etablissement is not None:
             expenses_qs = expenses_qs.filter(etablissement=active_etablissement)
-        expenses = expenses_qs.aggregate(value=Sum("amount"))["value"] or 0
+        # Le benefice se calcule sur les depenses reellement validees. Il
+        # additionnait jusqu'ici tout ce qui etait saisi, brouillons compris:
+        # une depense en attente de validation -- voire refusee et laissee en
+        # l'etat -- amputait le resultat que la direction lisait a l'ecran,
+        # alors que le modele porte precisement un circuit de validation a
+        # deux niveaux pour distinguer les deux.
+        expenses = (
+            expenses_qs.filter(level_two_validated_at__isnull=False).aggregate(
+                value=Sum("amount")
+            )["value"]
+            or 0
+        )
+        # Montre a part plutot que passe sous silence: une ecole qui n'a pas
+        # encore fait tourner son circuit de validation doit voir ou sont
+        # passees ses depenses, et ce qu'il lui reste a valider.
+        expenses_pending = (
+            expenses_qs.filter(level_two_validated_at__isnull=True).aggregate(
+                value=Sum("amount")
+            )["value"]
+            or 0
+        )
         students = students_qs.count()
         absences = attendance_qs.count()
         classroom_count = classrooms_qs.count()
@@ -9369,6 +10102,7 @@ class DashboardViewSet(viewsets.ViewSet):
             "students": students,
             "monthly_revenue": revenue,
             "monthly_expenses": expenses,
+            "monthly_expenses_pending": expenses_pending,
             "monthly_profit": revenue - expenses,
             "monthly_absences": absences,
             "classrooms": classroom_count,
@@ -9377,3 +10111,125 @@ class DashboardViewSet(viewsets.ViewSet):
         }
         cache.set(cache_key, payload, STATS_CACHE_SECONDS)
         return Response(payload)
+
+    @action(detail=False, methods=["get"], url_path="finances-annuelles")
+    def finances_annuelles(self, request):
+        """Les recettes et depenses mois par mois, sur l'annee scolaire.
+
+        L'ecran d'accueil tracait jusqu'ici une courbe fabriquee: trois
+        points obtenus en multipliant le montant du mois courant par des
+        coefficients ecrits en dur (0,42 / 0,74 / 0,87), etiquetes « S-3,
+        S-2, S-1 ». La direction lisait une tendance qui n'existait pas, et
+        le cahier des charges demandait un rapport annuel.
+
+        Les depenses comptees sont les depenses validees, comme pour le
+        benefice mensuel: un brouillon n'est pas une charge.
+        """
+        active_etablissement = self._resolve_dashboard_scope(request)
+        if (
+            getattr(request.user, "role", None) == UserRole.SUPER_ADMIN
+            and active_etablissement is None
+        ):
+            raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
+
+        annee = None
+        annee_id = _entier_positif_ou_none(
+            request.query_params.get("academic_year")
+            or request.headers.get("X-Academic-Year-Id")
+        )
+        if annee_id:
+            annee = AcademicYear.objects.filter(id=annee_id).first()
+        if annee is None:
+            annees = AcademicYear.objects.filter(is_active=True)
+            if active_etablissement is not None:
+                annees = annees.filter(etablissement=active_etablissement)
+            annee = annees.order_by("-start_date").first()
+
+        if annee is None:
+            return Response(
+                {
+                    "detail": "Aucune année scolaire active.",
+                    "mois": [],
+                    "total_recettes": 0,
+                    "total_depenses": 0,
+                    "benefice": 0,
+                }
+            )
+
+        paiements = Payment.objects.filter(
+            is_cancelled=False,
+            created_at__date__gte=annee.start_date,
+            created_at__date__lte=annee.end_date,
+        )
+        depenses = Expense.objects.filter(
+            level_two_validated_at__isnull=False,
+            date__gte=annee.start_date,
+            date__lte=annee.end_date,
+        )
+        if active_etablissement is not None:
+            paiements = paiements.filter(etablissement=active_etablissement)
+            depenses = depenses.filter(etablissement=active_etablissement)
+
+        recettes_par_mois = {
+            ligne["mois"]: ligne["total"]
+            for ligne in paiements.annotate(mois=TruncMonth("created_at"))
+            .values("mois")
+            .annotate(total=Sum("amount"))
+            if ligne["mois"] is not None
+        }
+        depenses_par_mois = {
+            ligne["mois"]: ligne["total"]
+            for ligne in depenses.annotate(mois=TruncMonth("date"))
+            .values("mois")
+            .annotate(total=Sum("amount"))
+            if ligne["mois"] is not None
+        }
+
+        def _cle(valeur):
+            """La cle de regroupement, ramenee au premier jour du mois.
+
+            `TruncMonth` rend un datetime sur un DateTimeField et une date sur
+            un DateField: les deux dictionnaires n'ont donc pas des cles de
+            meme type, et les comparer directement ne trouverait jamais rien.
+            """
+            return date(valeur.year, valeur.month, 1)
+
+        recettes_par_mois = {_cle(k): v for k, v in recettes_par_mois.items()}
+        depenses_par_mois = {_cle(k): v for k, v in depenses_par_mois.items()}
+
+        # Tous les mois de l'annee scolaire, y compris ceux sans mouvement:
+        # un trou dans la serie se lit comme une baisse, pas comme une
+        # absence de donnee.
+        mois = []
+        curseur = date(annee.start_date.year, annee.start_date.month, 1)
+        fin = date(annee.end_date.year, annee.end_date.month, 1)
+        total_recettes = Decimal("0")
+        total_depenses = Decimal("0")
+        while curseur <= fin:
+            recette = recettes_par_mois.get(curseur) or Decimal("0")
+            depense = depenses_par_mois.get(curseur) or Decimal("0")
+            total_recettes += recette
+            total_depenses += depense
+            mois.append(
+                {
+                    "mois": curseur.isoformat(),
+                    "libelle": f"{curseur.month:02d}/{curseur.year}",
+                    "recettes": recette,
+                    "depenses": depense,
+                    "benefice": recette - depense,
+                }
+            )
+            curseur = _ajouter_des_mois(curseur, 1)
+
+        return Response(
+            {
+                "academic_year": annee.id,
+                "academic_year_name": annee.name,
+                "debut": annee.start_date.isoformat(),
+                "fin": annee.end_date.isoformat(),
+                "mois": mois,
+                "total_recettes": total_recettes,
+                "total_depenses": total_depenses,
+                "benefice": total_recettes - total_depenses,
+            }
+        )

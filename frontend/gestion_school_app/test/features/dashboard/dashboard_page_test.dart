@@ -58,6 +58,19 @@ const _chiffres = DashboardStats(
   activeEtablissementName: 'IFP-OBK',
 );
 
+const _chiffresAvecDepensesEnAttente = DashboardStats(
+  students: 128,
+  monthlyRevenue: 450000,
+  monthlyExpenses: 120000,
+  monthlyExpensesPending: 45000,
+  monthlyProfit: 330000,
+  monthlyAbsences: 7,
+  classrooms: 9,
+  teachers: 14,
+  activeEtablissementId: 1,
+  activeEtablissementName: 'IFP-OBK',
+);
+
 ModulePermissions _droits(Map<String, AccessLevel> niveaux) {
   return ModulePermissions(
     role: 'test',
@@ -78,6 +91,9 @@ Future<void> _monter(
   WidgetTester tester, {
   AsyncValue<DashboardStats> chiffres = const AsyncValue.data(_chiffres),
   Map<String, AccessLevel> niveaux = const {},
+  AsyncValue<FinancesAnnuelles> annee = const AsyncValue.data(
+    FinancesAnnuelles(),
+  ),
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = const Size(1700, 2600);
@@ -99,6 +115,14 @@ Future<void> _monter(
         // et ne se termine pas sur une fuite qui n'existe pas.
         paymentsProvider.overrideWith((ref) async => const <PaymentItem>[]),
         feesProvider.overrideWith((ref) async => const <StudentFeeItem>[]),
+        financesAnnuellesProvider.overrideWith((ref) async {
+          return annee.when(
+            data: (valeur) => valeur,
+            error: (erreur, pile) =>
+                Future<FinancesAnnuelles>.error(erreur, pile),
+            loading: () => Completer<FinancesAnnuelles>().future,
+          );
+        }),
         dashboardStatsProvider.overrideWith((ref) async {
           return chiffres.when(
             data: (valeur) => valeur,
@@ -137,6 +161,29 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsWidgets);
   });
 
+  testWidgets('les dépenses restées à valider sont annoncées', (tester) async {
+    // Le bénéfice ne les compte plus -- il les comptait sans le dire, et se
+    // trouvait minoré par des dépenses que personne n'avait actées. Les
+    // passer sous silence serait l'erreur symétrique: l'école doit voir où
+    // sont passées ses dépenses.
+    await _monter(
+      tester,
+      chiffres: const AsyncValue.data(_chiffresAvecDepensesEnAttente),
+      niveaux: {'finance': AccessLevel.read},
+    );
+
+    expect(find.textContaining('Dépenses à valider'), findsWidgets);
+  });
+
+  testWidgets('sans dépense en attente, aucune ligne de plus', (tester) async {
+    await _monter(
+      tester,
+      niveaux: {'finance': AccessLevel.read},
+    );
+
+    expect(find.textContaining('Dépenses à valider'), findsNothing);
+  });
+
   testWidgets('une panne se dit au lieu de laisser la page muette', (
     tester,
   ) async {
@@ -149,5 +196,65 @@ void main() {
     );
 
     expect(find.textContaining('Erreur'), findsWidgets);
+  });
+
+  group('le graphique financier', () {
+    // Il traçait trois points fabriqués en multipliant le montant du mois par
+    // des coefficients écrits en dur, étiquetés « S-3, S-2, S-1 »: la
+    // direction lisait une tendance qui n'existait pas.
+
+    testWidgets('sans série, il ne parle que du mois', (tester) async {
+      await _monter(tester, niveaux: {'finance': AccessLevel.read});
+
+      expect(find.text('Performance financière du mois'), findsOneWidget);
+      expect(find.textContaining('S-1'), findsNothing);
+    });
+
+    testWidgets('avec une série, l_axe porte les vrais mois', (tester) async {
+      await _monter(
+        tester,
+        niveaux: {'finance': AccessLevel.read},
+        annee: const AsyncValue.data(
+          FinancesAnnuelles(
+            academicYearName: '2025-2026',
+            mois: [
+              MoisFinancier(
+                mois: '2025-10-01',
+                libelle: '10/2025',
+                recettes: 1200000,
+                depenses: 400000,
+                benefice: 800000,
+              ),
+              MoisFinancier(
+                mois: '2025-11-01',
+                libelle: '11/2025',
+                recettes: 900000,
+                depenses: 500000,
+                benefice: 400000,
+              ),
+            ],
+            totalRecettes: 2100000,
+            totalDepenses: 900000,
+            benefice: 1200000,
+          ),
+        ),
+      );
+
+      expect(find.text('Performance financière de l\'année'), findsOneWidget);
+      expect(find.text('10/2025'), findsOneWidget);
+      expect(find.text('11/2025'), findsOneWidget);
+    });
+
+    testWidgets('une série indisponible ne casse pas l_écran', (tester) async {
+      // Les compteurs du mois doivent rester lisibles: ils viennent d'un
+      // autre appel.
+      await _monter(
+        tester,
+        niveaux: {'finance': AccessLevel.read},
+        annee: AsyncValue.error(Exception('panne'), StackTrace.empty),
+      );
+
+      expect(find.text('Performance financière du mois'), findsOneWidget);
+    });
   });
 }

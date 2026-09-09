@@ -305,6 +305,89 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
             ),
           ),
           const SizedBox(height: 16),
+          // La publication des résultats.
+          //
+          // Les notes étaient lisibles par les familles dès la saisie: un
+          // élève voyait passer un chiffre avant que le jury ne l'ait arrêté,
+          // et parfois un autre après correction. La saisie se fait désormais
+          // à couvert, et la direction ouvre les résultats d'un seul geste.
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Publication des résultats'),
+                  const SizedBox(height: 6),
+                  Text(
+                    "Tant qu'une session n'est pas publiée, ses notes restent "
+                    "invisibles aux élèves et aux parents.",
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 10),
+                  sessionsAsync.when(
+                    loading: () => const LinearProgressIndicator(),
+                    error: (e, _) => Text('Erreur sessions: $e'),
+                    data: (sessions) {
+                      if (sessions.isEmpty) {
+                        return const Text('Aucune session');
+                      }
+                      return Column(
+                        children: [
+                          for (final session in sessions)
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: Text('${session.title} • ${session.term}'),
+                              subtitle: Text(
+                                session.resultatsPublies
+                                    ? 'Publiés • ${session.resultatsSaisis} note(s)'
+                                    : '${session.resultatsSaisis} note(s) saisie(s), non publiées',
+                              ),
+                              trailing: session.resultatsPublies
+                                  ? OutlinedButton.icon(
+                                      onPressed:
+                                          (mutationState.isLoading ||
+                                              isReadOnlyMode)
+                                          ? null
+                                          : () => _basculerLaPublication(
+                                              session,
+                                              publier: false,
+                                            ),
+                                      icon: const Icon(
+                                        Icons.visibility_off_outlined,
+                                        size: 18,
+                                      ),
+                                      label: const Text('Retirer'),
+                                    )
+                                  : FilledButton.tonalIcon(
+                                      // Une session sans note ne se publie
+                                      // pas: le serveur refuse, et proposer
+                                      // le geste ferait croire l'inverse.
+                                      onPressed:
+                                          (mutationState.isLoading ||
+                                              isReadOnlyMode ||
+                                              !session.peutEtrePubliee)
+                                          ? null
+                                          : () => _basculerLaPublication(
+                                              session,
+                                              publier: true,
+                                            ),
+                                      icon: const Icon(
+                                        Icons.campaign_outlined,
+                                        size: 18,
+                                      ),
+                                      label: const Text('Publier'),
+                                    ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -803,6 +886,59 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
         if (picked != null) onPick(picked);
       },
     );
+  }
+
+  /// Publie ou retire les résultats d'une session, et dit ce qui s'est passé.
+  ///
+  /// Le retrait demande confirmation: une famille a pu voir le chiffre, et le
+  /// reprendre sans le dire laisserait la direction sans réponse au premier
+  /// coup de téléphone.
+  Future<void> _basculerLaPublication(
+    ExamSessionItem session, {
+    required bool publier,
+  }) async {
+    if (!publier) {
+      final confirme = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Retirer les résultats ?'),
+          content: Text(
+            "Les familles ne verront plus les notes de « ${session.title} ». "
+            "Celles qui les ont déjà consultées les ont vues.",
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Retirer'),
+            ),
+          ],
+        ),
+      );
+      if (confirme != true) return;
+    }
+
+    final notifier = ref.read(examMutationProvider.notifier);
+    final message = publier
+        ? await notifier.publierLesResultats(session.id)
+        : await notifier.retirerLesResultats(session.id);
+
+    if (!mounted) return;
+    final etat = ref.read(examMutationProvider);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            etat.hasError
+                ? 'Opération refusée: ${etat.error}'
+                : (message ?? 'Opération effectuée.'),
+          ),
+        ),
+      );
   }
 
   String _apiDate(DateTime value) {

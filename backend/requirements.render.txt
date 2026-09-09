@@ -23,3 +23,4 @@ django-storages[s3]==1.14.4
 channels==4.1.0
 channels-redis==4.2.0
 sentry-sdk[django]==2.20.0
+google-auth==2.38.0

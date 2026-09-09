@@ -847,8 +847,13 @@ class GradesAndBulletinsApiTests(APITestCase):
             academic_year=self.year,
             classroom=self.class_a,
         )
-        self.assertEqual(float(history_1.average), 15.0)
-        self.assertEqual(float(history_2.average), 6.0)
+        # La conduite (18, coefficient 2 par defaut) entre dans la moyenne,
+        # exactement comme sur le bulletin imprime: 15 de moyenne de matieres
+        # sur coefficient 2 donnent (15*2 + 18*2)/4 = 16,50. Le classement
+        # l'ignorait, et affichait donc un ordre que les bulletins de la meme
+        # classe contredisaient.
+        self.assertEqual(float(history_1.average), 16.5)
+        self.assertEqual(float(history_2.average), 12.0)
         self.assertEqual(history_1.rank, 1)
         self.assertEqual(history_2.rank, 2)
 
@@ -909,8 +914,13 @@ class GradesAndBulletinsApiTests(APITestCase):
             classroom=self.class_a,
         )
 
-        self.assertEqual(float(history_1.average), 15.0)
-        self.assertEqual(float(history_2.average), 6.0)
+        # La conduite (18, coefficient 2 par defaut) entre dans la moyenne,
+        # exactement comme sur le bulletin imprime: 15 de moyenne de matieres
+        # sur coefficient 2 donnent (15*2 + 18*2)/4 = 16,50. Le classement
+        # l'ignorait, et affichait donc un ordre que les bulletins de la meme
+        # classe contredisaient.
+        self.assertEqual(float(history_1.average), 16.5)
+        self.assertEqual(float(history_2.average), 12.0)
         self.assertEqual(history_1.rank, 1)
         self.assertEqual(history_2.rank, 2)
 
@@ -1016,16 +1026,20 @@ class GradesAndBulletinsApiTests(APITestCase):
     @patch("apps.reports.views._render_bulletin_page")
     @patch("apps.reports.views._build_bulletin_payload")
     def test_class_bulletins_print_order_follows_rank(self, mock_build_payload, mock_render_page):
+        # Le trimestre fait partie de la cle: un bilan pose sur l'annee
+        # entiere ne commande pas l'ordre d'impression d'un bulletin de T1.
         StudentAcademicHistory.objects.update_or_create(
             student=self.student_1,
             academic_year=self.year,
             classroom=self.class_a,
+            term="T1",
             defaults={"average": 12.0, "rank": 2},
         )
         StudentAcademicHistory.objects.update_or_create(
             student=self.student_2,
             academic_year=self.year,
             classroom=self.class_a,
+            term="T1",
             defaults={"average": 14.0, "rank": 1},
         )
 

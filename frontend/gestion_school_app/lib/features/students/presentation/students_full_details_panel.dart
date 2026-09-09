@@ -351,8 +351,14 @@ extension _PanneauDossierComplet on _StudentsPageState {
                               title: Text(
                                 'Année: ${_yearName(_asInt(row['academic_year']))} • Classe: ${_classroomName(_asInt(row['classroom']))}',
                               ),
+                              // La periode est rendue par l'API (« T1 » ou
+                              // « Année »): sans elle, trois lignes de la
+                              // meme classe se ressemblaient sans qu'on
+                              // puisse dire de quel trimestre chacune parle.
                               subtitle: Text(
-                                'Moyenne: ${row['average'] ?? '-'} • Rang: ${row['rank'] ?? '-'}',
+                                'Période: ${row['periode'] ?? 'Année'} • '
+                                'Moyenne: ${row['average'] ?? '-'} • '
+                                'Rang: ${row['rank'] ?? '-'}',
                               ),
                             ),
                           )

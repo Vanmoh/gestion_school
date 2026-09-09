@@ -36,9 +36,31 @@ class ExamsRepository {
             academicYearId: row['academic_year'] as int,
             startDate: row['start_date']?.toString() ?? '',
             endDate: row['end_date']?.toString() ?? '',
+            resultatsPublies: row['results_published'] == true,
+            resultatsPubliesLe:
+                row['results_published_at']?.toString() ?? '',
+            resultatsSaisis: (row['resultats_saisis'] as num?)?.toInt() ?? 0,
           ),
         )
         .toList();
+  }
+
+  /// Ouvre les résultats de la session aux familles.
+  Future<String> publierLesResultats(int sessionId) async {
+    final response = await dio.post('/exam-sessions/$sessionId/publier/');
+    final data = response.data;
+    return data is Map<String, dynamic>
+        ? (data['detail']?.toString() ?? 'Résultats publiés.')
+        : 'Résultats publiés.';
+  }
+
+  /// Referme l'accès, le temps d'une correction.
+  Future<String> retirerLesResultats(int sessionId) async {
+    final response = await dio.post('/exam-sessions/$sessionId/depublier/');
+    final data = response.data;
+    return data is Map<String, dynamic>
+        ? (data['detail']?.toString() ?? 'Résultats retirés.')
+        : 'Résultats retirés.';
   }
 
   Future<List<ExamPlanningItem>> fetchPlannings() async {

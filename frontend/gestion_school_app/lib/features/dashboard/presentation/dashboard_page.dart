@@ -255,6 +255,12 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
         final scopedTeachers = math.max(1, (stats.teachers * scopeFactor).round());
         final scopedClassrooms = math.max(1, (stats.classrooms * scopeFactor).round());
         final scopedRevenue = stats.monthlyRevenue * scopeFactor;
+        // Lue à part des compteurs: elle vise une autre période et coûte une
+        // agrégation de plus. En cas d'échec, la liste reste vide et le
+        // graphique retombe sur le mois courant plutôt que sur du vide.
+        final serieAnnuelle =
+            ref.watch(financesAnnuellesProvider).valueOrNull?.mois ??
+            const <MoisFinancier>[];
         final scopedExpenses = stats.monthlyExpenses * scopeFactor;
         final scopedProfit = stats.monthlyProfit * scopeFactor;
         final scopedAbsences = math.max(0, (stats.monthlyAbsences * scopeFactor).round());
@@ -636,7 +642,10 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                                   profitM: profitM,
                                   totalRevenue: stats.monthlyRevenue,
                                   totalExpenses: stats.monthlyExpenses,
+                                  totalExpensesPending:
+                                      stats.monthlyExpensesPending,
                                   totalProfit: stats.monthlyProfit,
+                                  serieAnnuelle: serieAnnuelle,
                                 ),
                               ),
                             ),
@@ -679,7 +688,9 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                             profitM: profitM,
                             totalRevenue: stats.monthlyRevenue,
                             totalExpenses: stats.monthlyExpenses,
+                            totalExpensesPending: stats.monthlyExpensesPending,
                             totalProfit: stats.monthlyProfit,
+                            serieAnnuelle: serieAnnuelle,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -1858,7 +1869,16 @@ class _FinancePanel extends StatelessWidget {
   final double profitM;
   final double totalRevenue;
   final double totalExpenses;
+  final double totalExpensesPending;
   final double totalProfit;
+
+  /// Les mois réellement encaissés, ou une liste vide.
+  ///
+  /// Vide, le graphique retombe sur le seul mois courant plutôt que
+  /// d'inventer une tendance — ce que faisait l'ancienne version, avec trois
+  /// points obtenus en multipliant le montant du mois par des coefficients
+  /// écrits en dur.
+  final List<MoisFinancier> serieAnnuelle;
 
   const _FinancePanel({
     required this.revenueM,
@@ -1866,21 +1886,60 @@ class _FinancePanel extends StatelessWidget {
     required this.profitM,
     required this.totalRevenue,
     required this.totalExpenses,
+    this.totalExpensesPending = 0,
     required this.totalProfit,
+    this.serieAnnuelle = const [],
   });
+
+  /// Les mois portés à l'écran: la série réelle, ou le mois courant seul.
+  List<MoisFinancier> get _mois {
+    if (serieAnnuelle.isNotEmpty) {
+      return serieAnnuelle;
+    }
+    return [
+      MoisFinancier(
+        mois: '',
+        libelle: 'Mois',
+        recettes: totalRevenue,
+        depenses: totalExpenses,
+        benefice: totalProfit,
+      ),
+    ];
+  }
+
+  static const _millions = 1000000.0;
+
+  List<FlSpot> _points(double Function(MoisFinancier) valeur) {
+    final mois = _mois;
+    return [
+      for (var i = 0; i < mois.length; i++)
+        FlSpot(i.toDouble(), valeur(mois[i]) / _millions),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
-    final maxAxis = math
-        .max(0.08, math.max(revenueM, math.max(expensesM, profitM.abs())))
-        .toDouble();
-    final chartMaxY = maxAxis * 1.22;
-    final chartMinY = (profitM < 0 ? (profitM * 1.28) : 0.0).toDouble();
+    final mois = _mois;
+    final valeurs = <double>[
+      for (final ligne in mois) ...[
+        ligne.recettes / _millions,
+        ligne.depenses / _millions,
+        ligne.benefice / _millions,
+      ],
+    ];
+    final plafond = valeurs.fold<double>(0.08, (haut, v) => math.max(haut, v));
+    final plancher = valeurs.fold<double>(0, (bas, v) => math.min(bas, v));
+    final chartMaxY = plafond * 1.22;
+    final chartMinY = plancher < 0 ? plancher * 1.28 : 0.0;
 
     return _PanelShell(
-      title: 'Performance financière mensuelle',
-      subtitle:
-          'Comparatif recettes, dépenses et bénéfice net (en millions FCFA).',
+      title: serieAnnuelle.isEmpty
+          ? 'Performance financière du mois'
+          : 'Performance financière de l\'année',
+      subtitle: serieAnnuelle.isEmpty
+          ? 'Recettes, dépenses et bénéfice net du mois (en millions FCFA).'
+          : 'Recettes, dépenses et bénéfice net mois par mois '
+                '(en millions FCFA).',
       trailing: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
@@ -1925,15 +1984,19 @@ class _FinancePanel extends StatelessWidget {
                       interval: 1,
                       reservedSize: 24,
                       getTitlesWidget: (value, meta) {
-                        const labels = ['S-3', 'S-2', 'S-1', 'Mois'];
                         final index = value.round();
-                        if (index < 0 || index >= labels.length) {
+                        if (index < 0 || index >= mois.length) {
+                          return const SizedBox.shrink();
+                        }
+                        // Un mois sur deux au-delà de six colonnes: douze
+                        // étiquettes se chevauchent et deviennent illisibles.
+                        if (mois.length > 6 && index.isOdd) {
                           return const SizedBox.shrink();
                         }
                         return Padding(
                           padding: const EdgeInsets.only(top: 6),
                           child: Text(
-                            labels[index],
+                            mois[index].libelle,
                             style: Theme.of(context).textTheme.labelSmall
                                 ?.copyWith(
                                   color: Colors.white.withValues(alpha: 0.62),
@@ -2005,17 +2068,17 @@ class _FinancePanel extends StatelessWidget {
                 lineBarsData: [
                   _lineSeries(
                     color: const Color(0xFF24D0F4),
-                    spots: _trendSpots(revenueM, start: 0.42, mid: 0.74),
+                    spots: _points((ligne) => ligne.recettes),
                   ),
                   _lineSeries(
                     color: const Color(0xFFFFB76C),
-                    spots: _trendSpots(expensesM, start: 0.34, mid: 0.65),
+                    spots: _points((ligne) => ligne.depenses),
                   ),
                   _lineSeries(
                     color: totalProfit >= 0
                         ? const Color(0xFF39D68F)
                         : const Color(0xFFFF7A6A),
-                    spots: _trendSpots(profitM, start: 0.22, mid: 0.58),
+                    spots: _points((ligne) => ligne.benefice),
                   ),
                 ],
               ),
@@ -2053,6 +2116,14 @@ class _FinancePanel extends StatelessWidget {
                 value: _formatFcfa(totalExpenses),
                 color: const Color(0xFFFFB76C),
               ),
+              // Affichee seulement quand il y en a: une ecole qui valide au
+              // fil de l'eau n'a pas besoin d'une case a zero de plus.
+              if (totalExpensesPending > 0)
+                _FinanceFootValue(
+                  label: 'Dépenses à valider',
+                  value: _formatFcfa(totalExpensesPending),
+                  color: const Color(0xFFB0BCCF),
+                ),
               _FinanceFootValue(
                 label: 'Bénéfice net',
                 value: _formatFcfa(totalProfit),
@@ -2062,6 +2133,17 @@ class _FinancePanel extends StatelessWidget {
               ),
             ],
           ),
+          if (totalExpensesPending > 0) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Le bénéfice net ne compte que les dépenses validées jusqu\'au '
+              'second niveau. ${_formatFcfa(totalExpensesPending)} attendent '
+              'encore une validation.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: const Color(0xFFB0BCCF),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -2099,20 +2181,6 @@ LineChartBarData _lineSeries({
       ),
     ),
   );
-}
-
-List<FlSpot> _trendSpots(
-  double value, {
-  required double start,
-  required double mid,
-}) {
-  final phase3 = (mid + 1) / 2;
-  return [
-    FlSpot(0, value * start),
-    FlSpot(1, value * mid),
-    FlSpot(2, value * phase3),
-    FlSpot(3, value),
-  ];
 }
 
 List<double> _sparklinePoints(double base, {required bool trendUp}) {

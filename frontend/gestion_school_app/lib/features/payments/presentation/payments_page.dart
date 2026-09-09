@@ -15,9 +15,12 @@ import '../../../core/network/api_client.dart';
 import '../../../core/providers/navigation_intents.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../academics/presentation/annee_scolaire_controller.dart';
+import '../domain/fee_schedule.dart';
 import '../domain/payment.dart';
 import '../domain/student_fee.dart';
 import 'payment_entry_dialog.dart';
+import 'fee_schedules_controller.dart';
 import 'payments_controller.dart';
 import 'widgets/finance_communs.dart';
 import '../../../core/widgets/indicateur.dart';
@@ -27,6 +30,7 @@ import '../../../core/models/paginated_result.dart';
 part 'payments_expenses_tab.dart';
 part 'payments_unpaid_tab.dart';
 part 'payments_income_tab.dart';
+part 'payments_fee_schedules_tab.dart';
 
 class PaymentsPage extends ConsumerStatefulWidget {
   const PaymentsPage({super.key});
@@ -1566,6 +1570,308 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
         return (from: _toApiDate(start), to: _toApiDate(end));
       case _FinancePeriod.all:
         return (from: null, to: null);
+    }
+  }
+
+  // ----- Barèmes de frais -------------------------------------------------
+
+  /// Le formulaire de création d'un barème.
+  ///
+  /// La classe est facultative: laissée vide, le barème vise toutes les
+  /// classes de l'année — les frais communs à l'établissement se posent alors
+  /// en une ligne.
+  Future<void> _ouvrirFormulaireDeBareme() async {
+    final annee = ref.read(anneeScolaireProvider).selectionnee;
+    if (annee == null) {
+      _showMessage('Sélectionnez une année scolaire avant de créer un barème.');
+      return;
+    }
+
+    final classes = await _chargerLesClassesDeLAnnee();
+    if (!mounted) return;
+
+    final cree = await showDialog<bool>(
+      context: context,
+      builder: (context) => _DialogueDeBareme(
+        anneeNom: annee.nom,
+        classes: classes,
+        lireLErreur: _extractApiErrorMessage,
+        onEnregistrer:
+            ({
+              required int? classroomId,
+              required String feeType,
+              required double amount,
+              required String firstDueDate,
+              required int occurrences,
+              required String label,
+            }) async {
+              await ref
+                  .read(feeSchedulesRepositoryProvider)
+                  .create(
+                    academicYearId: annee.id,
+                    classroomId: classroomId,
+                    feeType: feeType,
+                    amount: amount,
+                    firstDueDate: firstDueDate,
+                    occurrences: occurrences,
+                    label: label,
+                  );
+            },
+      ),
+    );
+
+    if (cree == true && mounted) {
+      ref.invalidate(feeSchedulesProvider);
+      _showMessage('Barème enregistré.', isSuccess: true);
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _chargerLesClassesDeLAnnee() async {
+    try {
+      final reponse = await ref
+          .read(dioProvider)
+          .get('/classrooms/', queryParameters: {'page_size': 200});
+      final donnees = reponse.data;
+      final lignes = donnees is Map<String, dynamic> && donnees['results'] is List
+          ? donnees['results'] as List<dynamic>
+          : (donnees is List<dynamic> ? donnees : const <dynamic>[]);
+      return lignes
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
+    } catch (erreur) {
+      _showMessage('Classes indisponibles: ${_extractApiErrorMessage(erreur)}');
+      return const [];
+    }
+  }
+
+  /// Ce que l'application produirait, avant de l'écrire.
+  ///
+  /// Un barème mal saisi multiplie son erreur par le nombre d'échéances et
+  /// par la classe entière: il doit pouvoir se relire avant d'être posé.
+  Future<void> _apercuDuBareme(FeeSchedule bareme) async {
+    setState(() => _financeBusy = true);
+    try {
+      final apercu = await ref
+          .read(feeSchedulesRepositoryProvider)
+          .apercu(bareme.id);
+      if (!mounted) return;
+
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Aperçu du barème'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Élèves concernés: ${apercu.elevesConcernes}'),
+                Text('Échéances: ${apercu.echeances.length}'),
+                Text(
+                  'Montant par échéance: '
+                  '${_formatMoney(apercu.montantParEcheance)}',
+                ),
+                Text('Par élève: ${_formatMoney(apercu.montantParEleve)}'),
+                const SizedBox(height: 8),
+                Text(
+                  'Total à facturer: ${_formatMoney(apercu.montantTotal)}',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 8),
+                Text('Frais déjà générés: ${apercu.fraisDejaGeneres}'),
+                Text('Frais qui seront créés: ${apercu.fraisACreer}'),
+                if (apercu.echeances.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    'Dates: ${apercu.echeances.join(', ')}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        ),
+      );
+    } catch (erreur) {
+      _showMessage('Aperçu indisponible: ${_extractApiErrorMessage(erreur)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _appliquerLeBareme(FeeSchedule bareme) async {
+    setState(() => _financeBusy = true);
+    try {
+      final message = await ref
+          .read(feeSchedulesRepositoryProvider)
+          .appliquer(bareme.id);
+      if (!mounted) return;
+      ref.invalidate(feeSchedulesProvider);
+      ref.invalidate(feesProvider);
+      _showMessage(message, isSuccess: true);
+    } catch (erreur) {
+      _showMessage('Application refusée: ${_extractApiErrorMessage(erreur)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  /// Le geste de la rentrée: tous les barèmes relus, puis appliqués d'un coup.
+  Future<void> _appliquerTousLesBaremes() async {
+    final annee = ref.read(anneeScolaireProvider).selectionnee;
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Appliquer tous les barèmes ?'),
+        content: Text(
+          "Les frais manquants seront créés pour tous les élèves concernés"
+          "${annee == null ? '' : ' de ${annee.nom}'}. "
+          "Les frais déjà en place ne sont pas dupliqués.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Appliquer'),
+          ),
+        ],
+      ),
+    );
+    if (confirme != true) return;
+
+    setState(() => _financeBusy = true);
+    try {
+      final message = await ref
+          .read(feeSchedulesRepositoryProvider)
+          .appliquerTout(academicYearId: annee?.id);
+      if (!mounted) return;
+      ref.invalidate(feeSchedulesProvider);
+      ref.invalidate(feesProvider);
+      _showMessage(message, isSuccess: true);
+    } catch (erreur) {
+      _showMessage('Application refusée: ${_extractApiErrorMessage(erreur)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _supprimerLeBareme(FeeSchedule bareme) async {
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Supprimer ce barème ?'),
+        content: Text(
+          bareme.fraisGeneres == 0
+              ? "Ce barème n'a produit aucun frais."
+              : "Les ${bareme.fraisGeneres} frais déjà générés sont conservés, "
+                    "y compris ceux qui portent des paiements. Ils deviennent "
+                    "des frais saisis à la main.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+    if (confirme != true) return;
+
+    setState(() => _financeBusy = true);
+    try {
+      await ref.read(feeSchedulesRepositoryProvider).delete(bareme.id);
+      if (!mounted) return;
+      ref.invalidate(feeSchedulesProvider);
+      _showMessage('Barème supprimé.', isSuccess: true);
+    } catch (erreur) {
+      _showMessage('Suppression refusée: ${_extractApiErrorMessage(erreur)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  /// L'autre moitié du besoin: les cas particuliers.
+  ///
+  /// Le barème couvre le cas général. Une école a toujours le reste: un tarif
+  /// négocié, une bourse partielle, un échéancier propre à un élève.
+  Future<void> _importerDesFrais() async {
+    final annee = ref.read(anneeScolaireProvider).selectionnee;
+    if (annee == null) {
+      _showMessage('Sélectionnez une année scolaire avant d\'importer.');
+      return;
+    }
+
+    final choix = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      withData: true,
+      allowedExtensions: const <String>['csv', 'xlsx'],
+    );
+    final fichier = choix?.files.firstOrNull;
+    final octets = fichier?.bytes;
+    if (fichier == null || octets == null) return;
+
+    setState(() => _financeBusy = true);
+    try {
+      final formulaire = FormData.fromMap({
+        'academic_year': annee.id,
+        'file': MultipartFile.fromBytes(octets, filename: fichier.name),
+      });
+      final reponse = await ref
+          .read(dioProvider)
+          .post('/fees/import-fees/', data: formulaire);
+      if (!mounted) return;
+      ref.invalidate(feesProvider);
+      final message = reponse.data is Map<String, dynamic>
+          ? (reponse.data as Map<String, dynamic>)['detail']?.toString()
+          : null;
+      _showMessage(message ?? 'Frais importés.', isSuccess: true);
+    } catch (erreur) {
+      // Le serveur refuse le fichier entier dès qu'une ligne est fausse: un
+      // import à moitié passé laisse une comptabilité indéchiffrable.
+      _showMessage('Import refusé: ${_extractApiErrorMessage(erreur)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  Future<void> _telechargerLeModeleDeFrais() async {
+    setState(() => _financeBusy = true);
+    try {
+      final reponse = await ref
+          .read(dioProvider)
+          .get<List<int>>(
+            '/fees/import-template/',
+            queryParameters: {'format': 'xlsx'},
+            options: Options(responseType: ResponseType.bytes),
+          );
+      final octets = reponse.data;
+      if (octets == null || octets.isEmpty) {
+        _showMessage('Modèle indisponible.');
+        return;
+      }
+      await _savePdfExport(
+        bytes: Uint8List.fromList(octets),
+        fileName: 'modele_import_frais.xlsx',
+        dialogTitle: 'Enregistrer le modèle de frais',
+        successMessage: 'Modèle enregistré.',
+      );
+    } catch (erreur) {
+      _showMessage('Modèle indisponible: ${_extractApiErrorMessage(erreur)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
     }
   }
 
@@ -3470,6 +3776,9 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     // reste du module.
     final laFamille = droits.of('finance').scoped;
     final peutVoirLesDepenses = !laFamille;
+    // Poser un bareme est une ecriture, et une ecriture qui engage toute une
+    // classe: le lecteur seul n'y a pas acces.
+    final peutEcrireEnFinance = !laFamille && droits.canWrite('finance');
 
     final query = PaymentsPageQuery(
       page: _currentPage,
@@ -3799,6 +4108,19 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                       totalExpensesAmount: totalExpensesAmount,
                       periodValidatedExpensesAmount:
                           periodValidatedExpensesAmount,
+                    ),
+                  ),
+                ),
+              // Reserve a qui tient la caisse: le bareme decide de ce que
+              // toute une classe devra payer.
+              if (peutEcrireEnFinance)
+                _OngletFinance(
+                  libelle: 'Barèmes',
+                  icone: Icons.playlist_add_check_circle_outlined,
+                  contenu: _ongletDefilant(
+                    ongletDesBaremes(
+                      colorScheme: colorScheme,
+                      baremes: ref.watch(feeSchedulesProvider),
                     ),
                   ),
                 ),

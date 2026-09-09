@@ -115,18 +115,54 @@ class DashboardStatsCacheTests(APITestCase):
 
         self.assertEqual(Decimal(self._stats()["monthly_revenue"]), Decimal("15000"))
 
-    def test_une_depense_enregistree_apparait_sans_attendre(self):
-        self.assertEqual(Decimal(self._stats()["monthly_expenses"]), Decimal("0"))
-
-        Expense.objects.create(
+    def _depense(self, montant, *, validee=False):
+        depense = Expense.objects.create(
             label="Craie",
-            amount=Decimal("2500"),
+            amount=Decimal(montant),
             date=timezone.now().date(),
             category="Fournitures",
             etablissement=self.etablissement,
         )
+        if validee:
+            depense.level_one_validated_at = timezone.now()
+            depense.level_two_validated_at = timezone.now()
+            depense.save()
+        return depense
 
-        self.assertEqual(Decimal(self._stats()["monthly_expenses"]), Decimal("2500"))
+    def test_une_depense_enregistree_apparait_sans_attendre(self):
+        self.assertEqual(Decimal(self._stats()["monthly_expenses_pending"]), Decimal("0"))
+
+        self._depense("2500")
+
+        self.assertEqual(
+            Decimal(self._stats()["monthly_expenses_pending"]), Decimal("2500")
+        )
+
+    def test_le_benefice_ne_compte_que_les_depenses_validees(self):
+        """Une depense en attente ne doit pas amputer le resultat affiche.
+
+        Le tableau de bord additionnait tout ce qui etait saisi, brouillons
+        compris: la direction lisait un benefice minore par des depenses que
+        personne n'avait encore actees -- voire refusees et laissees en
+        l'etat -- alors que le modele porte un circuit de validation a deux
+        niveaux fait pour les distinguer.
+        """
+        self._paiement("100000")
+        self._depense("30000")
+
+        stats = self._stats()
+        self.assertEqual(Decimal(stats["monthly_expenses"]), Decimal("0"))
+        self.assertEqual(Decimal(stats["monthly_expenses_pending"]), Decimal("30000"))
+        self.assertEqual(Decimal(stats["monthly_profit"]), Decimal("100000"))
+
+    def test_une_depense_validee_entre_dans_le_benefice(self):
+        self._paiement("100000")
+        self._depense("30000", validee=True)
+
+        stats = self._stats()
+        self.assertEqual(Decimal(stats["monthly_expenses"]), Decimal("30000"))
+        self.assertEqual(Decimal(stats["monthly_expenses_pending"]), Decimal("0"))
+        self.assertEqual(Decimal(stats["monthly_profit"]), Decimal("70000"))
 
     def test_l_annulation_d_un_paiement_se_voit_aussi(self):
         paiement = self._paiement("9000")

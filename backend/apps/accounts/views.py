@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from apps.common.models import DeviceToken
 from apps.school.models import Etablissement, ParentProfile
 from .access import ROLE_LABELS, can_read, peut_administrer_compte, role_payload
 from .access_routes import module_paths
@@ -571,7 +572,77 @@ class LogoutView(APIView):
             # dans tous les cas, il n'y a rien de plus a revoquer.
             pass
 
+        # L'appareil qui se deconnecte ne doit plus recevoir les
+        # notifications du compte: sur un telephone partage, le suivant
+        # verrait passer les notes de l'enfant du precedent.
+        jeton_appareil = str(request.data.get("device_token") or "").strip()
+        if jeton_appareil:
+            DeviceToken.objects.filter(
+                token=jeton_appareil, user=request.user
+            ).update(is_active=False)
+
         return Response(status=status.HTTP_205_RESET_CONTENT)
+
+
+class DeviceTokenView(APIView):
+    """Enregistre ou retire le jeton push de l'appareil courant.
+
+    Le jeton est la cle, et non l'utilisateur: Firebase le renouvelle sans
+    prevenir, et un meme telephone peut servir a deux comptes du foyer. Le
+    reenregistrer le rattache au dernier connecte, ce qui evite qu'un parent
+    recoive les notifications adressees a l'autre.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        jeton = str(request.data.get("token") or "").strip()
+        if not jeton:
+            return Response(
+                {"token": "Ce champ est obligatoire."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(jeton) > 255:
+            return Response(
+                {"token": "Jeton trop long (255 caracteres au plus)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        plateforme = str(request.data.get("platform") or "").strip().lower()
+        if plateforme not in DeviceToken.Platform.values:
+            plateforme = DeviceToken.Platform.ANDROID
+
+        appareil, cree = DeviceToken.objects.update_or_create(
+            token=jeton,
+            defaults={
+                "user": request.user,
+                "platform": plateforme,
+                "is_active": True,
+            },
+        )
+        return Response(
+            {
+                "detail": "Appareil enregistre." if cree else "Appareil mis a jour.",
+                "id": appareil.id,
+                "platform": appareil.platform,
+            },
+            status=status.HTTP_201_CREATED if cree else status.HTTP_200_OK,
+        )
+
+    def delete(self, request):
+        jeton = str(request.data.get("token") or request.query_params.get("token") or "").strip()
+        if not jeton:
+            return Response(
+                {"token": "Ce champ est obligatoire."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Ferme plutot que supprime, et seulement pour le compte courant: un
+        # jeton efface reapparaitrait au premier envoi suivant, puisque rien
+        # ne dirait qu'il est mort.
+        DeviceToken.objects.filter(token=jeton, user=request.user).update(
+            is_active=False
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 token_refresh_view = CustomTokenRefreshView.as_view()

@@ -6,6 +6,17 @@ class ExamSessionItem {
   final String startDate;
   final String endDate;
 
+  /// Vrai quand les familles peuvent lire les notes de cette session.
+  ///
+  /// Elles les lisaient dès la saisie: un élève voyait passer une note avant
+  /// que le jury ne l'ait arrêtée, et parfois une autre après correction.
+  final bool resultatsPublies;
+  final String resultatsPubliesLe;
+
+  /// Combien de notes la session porte déjà. Publier une session vide ferait
+  /// chercher aux familles des résultats qui n'existent pas.
+  final int resultatsSaisis;
+
   const ExamSessionItem({
     required this.id,
     required this.title,
@@ -13,7 +24,12 @@ class ExamSessionItem {
     required this.academicYearId,
     required this.startDate,
     required this.endDate,
+    this.resultatsPublies = false,
+    this.resultatsPubliesLe = '',
+    this.resultatsSaisis = 0,
   });
+
+  bool get peutEtrePubliee => !resultatsPublies && resultatsSaisis > 0;
 }
 
 class ExamPlanningItem {

@@ -31,6 +31,7 @@ from .views import (
     StockItemViewSet,
     StockMovementViewSet,
     StudentAcademicHistoryViewSet,
+    FeeScheduleViewSet,
     StudentFeeViewSet,
     StudentViewSet,
     SubjectViewSet,
@@ -69,6 +70,7 @@ router.register(r"attendances", AttendanceViewSet)
 router.register(r"teacher-attendances", TeacherAttendanceViewSet)
 router.register(r"teacher-time-entries", TeacherTimeEntryViewSet)
 router.register(r"discipline-incidents", DisciplineIncidentViewSet)
+router.register(r"fee-schedules", FeeScheduleViewSet)
 router.register(r"fees", StudentFeeViewSet)
 router.register(r"payments", PaymentViewSet)
 router.register(r"promotion-runs", PromotionRunViewSet, basename="promotion-runs")

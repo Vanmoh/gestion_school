@@ -1009,6 +1009,27 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     }
   }
 
+  /// La génération automatique: on simule, on relit, puis on applique.
+  ///
+  /// Un emploi du temps engage l'année entière. Le proposer d'abord — combien
+  /// de séances placées, lesquelles ne rentrent pas et pourquoi — évite de
+  /// découvrir le problème une fois les centaines de créneaux écrits.
+  Future<void> _ouvrirLaGeneration(int? selectedClassId) async {
+    final applique = await showDialog<bool>(
+      context: context,
+      builder: (context) => _DialogueDeGeneration(
+        classroomId: selectedClassId,
+        dio: ref.read(dioProvider),
+      ),
+    );
+    if (applique == true) {
+      await _loadData();
+      if (mounted) {
+        _showMessage('Emploi du temps généré.', isSuccess: true);
+      }
+    }
+  }
+
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
     ForegroundNotice.show(
@@ -1289,6 +1310,18 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                       : _openDuplicateScheduleDialog,
                   icon: const Icon(Icons.copy_all_outlined),
                   label: const Text('Dupliquer planning'),
+                ),
+              // La génération remplace la saisie créneau par créneau, où il
+              // fallait vérifier de tête qu'aucun enseignant n'était attendu
+              // dans deux classes à la fois.
+              if (!_isTeacherUser)
+                FilledButton.icon(
+                  onPressed: (_saving || !_scheduleApiSupported)
+                      || isReadOnlyMode
+                      ? null
+                      : () => _ouvrirLaGeneration(selectedClassId),
+                  icon: const Icon(Icons.auto_awesome_motion_outlined),
+                  label: const Text('Générer automatiquement'),
                 ),
             ],
           ),
@@ -2608,5 +2641,288 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     final hh = value.hour.toString().padLeft(2, '0');
     final mm = value.minute.toString().padLeft(2, '0');
     return '$d/$m/$y $hh:$mm';
+  }
+}
+
+/// Le dialogue de génération: régler la grille, simuler, puis appliquer.
+///
+/// La simulation est obligatoire avant d'appliquer, et c'est délibéré: un
+/// emploi du temps engage l'année entière, et ce qui ne rentre pas doit être
+/// vu avant que les centaines de créneaux ne soient écrits.
+class _DialogueDeGeneration extends StatefulWidget {
+  final int? classroomId;
+  final Dio dio;
+
+  const _DialogueDeGeneration({required this.classroomId, required this.dio});
+
+  @override
+  State<_DialogueDeGeneration> createState() => _DialogueDeGenerationState();
+}
+
+class _DialogueDeGenerationState extends State<_DialogueDeGeneration> {
+  static const _jours = <(String, String)>[
+    ('MON', 'Lundi'),
+    ('TUE', 'Mardi'),
+    ('WED', 'Mercredi'),
+    ('THU', 'Jeudi'),
+    ('FRI', 'Vendredi'),
+    ('SAT', 'Samedi'),
+  ];
+
+  final _debut = TextEditingController(text: '08:00');
+  final _fin = TextEditingController(text: '17:00');
+  final _duree = TextEditingController(text: '60');
+  final _pauseDebut = TextEditingController(text: '12:00');
+  final _pauseFin = TextEditingController(text: '13:00');
+
+  final Set<String> _joursRetenus = {'MON', 'TUE', 'WED', 'THU', 'FRI'};
+  bool _remplacer = false;
+  bool _autoriserHorsDisponibilite = true;
+  bool _occupe = false;
+  String? _erreur;
+  Map<String, dynamic>? _apercu;
+
+  @override
+  void dispose() {
+    _debut.dispose();
+    _fin.dispose();
+    _duree.dispose();
+    _pauseDebut.dispose();
+    _pauseFin.dispose();
+    super.dispose();
+  }
+
+  Map<String, dynamic> _charge() {
+    return {
+      if (widget.classroomId != null) 'classroom': widget.classroomId,
+      'days': _joursRetenus.toList(),
+      'start_time': _debut.text.trim(),
+      'end_time': _fin.text.trim(),
+      'slot_minutes': int.tryParse(_duree.text.trim()) ?? 60,
+      'break_start': _pauseDebut.text.trim(),
+      'break_end': _pauseFin.text.trim(),
+      'replace': _remplacer,
+      'autoriser_hors_disponibilite': _autoriserHorsDisponibilite,
+    };
+  }
+
+  String _lireLErreur(Object erreur) {
+    if (erreur is DioException) {
+      final donnees = erreur.response?.data;
+      if (donnees is Map) {
+        for (final valeur in donnees.values) {
+          if (valeur is String && valeur.trim().isNotEmpty) return valeur;
+          if (valeur is List && valeur.isNotEmpty) return valeur.first.toString();
+        }
+      }
+      return 'Requête refusée (HTTP ${erreur.response?.statusCode ?? '?'}).';
+    }
+    return erreur.toString();
+  }
+
+  Future<void> _appeler(String chemin, {required bool applique}) async {
+    setState(() {
+      _occupe = true;
+      _erreur = null;
+    });
+    try {
+      final reponse = await widget.dio.post(chemin, data: _charge());
+      if (!mounted) return;
+      if (applique) {
+        Navigator.of(context).pop(true);
+        return;
+      }
+      setState(() {
+        _apercu = Map<String, dynamic>.from(reponse.data as Map);
+        _occupe = false;
+      });
+    } catch (erreur) {
+      if (!mounted) return;
+      setState(() {
+        _erreur = _lireLErreur(erreur);
+        _occupe = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final apercu = _apercu;
+    final echecs = (apercu?['echecs'] as List?) ?? const [];
+
+    return AlertDialog(
+      title: const Text('Générer l\'emploi du temps'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.classroomId == null
+                    ? 'Toutes les classes de l\'établissement.'
+                    : 'Classe sélectionnée uniquement.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              const Text('Jours ouvrés'),
+              Wrap(
+                spacing: 6,
+                children: [
+                  for (final (code, libelle) in _jours)
+                    FilterChip(
+                      label: Text(libelle),
+                      selected: _joursRetenus.contains(code),
+                      onSelected: _occupe
+                          ? null
+                          : (retenu) => setState(() {
+                              if (retenu) {
+                                _joursRetenus.add(code);
+                              } else {
+                                _joursRetenus.remove(code);
+                              }
+                              _apercu = null;
+                            }),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(child: _champ(_debut, 'Début', '08:00')),
+                  const SizedBox(width: 8),
+                  Expanded(child: _champ(_fin, 'Fin', '17:00')),
+                  const SizedBox(width: 8),
+                  Expanded(child: _champ(_duree, 'Durée (min)', '60')),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(child: _champ(_pauseDebut, 'Pause de', '12:00')),
+                  const SizedBox(width: 8),
+                  Expanded(child: _champ(_pauseFin, 'Pause à', '13:00')),
+                ],
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _remplacer,
+                onChanged: _occupe
+                    ? null
+                    : (valeur) => setState(() {
+                        _remplacer = valeur ?? false;
+                        _apercu = null;
+                      }),
+                title: const Text('Remplacer le planning existant'),
+                subtitle: const Text(
+                  'Sinon, les créneaux déjà posés sont conservés et évités.',
+                ),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _autoriserHorsDisponibilite,
+                onChanged: _occupe
+                    ? null
+                    : (valeur) => setState(() {
+                        _autoriserHorsDisponibilite = valeur ?? true;
+                        _apercu = null;
+                      }),
+                title: const Text('Autoriser hors disponibilité'),
+                subtitle: const Text(
+                  'En dernier recours, et le créneau porte alors sa raison.',
+                ),
+              ),
+              if (_erreur != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _erreur!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+              if (apercu != null) ...[
+                const Divider(height: 24),
+                Text(
+                  '${apercu['placees']} séance(s) placée(s) sur '
+                  '${apercu['seances_demandees']} demandée(s), '
+                  'dans ${apercu['creneaux_disponibles']} créneaux.',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                if (echecs.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '${echecs.length} séance(s) sans place:',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                  for (final echec in echecs.take(6))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        '• ${echec['subject'] ?? ''} (${echec['classroom'] ?? ''}): '
+                        '${echec['motif'] ?? ''}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  if (echecs.length > 6)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        '… et ${echecs.length - 6} autre(s).',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                ],
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _occupe ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Annuler'),
+        ),
+        OutlinedButton(
+          onPressed: _occupe || _joursRetenus.isEmpty
+              ? null
+              : () => _appeler(
+                  '/teacher-schedule-slots/simuler/',
+                  applique: false,
+                ),
+          child: const Text('Simuler'),
+        ),
+        FilledButton(
+          // Simuler d'abord: on n'écrit pas des centaines de créneaux sans
+          // avoir vu ce qu'ils donnent.
+          onPressed: _occupe || _apercu == null
+              ? null
+              : () => _appeler(
+                  '/teacher-schedule-slots/generer/',
+                  applique: true,
+                ),
+          child: _occupe
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Appliquer'),
+        ),
+      ],
+    );
+  }
+
+  Widget _champ(TextEditingController controleur, String libelle, String indice) {
+    return TextField(
+      controller: controleur,
+      enabled: !_occupe,
+      decoration: InputDecoration(labelText: libelle, hintText: indice),
+      onChanged: (_) {
+        if (_apercu != null) setState(() => _apercu = null);
+      },
+    );
   }
 }
