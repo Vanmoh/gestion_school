@@ -12,6 +12,13 @@ ecrite en dur ici -- ferait apparaitre des enseignements que l'ecole ne donne
 pas. A defaut de modele dans l'etablissement, la classe est laissee telle
 quelle et signalee: mieux vaut une classe visiblement vide qu'un programme
 emprunte a une autre ecole.
+
+Ce qu'elle ne sait pas faire, et qu'il faut relire apres coup: le niveau
+n'entre pas en ligne de compte. Une Terminale demunie recoit le programme de
+la classe la mieux pourvue de l'etablissement, fut-ce une 6e. C'est sans
+consequence la ou le tronc commun est reel, et faux ailleurs -- d'ou le
+--dry-run, et la relecture par la direction avant toute saisie de notes.
+Voir apps/school/tests/test_doter_les_classes.py, qui fixe ce comportement.
 """
 
 from django.core.management.base import BaseCommand
