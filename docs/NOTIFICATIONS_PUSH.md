@@ -1,4 +1,4 @@
-# Notifications push (Firebase Cloud Messaging)
+# Notifications aux familles: push, courriel, SMS
 
 ## Où en est le projet
 
@@ -19,6 +19,8 @@ Ce qui est en place aujourd'hui, et testé:
 | Contrôle de déploiement `gestion_school.W006` | ✅ |
 | Permission Android `POST_NOTIFICATIONS` | ✅ |
 | **Client Flutter (`firebase_messaging`)** | ⛔ **reste à faire** |
+| Courriel (SMTP) | ✅ |
+| SMS (passerelle par établissement) | ✅ |
 
 Le client Flutter n'est pas branché, et c'est délibéré: le plugin
 `firebase_messaging` exige un fichier `google-services.json` issu d'un projet
@@ -113,12 +115,54 @@ print(envoyer_a_des_appareils(['<jeton-du-telephone>'], titre='Test', message='B
 
 Un `ResultatEnvoi(envoyes=1)` confirme la chaîne complète.
 
-## Ce qui reste fermé
+## Les deux autres canaux
 
-- **SMS**: `SmsProviderConfig` stocke une URL et un jeton que rien n'appelle.
-  Les notifications de canal SMS restent en attente — elles ne sont pas
-  marquées envoyées, ce qui serait mentir sur ce qui est parti.
-- **Courriel**: aucun `EMAIL_BACKEND` n'est configuré.
+Le courriel et le SMS sont branchés eux aussi
+(`backend/apps/common/messagerie.py`), sur le même patron: sans
+configuration, l'envoi échoue proprement et la notification reste en base
+pour un envoi ultérieur. Un canal fermé n'empêche jamais les autres de
+partir.
 
-Ces deux canaux suivent le même patron que le push: un service d'envoi, et la
-tâche `envoyer_les_notifications_en_attente` qui apprend à les traiter.
+### Courriel
+
+```bash
+EMAIL_HOST=smtp.exemple.ml
+EMAIL_PORT=587
+EMAIL_HOST_USER=ecole@exemple.ml
+EMAIL_HOST_PASSWORD=<mot de passe d'application>
+EMAIL_USE_TLS=True
+DEFAULT_FROM_EMAIL=ecole@exemple.ml
+```
+
+Chez la plupart des fournisseurs, `EMAIL_HOST_PASSWORD` est un **mot de passe
+d'application**, pas celui du compte — que la validation en deux étapes
+refuse de toute façon. Sans `EMAIL_HOST`, Django écrit les messages sur la
+sortie standard et le contrôle `gestion_school.W007` le signale.
+
+### SMS
+
+Rien à mettre dans l'environnement: la passerelle se déclare **par
+établissement**, dans l'application (Communication → Fournisseurs SMS), car
+le contrat est signé par l'école.
+
+| Champ | Ce qu'il porte |
+|---|---|
+| Nom du fournisseur | Sert à choisir la convention de champs (Orange, Twilio, Vonage…) |
+| URL de l'API | Le point d'entrée `POST` du fournisseur |
+| Jeton | Envoyé en `Authorization: Bearer …` |
+| Identifiant d'expéditeur | Le nom affiché sur le téléphone (souvent à faire déclarer chez l'opérateur) |
+
+Ce qui change d'un fournisseur à l'autre est le nom des champs, pas la forme
+de l'appel; un fournisseur exotique se traite en ajoutant une entrée à
+`CHAMPS_PAR_FOURNISSEUR`, sans toucher au reste.
+
+Le refus du fournisseur — crédit épuisé, expéditeur non déclaré, numéro
+invalide — est conservé dans les journaux: c'est lui qui permet à l'école
+d'agir.
+
+### Vérifier
+
+```bash
+cd backend
+python manage.py check --deploy    # W006 (push) et W007 (courriel)
+```
