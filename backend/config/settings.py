@@ -457,6 +457,31 @@ SIMPLE_JWT = {
     "UPDATE_LAST_LOGIN": True,
 }
 
+# Courriel. Sans EMAIL_HOST, Django ecrit les messages sur la sortie standard
+# plutot que de les envoyer: c'est ce qu'on veut en developpement, et ce que
+# le controle de deploiement W007 signale ailleurs.
+#
+# Chez la plupart des fournisseurs, EMAIL_HOST_USER est l'adresse complete et
+# EMAIL_HOST_PASSWORD un mot de passe d'application -- pas le mot de passe du
+# compte, que la validation en deux etapes refuse de toute facon.
+EMAIL_HOST = config("EMAIL_HOST", default="").strip()
+EMAIL_PORT = config("EMAIL_PORT", cast=int, default=587)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", cast=bool, default=True)
+EMAIL_USE_SSL = config("EMAIL_USE_SSL", cast=bool, default=False)
+EMAIL_BACKEND = config(
+    "EMAIL_BACKEND",
+    default=(
+        "django.core.mail.backends.smtp.EmailBackend"
+        if EMAIL_HOST
+        else "django.core.mail.backends.console.EmailBackend"
+    ),
+)
+DEFAULT_FROM_EMAIL = config(
+    "DEFAULT_FROM_EMAIL", default=EMAIL_HOST_USER or "no-reply@gestion-school.local"
+)
+
 # Notifications push (Firebase Cloud Messaging, API HTTP v1).
 #
 # Le module Communication ecrivait ses notifications en base sans que rien ne

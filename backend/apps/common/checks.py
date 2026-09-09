@@ -15,6 +15,7 @@ W003_S3_REGION = "gestion_school.W003"
 W004_CHANNEL_LAYER = "gestion_school.W004"
 W005_COMPTES_DEMO = "gestion_school.W005"
 W006_PUSH_ABSENT = "gestion_school.W006"
+W007_COURRIEL_ABSENT = "gestion_school.W007"
 
 
 @register(deploy=True)
@@ -216,5 +217,36 @@ def push_notifications_are_configured(app_configs, **kwargs):
                 "restent visibles dans l'application, sans alerte."
             ),
             id=W006_PUSH_ABSENT,
+        )
+    ]
+
+
+@register(deploy=True)
+def outgoing_mail_is_configured(app_configs, **kwargs):
+    """Sans serveur d'envoi, le courrier s'ecrit dans les logs et n'arrive nulle part.
+
+    Le backend « console » est le defaut quand EMAIL_HOST est vide: pratique
+    en developpement, trompeur en production. Une notification de canal
+    courriel y serait affichee dans les journaux du conteneur, jamais lue par
+    la famille -- et la tache de distribution ne la marquerait pas envoyee,
+    ce qui est correct mais silencieux.
+    """
+    if settings.DEBUG:
+        return []
+
+    from apps.common.messagerie import courriel_configure
+
+    if courriel_configure():
+        return []
+
+    return [
+        CheckWarning(
+            "Aucun serveur de courriel n'est configure.",
+            hint=(
+                "Renseignez EMAIL_HOST, EMAIL_HOST_USER et EMAIL_HOST_PASSWORD "
+                "pour que les notifications de canal courriel atteignent les "
+                "familles. Sans cela elles restent en attente."
+            ),
+            id=W007_COURRIEL_ABSENT,
         )
     ]

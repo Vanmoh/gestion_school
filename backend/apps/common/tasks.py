@@ -22,28 +22,38 @@ def envoyer_les_notifications_en_attente(limite: int = 200):
     personne ne les recoive, alors que prevenir les familles est la raison
     d'etre du module.
 
-    La tache ne traite que le canal PUSH: le SMS attend une passerelle
-    d'operateur, le courriel un serveur d'envoi. Les notifications de ces
-    deux canaux restent en attente plutot que d'etre marquees envoyees --
-    les marquer serait mentir sur ce qui est parti.
+    Les trois canaux sont traites: push, courriel et SMS. Un canal non
+    configure n'echoue pas l'ensemble -- ses notifications restent en attente
+    et repartiront au prochain passage, une fois l'ecole equipee. Elles ne
+    sont jamais marquees envoyees a vide: ce serait mentir sur ce qui est
+    parti, et l'ecole croirait ses familles prevenues.
 
     `limite` borne le lot: une file qui a grossi pendant une panne ne doit
     pas immobiliser le worker sur un seul passage.
     """
+    from apps.common.messagerie import (
+        courriel_configure,
+        envoyer_un_courriel,
+        envoyer_un_sms,
+        passerelle_sms,
+    )
     from apps.common.models import DeviceToken
     from apps.common.push import envoyer_a_des_appareils, push_configure
     from apps.school.models import Notification, NotificationChannel
     from django.utils import timezone
 
-    if not push_configure():
-        logger.info("Push non configure: aucune notification envoyee.")
-        return {"envoyees": 0, "echecs": 0, "raison": "push non configure"}
+    push_pret = push_configure()
+    courriel_pret = courriel_configure()
+
+    canaux_ouverts = [NotificationChannel.SMS]
+    if push_pret:
+        canaux_ouverts.append(NotificationChannel.PUSH)
+    if courriel_pret:
+        canaux_ouverts.append(NotificationChannel.EMAIL)
 
     en_attente = list(
-        Notification.objects.filter(
-            is_sent=False, channel=NotificationChannel.PUSH
-        )
-        .select_related("recipient")
+        Notification.objects.filter(is_sent=False, channel__in=canaux_ouverts)
+        .select_related("recipient", "etablissement")
         .order_by("created_at", "id")[:limite]
     )
     if not en_attente:
@@ -66,34 +76,74 @@ def envoyer_les_notifications_en_attente(limite: int = 200):
     envoyees = 0
     echecs = 0
     jetons_morts: set[str] = set()
+    # Une requete par etablissement, pas une par notification: une classe
+    # entiere prevenue le meme soir vise la meme passerelle.
+    passerelles: dict[int, object] = {}
+
+    def _passerelle(etablissement):
+        if etablissement is None:
+            return None
+        if etablissement.id not in passerelles:
+            passerelles[etablissement.id] = passerelle_sms(etablissement)
+        return passerelles[etablissement.id]
 
     for notification in en_attente:
-        jetons = jetons_par_utilisateur.get(notification.recipient_id or 0, [])
-        if not jetons:
-            # Destinataire sans appareil connu: rien a envoyer, et rien a
-            # marquer. La notification reste lisible dans l'application.
-            continue
+        destinataire = notification.recipient
+        parti = False
+        motif = ""
 
-        resultat = envoyer_a_des_appareils(
-            jetons,
-            titre=notification.title,
-            message=notification.message,
-            donnees={"notification_id": notification.id},
-        )
-        jetons_morts.update(resultat.jetons_invalides)
+        if notification.channel == NotificationChannel.PUSH:
+            jetons = jetons_par_utilisateur.get(notification.recipient_id or 0, [])
+            if not jetons:
+                # Destinataire sans appareil connu: rien a envoyer, et rien a
+                # marquer. La notification reste lisible dans l'application.
+                continue
+            resultat = envoyer_a_des_appareils(
+                jetons,
+                titre=notification.title,
+                message=notification.message,
+                donnees={"notification_id": notification.id},
+            )
+            jetons_morts.update(resultat.jetons_invalides)
+            parti, motif = resultat.a_reussi, resultat.erreur
 
-        if resultat.a_reussi:
+        elif notification.channel == NotificationChannel.EMAIL:
+            adresse = str(getattr(destinataire, "email", "") or "").strip()
+            if not adresse:
+                # Pas d'adresse: rien a envoyer et rien a marquer, comme pour
+                # un destinataire sans appareil.
+                continue
+            resultat = envoyer_un_courriel(
+                destinataire=adresse,
+                sujet=notification.title,
+                message=notification.message,
+            )
+            parti, motif = resultat.envoye, resultat.erreur
+
+        elif notification.channel == NotificationChannel.SMS:
+            numero = str(getattr(destinataire, "phone", "") or "").strip()
+            if not numero:
+                continue
+            resultat = envoyer_un_sms(
+                passerelle=_passerelle(notification.etablissement),
+                numero=numero,
+                message=f"{notification.title}: {notification.message}",
+            )
+            parti, motif = resultat.envoye, resultat.erreur
+
+        if parti:
             notification.is_sent = True
             notification.sent_at = timezone.now()
             notification.save(update_fields=["is_sent", "sent_at", "updated_at"])
             envoyees += 1
         else:
             echecs += 1
-            if resultat.erreur:
+            if motif:
                 logger.warning(
-                    "Notification #%s non envoyee: %s",
+                    "Notification #%s (%s) non envoyee: %s",
                     notification.id,
-                    resultat.erreur,
+                    notification.channel,
+                    motif,
                 )
 
     if jetons_morts:
