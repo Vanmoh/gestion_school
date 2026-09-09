@@ -580,6 +580,18 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 12),
+          // Les règles qui pèsent sur les calculs, à part.
+          //
+          // Elles étaient noyées entre « Échelle cachet % » et les libellés de
+          // signature, au milieu d'une trentaine de champs de mise en page. Un
+          // réglage qui change la moyenne de tous les bulletins de l'école ne
+          // peut pas avoir le même poids visuel qu'une taille d'image.
+          _CarteDesReglesDeCalcul(
+            coefficientDeConduite: _conduiteCoefficientController,
+            penaliteDeRetard: _libraryPenaltyController,
+            enregistrement: _saving,
+          ),
+          const SizedBox(height: 12),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(12),
@@ -763,32 +775,6 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
                       ),
                     ),
                   ),
-                  SizedBox(
-                    width: 220,
-                    child: TextField(
-                      controller: _libraryPenaltyController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Penalite retard / jour',
-                        helperText: 'Bibliotheque. 0 = aucune penalite.',
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 240,
-                    child: TextField(
-                      controller: _conduiteCoefficientController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Coefficient de conduite',
-                        helperText: 'Bulletin et classement. 0 = ne pese pas.',
-                      ),
-                    ),
-                  ),
                   FilledButton.icon(
                     onPressed: _saving ? null : _save,
                     icon: const Icon(Icons.save_outlined),
@@ -917,6 +903,96 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
             ),
         ],
       ),
+      ),
+    );
+  }
+}
+
+/// Les réglages qui changent des chiffres, sortis du formulaire d'identité.
+///
+/// Le coefficient de conduite entre dans la moyenne de chaque bulletin et
+/// dans le classement de chaque classe: le modifier en cours d'année déplace
+/// tous les rangs. La pénalité de retard, elle, ne touche que les emprunts.
+/// Les deux méritaient mieux qu'une case au milieu des échelles d'images.
+class _CarteDesReglesDeCalcul extends StatelessWidget {
+  final TextEditingController coefficientDeConduite;
+  final TextEditingController penaliteDeRetard;
+  final bool enregistrement;
+
+  const _CarteDesReglesDeCalcul({
+    required this.coefficientDeConduite,
+    required this.penaliteDeRetard,
+    required this.enregistrement,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.calculate_outlined, size: 18, color: scheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Règles de calcul',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Ces deux réglages changent des chiffres déjà imprimés. '
+              'Les modifier en cours d\'année déplace les moyennes et les rangs.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                SizedBox(
+                  width: 260,
+                  child: TextField(
+                    controller: coefficientDeConduite,
+                    enabled: !enregistrement,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Coefficient de conduite',
+                      helperText:
+                          'Pèse dans chaque bulletin et dans le classement.\n'
+                          '0 = la conduite est notée mais ne compte pas.',
+                      helperMaxLines: 2,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 260,
+                  child: TextField(
+                    controller: penaliteDeRetard,
+                    enabled: !enregistrement,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Pénalité de retard / jour',
+                      helperText:
+                          'Emprunts de la bibliothèque.\n0 = aucune pénalité.',
+                      helperMaxLines: 2,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

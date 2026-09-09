@@ -196,6 +196,24 @@ extension _DialogueDUnCreneau on _TimetablePageState {
                         ),
                       ],
                     ),
+                    // Qui peut prendre ce créneau. La collecte des
+                    // disponibilités s'arrêtait à elle-même: les
+                    // déclarations étaient enregistrées puis oubliées, et
+                    // celui qui posait un cours à la main plaçait à
+                    // l'aveugle. Le serveur savait répondre; personne ne le
+                    // lui demandait.
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => _montrerQuiEstDisponible(
+                          jour: selectedDay,
+                          debut: startController.text.trim(),
+                          fin: endController.text.trim(),
+                        ),
+                        icon: const Icon(Icons.how_to_reg_outlined, size: 18),
+                        label: const Text('Qui est disponible sur ce créneau ?'),
+                      ),
+                    ),
                     const SizedBox(height: 10),
                     TextField(
                       controller: roomController,
@@ -374,5 +392,163 @@ extension _DialogueDUnCreneau on _TimetablePageState {
         majEtat(() => _saving = false);
       }
     }
+  }
+
+  /// Montre qui peut prendre le créneau saisi, du plus volontaire au moins
+  /// disponible.
+  ///
+  /// Le serveur classe en quatre groupes: préférés, possibles, ceux qui
+  /// n'ont rien déclaré, et ceux qui se sont dits indisponibles. Les
+  /// silencieux forment un groupe à part entière — ne rien avoir dit n'est ni
+  /// un oui ni un non, et l'administration a besoin de la nuance pour
+  /// arbitrer.
+  Future<void> _montrerQuiEstDisponible({
+    required String jour,
+    required String debut,
+    required String fin,
+  }) async {
+    final heureDebut = _parseTimeOfDay(debut);
+    final heureFin = _parseTimeOfDay(fin);
+    if (heureDebut == null || heureFin == null) {
+      _showMessage('Renseignez les heures de début et de fin (HH:MM).');
+      return;
+    }
+
+    Map<String, dynamic> reponse;
+    try {
+      final resultat = await ref
+          .read(dioProvider)
+          .get(
+            '/teacher-availability-slots/for-planning/',
+            queryParameters: {
+              'day': jour,
+              'start': _toApiTime(heureDebut),
+              'end': _toApiTime(heureFin),
+            },
+          );
+      reponse = Map<String, dynamic>.from(resultat.data as Map);
+    } catch (erreur) {
+      _showMessage('Disponibilités indisponibles: ${_extractErrorMessage(erreur)}');
+      return;
+    }
+
+    if (!mounted) return;
+
+    List<Map<String, dynamic>> groupe(String cle) {
+      final brut = reponse[cle];
+      if (brut is! List) return const [];
+      return brut.whereType<Map<String, dynamic>>().toList(growable: false);
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        final scheme = Theme.of(context).colorScheme;
+        return AlertDialog(
+          title: Text(
+            '${reponse['day_label'] ?? jour} '
+            '${reponse['start_time'] ?? debut}-${reponse['end_time'] ?? fin}',
+          ),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _groupeDeDisponibilite(
+                    titre: 'Volontaires',
+                    sousTitre: 'Ont déclaré ce créneau comme préféré.',
+                    couleur: scheme.primary,
+                    lignes: groupe('preferred'),
+                  ),
+                  _groupeDeDisponibilite(
+                    titre: 'Possibles',
+                    sousTitre: 'Peuvent, sans en faire un souhait.',
+                    couleur: scheme.tertiary,
+                    lignes: groupe('possible'),
+                  ),
+                  _groupeDeDisponibilite(
+                    titre: 'Sans réponse',
+                    sousTitre:
+                        "N'ont rien déclaré: ce n'est ni un oui ni un non.",
+                    couleur: scheme.outline,
+                    lignes: groupe('undeclared'),
+                  ),
+                  _groupeDeDisponibilite(
+                    titre: 'Indisponibles',
+                    sousTitre:
+                        'Ont pris la peine d\'écrire non. Les placer reste '
+                        'possible, la raison suivra le créneau.',
+                    couleur: scheme.error,
+                    lignes: groupe('unavailable'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _groupeDeDisponibilite({
+    required String titre,
+    required String sousTitre,
+    required Color couleur,
+    required List<Map<String, dynamic>> lignes,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.circle, size: 10, color: couleur),
+              const SizedBox(width: 6),
+              Text(
+                '$titre (${lignes.length})',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 16, top: 2),
+            child: Text(
+              sousTitre,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          if (lignes.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(left: 16, top: 4),
+              child: Text('—'),
+            )
+          else
+            for (final ligne in lignes)
+              Padding(
+                padding: const EdgeInsets.only(left: 16, top: 4),
+                child: Text(
+                  [
+                    ligne['teacher_name']?.toString() ?? '',
+                    if ((ligne['declared_start'] ?? '') != '' &&
+                        ligne['declared_start'] != null)
+                      '(déclaré ${ligne['declared_start']}-${ligne['declared_end']})',
+                    if ((ligne['note']?.toString() ?? '').isNotEmpty)
+                      '— ${ligne['note']}',
+                  ].join(' '),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+        ],
+      ),
+    );
   }
 }
