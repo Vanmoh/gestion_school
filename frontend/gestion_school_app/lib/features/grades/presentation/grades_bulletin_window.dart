@@ -11,6 +11,44 @@ part of 'grades_page.dart';
 /// c'est ce qui rend le déplacement sûr sur cinq cents lignes qui manipulent
 /// une douzaine de membres.
 extension _DialogueDesBulletins on _GradesPageState {
+  /// Le nom d'une classe, tel que l'écran l'affiche déjà.
+  String _nomDeLaClasse(int? classroomId) {
+    if (classroomId == null) return '';
+    final classe = _classrooms.firstWhere(
+      (row) => _asInt(row['id']) == classroomId,
+      orElse: () => <String, dynamic>{},
+    );
+    return (classe['name'] ?? '').toString();
+  }
+
+  /// Ouvre l'envoi des bulletins d'une classe aux familles.
+  ///
+  /// Les trois paramètres viennent de la fenêtre d'où l'on sort: ils y sont
+  /// déjà choisis, et les redemander serait faire ressaisir ce que
+  /// l'utilisateur vient de dire.
+  void _ouvrirEnvoiAuxFamilles({
+    required int? classroomId,
+    required String classroomName,
+    required int? yearId,
+    required String term,
+  }) {
+    if (classroomId == null || classroomId <= 0 || yearId == null || yearId <= 0) {
+      _showMessage('Sélectionnez une classe et une année scolaire.');
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => BulletinWhatsAppPage(
+          classroomId: classroomId,
+          classroomName: classroomName,
+          academicYearId: yearId,
+          term: term,
+        ),
+      ),
+    );
+  }
+
   Future<void> _openBulletinFloatingWindow() async {
     if (_years.isEmpty) {
       _showMessage('Aucune année scolaire disponible.');
@@ -503,6 +541,30 @@ extension _DialogueDesBulletins on _GradesPageState {
                             icon: const Icon(Icons.groups_2_outlined),
                             label: const Text('Imprimer classe entière'),
                           ),
+                          // L'envoi aux familles vivait dans Administration >
+                          // Rapports, et s'y atteignait en sélectionnant un
+                          // élève alors qu'il porte sur une classe entière.
+                          // On le pose ici, où la classe, l'année et le
+                          // trimestre sont déjà choisis: c'est le geste qui
+                          // suit l'impression, et on le cherche là.
+                          if (ref
+                              .read(currentPermissionsProvider)
+                              .canWrite('bulletin_whatsapp'))
+                            FilledButton.icon(
+                              onPressed: classStudents.isEmpty
+                                  ? null
+                                  : () {
+                                      Navigator.of(dialogContext).pop();
+                                      _ouvrirEnvoiAuxFamilles(
+                                        classroomId: selectedClassroom,
+                                        classroomName: _nomDeLaClasse(selectedClassroom),
+                                        yearId: selectedYear,
+                                        term: selectedTerm,
+                                      );
+                                    },
+                              icon: const Icon(Icons.chat_outlined),
+                              label: const Text('Envoyer aux familles'),
+                            ),
                         ],
                       ),
                     ],

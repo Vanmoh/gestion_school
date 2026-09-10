@@ -173,9 +173,44 @@ Un import Excel existe aussi (**Imports académiques**).
 Un bulletin réimprimé plus tard porte toujours le rang de son trimestre.
 
 **En fin d'année** — écran **Promotion**: simuler d'abord, relire les
-décisions, puis exécuter. La moyenne annuelle est la moyenne des trimestres
-évalués, conduite comprise: **relisez le seuil de passage**, car la conduite
-(18 par défaut) remonte les moyennes.
+décisions, puis exécuter.
+
+La moyenne annuelle est la moyenne des trimestres évalués, **conduite
+comprise** — la même que le bulletin. Avec une conduite à 18 par défaut et un
+coefficient 2, un élève à 6 de moyenne de matières atteint 10. L'écran vous
+donne désormais les deux chiffres côte à côte (« Moy: 10,00 (matières:
+6,00) ») et signale ces passages: « Passe grâce à la conduite ».
+
+Deux façons de régler cela, selon ce que veut la direction:
+
+- laisser faire, et arbitrer sur les motifs signalés;
+- renseigner **Seuil moyenne des matières** (facultatif): l'élève dont le
+  niveau en classe ne suit pas est alors retenu, quelle que soit sa conduite.
+
+## Frais et changements de classe
+
+Un élève qui change de classe en cours d'année garde les frais du barème de
+son ancienne classe. Si les tarifs diffèrent, sa facture est fausse.
+
+**Finances → Barèmes → Contrôler les écarts** liste ces cas, avec le tarif
+qu'appliquerait sa classe actuelle et l'indication des frais déjà réglés.
+
+Le contrôle **ne corrige rien**, délibérément: un frais qui porte un paiement
+encaissé ne se réécrit pas d'un trait de plume — cela suppose un
+remboursement, pas une correction de saisie. L'école tranche au cas par cas.
+
+À faire après chaque réaffectation d'élèves.
+
+## Absences: journées ou heures
+
+Une absence porte une date et, si vous le souhaitez, un **nombre d'heures**
+manquées. Le champ est facultatif: laissé vide, l'absence vaut une journée
+non quantifiée — le comportement d'avant, et celui de toutes les absences
+déjà saisies.
+
+Un lycée qui compte les heures les renseigne; le tableau de bord additionne
+alors les heures réellement manquées à côté du nombre d'absences. Une école
+qui compte les journées n'a rien à changer.
 
 ## Reprise d'un historique existant
 

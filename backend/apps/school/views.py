@@ -7147,6 +7147,108 @@ class FeeScheduleViewSet(AnneeScolaireScopeMixin, EtablissementScopedModelViewSe
             }
         )
 
+    @action(detail=False, methods=["get"])
+    def ecarts(self, request):
+        """Les frais qui ne correspondent plus a la classe de l'eleve.
+
+        Un eleve change de classe en cours d'annee -- reorientation, classe
+        dedoublee, erreur d'affectation corrigee -- et ses frais restent ceux
+        du bareme de son ancienne classe. Si les tarifs different, sa facture
+        est fausse, et rien ne le signalait.
+
+        Cette action ne corrige rien, et c'est deliberé: ces frais portent
+        souvent des paiements deja encaisses. Reecrire un montant sous un
+        reglement encaisse, ou en creer un second, se rattrape mal. L'ecole
+        voit l'ecart, le montant qu'appliquerait sa classe actuelle, et ce
+        qui a deja ete verse -- puis tranche au cas par cas.
+        """
+        frais = (
+            StudentFee.objects.filter(schedule__isnull=False)
+            .exclude(schedule__classroom__isnull=True)
+            .exclude(schedule__classroom_id=F("student__classroom_id"))
+            .select_related(
+                "student",
+                "student__user",
+                "student__classroom",
+                "schedule",
+                "schedule__classroom",
+                "academic_year",
+            )
+        )
+        frais = self._filter_by_scope(frais, field_name="schedule__etablissement")
+
+        annee_id = _entier_positif_ou_none(request.query_params.get("academic_year"))
+        if annee_id:
+            frais = frais.filter(academic_year_id=annee_id)
+
+        frais = self._with_financial_annotations_for_ecarts(frais)
+
+        # Le tarif qu'appliquerait la classe actuelle, pour comparaison. Une
+        # requete pour tous les baremes vises, et non une par ligne.
+        classes_visees = {
+            f.student.classroom_id for f in frais if f.student and f.student.classroom_id
+        }
+        tarifs = {}
+        for bareme in FeeSchedule.objects.filter(
+            classroom_id__in=classes_visees
+        ).values("classroom_id", "fee_type", "amount"):
+            tarifs[(bareme["classroom_id"], bareme["fee_type"])] = bareme["amount"]
+
+        lignes = []
+        for f in frais:
+            eleve = f.student
+            classe_actuelle = eleve.classroom if eleve else None
+            tarif_attendu = tarifs.get(
+                (getattr(classe_actuelle, "id", None), f.fee_type)
+            )
+            paye = getattr(f, "paye", 0) or 0
+            lignes.append(
+                {
+                    "fee": f.id,
+                    "student": getattr(eleve, "id", None),
+                    "student_full_name": (
+                        eleve.user.get_full_name().strip()
+                        if eleve and eleve.user
+                        else ""
+                    ),
+                    "student_matricule": getattr(eleve, "matricule", ""),
+                    "classe_actuelle": getattr(classe_actuelle, "name", ""),
+                    "classe_du_bareme": getattr(f.schedule.classroom, "name", ""),
+                    "fee_type": f.get_fee_type_display(),
+                    "due_date": f.due_date.isoformat() if f.due_date else None,
+                    "montant_facture": f.amount_due,
+                    "montant_de_sa_classe": tarif_attendu,
+                    "ecart": (
+                        tarif_attendu - f.amount_due
+                        if tarif_attendu is not None
+                        else None
+                    ),
+                    "deja_paye": paye,
+                    # Un frais deja regle ne se corrige pas d'un trait de
+                    # plume: c'est ce qui distingue une simple erreur de
+                    # saisie d'un remboursement.
+                    "porte_un_paiement": bool(paye),
+                }
+            )
+
+        return Response(
+            {
+                "count": len(lignes),
+                "avec_paiement": sum(1 for l in lignes if l["porte_un_paiement"]),
+                "resultats": lignes,
+            }
+        )
+
+    @staticmethod
+    def _with_financial_annotations_for_ecarts(queryset):
+        return queryset.annotate(
+            paye=Coalesce(
+                Sum("payments__amount", filter=Q(payments__is_cancelled=False)),
+                Value(0),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            )
+        )
+
     @action(detail=True, methods=["get"])
     def apercu(self, request, pk=None):
         """Ce que l'application produirait, sans rien ecrire.
@@ -9715,7 +9817,22 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
             mapping[source.id] = auto_targets[0] if auto_targets else None
         return mapping
 
-    def _compute_student_average(self, student, classroom, source_year):
+    def _moyenne_des_matieres(self, student, classroom, source_year):
+        """La moyenne annuelle sans la conduite.
+
+        Elle ne s'imprime nulle part -- le bulletin compte la conduite, et
+        c'est bien ainsi. Mais un passage en classe superieure se decide sur
+        ce que l'eleve vaut en classe: avec une conduite a 18 par defaut et un
+        coefficient 2, un eleve a 6 de moyenne de matieres atteint 10, et
+        passe sans que rien ne le signale.
+        """
+        return self._compute_student_average(
+            student, classroom, source_year, avec_conduite=False
+        )
+
+    def _compute_student_average(
+        self, student, classroom, source_year, *, avec_conduite=True
+    ):
         """La moyenne de l'annee, celle sur laquelle se decide le passage.
 
         Elle se calcule comme la moyenne des trimestres reellement evalues,
@@ -9744,7 +9861,13 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
                 # trimestre n'est pas encore saisi.
                 continue
             moyennes_trimestrielles.append(
-                moyenne_de_la_periode(student, classroom, source_year, term)
+                moyenne_de_la_periode(
+                    student,
+                    classroom,
+                    source_year,
+                    term,
+                    avec_conduite=avec_conduite,
+                )
             )
 
         if moyennes_trimestrielles:
@@ -9773,6 +9896,7 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
         mapping,
         min_average,
         min_conduite,
+        min_average_matieres=None,
     ):
         decision_rows = []
         promoted_count = 0
@@ -9789,6 +9913,12 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
             scoring_rows = []
             for student in students:
                 average = self._compute_student_average(student, classroom, source_year)
+                # La meme annee, sans la conduite: c'est ce que l'eleve vaut
+                # en classe, et c'est ce que la direction veut lire avant de
+                # le faire passer.
+                average_matieres = self._moyenne_des_matieres(
+                    student, classroom, source_year
+                )
                 conduite = Decimal(str(student.conduite or 0)).quantize(
                     Decimal("0.01"),
                     rounding=ROUND_HALF_UP,
@@ -9797,6 +9927,7 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
                     {
                         "student": student,
                         "average": average,
+                        "average_matieres": average_matieres,
                         "conduite": conduite,
                     }
                 )
@@ -9806,6 +9937,16 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
 
             for index, row in enumerate(ranked_rows, start=1):
                 is_eligible = row["average"] >= min_average and row["conduite"] >= min_conduite
+                # Seuil facultatif sur les seules matieres. Sans lui, rien ne
+                # change: c'est la moyenne du bulletin qui decide, comme
+                # avant.
+                if (
+                    is_eligible
+                    and min_average_matieres is not None
+                    and row["average_matieres"] < min_average_matieres
+                ):
+                    is_eligible = False
+                    row["bloque_par_les_matieres"] = True
                 reason = ""
                 decision = PromotionDecisionType.REPEATED
                 destination = classroom
@@ -9815,6 +9956,15 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
                     decision = PromotionDecisionType.PROMOTED
                     destination = target_classroom
                     promoted_count += 1
+                    # Le cas qui se plaide mal en conseil de classe: l'eleve
+                    # passe parce que sa conduite releve une moyenne de
+                    # matieres qui, seule, ne suffisait pas. Le dire n'empeche
+                    # pas le passage; il le rend visible.
+                    if row["average_matieres"] < min_average:
+                        reason = (
+                            f"Passe grace a la conduite: {row['average_matieres']} "
+                            f"en matieres, {row['average']} avec la conduite."
+                        )
                 elif is_eligible and target_is_same_class:
                     repeated_count += 1
                     reason = "Classe cible identique a la classe source: promotion bloquee."
@@ -9825,7 +9975,12 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
                     reason = "Classe terminale sans classe cible: archivage automatique."
                 else:
                     repeated_count += 1
-                    if row["average"] < min_average:
+                    if row.get("bloque_par_les_matieres"):
+                        reason = (
+                            f"Moyenne de matieres insuffisante: "
+                            f"{row['average_matieres']} (seuil {min_average_matieres})."
+                        )
+                    elif row["average"] < min_average:
                         reason = "Moyenne insuffisante."
                     elif row["conduite"] < min_conduite:
                         reason = "Conduite insuffisante."
@@ -9837,6 +9992,7 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
                         "target_classroom": destination,
                         "decision": decision,
                         "average": row["average"],
+                        "average_matieres": row["average_matieres"],
                         "conduite": row["conduite"],
                         "rank": index,
                         "reason": reason,
@@ -9857,6 +10013,21 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
         target_year = self._resolve_target_year(payload)
         min_average = Decimal(str(payload.get("min_average", "10"))).quantize(Decimal("0.01"))
         min_conduite = Decimal(str(payload.get("min_conduite", "10"))).quantize(Decimal("0.01"))
+        # Facultatif: sans lui, la moyenne du bulletin decide seule, comme
+        # avant. Avec lui, un eleve dont la conduite releve la moyenne reste
+        # retenu si son niveau en classe ne suit pas.
+        brut_matieres = payload.get("min_average_matieres")
+        min_average_matieres = (
+            Decimal(str(brut_matieres)).quantize(Decimal("0.01"))
+            if brut_matieres not in (None, "")
+            else None
+        )
+        if min_average_matieres is not None and not (
+            Decimal("0") <= min_average_matieres <= Decimal("20")
+        ):
+            raise ValidationError(
+                {"min_average_matieres": "Le seuil de matieres doit etre entre 0 et 20."}
+            )
 
         if target_year is None:
             raise ValidationError({"target_academic_year": "Une annee scolaire cible est requise."})
@@ -9881,6 +10052,7 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
             mapping=mapping,
             min_average=min_average,
             min_conduite=min_conduite,
+            min_average_matieres=min_average_matieres,
         )
 
         with transaction.atomic():
@@ -9914,6 +10086,7 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
                         target_classroom=row["target_classroom"],
                         decision=row["decision"],
                         average=row["average"],
+                        average_matieres=row["average_matieres"],
                         conduite=row["conduite"],
                         rank=row["rank"],
                         reason=row["reason"],
@@ -10085,6 +10258,12 @@ class DashboardViewSet(viewsets.ViewSet):
         )
         students = students_qs.count()
         absences = attendance_qs.count()
+        # Les heures reellement manquees, quand l'ecole les compte. Le nombre
+        # d'absences reste la mesure principale -- toutes les ecoles ne
+        # quantifient pas -- mais un lycee qui compte les heures veut ce
+        # chiffre-la, et non un nombre de journees qui melange une matinee et
+        # une semaine.
+        absence_hours = attendance_qs.aggregate(value=Sum("hours"))["value"] or 0
         classroom_count = classrooms_qs.count()
         teacher_count = teachers_qs.count()
 
@@ -10105,6 +10284,7 @@ class DashboardViewSet(viewsets.ViewSet):
             "monthly_expenses_pending": expenses_pending,
             "monthly_profit": revenue - expenses,
             "monthly_absences": absences,
+            "monthly_absence_hours": absence_hours,
             "classrooms": classroom_count,
             "teachers": teacher_count,
             "active_etablissement": etablissement_payload,

@@ -80,7 +80,10 @@ class _Transport implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-ModulePermissions _droits(AccessLevel niveau) {
+ModulePermissions _droits(
+  AccessLevel niveau, {
+  AccessLevel envoiAuxFamilles = AccessLevel.none,
+}) {
   return ModulePermissions(
     role: 'test',
     modules: {
@@ -91,11 +94,24 @@ ModulePermissions _droits(AccessLevel niveau) {
         level: niveau,
         scoped: false,
       ),
+      // Un module à part: lire un bulletin n'emporte pas le droit de le
+      // diffuser aux familles.
+      'bulletin_whatsapp': ModulePermission(
+        key: 'bulletin_whatsapp',
+        label: 'Envoi des bulletins aux familles',
+        group: 'administration',
+        level: envoiAuxFamilles,
+        scoped: false,
+      ),
     },
   );
 }
 
-Future<_Transport> _monter(WidgetTester tester, AccessLevel niveau) async {
+Future<_Transport> _monter(
+  WidgetTester tester,
+  AccessLevel niveau, {
+  AccessLevel envoiAuxFamilles = AccessLevel.none,
+}) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = const Size(1600, 2400);
   tester.view.devicePixelRatio = 1.0;
@@ -109,7 +125,9 @@ Future<_Transport> _monter(WidgetTester tester, AccessLevel niveau) async {
     ProviderScope(
       overrides: [
         dioProvider.overrideWithValue(dio),
-        currentPermissionsProvider.overrideWithValue(_droits(niveau)),
+        currentPermissionsProvider.overrideWithValue(
+          _droits(niveau, envoiAuxFamilles: envoiAuxFamilles),
+        ),
       ],
       child: const MaterialApp(home: Scaffold(body: GradesPage())),
     ),
@@ -158,5 +176,59 @@ void main() {
       transport.envois.where((r) => r.method != 'GET'),
       isEmpty,
     );
+  });
+
+  group('l_envoi des bulletins aux familles', () {
+    // Il vivait dans Administration > Rapports, et s'y atteignait en
+    // sélectionnant un élève alors qu'il porte sur une classe entière. On le
+    // cherche ici, où la classe, l'année et le trimestre sont déjà choisis.
+
+    Future<void> ouvrirLaFenetreDesBulletins(WidgetTester tester) async {
+      // C'est un bouton flottant, posé en bas d'écran à côté de « Saisir
+      // notes ».
+      await tester.tap(
+        find.widgetWithText(FloatingActionButton, 'Imprimer bulletins'),
+      );
+      // Des pompes explicites plutôt que `pumpAndSettle`: la fenêtre charge
+      // les rangs de la classe et garde un indicateur en rotation, que le
+      // repos n'atteint jamais.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+    }
+
+    testWidgets('le bouton est là, à côté des impressions', (tester) async {
+      await _monter(
+        tester,
+        AccessLevel.write,
+        envoiAuxFamilles: AccessLevel.write,
+      );
+      await ouvrirLaFenetreDesBulletins(tester);
+
+      expect(find.text('Imprimer classe entière'), findsOneWidget);
+      expect(find.text('Envoyer aux familles'), findsOneWidget);
+    });
+
+    testWidgets('sans le droit de diffuser, il n_apparaît pas', (tester) async {
+      // Le promoteur est dans ce cas: la matrice lui donne la lecture seule
+      // sur ce module.
+      await _monter(
+        tester,
+        AccessLevel.write,
+        envoiAuxFamilles: AccessLevel.read,
+      );
+      await ouvrirLaFenetreDesBulletins(tester);
+
+      expect(find.text('Imprimer classe entière'), findsOneWidget);
+      expect(find.text('Envoyer aux familles'), findsNothing);
+    });
+
+    testWidgets('sans accès au module, il n_apparaît pas non plus', (
+      tester,
+    ) async {
+      await _monter(tester, AccessLevel.write);
+      await ouvrirLaFenetreDesBulletins(tester);
+
+      expect(find.text('Envoyer aux familles'), findsNothing);
+    });
   });
 }

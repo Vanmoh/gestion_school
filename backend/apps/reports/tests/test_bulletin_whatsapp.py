@@ -31,7 +31,15 @@ from apps.school.models import (
 )
 
 
-@override_settings(DEFAULT_PHONE_COUNTRY_CODE="223", NATIONAL_PHONE_LENGTH=8)
+# `PUBLIC_BASE_URL` comme en production: sans elle, le lien serait bati sur
+# « http://testserver/ », que l'envoi refuse desormais -- un lien qui ne sort
+# pas du reseau local n'atteint aucune famille. Le refus lui-meme est
+# eprouve dans LienNonPublicTests, plus bas.
+@override_settings(
+    DEFAULT_PHONE_COUNTRY_CODE="223",
+    NATIONAL_PHONE_LENGTH=8,
+    PUBLIC_BASE_URL="https://api.ecole.ml",
+)
 class BulletinWhatsAppApiTests(APITestCase):
     def setUp(self):
         self.etablissement = Etablissement.objects.create(
@@ -541,3 +549,80 @@ class BulletinWhatsAppApiTests(APITestCase):
 
         livraison = BulletinDelivery.objects.get(id=preparation.data["delivery_id"])
         self.assertEqual(livraison.phone, "+22376123456")
+
+
+@override_settings(DEFAULT_PHONE_COUNTRY_CODE="223", NATIONAL_PHONE_LENGTH=8)
+class LienNonPublicTests(BulletinWhatsAppApiTests):
+    """L'envoi refuse de partir quand le lien ne sortirait pas du bâtiment.
+
+    Le décor de la classe parente est repris tel quel; seul `PUBLIC_BASE_URL`
+    change — c'est précisément la variable en cause.
+    """
+
+    @override_settings(PUBLIC_BASE_URL="")
+    def test_sans_adresse_publique_l_envoi_individuel_est_refuse(self):
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.post(
+            f"/api/reports/bulletin/{self.eleve.id}/{self.annee.id}/T1/whatsapp/"
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("PUBLIC_BASE_URL", str(reponse.data))
+
+    @override_settings(PUBLIC_BASE_URL="http://192.168.1.25:8000")
+    def test_une_adresse_locale_est_refusee(self):
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.post(
+            f"/api/reports/bulletin/{self.eleve.id}/{self.annee.id}/T1/whatsapp/"
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("192.168.1.25", str(reponse.data))
+
+    @override_settings(PUBLIC_BASE_URL="")
+    def test_l_envoi_de_classe_est_refuse_aussi(self):
+        """Soixante liens morts d'un coup: c'est le cas qui coûte le plus."""
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.post(
+            f"/api/reports/bulletins/class/{self.classe.id}/{self.annee.id}/T1/whatsapp/"
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @override_settings(PUBLIC_BASE_URL="")
+    def test_aucune_trace_n_est_ecrite_quand_l_envoi_est_refuse(self):
+        from apps.school.models import BulletinDelivery
+
+        self.client.force_authenticate(self.directeur)
+        self.client.post(
+            f"/api/reports/bulletin/{self.eleve.id}/{self.annee.id}/T1/whatsapp/"
+        )
+
+        self.assertEqual(BulletinDelivery.objects.count(), 0)
+
+    @override_settings(PUBLIC_BASE_URL="")
+    def test_la_consultation_de_l_etat_reste_possible(self):
+        """On doit pouvoir constater l'état même quand rien ne peut partir."""
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.get(
+            f"/api/reports/bulletin/{self.eleve.id}/{self.annee.id}/T1/whatsapp/"
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+
+    @override_settings(PUBLIC_BASE_URL="https://api.ecole.ml")
+    def test_avec_une_adresse_publique_l_envoi_repart(self):
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.post(
+            f"/api/reports/bulletin/{self.eleve.id}/{self.annee.id}/T1/whatsapp/"
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            reponse.data["download_url"].startswith("https://api.ecole.ml/")
+        )

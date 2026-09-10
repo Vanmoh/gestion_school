@@ -14,6 +14,7 @@ import '../../../core/permissions/module_permissions.dart';
 import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../../imports/presentation/academic_imports_window.dart';
+import '../../reports/presentation/bulletin_whatsapp_page.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../core/network/chargement_tolerant.dart';
 import '../../../core/widgets/indicateur.dart';

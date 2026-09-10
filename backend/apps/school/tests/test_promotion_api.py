@@ -378,6 +378,95 @@ class PromotionApiTests(APITestCase):
         # Le T3, non evalue, ne pese pas: (11,33 + 16,67) / 2 = 14,00.
         self.assertEqual(decision.average, Decimal("14.00"))
 
+    # ----- la conduite, et ce qu'elle masque ---------------------------
+
+    def test_la_moyenne_des_matieres_est_rendue_a_cote_de_celle_du_bulletin(self):
+        """Le conseil de classe doit voir sur quoi il décide.
+
+        La moyenne du bulletin compte la conduite, et c'est bien ainsi. Mais
+        elle ne dit pas ce que l'élève vaut en classe.
+        """
+        eleve = self._eleve("M001", "Awa")
+        self._note(eleve, self.maths, 6)
+
+        self.client.force_authenticate(self.directeur)
+        reponse = self.client.post(
+            "/api/promotion-runs/simulate/", self._charge(), format="json"
+        )
+
+        decision = self._decision(reponse.data["id"], eleve)
+        # Maths 6 (coef 4) seul: 6,00. Avec la conduite 18 (coef 2): 10,00.
+        self.assertEqual(decision.average_matieres, Decimal("6.00"))
+        self.assertEqual(decision.average, Decimal("10.00"))
+
+    def test_un_passage_qui_tient_a_la_conduite_est_signale(self):
+        """Le cas qui se plaide mal: 6 en classe, et l'élève passe."""
+        eleve = self._eleve("M001", "Awa")
+        self._note(eleve, self.maths, 6)
+
+        self.client.force_authenticate(self.directeur)
+        reponse = self.client.post(
+            "/api/promotion-runs/simulate/", self._charge(), format="json"
+        )
+
+        decision = self._decision(reponse.data["id"], eleve)
+        self.assertEqual(decision.decision, "promoted")
+        self.assertIn("grace a la conduite", decision.reason)
+        self.assertIn("6.00", decision.reason)
+
+    def test_un_seuil_sur_les_matieres_retient_l_eleve(self):
+        eleve = self._eleve("M001", "Awa")
+        self._note(eleve, self.maths, 6)
+
+        self.client.force_authenticate(self.directeur)
+        reponse = self.client.post(
+            "/api/promotion-runs/simulate/",
+            self._charge(min_average_matieres="10"),
+            format="json",
+        )
+
+        decision = self._decision(reponse.data["id"], eleve)
+        self.assertEqual(decision.decision, "repeated")
+        self.assertIn("matieres insuffisante", decision.reason)
+
+    def test_sans_ce_seuil_rien_ne_change(self):
+        """Le comportement par défaut reste celui d'avant."""
+        eleve = self._eleve("M001", "Awa")
+        self._note(eleve, self.maths, 6)
+
+        self.client.force_authenticate(self.directeur)
+        reponse = self.client.post(
+            "/api/promotion-runs/simulate/", self._charge(), format="json"
+        )
+
+        self.assertEqual(self._decision(reponse.data["id"], eleve).decision, "promoted")
+
+    def test_un_bon_eleve_n_est_pas_retenu_par_le_seuil_de_matieres(self):
+        eleve = self._eleve("M001", "Awa")
+        self._note(eleve, self.maths, 14)
+
+        self.client.force_authenticate(self.directeur)
+        reponse = self.client.post(
+            "/api/promotion-runs/simulate/",
+            self._charge(min_average_matieres="10"),
+            format="json",
+        )
+
+        decision = self._decision(reponse.data["id"], eleve)
+        self.assertEqual(decision.decision, "promoted")
+        self.assertEqual(decision.reason, "")
+
+    def test_un_seuil_de_matieres_hors_bornes_est_refuse(self):
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.post(
+            "/api/promotion-runs/simulate/",
+            self._charge(min_average_matieres="25"),
+            format="json",
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_conduite_below_threshold_blocks_an_otherwise_good_average(self):
         eleve = self._eleve("M001", "Awa", conduite="6")
         self._note(eleve, self.maths, 17)

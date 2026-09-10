@@ -119,6 +119,7 @@ class UserMutationController extends StateNotifier<AsyncValue<void>> {
     required String role,
     required String phone,
     int? etablissementId,
+    String? whatsappPhone,
   }) async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() {
@@ -133,6 +134,7 @@ class UserMutationController extends StateNotifier<AsyncValue<void>> {
             role: role,
             phone: phone,
             etablissementId: etablissementId,
+            whatsappPhone: whatsappPhone,
           );
     });
 

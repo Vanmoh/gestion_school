@@ -1847,6 +1847,110 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     }
   }
 
+  /// Montre les frais qui ne correspondent plus à la classe de l'élève.
+  ///
+  /// Aucune correction automatique: ces frais portent souvent des paiements
+  /// déjà encaissés, et réécrire un montant sous un règlement se rattrape
+  /// mal. L'école voit l'écart et tranche au cas par cas.
+  Future<void> _controlerLesEcarts() async {
+    setState(() => _financeBusy = true);
+    try {
+      final donnees = await ref.read(feeSchedulesRepositoryProvider).ecarts();
+      if (!mounted) return;
+
+      final lignes = (donnees['resultats'] as List?) ?? const [];
+      final avecPaiement = (donnees['avec_paiement'] as num?)?.toInt() ?? 0;
+
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Frais et changements de classe'),
+          content: SizedBox(
+            width: 560,
+            child: lignes.isEmpty
+                ? const Text(
+                    'Aucun écart: tous les frais issus d\'un barème '
+                    'correspondent à la classe actuelle de l\'élève.',
+                  )
+                : SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${lignes.length} frais ne correspondent plus à la '
+                          'classe de l\'élève.',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        if (avecPaiement > 0) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            '$avecPaiement portent déjà un paiement: les '
+                            'corriger suppose un remboursement, pas une '
+                            'simple correction de saisie.',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(context).colorScheme.error,
+                                ),
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        for (final brut in lignes.take(30))
+                          if (brut is Map)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '${brut['student_full_name'] ?? ''} '
+                                    '(${brut['student_matricule'] ?? ''})',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodyMedium,
+                                  ),
+                                  Text(
+                                    '${brut['fee_type'] ?? ''} • échéance '
+                                    '${brut['due_date'] ?? '-'} • facturé '
+                                    '${_formatMoney(_toDoubleOuZero(brut['montant_facture']))}',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                  Text(
+                                    'Barème de ${brut['classe_du_bareme'] ?? '-'}, '
+                                    'élève désormais en ${brut['classe_actuelle'] ?? '-'}'
+                                    '${brut['montant_de_sa_classe'] == null ? ' (aucun barème dans sa classe)' : ' — tarif de sa classe: ${_formatMoney(_toDoubleOuZero(brut['montant_de_sa_classe']))}'}'
+                                    '${brut['porte_un_paiement'] == true ? ' • déjà réglé' : ''}',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                ],
+                              ),
+                            ),
+                        if (lignes.length > 30)
+                          Text('… et ${lignes.length - 30} autre(s).'),
+                      ],
+                    ),
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        ),
+      );
+    } catch (erreur) {
+      _showMessage('Contrôle impossible: ${_extractApiErrorMessage(erreur)}');
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
+  double _toDoubleOuZero(dynamic valeur) {
+    if (valeur is num) return valeur.toDouble();
+    return double.tryParse(valeur?.toString() ?? '') ?? 0;
+  }
+
   Future<void> _telechargerLeModeleDeFrais() async {
     setState(() => _financeBusy = true);
     try {
