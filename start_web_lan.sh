@@ -292,12 +292,20 @@ flutter build web --release --no-wasm-dry-run --no-web-resources-cdn \
 # tournent sans fin. Mieux vaut ne pas demarrer que le decouvrir en classe.
 "$ROOT_DIR/tools/verifier_autonomie_hors_ligne.sh" "$APP_DIR/build/web"
 
-if [[ "$PWA_STRATEGY" == "none" ]]; then
-  echo "Serveur anti-cache actif (headers no-store)"
-  exec python3 "$ROOT_DIR/tools/no_cache_static_server.py" \
-    --host 0.0.0.0 \
-    --port "$WEB_PORT" \
-    --directory build/web
-fi
-
-exec python3 -m http.server "$WEB_PORT" --bind 0.0.0.0 --directory build/web
+# Compresse et revalide, dans les deux modes.
+#
+# L'ancien serveur envoyait « no-store » sur tout, pour ne jamais montrer un
+# ecran d'hier apres un rebuild. Le motif etait bon, le remede couteux: le
+# navigateur retelechargeait main.dart.js (6,5 Mo) et les polices (2,2 Mo) a
+# chaque ouverture, sans compression -- d'ou les vingt secondes avant le
+# premier ecran.
+#
+# La garantie est conservee autrement: chaque fichier porte son empreinte, le
+# navigateur demande avant de servir ce qu'il detient, et un rebuild change
+# l'empreinte. Mesure sur ce build: 6,5 Mo -> 1,86 Mo compresses, puis 304 en
+# moins d'une milliseconde aux ouvertures suivantes.
+echo "Serveur local: gzip + revalidation (empreintes)"
+exec python3 "$ROOT_DIR/tools/serveur_web_local.py" \
+  --host 0.0.0.0 \
+  --port "$WEB_PORT" \
+  --directory build/web
