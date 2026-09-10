@@ -58,11 +58,31 @@ class NumeroWhatsAppDuParentTests(APITestCase):
         """Sans accord, aucun envoi n'est préparé: il faut le voir ici."""
         self.assertFalse(self._fiche()["whatsapp_consent"])
 
-    def test_sans_numero_whatsapp_le_telephone_est_propose(self):
+    def test_le_numero_suit_le_telephone_des_la_creation(self):
+        """Plus rien à saisir: la fiche naît avec son numéro d'envoi."""
         fiche = self._fiche()
 
-        self.assertEqual(fiche["whatsapp_phone"], "")
-        self.assertEqual(fiche["whatsapp_phone_suggestion"], "+22376123456")
+        self.assertEqual(fiche["whatsapp_phone"], "+22376123456")
+        # Rien à proposer: le numéro est déjà là.
+        self.assertEqual(fiche["whatsapp_phone_suggestion"], "")
+
+    def test_un_telephone_illisible_laisse_le_numero_vide_et_propose_rien(self):
+        """« 76 12 34 56 / bureau 66 74 22 32 » ne se tranche pas tout seul."""
+        illisible = User.objects.create_user(
+            username="parent_illisible",
+            password="Pass1234!",
+            role=UserRole.PARENT,
+            phone="76 12 34 56 / bureau 66 74 22 32",
+            etablissement=self.etablissement,
+        )
+        ParentProfile.objects.create(
+            user=illisible, etablissement=self.etablissement
+        )
+
+        reponse = self.client.get(f"/api/auth/users/{illisible.id}/")
+
+        self.assertEqual(reponse.data["whatsapp_phone"], "")
+        self.assertEqual(reponse.data["whatsapp_phone_suggestion"], "")
 
     def test_rien_n_est_propose_quand_le_numero_existe_deja(self):
         self.parent.whatsapp_phone = "+22366000000"
@@ -72,6 +92,8 @@ class NumeroWhatsAppDuParentTests(APITestCase):
 
     def test_un_telephone_illisible_ne_propose_rien(self):
         """« 76 12 34 56 / bureau 66 74 22 32 » ne se tranche pas tout seul."""
+        self.parent.whatsapp_phone = ""
+        self.parent.save(update_fields=["whatsapp_phone"])
         self.parent_user.phone = "76 12 34 56 / bureau 66 74 22 32"
         self.parent_user.save(update_fields=["phone"])
 
@@ -138,14 +160,25 @@ class NumeroWhatsAppDuParentTests(APITestCase):
         self.parent.refresh_from_db()
         self.assertEqual(self.parent.whatsapp_phone, "")
 
-    def test_corriger_le_telephone_seul_ne_touche_pas_au_numero_whatsapp(self):
-        """Le piège d'origine, fixé pour qu'il reste visible.
+    def test_corriger_le_telephone_met_a_jour_le_numero_d_envoi(self):
+        """Le geste qui ne servait à rien, et qui sert désormais.
 
-        Les deux champs restent distincts: c'est voulu. Ce qui change, c'est
-        qu'on voit désormais les deux au même endroit, et qu'on peut corriger
-        le second sans quitter l'écran.
+        C'était le piège: on corrigeait le téléphone, on croyait avoir tout
+        fait, et l'envoi partait sur l'ancien numéro. Le numéro d'envoi suit
+        maintenant, à condition que personne ne les ait dissociés.
         """
-        self.parent.whatsapp_phone = "+22376123456"
+        self.client.patch(
+            f"/api/auth/users/{self.parent_user.id}/",
+            {"phone": "66 00 00 00"},
+            format="json",
+        )
+
+        self.parent.refresh_from_db()
+        self.assertEqual(self.parent.whatsapp_phone, "+22366000000")
+
+    def test_un_numero_dissocie_survit_a_la_correction_du_telephone(self):
+        """Le portable du tuteur, quand la fiche porte le fixe du domicile."""
+        self.parent.whatsapp_phone = "+22399887766"
         self.parent.save(update_fields=["whatsapp_phone"])
 
         self.client.patch(
@@ -155,7 +188,7 @@ class NumeroWhatsAppDuParentTests(APITestCase):
         )
 
         self.parent.refresh_from_db()
-        self.assertEqual(self.parent.whatsapp_phone, "+22376123456")
+        self.assertEqual(self.parent.whatsapp_phone, "+22399887766")
 
     def test_le_numero_ne_s_applique_pas_a_un_compte_sans_fiche_parent(self):
         enseignant = User.objects.create_user(

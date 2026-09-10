@@ -677,11 +677,16 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                           controller: whatsappController,
                           decoration: InputDecoration(
                             labelText: 'Numéro WhatsApp (envoi des bulletins)',
-                            helperText: user.whatsappConsent
-                                ? "Sert à l'envoi des bulletins aux familles."
-                                : "Le parent n'a pas donné son accord: aucun "
-                                      "envoi ne partira.",
-                            helperMaxLines: 2,
+                            helperText: !user.whatsappConsent
+                                ? "Le parent n'a pas donné son accord: aucun "
+                                      "envoi ne partira, quel que soit le "
+                                      "numéro."
+                                : user.whatsappPhone.isEmpty
+                                ? "Téléphone illisible: renseignez ici le "
+                                      "numéro à joindre."
+                                : "Suit le téléphone ci-dessus. Le modifier "
+                                      "ici les dissocie définitivement.",
+                            helperMaxLines: 3,
                             suffixIcon: user.whatsappPhoneSuggestion.isEmpty
                                 ? null
                                 : IconButton(
