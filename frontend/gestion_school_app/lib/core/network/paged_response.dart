@@ -17,6 +17,21 @@ const String followedPageFlag = 'followed_page';
 /// de requetes.
 const int maxAutoFollowedPages = 50;
 
+/// Marque une taille de page posee par le client, et non par l'appelant.
+///
+/// La nuance compte: une page demandee par l'ecran veut dire « je pilote ma
+/// pagination, ne recolle rien ». Une page posee ici veut dire l'inverse --
+/// « ramene tout, mais en moins d'allers-retours ».
+const String defaultPageSizeFlag = 'page_size_par_defaut';
+
+/// Taille demandee aux listes qui n'en fixent pas.
+///
+/// L'API pagine par cent, et le recollement suit les pages **une par une, en
+/// serie**: cinq cents eleves faisaient cinq allers-retours qui s'attendaient,
+/// pour une seule liste -- et l'ecran des notes en charge six. A cinq cents,
+/// le maximum accepte par l'API, la meme liste tient en une requete.
+const int taillePageParDefaut = 500;
+
 /// Vrai si l'appelant pilote lui-meme sa pagination.
 ///
 /// La regle reprend la convention deja suivie par le code existant: les ecrans
@@ -25,6 +40,13 @@ const int maxAutoFollowedPages = 50;
 bool callerHandlesPaging(RequestOptions options) {
   if (options.extra[followedPageFlag] == true) {
     return true;
+  }
+  // Une taille posee par le client ne vaut pas pilotage: le recollement doit
+  // continuer de suivre `next`. Sans cette exception, ajouter `page_size`
+  // pour aller plus vite tronquerait silencieusement toute liste depassant
+  // la page -- une classe disparaitrait d'un menu sans le moindre message.
+  if (options.extra[defaultPageSizeFlag] == true) {
+    return false;
   }
   if (options.queryParameters.containsKey('page') ||
       options.queryParameters.containsKey('page_size')) {
@@ -129,4 +151,33 @@ Response<dynamic> _rebuild(
   rebuilt['next'] = next;
   response.data = rebuilt;
   return response;
+}
+
+/// Pose une taille de page sur une requete de liste qui n'en demande aucune.
+///
+/// Appelee par l'intercepteur du client, avant l'envoi. Ne touche ni aux
+/// requetes qui pilotent deja leur pagination, ni aux pages suivies par le
+/// recollement -- elles portent deja la taille de la premiere.
+void appliquerLaTaillePageParDefaut(RequestOptions options) {
+  if (options.method.toUpperCase() != 'GET') {
+    return;
+  }
+  if (options.extra[followedPageFlag] == true) {
+    return;
+  }
+  if (options.queryParameters.containsKey('page') ||
+      options.queryParameters.containsKey('page_size')) {
+    return;
+  }
+  final dansLeChemin = Uri.tryParse(options.path)?.queryParameters ?? const {};
+  if (dansLeChemin.containsKey('page') ||
+      dansLeChemin.containsKey('page_size')) {
+    return;
+  }
+
+  options.queryParameters = {
+    ...options.queryParameters,
+    'page_size': taillePageParDefaut,
+  };
+  options.extra = {...options.extra, defaultPageSizeFlag: true};
 }
