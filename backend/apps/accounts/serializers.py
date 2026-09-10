@@ -6,6 +6,7 @@ from apps.accounts.access import ROLE_LABELS, peut_administrer_compte
 from apps.accounts.models import UserRole
 from apps.common.presence import presence_depuis_ligne, presence_last_seen
 from apps.school.models import ClassRoom, Etablissement, ParentProfile, Student
+from apps.school.phone_utils import normaliser_numero
 
 User = get_user_model()
 
@@ -62,6 +63,23 @@ class UserSerializer(serializers.ModelSerializer):
     # lisent ensemble -- en ligne, ou vu a telle heure, ou jamais venu.
     online = serializers.SerializerMethodField(read_only=True)
     last_seen_at = serializers.SerializerMethodField(read_only=True)
+    # Le numero WhatsApp du parent, la ou l'administration corrige les
+    # contacts.
+    #
+    # Il vit sur ParentProfile et non sur le compte, parce qu'il n'admet
+    # qu'une forme -- E.164 -- quand `phone` est un champ de repertoire libre
+    # qui porte souvent deux numeros ou une note. Mais rien ne le disait: on
+    # corrigeait le telephone ici, et l'envoi des bulletins continuait de
+    # partir sur l'ancien numero, ou sur rien.
+    whatsapp_phone = serializers.SerializerMethodField(read_only=True)
+    whatsapp_phone_input = serializers.CharField(
+        write_only=True, required=False, allow_blank=True
+    )
+    whatsapp_consent = serializers.SerializerMethodField(read_only=True)
+    # Ce que `phone` donnerait une fois normalise, quand le numero WhatsApp
+    # est absent. Propose, jamais ecrit d'office: un « 76 12 34 56 / bureau
+    # 66 74 22 32 » ne se tranche pas tout seul.
+    whatsapp_phone_suggestion = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
@@ -84,7 +102,69 @@ class UserSerializer(serializers.ModelSerializer):
             "has_never_logged_in",
             "online",
             "last_seen_at",
+            "whatsapp_phone",
+            "whatsapp_phone_input",
+            "whatsapp_consent",
+            "whatsapp_phone_suggestion",
         ]
+
+    @staticmethod
+    def _profil_parent(obj):
+        return getattr(obj, "parent_profile", None)
+
+    def get_whatsapp_phone(self, obj):
+        profil = self._profil_parent(obj)
+        return getattr(profil, "whatsapp_phone", "") if profil else ""
+
+    def get_whatsapp_consent(self, obj):
+        profil = self._profil_parent(obj)
+        return bool(getattr(profil, "whatsapp_consent", False)) if profil else False
+
+    def get_whatsapp_phone_suggestion(self, obj):
+        """Le telephone de repertoire converti, quand le champ WhatsApp est vide.
+
+        Rien n'est propose si la conversion echoue: un champ qui porte deux
+        numeros n'a pas de forme E.164, et deviner laquelle retenir serait
+        pire que de laisser l'administration trancher.
+        """
+        profil = self._profil_parent(obj)
+        if profil is None:
+            return ""
+        if (getattr(profil, "whatsapp_phone", "") or "").strip():
+            return ""
+        return normaliser_numero(getattr(obj, "phone", "")) or ""
+
+    def validate_whatsapp_phone_input(self, value):
+        nettoye = str(value or "").strip()
+        if not nettoye:
+            return ""
+        normalise = normaliser_numero(nettoye)
+        if not normalise:
+            raise serializers.ValidationError(
+                "Numéro WhatsApp illisible. Attendu: un numéro joignable, "
+                "par exemple 76 12 34 56 ou +223 76 12 34 56."
+            )
+        return normalise
+
+    def update(self, instance, validated_data):
+        numero = validated_data.pop("whatsapp_phone_input", None)
+        instance = super().update(instance, validated_data)
+
+        if numero is not None:
+            profil = self._profil_parent(instance)
+            if profil is None:
+                raise serializers.ValidationError(
+                    {
+                        "whatsapp_phone_input": (
+                            "Ce compte n'a pas de fiche parent: le numéro "
+                            "WhatsApp ne s'applique qu'aux parents."
+                        )
+                    }
+                )
+            profil.whatsapp_phone = numero
+            profil.save(update_fields=["whatsapp_phone", "updated_at"])
+
+        return instance
 
     def get_full_name(self, obj):
         return obj.get_full_name().strip() or obj.username

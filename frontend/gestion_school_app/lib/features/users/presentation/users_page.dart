@@ -608,6 +608,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     final lastNameController = TextEditingController(text: user.lastName);
     final emailController = TextEditingController(text: user.email);
     final phoneController = TextEditingController(text: user.phone);
+    // Le numéro qui sert réellement à l'envoi des bulletins. Vide, on propose
+    // le téléphone de répertoire converti — sans l'écrire d'office: un champ
+    // qui porte deux numéros ne se tranche pas tout seul.
+    final whatsappController = TextEditingController(text: user.whatsappPhone);
+    final estParent = user.role == 'parent';
     var editRole = user.role;
     final authUser = ref.read(authControllerProvider).value;
     final selectedEtablissement = ref.read(etablissementProvider).selected;
@@ -661,6 +666,39 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                           labelText: 'Telephone',
                         ),
                       ),
+                      // Le numéro qui sert réellement à l'envoi des
+                      // bulletins. Il vit sur la fiche parent et n'admet
+                      // qu'une forme, quand le téléphone au-dessus est un
+                      // champ de répertoire libre. On corrigeait le premier
+                      // en croyant avoir tout fait.
+                      if (estParent) ...[
+                        const SizedBox(height: 10),
+                        TextFormField(
+                          controller: whatsappController,
+                          decoration: InputDecoration(
+                            labelText: 'Numéro WhatsApp (envoi des bulletins)',
+                            helperText: user.whatsappConsent
+                                ? "Sert à l'envoi des bulletins aux familles."
+                                : "Le parent n'a pas donné son accord: aucun "
+                                      "envoi ne partira.",
+                            helperMaxLines: 2,
+                            suffixIcon: user.whatsappPhoneSuggestion.isEmpty
+                                ? null
+                                : IconButton(
+                                    tooltip:
+                                        'Reprendre le téléphone: '
+                                        '${user.whatsappPhoneSuggestion}',
+                                    icon: const Icon(
+                                      Icons.content_paste_go_outlined,
+                                    ),
+                                    onPressed: () => setDialogState(() {
+                                      whatsappController.text =
+                                          user.whatsappPhoneSuggestion;
+                                    }),
+                                  ),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 10),
                       DropdownButtonFormField<String>(
                         isExpanded: true,
@@ -744,6 +782,12 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                 etablissementId: isSuperAdmin
                                     ? editEtablissementId
                                     : selectedEtablissement?.id,
+                                // Seulement pour un parent: sur un autre
+                                // compte, le serveur refuserait — le numéro
+                                // vit sur la fiche parent.
+                                whatsappPhone: estParent
+                                    ? whatsappController.text.trim()
+                                    : null,
                               );
 
                           final mutation = ref.read(userMutationProvider);

@@ -16,6 +16,7 @@ W004_CHANNEL_LAYER = "gestion_school.W004"
 W005_COMPTES_DEMO = "gestion_school.W005"
 W006_PUSH_ABSENT = "gestion_school.W006"
 W007_COURRIEL_ABSENT = "gestion_school.W007"
+W008_LIEN_BULLETIN_PRIVE = "gestion_school.W008"
 
 
 @register(deploy=True)
@@ -248,5 +249,41 @@ def outgoing_mail_is_configured(app_configs, **kwargs):
                 "familles. Sans cela elles restent en attente."
             ),
             id=W007_COURRIEL_ABSENT,
+        )
+    ]
+
+
+@register(deploy=True)
+def bulletin_links_reach_the_families(app_configs, **kwargs):
+    """Un lien de bulletin qui ne sort pas du batiment n'atteint personne.
+
+    Sans PUBLIC_BASE_URL, le lien est bati sur l'adresse de la requete.
+    Prepare depuis l'application servie en Wi-Fi, il porte celle du poste --
+    « http://192.168.1.25:8000 » -- et le parent qui clique depuis sa
+    connexion mobile n'ouvre rien. WhatsApp ne le rend meme pas cliquable:
+    une adresse IP privee avec un port n'est pas linkifiee.
+
+    L'envoi refuse desormais de partir dans ce cas. Ce controle le dit avant,
+    au demarrage, plutot qu'au premier secretariat qui prepare une classe.
+    """
+    if settings.DEBUG:
+        return []
+
+    from apps.reports.bulletin_delivery import base_est_publique
+
+    base = str(getattr(settings, "PUBLIC_BASE_URL", "") or "").strip()
+    if base_est_publique(base):
+        return []
+
+    return [
+        CheckWarning(
+            "Les liens de bulletins envoyes aux familles ne sortiraient pas "
+            "du reseau local.",
+            hint=(
+                "Renseignez PUBLIC_BASE_URL avec l'adresse publique de l'API "
+                "(par exemple https://gestion-school-jkzf.onrender.com). Sans "
+                "elle, l'envoi des bulletins par WhatsApp est refuse."
+            ),
+            id=W008_LIEN_BULLETIN_PRIVE,
         )
     ]

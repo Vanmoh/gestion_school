@@ -109,7 +109,17 @@ Voir `backend/.env.example` :
 
 - `DEFAULT_PHONE_COUNTRY_CODE` (defaut `223`) et `NATIONAL_PHONE_LENGTH`
   (defaut `8`) ;
-- `PUBLIC_BASE_URL` : **a renseigner en production** des que l'API repond
+- `PUBLIC_BASE_URL` : **obligatoire**. L'envoi refuse desormais de partir
+  quand le lien ne sortirait pas du reseau local (adresse privee, `localhost`,
+  ou reglage absent). Sans elle, le lien reprenait l'adresse de la requete :
+  prepare depuis l'application servie en Wi-Fi, il portait
+  `http://192.168.x.x:8000` -- inatteignable depuis la connexion mobile d'un
+  parent, et pas meme cliquable dans WhatsApp, qui ne linkifie pas une IP
+  privee avec un port. Elle est renseignee dans `render.yaml` et
+  `render.staging.yaml` ; le controle `gestion_school.W008` le signale au
+  demarrage.
+
+  Ancienne mention, conservee pour memoire : **a renseigner en production** des que l'API repond
   derriere un domaine different de celui qu'atteint le telephone d'un parent.
   Vide, le lien est construit a partir de la requete, qui peut arriver par une
   adresse interne ;
@@ -146,3 +156,22 @@ Quand les demarches Meta auront abouti, il restera a :
 Le canal assiste reste alors le mode de repli : une passerelle qui tombe, ou
 une facture impayee, ne doit pas laisser l'ecole sans moyen d'envoyer les
 bulletins.
+
+## Le numero du parent : il y en a deux
+
+| Champ | Ou il se regle | A quoi il sert |
+|---|---|---|
+| Telephone | Gestion utilisateurs | Repertoire. Champ libre : peut porter deux numeros ou une note (« bureau ») |
+| Numero WhatsApp | Gestion utilisateurs, sur la fiche d'un parent | L'envoi. Format strict E.164 |
+
+Les deux sont distincts a dessein : imposer le format E.164 a toutes les
+fiches existantes aurait bloque leur simple reenregistrement.
+
+Mais corriger le telephone ne changeait rien a l'envoi, et rien ne le disait.
+La fiche d'un parent porte desormais les deux champs cote a cote. Quand le
+numero WhatsApp est vide, un bouton propose le telephone converti -- propose,
+jamais ecrit d'office : un « 76 12 34 56 / bureau 66 74 22 32 » ne se tranche
+pas tout seul.
+
+L'accord du parent s'affiche sous le champ : sans lui, aucun envoi n'est
+prepare, quel que soit le numero.
