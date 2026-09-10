@@ -150,6 +150,10 @@ final dioProvider = Provider<Dio>((ref) {
         // Do not pin non-superadmin scope from cached user metadata.
         // Cached storage can be stale across account switches; backend enforces
         // effective establishment from the authenticated user on every request.
+        // Une liste sans pagination explicite part avec une grande page:
+        // le recollement suit `next` en serie, et cinq requetes qui
+        // s'attendent pour cinq cents eleves se voient a l'ecran.
+        appliquerLaTaillePageParDefaut(options);
         handler.next(options);
       },
       onResponse: (response, handler) async {

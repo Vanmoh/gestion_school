@@ -240,6 +240,36 @@ Exemples:
 - Reçu PDF: `GET /api/reports/receipt/{payment_id}/`
 - Export Excel paiements: `GET /api/reports/payments/export-excel/`
 
+## Temps de chargement
+
+L'application mettait une vingtaine de secondes à s'ouvrir en local. Trois
+causes, toutes corrigées :
+
+**Tout était retéléchargé à chaque ouverture.** Le serveur local envoyait
+`Cache-Control: no-store` sur tout — le motif était bon (ne jamais voir un
+écran d'hier après un rebuild), le remède coûteux : `main.dart.js` (6,5 Mo)
+et les polices (2,2 Mo) repartaient à chaque fois, sans compression.
+
+`tools/serveur_web_local.py` compresse désormais et revalide par empreinte :
+le navigateur demande « as-tu changé ? » et reçoit un `304` de quelques
+octets si rien n'a bougé. Un rebuild change l'empreinte, donc les
+modifications restent visibles immédiatement — la garantie d'origine est
+conservée.
+
+| | Avant | Après |
+|---|---|---|
+| Première ouverture | 8,37 Mo | **2,99 Mo** |
+| Ouvertures suivantes | 8,37 Mo | **0 octet** (304) |
+
+**L'écran d'accueil attendait trois fois de suite.** Les deux appels réseau
+partent maintenant ensemble.
+
+**Les listes se chargeaient page par page.** L'API pagine par cent et le
+client suit les pages *en série* : cinq cents élèves faisaient cinq
+allers-retours qui s'attendaient, et l'écran des notes charge six listes. Le
+client demande désormais des pages de cinq cents — sans désactiver le
+recollement, sans quoi toute liste plus longue serait tronquée en silence.
+
 ## Ouvrir une année scolaire
 
 Marche à suivre complète, de l'établissement vide à la première journée de

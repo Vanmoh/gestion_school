@@ -167,4 +167,74 @@ void main() {
     expect(merged.data, ['a', 'b']);
     expect(adapter.requested, isEmpty);
   });
+
+  group('la taille de page par défaut', () {
+    RequestOptions requete({
+      Map<String, dynamic> parametres = const {},
+      Map<String, dynamic> extra = const {},
+      String methode = 'GET',
+      String chemin = '/students/',
+    }) {
+      return RequestOptions(
+        path: chemin,
+        method: methode,
+        queryParameters: Map<String, dynamic>.from(parametres),
+        extra: Map<String, dynamic>.from(extra),
+      );
+    }
+
+    test('une liste sans pagination part avec une grande page', () {
+      // L'API pagine par cent et le recollement suit les pages en série:
+      // cinq cents élèves faisaient cinq allers-retours qui s'attendaient.
+      final options = requete();
+
+      appliquerLaTaillePageParDefaut(options);
+
+      expect(options.queryParameters['page_size'], taillePageParDefaut);
+    });
+
+    test('elle n_empêche pas le recollement', () {
+      // Le piège: `page_size` veut dire « je pilote ma pagination », et le
+      // poser sans cette exception tronquerait toute liste plus longue —
+      // une classe disparaîtrait d'un menu sans le moindre message.
+      final options = requete();
+      appliquerLaTaillePageParDefaut(options);
+
+      expect(callerHandlesPaging(options), isFalse);
+    });
+
+    test('une pagination demandée par l_écran est respectée', () {
+      final options = requete(parametres: {'page': 2, 'page_size': 25});
+
+      appliquerLaTaillePageParDefaut(options);
+
+      expect(options.queryParameters['page_size'], 25);
+      expect(callerHandlesPaging(options), isTrue);
+    });
+
+    test('une taille inscrite dans le chemin est respectée aussi', () {
+      final options = requete(chemin: '/students/?page_size=10');
+
+      appliquerLaTaillePageParDefaut(options);
+
+      expect(options.queryParameters.containsKey('page_size'), isFalse);
+    });
+
+    test('une page suivie par le recollement n_est pas retouchée', () {
+      // Elle porte déjà la taille de la première.
+      final options = requete(extra: {followedPageFlag: true});
+
+      appliquerLaTaillePageParDefaut(options);
+
+      expect(options.queryParameters.containsKey('page_size'), isFalse);
+    });
+
+    test('une écriture n_est jamais paginée', () {
+      final options = requete(methode: 'POST');
+
+      appliquerLaTaillePageParDefaut(options);
+
+      expect(options.queryParameters.containsKey('page_size'), isFalse);
+    });
+  });
 }

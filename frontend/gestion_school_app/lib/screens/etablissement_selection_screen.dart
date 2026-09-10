@@ -43,20 +43,27 @@ class _PublicEtablissementEntryPageState
     }
     try {
       final provider = ref.read(etablissementProvider);
+      // D'abord, et seul: `hydrate` relit le choix precedent sans reseau, et
+      // les deux appels qui suivent en dependent.
       await provider.hydrate();
 
-      // L'identite de l'ecole apres le contexte local, dans la meme chaine
-      // que la liste: c'est ce portail qui porte son nom, son sigle et son
-      // logo, et il s'affiche avant toute connexion.
+      // L'identite de l'ecole et la liste des etablissements partent
+      // ensemble. Elles s'attendaient l'une l'autre pour rien: le portail a
+      // besoin des deux avant de s'afficher, et aucune ne se sert de ce que
+      // l'autre ramene.
       //
-      // Dans la chaine et non lancee de cote: un appel qui survit a l'ecran
-      // laisse un minuteur en vol, et le montage de l'application n'est plus
-      // testable -- Flutter refuse de conclure un test sur un minuteur actif.
-      await ref.read(personnalisationProvider).charger();
-      // Le chargement vit dans le provider: les deux ecrans qui en ont
-      // besoin le demandaient chacun de son cote, avec deux gestions
-      // d'erreur qui ont fini par diverger.
-      await provider.charger(forcer: true);
+      // `Future.wait` et non deux appels lances de cote: l'attente reste dans
+      // la chaine, donc rien ne survit a l'ecran. Un appel qui lui survivrait
+      // laisserait un minuteur en vol, et le montage de l'application ne
+      // serait plus testable -- Flutter refuse de conclure un test sur un
+      // minuteur actif.
+      await Future.wait([
+        ref.read(personnalisationProvider).charger(),
+        // Le chargement vit dans le provider: les deux ecrans qui en ont
+        // besoin le demandaient chacun de son cote, avec deux gestions
+        // d'erreur qui ont fini par diverger.
+        provider.charger(forcer: true),
+      ]);
       if (mounted) {
         setState(() => _erreur = null);
       }
