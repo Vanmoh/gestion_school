@@ -119,6 +119,16 @@ class FeeSchedulesRepository {
     return map['detail']?.toString() ?? 'Frais générés.';
   }
 
+  /// Les frais qui ne correspondent plus à la classe de l'élève.
+  ///
+  /// Un élève change de classe en cours d'année et garde le tarif de son
+  /// ancienne. Le contrôle ne corrige rien: ces frais portent souvent des
+  /// paiements déjà encaissés.
+  Future<Map<String, dynamic>> ecarts() async {
+    final response = await dio.get('/fee-schedules/ecarts/');
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   /// Applique tous les barèmes d'une année: le geste de la rentrée.
   Future<String> appliquerTout({int? academicYearId}) async {
     final response = await dio.post(

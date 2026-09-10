@@ -21,6 +21,10 @@ services:
         value: "https://gestion-school-staging-web.onrender.com"
       - key: CSRF_TRUSTED_ORIGINS
         value: "https://*.onrender.com"
+      # Comme en production: sans elle, les liens envoyes aux familles
+      # reprennent l'adresse de la requete et ne sortent pas du reseau local.
+      - key: PUBLIC_BASE_URL
+        value: "https://gestion-school-staging-api.onrender.com"
       - key: DATABASE_URL
         sync: false
       - key: DB_SSL_REQUIRE

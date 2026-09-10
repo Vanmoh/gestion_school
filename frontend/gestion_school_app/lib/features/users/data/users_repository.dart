@@ -167,6 +167,12 @@ class UsersRepository {
     required String role,
     required String phone,
     int? etablissementId,
+    /// Numéro WhatsApp du parent, distinct du téléphone de répertoire.
+    ///
+    /// `null` quand le champ n'est pas concerné (compte non parent, ou
+    /// dialogue qui ne le propose pas): le serveur n'y touche alors pas.
+    /// Chaîne vide = effacer le numéro.
+    String? whatsappPhone,
   }) async {
     try {
       await dio.patch(
@@ -178,6 +184,7 @@ class UsersRepository {
           'email': email,
           'role': role,
           'phone': phone,
+          'whatsapp_phone_input': ?whatsappPhone,
           ...?(etablissementId == null ? null : {'etablissement': etablissementId}),
         },
       );

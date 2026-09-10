@@ -54,7 +54,10 @@ from apps.reports.card_verification import signer as signer_carte
 from apps.reports.bulletin_delivery import (
     generer_pdf_bulletin,
     horodatage_d_expiration,
+    base_est_publique,
+    base_publique,
     lien_de_telechargement,
+    motif_de_base_non_publique,
     lien_expire,
     lien_wa_me,
     nom_de_fichier_bulletin,
@@ -2906,6 +2909,23 @@ class _BulletinWhatsAppBase(APIView):
             raise ValidationError({"detail": "Période invalide. Utilisez uniquement T1, T2 ou T3."})
         return normalized_term
 
+    def _refuser_si_le_lien_ne_sort_pas(self, request):
+        """Coupe l'envoi quand le lien ne quitterait pas le reseau local.
+
+        Le lien est bati sur PUBLIC_BASE_URL, ou a defaut sur l'adresse de la
+        requete. Prepare depuis l'application servie en Wi-Fi, il portait
+        alors « http://192.168.1.25:8000 »: le parent qui clique depuis sa
+        connexion mobile n'ouvre rien, et WhatsApp ne rend meme pas l'adresse
+        cliquable.
+
+        Bloquer plutot qu'avertir: soixante liens morts partis a soixante
+        familles font soixante appels a l'ecole, et personne ne sait
+        pourquoi.
+        """
+        base = base_publique(request)
+        if not base_est_publique(base):
+            raise ValidationError({"detail": motif_de_base_non_publique(base)})
+
     def _periode_validee(
         self,
         student: Student,
@@ -3152,6 +3172,8 @@ class BulletinWhatsAppView(_BulletinWhatsAppBase):
         )
         _ensure_student_access(request, student)
 
+        self._refuser_si_le_lien_ne_sort_pas(request)
+
         obstacle = self._obstacle(student, academic_year, normalized_term)
         if obstacle:
             raise ValidationError({"detail": obstacle})
@@ -3301,6 +3323,8 @@ class ClassBulletinsWhatsAppView(_BulletinWhatsAppBase):
         )
 
     def post(self, request, classroom_id: int, academic_year_id: int, term: str):
+        self._refuser_si_le_lien_ne_sort_pas(request)
+
         normalized_term = self._periode_valide(term)
         academic_year = self._annee(academic_year_id)
         classroom, students = self._classe_et_eleves(request, classroom_id)

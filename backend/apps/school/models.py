@@ -93,7 +93,10 @@ class Etablissement(TimeStampedModel):
         max_digits=4,
         decimal_places=2,
         default=2,
-        validators=[MinValueValidator(0), MaxValueValidator(10)],
+        validators=[
+            MinValueValidator(Decimal("0")),
+            MaxValueValidator(Decimal("10")),
+        ],
     )
 
     class Meta:
@@ -861,6 +864,12 @@ class PromotionDecision(TimeStampedModel):
     )
     decision = models.CharField(max_length=20, choices=PromotionDecisionType.choices)
     average = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    # La meme moyenne, sans la conduite. Elle ne s'imprime nulle part, mais
+    # elle repond a la question du conseil de classe: que vaut l'eleve en
+    # classe? Avec une conduite a 18 par defaut et un coefficient 2, un eleve
+    # a 6 de moyenne de matieres atteint 10 et passe sans que rien ne le
+    # signale.
+    average_matieres = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     conduite = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     rank = models.PositiveIntegerField(default=0)
     reason = models.CharField(max_length=255, blank=True)
@@ -944,6 +953,31 @@ class Attendance(TimeStampedModel):
     is_late = models.BooleanField(default=False)
     reason = models.CharField(max_length=255, blank=True)
     proof = models.FileField(upload_to="attendance_proofs/", null=True, blank=True)
+    # Heures de cours manquees ce jour-la.
+    #
+    # Une absence etait tout ou rien: l'eleve parti a la recreation comptait
+    # comme celui qui n'est jamais venu. Au lycee, ou l'on compte les heures
+    # et non les journees, cela ne dit rien de ce qu'un eleve a reellement
+    # manque.
+    #
+    # Nul par defaut, et non zero: `null` veut dire « journee entiere, non
+    # quantifiee » -- ce que sont toutes les absences deja saisies. Zero
+    # voudrait dire « aucune heure manquee », ce qui est faux. Une ecole qui
+    # ne compte pas les heures n'a rien a renseigner et rien ne change pour
+    # elle.
+    hours = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        # Bornes en Decimal et non en entier: sur un DecimalField, DRF
+        # avertit a chaque construction de serializer quand elles ne le sont
+        # pas.
+        validators=[
+            MinValueValidator(Decimal("0")),
+            MaxValueValidator(Decimal("24")),
+        ],
+    )
 
     class Meta:
         indexes = [
@@ -2411,13 +2445,21 @@ class StockMovement(TimeStampedModel):
         article.recalculer_quantite()
 
 
-def moyenne_de_la_periode(student, classroom, academic_year, term) -> Decimal:
+def moyenne_de_la_periode(
+    student, classroom, academic_year, term, *, avec_conduite: bool = True
+) -> Decimal:
     """La moyenne d'un eleve sur un trimestre, telle qu'elle sera imprimee.
 
     Meme calcul que le bulletin, par construction: les deux passent par
     apps/school/moyennes.py. Le classement s'en ecartait, faute de compter la
     conduite -- un eleve pouvait etre classe derriere un camarade dont le
     bulletin affichait une moyenne inferieure.
+
+    `avec_conduite=False` rend la moyenne des seules matieres. Elle ne
+    s'imprime nulle part: elle sert a la promotion, ou l'on veut savoir ce que
+    vaut l'eleve en classe independamment de sa conduite. Avec une conduite a
+    18 par defaut et un coefficient 2, un eleve a 6 de moyenne de matieres
+    atteint 10 -- le seuil de passage -- sans que rien ne le signale.
     """
     grades = (
         Grade.objects.filter(
@@ -2469,8 +2511,12 @@ def moyenne_de_la_periode(student, classroom, academic_year, term) -> Decimal:
         notes_finales_par_matiere=notes_finales,
         coefficients_par_matiere=coefficients,
         conduite_note=student.conduite,
-        conduite_coefficient=moyennes.coefficient_de_conduite(
-            getattr(student, "etablissement", None)
+        conduite_coefficient=(
+            moyennes.coefficient_de_conduite(
+                getattr(student, "etablissement", None)
+            )
+            if avec_conduite
+            else Decimal("0")
         ),
     )
     return moyenne

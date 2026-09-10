@@ -544,3 +544,109 @@ class FraisSaisiAlaMainTests(DecorDeBareme, APITestCase):
                     due_date=existant.due_date,
                     schedule=bareme,
                 )
+
+
+class EcartsApresChangementDeClasseTests(DecorDeBareme, APITestCase):
+    """Un élève change de classe, ses frais restent ceux de l'ancienne.
+
+    Réorientation, classe dédoublée, erreur d'affectation corrigée: l'élève
+    passe en 5A et continue de payer le tarif de la 6A. Si les tarifs
+    diffèrent, sa facture est fausse — et rien ne le signalait.
+
+    Le contrôle ne corrige rien: ces frais portent souvent des paiements déjà
+    encaissés, et réécrire un montant sous un règlement se rattrape mal.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.comptable)
+        self.eleve = self._eleve("F001", classe=self.sixieme)
+        self.bareme_sixieme = self._bareme(
+            classroom=self.sixieme, amount=Decimal("10000"), occurrences=1
+        )
+        self.bareme_sixieme.appliquer()
+
+    def _ecarts(self):
+        reponse = self.client.get("/api/fee-schedules/ecarts/")
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK)
+        return reponse.data
+
+    def test_sans_changement_de_classe_aucun_ecart(self):
+        self.assertEqual(self._ecarts()["count"], 0)
+
+    def test_un_changement_de_classe_fait_apparaitre_l_ecart(self):
+        self.eleve.classroom = self.cinquieme
+        self.eleve.save(update_fields=["classroom", "updated_at"])
+
+        donnees = self._ecarts()
+
+        self.assertEqual(donnees["count"], 1)
+        ligne = donnees["resultats"][0]
+        self.assertEqual(ligne["classe_actuelle"], "5A")
+        self.assertEqual(ligne["classe_du_bareme"], "6A")
+        self.assertEqual(Decimal(str(ligne["montant_facture"])), Decimal("10000"))
+
+    def test_il_annonce_le_tarif_de_la_classe_actuelle(self):
+        """C'est le chiffre qui permet de trancher."""
+        self._bareme(
+            classroom=self.cinquieme, amount=Decimal("15000"), occurrences=1
+        )
+        self.eleve.classroom = self.cinquieme
+        self.eleve.save(update_fields=["classroom", "updated_at"])
+
+        ligne = self._ecarts()["resultats"][0]
+
+        self.assertEqual(Decimal(str(ligne["montant_de_sa_classe"])), Decimal("15000"))
+        self.assertEqual(Decimal(str(ligne["ecart"])), Decimal("5000"))
+
+    def test_sans_bareme_dans_la_nouvelle_classe_l_ecart_reste_inconnu(self):
+        self.eleve.classroom = self.cinquieme
+        self.eleve.save(update_fields=["classroom", "updated_at"])
+
+        ligne = self._ecarts()["resultats"][0]
+
+        self.assertIsNone(ligne["montant_de_sa_classe"])
+        self.assertIsNone(ligne["ecart"])
+
+    def test_un_frais_deja_regle_est_signale_comme_tel(self):
+        """Ce qui distingue une erreur de saisie d'un remboursement."""
+        frais = StudentFee.objects.get(student=self.eleve)
+        Payment.objects.create(
+            fee=frais,
+            amount=Decimal("10000"),
+            method="Especes",
+            etablissement=self.etablissement,
+        )
+        self.eleve.classroom = self.cinquieme
+        self.eleve.save(update_fields=["classroom", "updated_at"])
+
+        donnees = self._ecarts()
+
+        self.assertEqual(donnees["avec_paiement"], 1)
+        self.assertTrue(donnees["resultats"][0]["porte_un_paiement"])
+
+    def test_un_bareme_sans_classe_ne_produit_aucun_ecart(self):
+        """Il vise toute l'année: changer de classe n'y change rien."""
+        StudentFee.objects.all().delete()
+        commun = self._bareme(classroom=None, occurrences=1)
+        commun.appliquer()
+        self.eleve.classroom = self.cinquieme
+        self.eleve.save(update_fields=["classroom", "updated_at"])
+
+        self.assertEqual(self._ecarts()["count"], 0)
+
+    def test_le_controle_ne_modifie_rien(self):
+        self.eleve.classroom = self.cinquieme
+        self.eleve.save(update_fields=["classroom", "updated_at"])
+        avant = StudentFee.objects.get(student=self.eleve).amount_due
+
+        self._ecarts()
+
+        self.assertEqual(StudentFee.objects.get(student=self.eleve).amount_due, avant)
+
+    def test_l_enseignant_n_y_a_pas_acces(self):
+        self.client.force_authenticate(self.enseignant)
+
+        reponse = self.client.get("/api/fee-schedules/ecarts/")
+
+        self.assertEqual(reponse.status_code, status.HTTP_403_FORBIDDEN)

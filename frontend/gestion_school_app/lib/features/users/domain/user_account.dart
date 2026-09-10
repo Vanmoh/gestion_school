@@ -28,6 +28,22 @@ class UserAccount {
   /// session, pas de la derniere action.
   final Presence presence;
 
+  /// Le numéro qui sert à l'envoi des bulletins, distinct de `phone`.
+  ///
+  /// `phone` est un champ de répertoire: il porte souvent deux numéros ou une
+  /// note (« bureau »). Celui-ci est composé par un programme et n'admet donc
+  /// qu'une forme, E.164. On corrigeait le premier en croyant avoir tout
+  /// fait, et l'envoi partait sur l'ancien numéro — ou sur rien.
+  final String whatsappPhone;
+
+  /// Vrai quand le parent a donné son accord pour recevoir les bulletins.
+  /// Sans lui, aucun envoi n'est préparé.
+  final bool whatsappConsent;
+
+  /// Ce que `phone` donnerait une fois normalisé, quand le numéro WhatsApp
+  /// est absent. Proposé, jamais écrit d'office.
+  final String whatsappPhoneSuggestion;
+
   const UserAccount({
     required this.id,
     required this.username,
@@ -43,7 +59,14 @@ class UserAccount {
     this.lastLogin,
     this.dateJoined,
     this.presence = const Presence(),
+    this.whatsappPhone = '',
+    this.whatsappConsent = false,
+    this.whatsappPhoneSuggestion = '',
   });
+
+  /// Vrai quand la fiche porte un numéro WhatsApp exploitable.
+  bool get peutRecevoirParWhatsApp =>
+      whatsappPhone.trim().isNotEmpty && whatsappConsent;
 
   factory UserAccount.fromJson(Map<String, dynamic> json) {
     return UserAccount(
@@ -57,6 +80,10 @@ class UserAccount {
       phone: json['phone']?.toString() ?? '',
       etablissementId: (json['etablissement'] as num?)?.toInt(),
       etablissementName: json['etablissement_name']?.toString() ?? '',
+      whatsappPhone: json['whatsapp_phone']?.toString() ?? '',
+      whatsappConsent: json['whatsapp_consent'] == true,
+      whatsappPhoneSuggestion:
+          json['whatsapp_phone_suggestion']?.toString() ?? '',
       // Absent d'un serveur anterieur: on suppose le compte ouvert plutot
       // que de l'afficher coupe a tort.
       isActive: json['is_active'] as bool? ?? true,

@@ -36,6 +36,13 @@ services:
         value: "https://gestion-school-web.onrender.com"
       - key: CSRF_TRUSTED_ORIGINS
         value: "https://*.onrender.com"
+      # Racine des liens envoyes aux familles par WhatsApp. Sans elle, le
+      # lien reprend l'adresse de la requete: prepare depuis l'application
+      # servie en Wi-Fi, il portait « http://192.168.x.x:8000 » et n'ouvrait
+      # rien depuis la connexion mobile d'un parent. A remplacer par le
+      # domaine de l'ecole des qu'il existe.
+      - key: PUBLIC_BASE_URL
+        value: "https://gestion-school-jkzf.onrender.com"
       - key: DATABASE_URL
         sync: false
       - key: DB_SSL_REQUIRE

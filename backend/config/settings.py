@@ -437,10 +437,47 @@ NATIONAL_PHONE_LENGTH = config("NATIONAL_PHONE_LENGTH", cast=int, default=8)
 BULLETIN_LINK_TTL_HOURS = config("BULLETIN_LINK_TTL_HOURS", cast=int, default=72)
 
 # Base publique des liens envoyes aux familles (« https://api.ecole.ml »).
-# Vide, le lien est construit a partir de la requete qui le demande -- ce qui
-# suffit tant que l'API repond sur le domaine que les parents peuvent
-# joindre, et se regle ici quand ce n'est pas le cas.
+# Vide, elle est deduite de ALLOWED_HOSTS plutot que de la requete.
+#
+# Le repli sur la requete etait le vrai defaut: prepare depuis l'application
+# servie en Wi-Fi, le lien portait l'adresse du poste -- « 192.168.1.25:8000 »
+# -- et n'ouvrait rien depuis la connexion mobile d'un parent. WhatsApp ne le
+# rendait meme pas cliquable.
+#
+# ALLOWED_HOSTS porte deja le domaine public de l'API: c'est la meme
+# information, et l'exiger une seconde fois dans une variable a part
+# revenait a compter sur une configuration manuelle qui n'a jamais ete
+# faite. Un reglage explicite l'emporte toujours -- une ecole derriere un
+# reverse proxy sur un autre domaine le pose ici.
 PUBLIC_BASE_URL = config("PUBLIC_BASE_URL", default="").strip().rstrip("/")
+
+
+def _premier_hote_public(hotes) -> str:
+    """Le premier domaine de ALLOWED_HOSTS qu'un parent peut joindre.
+
+    Ecarte les jokers, les adresses locales et les noms sans point: aucun ne
+    sort du reseau de l'ecole.
+    """
+    for hote in hotes:
+        nom = str(hote or "").strip().lstrip(".").lower()
+        if not nom or nom == "*" or "." not in nom:
+            continue
+        if nom.startswith(("localhost", "127.", "10.", "192.168.", "0.0.0.0")):
+            continue
+        if any(nom.startswith(f"172.{octet}.") for octet in range(16, 32)):
+            continue
+        if nom.endswith((".local", ".lan")):
+            continue
+        return nom
+    return ""
+
+
+if not PUBLIC_BASE_URL and not DEBUG:
+    _hote_public = _premier_hote_public(ALLOWED_HOSTS)
+    if _hote_public:
+        # https et non http: le proxy termine TLS, et un lien en clair serait
+        # de toute facon redirige (SECURE_SSL_REDIRECT).
+        PUBLIC_BASE_URL = f"https://{_hote_public}"
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),

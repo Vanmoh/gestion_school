@@ -98,6 +98,69 @@ def base_publique(request=None) -> str:
     return ""
 
 
+# Ce qui ne sort pas du batiment. Un lien bati sur l'une de ces adresses
+# s'ouvre au secretariat et nulle part ailleurs: le parent qui clique depuis
+# sa connexion mobile n'atteint rien.
+_HOTES_PRIVES = (
+    "localhost",
+    "127.",
+    "0.0.0.0",
+    "10.",
+    "192.168.",
+    "::1",
+    ".local",
+    ".lan",
+)
+
+# 172.16.0.0 a 172.31.255.255: la plage privee qu'un simple prefixe de chaine
+# ne sait pas decrire, et que Docker utilise par defaut.
+_PLAGE_172_PRIVEE = tuple(f"172.{octet}." for octet in range(16, 32))
+
+
+def base_est_publique(base: str) -> bool:
+    """Vrai quand un parent peut ouvrir ce lien depuis sa connexion mobile.
+
+    Le lien etait construit a partir de la requete quand PUBLIC_BASE_URL
+    n'etait pas renseigne. Prepare depuis l'application servie en reseau
+    local, il portait alors l'adresse du poste -- « http://192.168.1.25:8000 »
+    -- et n'ouvrait rien hors du Wi-Fi de l'ecole. WhatsApp ne le rendait meme
+    pas cliquable: une adresse IP privee avec un port n'est pas linkifiee.
+    """
+    adresse = str(base or "").strip().lower()
+    if not adresse:
+        # Base vide: le lien serait relatif (« /api/reports/... »), donc
+        # ni ouvrable ni cliquable.
+        return False
+    if not adresse.startswith(("http://", "https://")):
+        return False
+
+    hote = adresse.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
+    if not hote:
+        return False
+    if hote.startswith(_HOTES_PRIVES) or hote.endswith((".local", ".lan")):
+        return False
+    if hote.startswith(_PLAGE_172_PRIVEE):
+        return False
+    # Un nom sans point ne sort pas d'un reseau local (« serveur-ecole »).
+    return "." in hote
+
+
+def motif_de_base_non_publique(base: str) -> str:
+    """Ce qu'il faut dire a qui prepare l'envoi, et comment le corriger."""
+    adresse = str(base or "").strip()
+    if not adresse:
+        detail = "aucune adresse publique n'est configurée"
+    else:
+        detail = f"« {adresse} » n'est joignable que depuis le réseau local"
+    return (
+        f"Les bulletins ne peuvent pas être envoyés: {detail}. "
+        "Un parent qui cliquerait depuis sa connexion mobile n'ouvrirait rien. "
+        "Renseignez PUBLIC_BASE_URL avec l'adresse publique de l'API "
+        "(par exemple https://gestion-school-jkzf.onrender.com), puis "
+        "redémarrez le service."
+    )
+
+
 def chemin_de_partage(student_id: int, academic_year_id: int, term: str, expire: int, signature: str) -> str:
     return (
         f"/api/reports/bulletin-partage/{int(student_id)}/{int(academic_year_id)}/"
