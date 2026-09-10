@@ -68,6 +68,13 @@ extension _OngletDesBaremes on _PaymentsPageState {
                   icon: const Icon(Icons.download_outlined),
                   label: const Text('Modèle de fichier'),
                 ),
+                // Un élève changé de classe garde le tarif de l'ancienne, et
+                // rien ne le signalait.
+                OutlinedButton.icon(
+                  onPressed: _financeBusy ? null : _controlerLesEcarts,
+                  icon: const Icon(Icons.rule_outlined),
+                  label: const Text('Contrôler les écarts'),
+                ),
               ],
             ),
           ],

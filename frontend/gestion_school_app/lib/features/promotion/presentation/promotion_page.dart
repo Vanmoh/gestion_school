@@ -27,6 +27,15 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
   final Set<int> _sourceClassroomIds = <int>{};
 
   final TextEditingController _minAverageController = TextEditingController(text: '10');
+
+  /// Seuil sur les seules matières, facultatif.
+  ///
+  /// Vide, rien ne change: la moyenne du bulletin décide seule. Rempli, il
+  /// retient l'élève dont la conduite relève la moyenne sans que le niveau en
+  /// classe suive — avec une conduite à 18 par défaut et un coefficient 2, un
+  /// élève à 6 de moyenne de matières atteint 10.
+  final TextEditingController _minAverageMatieresController =
+      TextEditingController();
   final TextEditingController _minConduiteController = TextEditingController(text: '10');
 
   @override
@@ -38,6 +47,7 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
   @override
   void dispose() {
     _minAverageController.dispose();
+    _minAverageMatieresController.dispose();
     _minConduiteController.dispose();
     super.dispose();
   }
@@ -288,6 +298,10 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
     }
 
     final minAverage = double.tryParse(_minAverageController.text.trim().replaceAll(',', '.'));
+    final brutMatieres = _minAverageMatieresController.text.trim();
+    final minAverageMatieres = brutMatieres.isEmpty
+        ? null
+        : double.tryParse(brutMatieres.replaceAll(',', '.'));
     final minConduite = double.tryParse(_minConduiteController.text.trim().replaceAll(',', '.'));
     if (minAverage == null || minConduite == null) {
       _showMessage('Les seuils doivent etre numeriques.');
@@ -332,6 +346,9 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
         'source_academic_year': _sourceYearId,
         'target_academic_year': _targetYearId,
         'min_average': minAverage,
+        // Absent quand le champ est vide: le serveur décide alors sur la
+        // seule moyenne du bulletin, comme avant.
+        'min_average_matieres': ?minAverageMatieres,
         'min_conduite': minConduite,
         if (_sourceClassroomIds.isNotEmpty)
           'source_classrooms': _sourceClassroomIds.toList(growable: false),
@@ -402,6 +419,11 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
                         final targetClass = row['target_classroom_name']?.toString() ?? '-';
                         final decision = _decisionLabel(row['decision']?.toString() ?? '-');
                         final avg = row['average']?.toString() ?? '0';
+                        // La moyenne du bulletin compte la conduite; celle-ci
+                        // dit ce que l'élève vaut en classe. Les deux côte à
+                        // côte, c'est sur quoi le conseil décide.
+                        final avgMatieres =
+                            row['average_matieres']?.toString() ?? '';
                         final conduite = row['conduite']?.toString() ?? '0';
                         final rank = row['rank']?.toString() ?? '-';
                         final reason = row['reason']?.toString() ?? '';
@@ -410,7 +432,9 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
                           contentPadding: EdgeInsets.zero,
                           title: Text('$studentName${matricule.isNotEmpty ? ' ($matricule)' : ''}'),
                           subtitle: Text(
-                            'Decision: $decision | Rang: $rank | Moy: $avg | Conduite: $conduite\n'
+                            'Decision: $decision | Rang: $rank | Moy: $avg'
+                            '${avgMatieres.isEmpty ? '' : ' (matières: $avgMatieres)'}'
+                            ' | Conduite: $conduite\n'
                             'Classe: $sourceClass -> $targetClass'
                             '${reason.trim().isNotEmpty ? '\nMotif: $reason' : ''}',
                           ),
@@ -558,6 +582,22 @@ class _PromotionPageState extends ConsumerState<PromotionPage> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _minAverageMatieresController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Seuil moyenne des matières (facultatif)',
+                      helperText:
+                          'La moyenne du bulletin compte la conduite: à 18 par '
+                          'défaut et coefficient 2, un élève à 6 en matières '
+                          'atteint 10.\nRempli, ce seuil retient celui dont le '
+                          'niveau en classe ne suit pas. Vide, rien ne change.',
+                      helperMaxLines: 4,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Text(
