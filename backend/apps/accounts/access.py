@@ -426,6 +426,16 @@ AFFINEMENTS = {
         "module": "finance",
         "roles": frozenset({SUPER_ADMIN}),
     },
+    # Supprimer une annee scolaire efface le cadre auquel se rattachent les
+    # classes, les notes et les inscriptions. La matrice ouvre deja le module
+    # academique en administration a la direction -- pour qu'elle ouvre,
+    # cloture et rouvre ses annees. Effacer n'est pas de cet ordre: c'est le
+    # seul geste du module qui ne se repare pas par un autre geste du module.
+    "suppression_annee_scolaire": {
+        "label": "Supprimer une annee scolaire",
+        "module": "academics",
+        "roles": frozenset({SUPER_ADMIN}),
+    },
     "saisie_conduite": {
         "label": "Noter la conduite",
         "module": "discipline",

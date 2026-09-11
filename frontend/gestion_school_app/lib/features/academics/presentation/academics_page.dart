@@ -220,6 +220,102 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     }
   }
 
+  /// Efface l'annee affichee. Reserve au super administrateur.
+  ///
+  /// Le serveur refuse toute annee qui porte la moindre donnee -- les cles
+  /// etrangeres sont en PROTECT -- et dit ce qui la retient. C'est ce qui
+  /// rend le geste sur: il n'efface qu'une annee vide, ouverte par erreur
+  /// ou restee sans usage.
+  Future<void> _supprimerLAnnee() async {
+    final controleur = ref.read(anneeScolaireProvider);
+    final annee = controleur.selectionnee;
+    if (annee == null) return;
+
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Supprimer ${annee.nom} ?'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'L’année sera effacée de l’établissement. '
+              'L’opération ne s’annule pas.',
+            ),
+            SizedBox(height: 10),
+            Text(
+              'Une année qui porte des classes, des inscriptions, des notes '
+              'ou des paiements ne peut pas être supprimée : le serveur '
+              'refuse et indique ce qui la retient.',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            key: const Key('confirmer-suppression-annee'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+    if (confirme != true) return;
+
+    setState(() => _saving = true);
+    try {
+      await ref.read(anneesScolairesRepositoryProvider).supprimer(annee.id);
+      // L'annee effacee etait peut-etre celle qu'on consultait: le
+      // controleur en choisit une autre, ou constate qu'il n'en reste plus.
+      await controleur.charger();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${annee.nom} a été supprimée.')),
+      );
+      await _loadData();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_messageDErreur(error))),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Le motif du serveur plutot que la trace technique de Dio.
+  ///
+  /// Un refus de suppression nomme ce qui retient l'annee: c'est
+  /// exactement ce que la direction a besoin de lire, et cela se perdait
+  /// dans un « DioException [bad response] » interminable.
+  String _messageDErreur(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map && data['detail'] != null) {
+        return data['detail'].toString();
+      }
+      if (data is Map) {
+        for (final valeur in data.values) {
+          if (valeur is List && valeur.isNotEmpty) {
+            return valeur.first.toString();
+          }
+          if (valeur is String && valeur.trim().isNotEmpty) {
+            return valeur.trim();
+          }
+        }
+      }
+    }
+    return 'Suppression impossible : $error';
+  }
+
   Future<bool> _post(
     String endpoint,
     Map<String, dynamic> data,
@@ -1306,6 +1402,13 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     final droits = ref.watch(currentPermissionsProvider).of('academics');
     final peutEcrire = droits.canWrite;
     final peutSupprimer = droits.canDelete;
+    // Effacer une annee est un cran au-dessus: la direction administre le
+    // module academique, mais l'annee est le cadre auquel tout le reste se
+    // rattache. Le serveur le reserve au super administrateur, l'ecran
+    // n'affiche donc le bouton qu'a lui.
+    final peutSupprimerUneAnnee = ref
+        .watch(currentPermissionsProvider)
+        .can(Capacites.suppressionAnneeScolaire);
     final selectedEtablissement = ref.watch(etablissementProvider).selected;
     final etablissements = ref.watch(etablissementProvider).etablissements;
     final selectedEtablissementId = selectedEtablissement?.id;
@@ -1405,6 +1508,9 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
               : null,
           onRouvrir: peutSupprimer && !_saving
               ? () => _changerEtatAnnee('rouvrir')
+              : null,
+          onSupprimer: peutSupprimerUneAnnee && !_saving
+              ? _supprimerLAnnee
               : null,
         ),
         const SizedBox(height: 14),

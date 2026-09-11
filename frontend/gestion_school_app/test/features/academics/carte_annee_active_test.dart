@@ -66,6 +66,7 @@ Future<void> _monter(
   VoidCallback? onActiver,
   VoidCallback? onCloturer,
   VoidCallback? onRouvrir,
+  VoidCallback? onSupprimer,
 }) async {
   tester.view.physicalSize = const Size(1200, 900);
   tester.view.devicePixelRatio = 1.0;
@@ -83,6 +84,7 @@ Future<void> _monter(
             onActiver: onActiver,
             onCloturer: onCloturer,
             onRouvrir: onRouvrir,
+            onSupprimer: onSupprimer,
           ),
         ),
       ),
@@ -234,6 +236,40 @@ void main() {
       expect(find.byKey(const Key('annee-rendre-active')), findsNothing);
       expect(find.byKey(const Key('annee-cloturer')), findsNothing);
       expect(find.byKey(const Key('annee-rouvrir')), findsNothing);
+    });
+  });
+
+  group('la suppression', () {
+    testWidgets('elle ne s_offre pas sans le geste accordé', (tester) async {
+      // La direction administre le module académique. Elle ne doit pas pour
+      // autant voir un bouton qui lui sera refusé au clic.
+      await _monter(tester, await _controleur([_enCours()]));
+
+      expect(find.byKey(const Key('annee-supprimer')), findsNothing);
+    });
+
+    testWidgets('elle apparaît au profil qui la détient', (tester) async {
+      await _monter(
+        tester,
+        await _controleur([_enCours()]),
+        onSupprimer: () {},
+      );
+
+      expect(find.byKey(const Key('annee-supprimer')), findsOneWidget);
+    });
+
+    testWidgets('elle se déclenche au clic', (tester) async {
+      var appels = 0;
+      await _monter(
+        tester,
+        await _controleur([_enCours()]),
+        onSupprimer: () => appels += 1,
+      );
+
+      await tester.tap(find.byKey(const Key('annee-supprimer')));
+      await tester.pump();
+
+      expect(appels, 1);
     });
   });
 }

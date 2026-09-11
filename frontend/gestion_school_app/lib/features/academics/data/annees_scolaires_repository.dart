@@ -89,6 +89,11 @@ class AnneesScolairesRepository {
 
   Future<AnneeScolaire> rouvrir(int id) => _action(id, 'rouvrir');
 
+  /// Efface une annee. Le serveur la refuse des qu'elle porte la moindre
+  /// donnee, et dit alors ce qui la retient: on laisse remonter l'erreur
+  /// telle quelle, c'est ce message que l'ecran affiche.
+  Future<void> supprimer(int id) => dio.delete('/academic-years/$id/');
+
   Future<AnneeScolaire> _action(int id, String action) async {
     final response = await dio.post('/academic-years/$id/$action/');
     return AnneeScolaire.fromJson(

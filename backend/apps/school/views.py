@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.db.models import Avg, Count, DecimalField, ExpressionWrapper, F, Prefetch, Q, Sum, Value
 from django.db.models.functions import Coalesce, TruncMonth
 from django.http import (
@@ -1028,6 +1029,68 @@ class AcademicYearViewSet(BaseModelViewSet):
 
     def perform_update(self, serializer):
         serializer.save(etablissement=self._etablissement_cible())
+
+    @staticmethod
+    def _ce_qui_retient(exc: ProtectedError) -> str:
+        """Nomme ce qui empeche la suppression, et en quelle quantite.
+
+        « Cette annee est utilisee ailleurs » n'aide personne a decider. La
+        direction a besoin de savoir si ce sont deux classes vides ou trois
+        mille notes: dans un cas elle nettoie, dans l'autre elle renonce.
+        """
+        comptes: dict[str, int] = {}
+        for objet in exc.protected_objects:
+            libelle = str(
+                objet._meta.verbose_name_plural or objet._meta.verbose_name
+            )
+            comptes[libelle] = comptes.get(libelle, 0) + 1
+
+        if not comptes:
+            return "des donnees rattachees"
+
+        ordonnes = sorted(comptes.items(), key=lambda item: (-item[1], item[0]))
+        nommes = [f"{nombre} {libelle}" for libelle, nombre in ordonnes[:4]]
+        if len(ordonnes) > 4:
+            nommes.append("et d'autres")
+        return ", ".join(nommes)
+
+    def destroy(self, request, *args, **kwargs):
+        """Efface une annee scolaire. Reserve au super administrateur.
+
+        La matrice ouvre le module academique en administration a la
+        direction, ce qui lui donnait aussi ce geste. Or une annee est le
+        cadre de tout le reste: ouvrir, cloturer et rouvrir se defont par le
+        geste inverse, effacer non. L'affinement le retire donc a tous sauf
+        au super administrateur, sans toucher au reste du module.
+        """
+        if not affinement_autorise(
+            getattr(request.user, "role", ""), "suppression_annee_scolaire"
+        ):
+            raise PermissionDenied(
+                "La suppression d'une annee scolaire est reservee au super "
+                "administrateur."
+            )
+
+        annee = self.get_object()
+        nom = annee.name
+        try:
+            with transaction.atomic():
+                annee.delete()
+        except ProtectedError as exc:
+            # Les cles etrangeres sont en PROTECT: une annee qui porte la
+            # moindre donnee ne part pas. C'est ce qui rend ce geste sur,
+            # encore faut-il dire ce qui retient plutot qu'un 500 opaque.
+            return Response(
+                {
+                    "detail": (
+                        f"L'annee « {nom} » ne peut pas etre supprimee: elle "
+                        f"porte {self._ce_qui_retient(exc)}."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=["post"], url_path="activer")
     def activer(self, request, pk=None):
