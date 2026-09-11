@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import os
@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import zipfile
 from pathlib import Path
@@ -29,6 +30,7 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import AuditLogPagination
+from .sauvegarde import fichiers_a_archiver, poids_total, volume_de_la_bibliotheque
 from .models import ActivityLog, BackupArchive, PersonnalisationPlateforme
 from .serializers import ActivityLogSerializer, BackupArchiveSerializer, PersonnalisationSerializer
 
@@ -427,7 +429,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
     serializer_class = BackupArchiveSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
-    http_method_names = ["get", "post"]
+    # "delete" ouvert pour le menage: une archive de plusieurs centaines de
+    # mega-octets par semaine remplit le disque, et rien ne permettait d'en
+    # retirer une autrement qu'en passant sur le serveur.
+    http_method_names = ["get", "post", "delete"]
     filterset_fields = ["scope", "status", "etablissement", "created_by", "restored_by"]
     search_fields = ["filename", "notes", "etablissement__name", "created_by__username"]
     ordering_fields = ["created_at", "status", "scope", "file_size_bytes"]
@@ -438,6 +443,25 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
     def _is_super_admin(self):
         return getattr(self.request.user, "role", "") == "super_admin"
+
+    @staticmethod
+    def _drapeau(valeur, *, defaut: bool) -> bool:
+        """Lit un booleen envoye en JSON comme en formulaire multipart.
+
+        Le formulaire n'a pas de type: il transmet « false », « 0 » ou
+        « no » sous forme de chaine, et toute chaine non vide est vraie en
+        Python -- une case decochee arrivait donc cochee.
+        """
+        if valeur is None:
+            return defaut
+        if isinstance(valeur, bool):
+            return valeur
+        texte = str(valeur).strip().lower()
+        if texte in {"0", "false", "no", "non", ""}:
+            return False
+        if texte in {"1", "true", "yes", "oui"}:
+            return True
+        return defaut
 
     def _require_super_admin_restore(self):
         if not self._is_super_admin():
@@ -554,6 +578,74 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             merged.extend(json.loads(payload))
         return json.dumps(merged, ensure_ascii=False)
 
+    # L'ecriture des medias occupe la tranche 5 %-95 % de la barre: avant, on
+    # lit la base; apres, on calcule l'empreinte du fichier. Annoncer 100 %
+    # des le dernier fichier ecrit laisserait l'ecran fige sur « termine »
+    # pendant tout le hachage d'une archive de plusieurs giga-octets.
+    _PART_MEDIAS = (5, 95)
+    # Un signal par seconde au plus. Sur des milliers de fichiers, ecrire
+    # l'avancement a chaque entree couterait plus de requetes que
+    # l'archivage lui-meme.
+    _INTERVALLE_DE_SIGNAL = 1.0
+
+    def _set_build_progress(
+        self,
+        backup_ref,
+        *,
+        progress=None,
+        phase=None,
+        bytes_done=None,
+        bytes_total=None,
+    ):
+        """Ecrit l'avancement sans relire ni reecrire le reste de la ligne.
+
+        `update()` plutot que `save()`: le processus qui archive ne doit pas
+        reposer par-dessus des champs qu'un autre aurait modifies entre
+        temps, et l'objet en memoire n'a pas a rester a jour pour cela.
+        """
+        backup_id = backup_ref.id if isinstance(backup_ref, BackupArchive) else int(backup_ref)
+        update_kwargs = {}
+
+        if progress is not None:
+            update_kwargs["build_progress"] = max(0, min(100, int(progress)))
+        if phase is not None:
+            update_kwargs["build_phase"] = str(phase or "")[:120]
+        if bytes_done is not None:
+            update_kwargs["bytes_done"] = max(0, int(bytes_done))
+        if bytes_total is not None:
+            update_kwargs["bytes_total"] = max(0, int(bytes_total))
+
+        if not update_kwargs:
+            return
+
+        update_kwargs["updated_at"] = timezone.now()
+        BackupArchive.objects.filter(pk=backup_id).update(**update_kwargs)
+
+    def _pourcentage_des_medias(self, ecrits: int, total: int) -> int:
+        """Position dans la barre pour `ecrits` octets deja archives."""
+        debut, fin = self._PART_MEDIAS
+        if total <= 0:
+            return fin
+        part = min(1.0, max(0.0, ecrits / total))
+        return int(debut + (fin - debut) * part)
+
+    def _mark_build_failed(self, backup_id: int, exc: Exception):
+        """Une sauvegarde interrompue doit se voir, et dire pourquoi.
+
+        Sans cela, le processus detache mourait en silence et la ligne
+        restait « en cours » indefiniment: l'ecran affichait une barre qui
+        n'avancait plus, sans jamais rien expliquer.
+        """
+        try:
+            BackupArchive.objects.filter(pk=backup_id).update(
+                status=BackupArchive.Status.FAILED,
+                build_phase="Echec",
+                restore_log=f"{exc}\n\n{traceback.format_exc()}",
+                updated_at=timezone.now(),
+            )
+        except Exception:
+            pass
+
     def _build_archive(self, backup: BackupArchive) -> BackupArchive:
         stamp = timezone.localtime().strftime("%Y%m%d_%H%M%S")
         suffix = "global" if backup.scope == BackupArchive.Scope.GLOBAL else f"etab_{backup.etablissement_id}"
@@ -564,11 +656,40 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         backup.status = BackupArchive.Status.RUNNING
         backup.filename = backup_name
         backup.file_path = str(archive_path)
-        backup.save(update_fields=["status", "filename", "file_path", "updated_at"])
+        backup.build_started_at = timezone.now()
+        backup.build_phase = "Lecture de la base"
+        backup.build_progress = 1
+        backup.bytes_done = 0
+        backup.bytes_total = 0
+        backup.save(
+            update_fields=[
+                "status",
+                "filename",
+                "file_path",
+                "build_started_at",
+                "build_phase",
+                "build_progress",
+                "bytes_done",
+                "bytes_total",
+                "updated_at",
+            ]
+        )
 
         payload_json = self._serialize_global()
         if backup.scope == BackupArchive.Scope.ETABLISSEMENT:
             payload_json = self._serialize_etablissement(backup.etablissement)
+        octets_des_donnees = len(payload_json.encode("utf-8"))
+
+        # Le listage precede l'ecriture pour connaitre le volume total: sans
+        # denominateur, il n'y a ni pourcentage ni reste a annoncer.
+        fichiers = []
+        if backup.include_media:
+            fichiers = fichiers_a_archiver(
+                settings.MEDIA_ROOT,
+                avec_bibliotheque=backup.include_library_documents,
+            )
+        octets_des_medias = poids_total(fichiers)
+        octets_a_ecrire = octets_des_donnees + octets_des_medias
 
         manifest = {
             "version": 1,
@@ -578,30 +699,82 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             "created_by": getattr(backup.created_by, "username", ""),
             "etablissement_id": backup.etablissement_id,
             "include_media": bool(backup.include_media),
+            "include_library_documents": bool(backup.include_library_documents),
+            "media_files": len(fichiers),
+            "bytes_source": octets_a_ecrire,
         }
+
+        debut, _ = self._PART_MEDIAS
+        self._set_build_progress(
+            backup,
+            progress=debut,
+            phase="Ecriture des donnees",
+            bytes_done=0,
+            bytes_total=octets_a_ecrire,
+        )
 
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
             zf.writestr("data.json", payload_json)
 
-            if backup.include_media:
-                media_root = Path(settings.MEDIA_ROOT)
-                if media_root.exists() and media_root.is_dir():
-                    for item in media_root.rglob("*"):
-                        if item.is_file():
-                            relative = item.relative_to(media_root)
-                            zf.write(item, arcname=str(Path("media") / relative))
+            ecrits = octets_des_donnees
+            total_fichiers = len(fichiers)
+            dernier_signal = time.monotonic()
+            self._set_build_progress(
+                backup,
+                bytes_done=ecrits,
+                progress=self._pourcentage_des_medias(ecrits, octets_a_ecrire),
+                phase=(
+                    f"Medias (0/{total_fichiers})" if total_fichiers else "Donnees archivees"
+                ),
+            )
+
+            for rang, fichier in enumerate(fichiers, start=1):
+                try:
+                    zf.write(fichier.chemin, arcname=fichier.nom_dans_l_archive)
+                except OSError:
+                    # Un fichier efface ou illisible entre le listage et
+                    # l'ecriture ne doit pas faire perdre toute l'archive.
+                    continue
+
+                ecrits += fichier.octets
+                maintenant = time.monotonic()
+                if maintenant - dernier_signal < self._INTERVALLE_DE_SIGNAL and rang != total_fichiers:
+                    continue
+                dernier_signal = maintenant
+                self._set_build_progress(
+                    backup,
+                    bytes_done=ecrits,
+                    progress=self._pourcentage_des_medias(ecrits, octets_a_ecrire),
+                    phase=f"Medias ({rang}/{total_fichiers})",
+                )
+
+        self._set_build_progress(
+            backup,
+            progress=self._PART_MEDIAS[1] + 2,
+            phase="Empreinte de controle",
+            bytes_done=octets_a_ecrire,
+            bytes_total=octets_a_ecrire,
+        )
 
         backup.file_size_bytes = archive_path.stat().st_size
         backup.sha256 = self._sha256_file(archive_path)
         backup.manifest = manifest
         backup.status = BackupArchive.Status.COMPLETED
+        backup.build_phase = "Terminee"
+        backup.build_progress = 100
+        backup.bytes_done = octets_a_ecrire
+        backup.bytes_total = octets_a_ecrire
         backup.save(
             update_fields=[
                 "file_size_bytes",
                 "sha256",
                 "manifest",
                 "status",
+                "build_phase",
+                "build_progress",
+                "bytes_done",
+                "bytes_total",
                 "updated_at",
             ]
         )
@@ -1154,6 +1327,36 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 lookup = {f"{field.name}_id__in": student_ids}
                 model.objects.filter(**lookup).delete()
 
+    def _run_build_in_background(self, backup_id: int):
+        """Ecrit l'archive dans un processus detache.
+
+        Elle etait construite pendant la requete POST. Sur un etablissement
+        charge en documents, la reponse arrivait apres plusieurs minutes --
+        quand la passerelle ne coupait pas avant -- et rien ne pouvait etre
+        affiche pendant ce temps. Detachee, la requete rend la main tout de
+        suite et l'ecran suit l'avancement en interrogeant la ligne.
+        """
+        manage_py = Path(settings.BASE_DIR) / "manage.py"
+        command = [
+            sys.executable,
+            str(manage_py),
+            "run_backup_create",
+            f"--backup-id={backup_id}",
+        ]
+
+        env = os.environ.copy()
+        env.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+
+        subprocess.Popen(
+            command,
+            cwd=str(settings.BASE_DIR),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
     def _run_restore_in_background(self, backup_id: int, archive_path: str, actor_id: int | None):
         manage_py = Path(settings.BASE_DIR) / "manage.py"
         command = [
@@ -1195,8 +1398,12 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         scope = str(request.data.get("scope") or BackupArchive.Scope.ETABLISSEMENT).strip()
-        include_media_raw = request.data.get("include_media", True)
-        include_media = str(include_media_raw).lower() not in {"0", "false", "no"}
+        include_media = self._drapeau(request.data.get("include_media", True), defaut=True)
+        # Hors bibliotheque par defaut: c'est le choix qui rend la sauvegarde
+        # legere, donc frequente. Qui veut le fonds complet le demande.
+        include_library = self._drapeau(
+            request.data.get("include_library_documents", False), defaut=False
+        )
         notes = str(request.data.get("notes") or "").strip()
 
         if scope not in {BackupArchive.Scope.GLOBAL, BackupArchive.Scope.ETABLISSEMENT}:
@@ -1228,19 +1435,152 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             etablissement=etablissement,
             created_by=request.user,
             include_media=include_media,
+            include_library_documents=include_library and include_media,
             notes=notes,
             status=BackupArchive.Status.PENDING,
+            build_phase="En attente du traitement",
+            build_progress=1,
         )
 
         try:
-            backup = self._build_archive(backup)
+            self._run_build_in_background(backup.id)
         except Exception as exc:
-            backup.status = BackupArchive.Status.FAILED
-            backup.restore_log = str(exc)
-            backup.save(update_fields=["status", "restore_log", "updated_at"])
-            return Response({"detail": f"Echec sauvegarde: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            self._mark_build_failed(backup.id, exc)
+            backup.refresh_from_db()
+            return Response(
+                {"detail": f"Echec sauvegarde: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
-        return Response(self.get_serializer(backup).data, status=status.HTTP_201_CREATED)
+        # 202 et non 201: la ligne existe, l'archive pas encore. L'ecran suit
+        # `build_progress` jusqu'au statut « terminee ».
+        return Response(self.get_serializer(backup).data, status=status.HTTP_202_ACCEPTED)
+
+    # --- Volume, suppression, menage -------------------------------------
+
+    @action(detail=False, methods=["get"], url_path="volumes")
+    def volumes(self, request):
+        """Ce qu'une sauvegarde pesera, avant de la lancer.
+
+        L'ecran proposait « inclure les medias » sans dire ce que cela
+        represente. Le fonds d'annales pese a lui seul plusieurs
+        giga-octets: la case se cochait a l'aveugle, et la sauvegarde
+        devenait interminable sans qu'on comprenne pourquoi.
+        """
+        media_root = Path(settings.MEDIA_ROOT)
+        sans_bibliotheque = poids_total(
+            fichiers_a_archiver(media_root, avec_bibliotheque=False)
+        )
+        bibliotheque = volume_de_la_bibliotheque(media_root)
+        archives = BackupArchive.objects.aggregate(
+            nombre=models.Count("id"),
+            octets=models.Sum("file_size_bytes"),
+        )
+        return Response(
+            {
+                "media_hors_bibliotheque_octets": sans_bibliotheque,
+                "bibliotheque_octets": bibliotheque,
+                "media_total_octets": sans_bibliotheque + bibliotheque,
+                "archives_nombre": archives["nombre"] or 0,
+                "archives_octets": archives["octets"] or 0,
+            }
+        )
+
+    def _supprimer_le_fichier(self, backup: BackupArchive) -> None:
+        """Retire l'archive du disque. La ligne seule ne libere rien."""
+        brut = str(backup.file_path or "").strip()
+        if not brut:
+            return
+        chemin = Path(brut).expanduser()
+        # Cantonne a l'entrepot d'archives: un `file_path` bricole en base ne
+        # doit pas pouvoir faire effacer un fichier quelconque du serveur.
+        racine = self._backups_root().resolve()
+        try:
+            resolu = chemin.resolve()
+            resolu.relative_to(racine)
+        except (OSError, ValueError):
+            return
+        try:
+            resolu.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def destroy(self, request, *args, **kwargs):
+        backup = self.get_object()
+
+        if backup.scope == BackupArchive.Scope.GLOBAL and not self._is_super_admin():
+            return Response(
+                {"detail": "Seul un super admin peut supprimer une sauvegarde globale."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if backup.status in {BackupArchive.Status.RUNNING, BackupArchive.Status.PENDING}:
+            # Effacer le fichier qu'un processus est en train d'ecrire
+            # laisserait une archive tronquee et une ligne qui la reclame.
+            return Response(
+                {"detail": "Operation en cours: attendez la fin avant de supprimer."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        self._supprimer_le_fichier(backup)
+        backup.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=["post"], url_path="purge")
+    def purge(self, request):
+        """Efface les anciennes archives, en gardant les plus recentes.
+
+        `conserver` fixe combien d'archives terminees survivent (la plus
+        recente au minimum: un historique vide n'est pas un menage, c'est
+        une perte). `avant_jours`, s'il est donne, restreint la coupe aux
+        archives plus vieilles que ce nombre de jours.
+        """
+        try:
+            conserver = max(1, int(request.data.get("conserver", 3)))
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Nombre d'archives a conserver invalide."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        avant_jours = request.data.get("avant_jours")
+        limite = None
+        if avant_jours not in (None, ""):
+            try:
+                limite = timezone.now() - timedelta(days=max(0, int(avant_jours)))
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Anciennete invalide."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # `get_queryset` cantonne deja la direction a son etablissement: le
+        # menage ne peut pas atteindre les archives d'une autre ecole.
+        candidates = list(
+            self.filter_queryset(self.get_queryset()).exclude(
+                status__in=[BackupArchive.Status.RUNNING, BackupArchive.Status.PENDING]
+            )
+        )
+        candidates.sort(key=lambda row: (row.created_at, row.id), reverse=True)
+
+        supprimees = 0
+        octets_liberes = 0
+        for backup in candidates[conserver:]:
+            if limite is not None and backup.created_at >= limite:
+                continue
+            if backup.scope == BackupArchive.Scope.GLOBAL and not self._is_super_admin():
+                continue
+            octets_liberes += int(backup.file_size_bytes or 0)
+            self._supprimer_le_fichier(backup)
+            backup.delete()
+            supprimees += 1
+
+        return Response(
+            {
+                "supprimees": supprimees,
+                "octets_liberes": octets_liberes,
+                "conservees": min(len(candidates), conserver),
+            }
+        )
 
     @action(detail=True, methods=["get"], url_path="download")
     def download(self, request, pk=None):

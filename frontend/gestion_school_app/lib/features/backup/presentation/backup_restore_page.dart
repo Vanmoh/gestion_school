@@ -43,7 +43,17 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
 
   String _createScope = 'établissement';
   bool _includeMedia = true;
+  /// La bibliotheque decochee par defaut. Elle pese a elle seule des
+  /// milliers de fois le reste des medias -- annales et manuels importes,
+  /// identiques d'une ecole a l'autre et reconstituables par l'import.
+  /// Cochee sans le savoir, elle rendait chaque sauvegarde interminable.
+  bool _includeLibrary = false;
   final TextEditingController _notesController = TextEditingController();
+
+  /// Ce que pese le dossier des medias, mesure par le serveur. Sert a
+  /// annoncer le volume avant de lancer, plutot que de faire cocher une
+  /// case a l'aveugle.
+  Map<String, dynamic>? _volumes;
 
   String _restoreScope = 'établissement';
   PlatformFile? _restoreFile;
@@ -95,9 +105,43 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
         setState(() => _loading = false);
       }
     }
+
+    if (showLoading) {
+      // Apres l'historique, pas avant: la mesure parcourt le disque et n'a
+      // pas a retarder l'affichage de la liste.
+      await _chargerLesVolumes();
+    }
   }
 
-  bool _hasActiveRestore() {
+  /// Mesure le dossier des medias cote serveur. Un echec reste muet: c'est
+  /// un renseignement de confort, la sauvegarde marche sans lui.
+  Future<void> _chargerLesVolumes() async {
+    try {
+      final response = await _requestWithBackupFallback(
+        (base) => ref.read(dioProvider).get(
+          '$base/volumes/',
+          options: _backupRequestOptions(),
+        ),
+      );
+      final data = response.data;
+      if (mounted && data is Map<String, dynamic>) {
+        setState(() => _volumes = data);
+      }
+    } catch (_) {
+      // Serveur plus ancien, ou route absente: on n'annonce rien.
+    }
+  }
+
+  int _volume(String cle) {
+    final brut = _volumes?[cle];
+    if (brut is int) return brut;
+    return int.tryParse(brut?.toString() ?? '') ?? 0;
+  }
+
+  /// Vrai tant qu'une archive s'ecrit ou se restaure. Les deux operations
+  /// entretiennent le rafraichissement: la sauvegarde aussi se suit
+  /// desormais en direct, et pas seulement la restauration.
+  bool _uneOperationEstEnCours() {
     for (final row in _rows) {
       final status = (row['status']?.toString() ?? '').toLowerCase();
       if (status == 'running' || status == 'pending') {
@@ -116,7 +160,7 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
   }
 
   void _syncHistoryAutoRefresh() {
-    final shouldRefresh = _hasActiveRestore() || _shouldForcePolling();
+    final shouldRefresh = _uneOperationEstEnCours() || _shouldForcePolling();
     if (!shouldRefresh) {
       _historyAutoRefreshTimer?.cancel();
       _historyAutoRefreshTimer = null;
@@ -145,12 +189,18 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       final payload = <String, dynamic>{
         'scope': _createScope,
         'include_media': _includeMedia,
+        'include_library_documents': _includeMedia && _includeLibrary,
         'notes': _notesController.text.trim(),
       };
       if (_createScope == 'établissement' && selectedEtab != null) {
         payload['etablissement_id'] = selectedEtab.id;
       }
 
+      // L'archive s'ecrit dans un processus a part: la reponse arrive tout de
+      // suite, et c'est l'historique qui montre l'avancement. On demarre donc
+      // le rafraichissement avant meme que la ligne existe.
+      _forcePollingUntil = DateTime.now().add(const Duration(minutes: 2));
+      _syncHistoryAutoRefresh();
       await _requestWithBackupFallback(
         (base) => ref.read(dioProvider).post(
           '$base/',
@@ -158,7 +208,152 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
           options: _backupRequestOptions(),
         ),
       );
-      _showMessage('Sauvegarde créée avec succès.', isSuccess: true);
+      _showMessage(
+        'Sauvegarde lancée. Son avancement s\'affiche dans l\'historique.',
+        isSuccess: true,
+      );
+      await _loadRows();
+    });
+  }
+
+  /// Efface une archive, apres confirmation nommee.
+  Future<void> _supprimerArchive(Map<String, dynamic> row) async {
+    final id = row['id'];
+    if (id == null) {
+      _showMessage('Backup invalide.');
+      return;
+    }
+
+    final nom = row['filename']?.toString().isNotEmpty == true
+        ? row['filename'].toString()
+        : 'Archive #$id';
+    final poids = _tailleLisible(_octets(row));
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Supprimer cette archive ?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('$nom sera effacée du serveur.'),
+            if (poids != '—') ...[
+              const SizedBox(height: 8),
+              Text('Espace libéré : $poids'),
+            ],
+            const SizedBox(height: 8),
+            const Text(
+              'Elle ne pourra plus servir à restaurer. '
+              'Téléchargez-la d\'abord si vous voulez la garder.',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            key: const Key('confirmer-suppression-archive'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+    if (confirme != true) return;
+
+    await _runBusyTask(() async {
+      await _requestWithBackupFallback(
+        (base) => ref.read(dioProvider).delete(
+          '$base/$id/',
+          options: _backupRequestOptions(),
+        ),
+      );
+      _showMessage('Archive supprimée.', isSuccess: true);
+      await _loadRows();
+    });
+  }
+
+  /// Ne garde que les archives les plus recentes. Sans ce menage, une
+  /// sauvegarde hebdomadaire remplit le disque du serveur en quelques mois.
+  Future<void> _nettoyerLHistorique() async {
+    var conserver = 3;
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (builderContext, setDialogState) => AlertDialog(
+          title: const Text('Nettoyer l\'historique'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Les archives les plus récentes sont gardées, '
+                'les plus anciennes sont effacées.',
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                isExpanded: true,
+                initialValue: conserver,
+                decoration: const InputDecoration(
+                  labelText: 'Archives à conserver',
+                ),
+                items: const [
+                  DropdownMenuItem(value: 1, child: Text('La dernière seulement')),
+                  DropdownMenuItem(value: 3, child: Text('Les 3 dernières')),
+                  DropdownMenuItem(value: 5, child: Text('Les 5 dernières')),
+                  DropdownMenuItem(value: 10, child: Text('Les 10 dernières')),
+                ],
+                onChanged: (valeur) {
+                  if (valeur != null) {
+                    setDialogState(() => conserver = valeur);
+                  }
+                },
+              ),
+              const SizedBox(height: 10),
+              const Text('Une sauvegarde en cours n\'est jamais touchée.'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              key: const Key('confirmer-nettoyage-archives'),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Nettoyer'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirme != true) return;
+
+    await _runBusyTask(() async {
+      final response = await _requestWithBackupFallback(
+        (base) => ref.read(dioProvider).post(
+          '$base/purge/',
+          data: {'conserver': conserver},
+          options: _backupRequestOptions(),
+        ),
+      );
+      final data = response.data;
+      final supprimees = data is Map<String, dynamic>
+          ? (data['supprimees'] as num?)?.toInt() ?? 0
+          : 0;
+      final liberes = data is Map<String, dynamic>
+          ? (data['octets_liberes'] as num?)?.toInt() ?? 0
+          : 0;
+      _showMessage(
+        supprimees == 0
+            ? 'Rien à nettoyer : aucune archive plus ancienne à effacer.'
+            : '$supprimees archive${supprimees > 1 ? 's' : ''} supprimée'
+                  '${supprimees > 1 ? 's' : ''}, '
+                  '${_tailleLisible(liberes)} libérés.',
+        isSuccess: true,
+      );
       await _loadRows();
     });
   }
@@ -549,19 +744,78 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
     return int.tryParse(brut?.toString() ?? '') ?? 0;
   }
 
-  int _progressValue(Map<String, dynamic> row) {
-    final raw = row['restore_progress'];
-    final parsed = raw is int ? raw : int.tryParse(raw?.toString() ?? '');
-    if (parsed == null) {
-      return 0;
+  int _pourcentage(Object? brut) {
+    final valeur = brut is int ? brut : int.tryParse(brut?.toString() ?? '');
+    if (valeur == null || valeur < 0) return 0;
+    return valeur > 100 ? 100 : valeur;
+  }
+
+  int _entier(Object? brut) {
+    if (brut is int) return brut;
+    if (brut is num) return brut.toInt();
+    return int.tryParse(brut?.toString() ?? '') ?? 0;
+  }
+
+  /// L'avancement a montrer pour une ligne en cours.
+  ///
+  /// Une meme archive est d'abord ecrite, puis restauree plus tard: chaque
+  /// operation a ses propres champs, sans quoi la restauration effacerait la
+  /// trace de l'ecriture. `restore_phase` renseigne designe donc une
+  /// restauration; vide, la ligne en est encore a s'ecrire.
+  _Avancement _avancementDe(Map<String, dynamic> row) {
+    final phaseRestauration = (row['restore_phase']?.toString() ?? '').trim();
+    if (phaseRestauration.isNotEmpty) {
+      return _Avancement(
+        libelle: 'Restauration',
+        pourcentage: _pourcentage(row['restore_progress']),
+        phase: phaseRestauration,
+        octetsFaits: 0,
+        octetsTotal: 0,
+        debut: null,
+      );
     }
-    if (parsed < 0) {
-      return 0;
-    }
-    if (parsed > 100) {
-      return 100;
-    }
-    return parsed;
+
+    return _Avancement(
+      libelle: 'Sauvegarde',
+      pourcentage: _pourcentage(row['build_progress']),
+      phase: (row['build_phase']?.toString() ?? '').trim(),
+      octetsFaits: _entier(row['bytes_done']),
+      octetsTotal: _entier(row['bytes_total']),
+      debut: DateTime.tryParse(row['build_started_at']?.toString() ?? '')?.toLocal(),
+    );
+  }
+
+  /// « 3,2 Mo sur 7,4 Mo », vide tant que le volume n'est pas connu.
+  String _volumeTraite(_Avancement avancement) {
+    if (avancement.octetsTotal <= 0) return '';
+    return '${_tailleLisible(avancement.octetsFaits)} '
+        'sur ${_tailleLisible(avancement.octetsTotal)}';
+  }
+
+  /// Le temps qu'il reste, deduit du debit constate depuis le depart.
+  ///
+  /// Vide tant qu'il n'y a pas de quoi l'estimer: une duree annoncee sur
+  /// deux octets ecrits serait une invention, et l'ecran passerait son temps
+  /// a se dedire.
+  String _resteAFaire(_Avancement avancement) {
+    final debut = avancement.debut;
+    if (debut == null || avancement.octetsTotal <= 0) return '';
+    final restant = avancement.octetsTotal - avancement.octetsFaits;
+    if (restant <= 0) return '';
+
+    final ecoule = DateTime.now().difference(debut).inMilliseconds;
+    if (ecoule < 1500 || avancement.octetsFaits <= 0) return '';
+
+    final octetsParSeconde = avancement.octetsFaits * 1000 / ecoule;
+    if (octetsParSeconde <= 0) return '';
+
+    final secondes = (restant / octetsParSeconde).round();
+    if (secondes < 5) return 'reste quelques secondes';
+    if (secondes < 60) return 'reste ~$secondes s';
+    final minutes = (secondes / 60).round();
+    if (minutes < 60) return 'reste ~$minutes min';
+    final heures = (minutes / 60).round();
+    return 'reste ~$heures h';
   }
 
   @override
@@ -624,6 +878,17 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                     'Créer une sauvegarde',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
+                  const SizedBox(height: 4),
+                  // Ce que l'archive emporte, dit a l'endroit ou on le
+                  // choisit. Sans cette phrase, « inclure les medias » se
+                  // cochait sans savoir ce que le reste contenait deja.
+                  Text(
+                    'L\'archive contient toutes les données saisies : élèves, '
+                    'notes, absences, paiements, personnel, comptes. '
+                    'Ni le code de l\'application, ni les mots de passe en '
+                    'clair, ni les réglages du serveur.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
                     isExpanded: true,
@@ -653,9 +918,35 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                     value: _includeMedia,
                     contentPadding: EdgeInsets.zero,
                     title: const Text('Inclure les médias'),
+                    subtitle: Text(
+                      _volumes == null
+                          ? 'Photos, logos, pièces jointes, justificatifs.'
+                          : 'Photos, logos, pièces jointes, justificatifs : '
+                                '${_tailleLisible(_volume('media_hors_bibliotheque_octets'))}.',
+                    ),
                     onChanged: _busy
                         ? null
                         : (value) => setState(() => _includeMedia = value),
+                  ),
+                  // La case decisive: sans elle, la sauvegarde emportait tout
+                  // le fonds d'annales a chaque fois, pour un volume sans
+                  // rapport avec ce qu'une ecole a reellement saisi.
+                  SwitchListTile(
+                    key: const Key('inclure-bibliotheque'),
+                    value: _includeMedia && _includeLibrary,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Inclure les documents de bibliothèque'),
+                    subtitle: Text(
+                      _volumes == null
+                          ? 'Annales et manuels importés. Alourdit fortement '
+                                'l\'archive, et se réimportent sans perte.'
+                          : 'Annales et manuels importés : '
+                                '${_tailleLisible(_volume('bibliotheque_octets'))}. '
+                                'Se réimportent sans perte.',
+                    ),
+                    onChanged: _busy || !_includeMedia
+                        ? null
+                        : (value) => setState(() => _includeLibrary = value),
                   ),
                   TextField(
                     controller: _notesController,
@@ -743,9 +1034,22 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
             ),
           ),
           const SizedBox(height: 12),
-          Text(
-            'Historique',
-            style: Theme.of(context).textTheme.titleMedium,
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Historique',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              if (isSuperAdmin && _rows.length > 1)
+                TextButton.icon(
+                  key: const Key('nettoyer-historique'),
+                  onPressed: _busy ? null : _nettoyerLHistorique,
+                  icon: const Icon(Icons.cleaning_services_outlined, size: 18),
+                  label: const Text('Nettoyer'),
+                ),
+            ],
           ),
           const SizedBox(height: 8),
           BarreRechercheModule(
@@ -779,8 +1083,9 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
               final restoreLog = (row['restore_log']?.toString() ?? '').trim();
               final isFailed = statusValue == 'failed';
               final isRunning = statusValue == 'running' || statusValue == 'pending';
-              final progress = _progressValue(row);
-              final phase = (row['restore_phase']?.toString() ?? '').trim();
+              final avancement = _avancementDe(row);
+              final volumeTraite = _volumeTraite(avancement);
+              final reste = _resteAFaire(avancement);
               return Card(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -808,6 +1113,17 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                             onPressed: _busy ? null : () => _restoreFromArchive(row),
                             icon: const Icon(Icons.settings_backup_restore_outlined),
                           ),
+                          if (isSuperAdmin)
+                            IconButton(
+                              tooltip: 'Supprimer',
+                              // Rien a supprimer tant que le fichier s'ecrit:
+                              // l'archive serait tronquee et la ligne
+                              // reclamerait un fichier disparu.
+                              onPressed: _busy || isRunning
+                                  ? null
+                                  : () => _supprimerArchive(row),
+                              icon: const Icon(Icons.delete_outline),
+                            ),
                         ],
                       ),
                       Text(
@@ -819,18 +1135,30 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                           children: [
                             Expanded(
                               child: LinearProgressIndicator(
-                                value: progress / 100.0,
+                                value: avancement.pourcentage / 100.0,
                                 minHeight: 8,
                               ),
                             ),
                             const SizedBox(width: 10),
-                            Text('$progress%'),
+                            Text(
+                              '${avancement.pourcentage}%',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
                           ],
                         ),
-                        if (phase.isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Text('Etape: $phase'),
-                        ],
+                        const SizedBox(height: 4),
+                        Text(
+                          [
+                            avancement.libelle,
+                            if (avancement.phase.isNotEmpty) avancement.phase,
+                            if (volumeTraite.isNotEmpty) volumeTraite,
+                            if (reste.isNotEmpty) reste,
+                          ].join(' • '),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       ],
                       if (isFailed && restoreLog.isNotEmpty) ...[
                         const SizedBox(height: 8),
@@ -845,4 +1173,23 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
       ),
     );
   }
+}
+
+/// Ce que l'ecran a besoin de savoir d'une operation en cours.
+class _Avancement {
+  const _Avancement({
+    required this.libelle,
+    required this.pourcentage,
+    required this.phase,
+    required this.octetsFaits,
+    required this.octetsTotal,
+    required this.debut,
+  });
+
+  final String libelle;
+  final int pourcentage;
+  final String phase;
+  final int octetsFaits;
+  final int octetsTotal;
+  final DateTime? debut;
 }

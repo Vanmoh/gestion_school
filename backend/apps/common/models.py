@@ -84,8 +84,29 @@ class BackupArchive(TimeStampedModel):
     file_size_bytes = models.BigIntegerField(default=0)
     sha256 = models.CharField(max_length=64, blank=True)
     include_media = models.BooleanField(default=True)
+    # La bibliotheque reste dehors par defaut. Elle pese a elle seule des
+    # milliers de fois le reste des medias, et se reconstitue par l'import
+    # des annales: l'emporter a chaque sauvegarde rendait l'operation trop
+    # lourde pour etre faite souvent, donc trop rare pour proteger quoi que
+    # ce soit.
+    include_library_documents = models.BooleanField(default=False)
     manifest = models.JSONField(default=dict, blank=True)
     notes = models.TextField(blank=True)
+
+    # --- Avancement de l'ecriture de l'archive ---------------------------
+    # Symetriques des champs `restore_*` ci-dessous. Separes d'eux parce
+    # qu'une meme archive est ecrite une fois puis restauree plus tard: un
+    # seul jeu de champs verrait la restauration effacer la trace de
+    # l'ecriture.
+    build_phase = models.CharField(max_length=120, blank=True)
+    build_progress = models.PositiveSmallIntegerField(default=0)
+    # En octets, pour que l'ecran annonce un volume et un reste plutot qu'un
+    # pourcentage seul -- sur une archive de plusieurs minutes, « 40 % » ne
+    # dit pas s'il reste dix secondes ou dix minutes.
+    bytes_total = models.BigIntegerField(default=0)
+    bytes_done = models.BigIntegerField(default=0)
+    build_started_at = models.DateTimeField(null=True, blank=True)
+
     restore_log = models.TextField(blank=True)
     restore_phase = models.CharField(max_length=120, blank=True)
     restore_progress = models.PositiveSmallIntegerField(default=0)
