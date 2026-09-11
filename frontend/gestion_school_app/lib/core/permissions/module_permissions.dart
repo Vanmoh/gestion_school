@@ -279,6 +279,10 @@ class Capacites {
   static const annulationValidationPaie = 'annulation_validation_paie';
   static const annulationValidationDepense = 'annulation_validation_depense';
 
+  /// Effacer une annee scolaire. La direction ouvre, cloture et rouvre les
+  /// siennes; effacer est le seul geste du module qu'aucun autre ne repare.
+  static const suppressionAnneeScolaire = 'suppression_annee_scolaire';
+
   static const saisieConduite = 'saisie_conduite';
   static const appelAttention = 'appel_attention';
 }

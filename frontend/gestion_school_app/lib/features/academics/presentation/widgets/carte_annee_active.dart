@@ -33,6 +33,11 @@ class CarteAnneeActive extends ConsumerWidget {
   final VoidCallback? onCloturer;
   final VoidCallback? onRouvrir;
 
+  /// Effacer l'annee affichee. Nul pour tout profil sauf le super
+  /// administrateur: les trois actions ci-dessus se defont par leur
+  /// contraire, celle-ci non.
+  final VoidCallback? onSupprimer;
+
   const CarteAnneeActive({
     super.key,
     required this.classes,
@@ -41,6 +46,7 @@ class CarteAnneeActive extends ConsumerWidget {
     this.onActiver,
     this.onCloturer,
     this.onRouvrir,
+    this.onSupprimer,
   });
 
   @override
@@ -175,6 +181,18 @@ class CarteAnneeActive extends ConsumerWidget {
                 onPressed: onOuvrirAnnee,
                 icon: const Icon(Icons.event_available_outlined, size: 18),
                 label: const Text('Ouvrir une nouvelle année'),
+              ),
+            // En dernier, et dans la couleur d'erreur: le seul geste de la
+            // carte qui ne se reprend pas.
+            if (onSupprimer != null)
+              TextButton.icon(
+                key: const Key('annee-supprimer'),
+                onPressed: onSupprimer,
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: const Text('Supprimer'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                ),
               ),
           ],
         ),
