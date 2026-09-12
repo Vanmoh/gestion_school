@@ -957,9 +957,6 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     );
   }
 
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
-
   /// Deplie ou replie le formulaire de creation, en bas de page.
   ///
   /// A l'ouverture on amene l'ancre a l'ecran: le formulaire nait sous la
@@ -1200,10 +1197,10 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                 spacing: 10,
                 runSpacing: 10,
                 children: [
-                  _metricChip('Total comptes', '$totalUsers'),
-                  _metricChip('Direction/Admin', '$adminCount'),
-                  _metricChip('Pedagogie', '$teachingCount'),
-                  _metricChip('Parents/Eleves', '$familyCount'),
+                  Indicateur(libelle: 'Total comptes', valeur: '$totalUsers'),
+                  Indicateur(libelle: 'Direction/Admin', valeur: '$adminCount'),
+                  Indicateur(libelle: 'Pedagogie', valeur: '$teachingCount'),
+                  Indicateur(libelle: 'Parents/Eleves', valeur: '$familyCount'),
                 ],
               ),
             ),

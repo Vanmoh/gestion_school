@@ -276,6 +276,31 @@ class _GestionSchoolAppState extends ConsumerState<GestionSchoolApp> {
   }
 }
 
+/// Les entrées de menu qui n'apparaissent dans aucun groupe.
+///
+/// La barre latérale ne dessine que les groupes: une entrée oubliée dans
+/// `_groups` existe, se construit, répond à son adresse — et reste
+/// introuvable. C'est arrivé à « Dossier élève », que la matrice ouvre
+/// pourtant aux neuf rôles et qui est la seule page montrant à une famille
+/// tout ce que l'école sait de son enfant.
+///
+/// Deux entrées échappent légitimement au menu et sont donc admises ici:
+/// « Imports académiques » s'ouvre en fenêtre depuis l'écran Académique, et
+/// les émargements enseignants sont repliés dans « Émargements ».
+@visibleForTesting
+List<String> entreesDeMenuSansGroupe() {
+  const tolerees = {'academic_imports'};
+  final groupees = <String>{
+    for (final groupe in _AdminShellState._groups) ...groupe.itemKeys,
+  };
+  return [
+    for (final entree in _AdminShellState._items)
+      if (!groupees.contains(entree.keyName) &&
+          !tolerees.contains(entree.keyName))
+        entree.keyName,
+  ];
+}
+
 class _AdminShell extends ConsumerStatefulWidget {
   const _AdminShell();
 
@@ -338,9 +363,13 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       icon: Icons.school_outlined,
       view: StudentsPage(),
     ),
+    // « Dossier élève » et non « Recherche élève »: on cherche pour arriver
+    // quelque part, et c'est ce quelque part qui doit nommer l'entree. C'est
+    // aussi la seule page qui montre a une famille tout ce que l'ecole sait
+    // de son enfant -- notes, absences, discipline, frais -- en consultation.
     _AdminMenuItem(
       keyName: 'student_lookup',
-      label: 'Recherche élève',
+      label: 'Dossier élève',
       icon: Icons.person_search_outlined,
       view: StudentLookupPage(),
     ),
@@ -444,6 +473,17 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       icon: Icons.apartment_outlined,
       view: EtablissementsPage(),
     ),
+    // Elle n'existait que sous une icone d'engrenage de la barre du haut,
+    // au milieu de « informations session » et « se deconnecter ». Le nom de
+    // l'ecole, son logo et sa couleur sont une donnee d'administration
+    // comme les etablissements ou les comptes: ils se trouvent la ou on les
+    // cherche.
+    _AdminMenuItem(
+      keyName: 'personnalisation',
+      label: 'Personnalisation',
+      icon: Icons.palette_outlined,
+      view: PersonnalisationPage(),
+    ),
     _AdminMenuItem(
       keyName: 'communication',
       label: 'Communication',
@@ -479,7 +519,13 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     _AdminMenuGroup(
       keyName: 'pedagogie',
       title: 'Pédagogie',
-      itemKeys: ['students', 'teachers', 'attendance', 'discipline'],
+      itemKeys: [
+        'students',
+        'student_lookup',
+        'teachers',
+        'attendance',
+        'discipline',
+      ],
       collapsible: true,
     ),
     _AdminMenuGroup(
@@ -500,6 +546,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       itemKeys: [
         'users',
         'etablissements',
+        'personnalisation',
         'communication',
         'reports',
         'activity_logs',
@@ -639,6 +686,11 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   @override
   void initState() {
     super.initState();
+    assert(
+      entreesDeMenuSansGroupe().isEmpty,
+      'Entrées de menu hors groupe, donc invisibles dans la barre latérale: '
+      '${entreesDeMenuSansGroupe().join(', ')}',
+    );
     for (final group in _groups) {
       if (group.collapsible) {
         _expandedGroups[group.keyName] = true;
@@ -1384,13 +1436,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
             overflow: TextOverflow.ellipsis,
           ),
           actions: [
-            if (_permissions.canWrite('personnalisation'))
-              IconButton(
-                key: const Key('ouvrir-personnalisation-mobile'),
-                tooltip: 'Personnalisation',
-                onPressed: () => PersonnalisationPage.ouvrir(context),
-                icon: const Icon(Icons.settings_outlined),
-              ),
             IconButton(
               tooltip: 'Informations session',
               onPressed: () => _showConnectionInfo(user, selectedEtablissement),
@@ -1830,28 +1875,6 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                                       ),
                                     ),
                                   ),
-                                  // La personnalisation engage l'application
-                                  // entiere, tous etablissements confondus.
-                                  // Le droit vient de la matrice et non du
-                                  // role lu ici: le serveur en est seul juge,
-                                  // et deux regles ecrites a deux endroits
-                                  // finissent par diverger.
-                                  if (_permissions.canWrite(
-                                    'personnalisation',
-                                  )) ...[
-                                    const SizedBox(width: 8),
-                                    IconButton.filledTonal(
-                                      key: const Key('ouvrir-personnalisation'),
-                                      style: IconButton.styleFrom(
-                                        backgroundColor: Colors.white
-                                            .withValues(alpha: 0.1),
-                                      ),
-                                      tooltip: 'Personnalisation',
-                                      onPressed: () =>
-                                          PersonnalisationPage.ouvrir(context),
-                                      icon: const Icon(Icons.settings_outlined),
-                                    ),
-                                  ],
                                 ],
                               ),
                             ),

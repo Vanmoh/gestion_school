@@ -367,9 +367,6 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
     }).toList();
   }
 
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
-
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
     // Le fond vient d'un Material et non du Container: une ligne de
@@ -905,12 +902,12 @@ class _CommunicationPageState extends ConsumerState<CommunicationPage> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _metricChip('Utilisateurs', '${_users.length}'),
-                _metricChip('Annonces', '${_announcements.length}'),
-                _metricChip('Notifications', '${_notifications.length}'),
-                _metricChip('Notifications envoyees', '$sentNotifications'),
+                Indicateur(libelle: 'Utilisateurs', valeur: '${_users.length}'),
+                Indicateur(libelle: 'Annonces', valeur: '${_announcements.length}'),
+                Indicateur(libelle: 'Notifications', valeur: '${_notifications.length}'),
+                Indicateur(libelle: 'Notifications envoyees', valeur: '$sentNotifications'),
                 if (canReadSms)
-                  _metricChip('Providers SMS actifs', '$activeSmsProviders'),
+                  Indicateur(libelle: 'Providers SMS actifs', valeur: '$activeSmsProviders'),
               ],
             ),
           ),

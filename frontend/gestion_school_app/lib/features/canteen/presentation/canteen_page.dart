@@ -148,9 +148,6 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
     await _loadData();
   }
 
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
-
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
     // Le fond vient d'un Material et non du Container: une ligne de liste
@@ -513,12 +510,12 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _metricChip('Élèves', '${_students.length}'),
-                _metricChip('Menus', '${_menus.length}'),
-                _metricChip('Abonnements', '${_subscriptions.length}'),
-                _metricChip('Abonnements actifs', '$activeSubscriptions'),
-                _metricChip('Services', '${_services.length}'),
-                _metricChip('Services payes', '$paidServices'),
+                Indicateur(libelle: 'Élèves', valeur: '${_students.length}'),
+                Indicateur(libelle: 'Menus', valeur: '${_menus.length}'),
+                Indicateur(libelle: 'Abonnements', valeur: '${_subscriptions.length}'),
+                Indicateur(libelle: 'Abonnements actifs', valeur: '$activeSubscriptions'),
+                Indicateur(libelle: 'Services', valeur: '${_services.length}'),
+                Indicateur(libelle: 'Services payes', valeur: '$paidServices'),
               ],
             ),
           ),

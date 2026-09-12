@@ -1268,10 +1268,10 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
         spacing: 12,
         runSpacing: 12,
         children: [
-          _metricChip('Comptes enseignants', '$usersCount'),
-          _metricChip('Profils créés', '$profileCount'),
-          _metricChip('Profils à créer', '$pendingProfilesCount'),
-          _metricChip('Affectations', '${_assignments.length}'),
+          Indicateur(libelle: 'Comptes enseignants', valeur: '$usersCount'),
+          Indicateur(libelle: 'Profils créés', valeur: '$profileCount'),
+          Indicateur(libelle: 'Profils à créer', valeur: '$pendingProfilesCount'),
+          Indicateur(libelle: 'Affectations', valeur: '${_assignments.length}'),
         ],
       ),
     );
@@ -1939,9 +1939,6 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
       ),
     );
   }
-
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
 
   Widget _panelSurface(
     BuildContext context, {

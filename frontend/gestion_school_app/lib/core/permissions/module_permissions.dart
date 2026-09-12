@@ -283,6 +283,10 @@ class Capacites {
   /// siennes; effacer est le seul geste du module qu'aucun autre ne repare.
   static const suppressionAnneeScolaire = 'suppression_annee_scolaire';
 
+  /// Dispenser un élève du paiement de son inscription. Renoncer à une
+  /// recette se décide à la direction, pas à la caisse.
+  static const dispenseInscription = 'dispense_inscription';
+
   static const saisieConduite = 'saisie_conduite';
   static const appelAttention = 'appel_attention';
 }

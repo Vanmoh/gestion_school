@@ -244,9 +244,6 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
     return 'fallback:$createdAt|$path|$method';
   }
 
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
-
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
     // Le fond vient d'un Material et non du Container: une ligne de
@@ -461,11 +458,11 @@ class _ActivityLogsPageState extends ConsumerState<ActivityLogsPage> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _metricChip('Total logs', '$totalLogs'),
-                _metricChip('Succes', '$successfulLogs'),
-                _metricChip('Echecs', '$failedLogs'),
-                _metricChip('HTTP >= 400', '$errorStatusLogs'),
-                _metricChip('Utilisateurs', '$users'),
+                Indicateur(libelle: 'Total logs', valeur: '$totalLogs'),
+                Indicateur(libelle: 'Succes', valeur: '$successfulLogs'),
+                Indicateur(libelle: 'Echecs', valeur: '$failedLogs'),
+                Indicateur(libelle: 'HTTP >= 400', valeur: '$errorStatusLogs'),
+                Indicateur(libelle: 'Utilisateurs', valeur: '$users'),
               ],
             ),
           ),

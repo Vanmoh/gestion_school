@@ -1077,9 +1077,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     return false;
   }
 
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
-
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
     // Le fond vient d'un Material et non du Container: une ligne de
@@ -1269,8 +1266,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                _metricChip('Statut planning', selectedPublicationLabel),
-                _metricChip('Horaires', '${selectedSlots.length}'),
+                Indicateur(libelle: 'Statut planning', valeur: selectedPublicationLabel),
+                Indicateur(libelle: 'Horaires', valeur: '${selectedSlots.length}'),
               ],
             ),
           ],
@@ -1460,12 +1457,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    _metricChip(
-                      'Affectations classe',
+                    Indicateur(libelle: 
+                      'Affectations classe', valeur:
                       '${selectedAssignments.length}',
                     ),
-                    _metricChip('Horaires classe', '${selectedSlots.length}'),
-                    _metricChip('Statut', selectedPublicationLabel),
+                    Indicateur(libelle: 'Horaires classe', valeur: '${selectedSlots.length}'),
+                    Indicateur(libelle: 'Statut', valeur: selectedPublicationLabel),
                   ],
                 ),
                 const SizedBox(height: 10),
@@ -1719,14 +1716,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   spacing: 10,
                   runSpacing: 10,
                   children: [
-                    _metricChip('Enseignants', '${_teachers.length}'),
-                    _metricChip('Matières', '${_subjects.length}'),
-                    _metricChip('Classes', '${_classrooms.length}'),
-                    _metricChip('Affectations', '${_assignments.length}'),
-                    _metricChip('Horaires', '${_scheduleSlots.length}'),
-                    _metricChip('Classes planifiées', '$classesWithSlots'),
-                    _metricChip('Classes publiées', '$classesPublished'),
-                    _metricChip('Classes verrouillées', '$classesLocked'),
+                    Indicateur(libelle: 'Enseignants', valeur: '${_teachers.length}'),
+                    Indicateur(libelle: 'Matières', valeur: '${_subjects.length}'),
+                    Indicateur(libelle: 'Classes', valeur: '${_classrooms.length}'),
+                    Indicateur(libelle: 'Affectations', valeur: '${_assignments.length}'),
+                    Indicateur(libelle: 'Horaires', valeur: '${_scheduleSlots.length}'),
+                    Indicateur(libelle: 'Classes planifiées', valeur: '$classesWithSlots'),
+                    Indicateur(libelle: 'Classes publiées', valeur: '$classesPublished'),
+                    Indicateur(libelle: 'Classes verrouillées', valeur: '$classesLocked'),
                   ],
                 ),
               ),

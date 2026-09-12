@@ -14,7 +14,7 @@ import '../../../core/permissions/module_permissions.dart';
 import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../../imports/presentation/academic_imports_window.dart';
-import '../../reports/presentation/bulletin_whatsapp_page.dart';
+import 'bulletin_whatsapp_page.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../core/network/chargement_tolerant.dart';
 import '../../../core/widgets/indicateur.dart';
@@ -1330,9 +1330,6 @@ class _GradesPageState extends ConsumerState<GradesPage> {
     return '$y-$m-$d';
   }
 
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
-
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
     // Le fond vient d'un Material et non du Container: une ligne de
@@ -1627,8 +1624,8 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      _metricChip('Filtrées', '${scopedGrades.length}'),
-                      _metricChip('Moyenne', scopedAverage.toStringAsFixed(2)),
+                      Indicateur(libelle: 'Filtrées', valeur: '${scopedGrades.length}'),
+                      Indicateur(libelle: 'Moyenne', valeur: scopedAverage.toStringAsFixed(2)),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -1937,12 +1934,12 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                   spacing: 10,
                   runSpacing: 10,
                   children: [
-                    _metricChip('Élèves', '${_students.length}'),
-                    _metricChip('Matières', '${_subjects.length}'),
-                    _metricChip('Classes', '${visibleClassrooms.length}'),
-                    _metricChip('Années', '${_years.length}'),
-                    _metricChip('Notes', '${_grades.length}'),
-                    _metricChip('Validation', validationLabel),
+                    Indicateur(libelle: 'Élèves', valeur: '${_students.length}'),
+                    Indicateur(libelle: 'Matières', valeur: '${_subjects.length}'),
+                    Indicateur(libelle: 'Classes', valeur: '${visibleClassrooms.length}'),
+                    Indicateur(libelle: 'Années', valeur: '${_years.length}'),
+                    Indicateur(libelle: 'Notes', valeur: '${_grades.length}'),
+                    Indicateur(libelle: 'Validation', valeur: validationLabel),
                   ],
                 ),
               ),

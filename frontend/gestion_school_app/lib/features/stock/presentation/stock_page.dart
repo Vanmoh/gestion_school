@@ -131,9 +131,6 @@ class _StockPageState extends ConsumerState<StockPage> {
     await _loadData();
   }
 
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
-
   Widget _sectionCard({required String title, required Widget child}) {
     final colorScheme = Theme.of(context).colorScheme;
     // Le fond vient d'un Material et non du Container: une ligne de
@@ -472,12 +469,12 @@ class _StockPageState extends ConsumerState<StockPage> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _metricChip('Fournisseurs', '${_suppliers.length}'),
-                _metricChip('Articles', '${_items.length}'),
-                _metricChip('Mouvements', '${_movements.length}'),
-                _metricChip('Entrees', '$inMovements'),
-                _metricChip('Sorties', '$outMovements'),
-                _metricChip('Alertes', '${_lowStock.length}'),
+                Indicateur(libelle: 'Fournisseurs', valeur: '${_suppliers.length}'),
+                Indicateur(libelle: 'Articles', valeur: '${_items.length}'),
+                Indicateur(libelle: 'Mouvements', valeur: '${_movements.length}'),
+                Indicateur(libelle: 'Entrees', valeur: '$inMovements'),
+                Indicateur(libelle: 'Sorties', valeur: '$outMovements'),
+                Indicateur(libelle: 'Alertes', valeur: '${_lowStock.length}'),
               ],
             ),
           ),

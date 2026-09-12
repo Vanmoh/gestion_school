@@ -83,6 +83,27 @@ class Etablissement(TimeStampedModel):
     library_penalty_per_day = models.DecimalField(
         max_digits=10, decimal_places=2, default=0
     )
+    # --- Inscription conditionnee au paiement ----------------------------
+    # Beaucoup d'ecoles n'ouvrent le dossier qu'apres encaissement de
+    # l'inscription. La regle ne peut pas bloquer la creation de l'eleve:
+    # un paiement s'accroche a un frais, et un frais a un eleve -- sans
+    # fiche, il n'existe aucun endroit ou enregistrer le versement, et la
+    # caisse repasserait au carnet papier.
+    #
+    # L'eleve est donc cree, et c'est la delivrance des documents officiels
+    # qui attend le reglement. Decoche par defaut: une ecole qui ne demande
+    # rien ne doit pas voir ses bulletins se fermer le jour de la mise a
+    # jour.
+    inscription_exige_paiement = models.BooleanField(default=False)
+    # Le plancher a partir duquel l'inscription est tenue pour reglee, en
+    # francs. Un montant et non un pourcentage: le frais varie souvent selon
+    # la classe alors que l'acompte demande est le meme pour tous.
+    inscription_montant_minimum = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
     # Poids de la conduite dans la moyenne de la periode. La valeur etait
     # figee a 2 dans le code du bulletin, et absente du classement: deux
     # calculs pour un meme eleve. Elle se regle desormais par etablissement,
@@ -695,6 +716,32 @@ class Student(TimeStampedModel):
     is_archived = models.BooleanField(default=False)
     conduite = models.DecimalField(max_digits=4, decimal_places=2, default=18)
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="students", null=True, blank=True)
+
+    class Inscription(models.TextChoices):
+        EN_ATTENTE = "en_attente", "Inscription en attente"
+        VALIDEE = "validee", "Inscription validee"
+        EXEMPTEE = "exemptee", "Dispense d'inscription"
+
+    # Ou en est le reglement de l'inscription. Se recalcule seul au fil des
+    # versements (voir apps/school/inscription.py); l'exemption, elle, se
+    # decide et se justifie -- boursier, orphelin, enfant du personnel,
+    # remise de fratrie. Sans elle, le secretariat saisissait un faux
+    # paiement pour debloquer le bulletin, et la caisse s'en trouvait
+    # faussee.
+    inscription_status = models.CharField(
+        max_length=12,
+        choices=Inscription.choices,
+        default=Inscription.VALIDEE,
+    )
+    inscription_exempted_reason = models.CharField(max_length=255, blank=True)
+    inscription_exempted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="inscriptions_exemptees",
+    )
+    inscription_exempted_at = models.DateTimeField(null=True, blank=True)
 
     def save(self, *args, **kwargs):
         if not self.matricule:
