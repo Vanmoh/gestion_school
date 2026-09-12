@@ -31,6 +31,8 @@ part 'payments_expenses_tab.dart';
 part 'payments_unpaid_tab.dart';
 part 'payments_income_tab.dart';
 part 'payments_fee_schedules_tab.dart';
+part 'payments_relances.dart';
+part 'payments_exports.dart';
 
 class PaymentsPage extends ConsumerStatefulWidget {
   const PaymentsPage({super.key});
@@ -158,6 +160,19 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     'Carte',
     'Autre',
   ];
+
+  /// Les methodes qui designent une transaction exterieure. Le serveur
+  /// exige leur reference: c'est elle qui permet de rapprocher l'ecriture du
+  /// relevé, et de retrouver un versement conteste.
+  static const Set<String> _methodesAvecReference = {
+    'Mobile Money',
+    'Virement',
+    'Cheque',
+    'Carte',
+  };
+
+  bool _referenceExigee(String methode) =>
+      _methodesAvecReference.contains(methode);
 
   final _searchController = TextEditingController();
   final _payrollMonthController = TextEditingController();
@@ -519,11 +534,15 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
   /// La tresorerie n'apparait qu'a qui voit les depenses: sans elles, le
   /// solde net n'aurait aucun sens. Elle vire au rouge quand elle passe sous
   /// zero -- c'est le seul chiffre de cette ligne qui appelle une reaction.
+  /// `encaisse` et `tresorerie` nuls signifient « pas encore compté »: le
+  /// serveur agrège, et afficher un zéro pendant ce temps ferait croire à
+  /// une caisse vide.
   Widget _ligneDeSynthese({
     required ColorScheme scheme,
-    required double encaisse,
+    required double? encaisse,
     required double impayes,
     double? tresorerie,
+    bool tresorerieAttendue = false,
   }) {
     return Container(
       width: double.infinity,
@@ -544,17 +563,17 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
           // deja, et cette ligne ne porte que des montants.
           IndicateurFinance(
             libelle: 'Montant encaissé',
-            valeur: montantEnFrancs(encaisse),
+            valeur: encaisse == null ? '…' : montantEnFrancs(encaisse),
           ),
           IndicateurFinance(
             libelle: 'Impayés',
             valeur: montantEnFrancs(impayes),
           ),
-          if (tresorerie != null)
+          if (tresorerieAttendue)
             IndicateurFinance(
               libelle: 'Trésorerie nette',
-              valeur: montantEnFrancs(tresorerie),
-              couleur: tresorerie < 0 ? scheme.error : null,
+              valeur: tresorerie == null ? '…' : montantEnFrancs(tresorerie),
+              couleur: (tresorerie ?? 0) < 0 ? scheme.error : null,
             ),
         ],
       ),
@@ -801,6 +820,9 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
         _financePayrolls = payrolls;
         _financeExpenses = expenses;
       });
+      // Valider une depense change le resultat de la periode, que le serveur
+      // compte a part: sans cela la synthese gardait l'etat d'avant.
+      ref.invalidate(financeTotalsProvider);
       await _chargerLesHeures();
     } catch (error) {
       _showMessage('Erreur chargement paie horaire: $error');
@@ -1245,6 +1267,9 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     );
     ref.invalidate(paymentsPaginatedProvider(query));
     ref.invalidate(feesProvider);
+    // La synthese suit le meme argent: valider une depense ou annuler un
+    // versement la perime autant que le journal.
+    ref.invalidate(financeTotalsProvider);
     try {
       await Future.wait([
         ref.read(paymentsPaginatedProvider(query).future),
@@ -1389,9 +1414,27 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                     ),
                   ),
                   const SizedBox(height: 10),
-                  TextField(
-                    controller: referenceController,
-                    decoration: const InputDecoration(labelText: 'Référence (optionnel)'),
+                  // Hors especes, le serveur exige la reference du
+                  // transfert. Le champ s'annoncait « optionnel »: le lot
+                  // partait puis se faisait refuser, sans que rien n'ait
+                  // prevenu.
+                  ValueListenableBuilder<String>(
+                    valueListenable: methodNotifier,
+                    builder: (context, selectedMethod, _) {
+                      final exigee = _referenceExigee(selectedMethod);
+                      return TextField(
+                        controller: referenceController,
+                        decoration: InputDecoration(
+                          labelText: exigee
+                              ? 'Référence du versement'
+                              : 'Référence (optionnel)',
+                          helperText: exigee
+                              ? 'Le numéro de la transaction, 4 caractères '
+                                    'au moins. Le même pour tout le lot.'
+                              : null,
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -1422,39 +1465,57 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
         return;
       }
 
-      setState(() => _financeBusy = true);
-      final repo = ref.read(paymentsRepositoryProvider);
       final selectedMethod = methodNotifier.value;
       final reference = referenceController.text.trim();
-      var created = 0;
-
-      for (final fee in selectedFees) {
-        final baseAmount = fixedAmount ?? fee.balance;
-        final amount = baseAmount > fee.balance ? fee.balance : baseAmount;
-        if (amount <= 0) {
-          continue;
-        }
-        await repo.createPayment(
-          feeId: fee.id,
-          amount: amount,
-          method: selectedMethod,
-          reference: reference,
+      if (_referenceExigee(selectedMethod) && reference.length < 4) {
+        _showMessage(
+          'Indiquez la référence du versement : au moins 4 caractères '
+          'pour un paiement $selectedMethod.',
         );
-        created += 1;
+        return;
       }
+
+      setState(() => _financeBusy = true);
+      final repo = ref.read(paymentsRepositoryProvider);
+
+      // Une seule requête, enregistrée en bloc côté serveur. Les paiements
+      // partaient auparavant un par un: un refus au milieu laissait derrière
+      // lui ceux qui étaient passés, sans dire lesquels, et reprendre le lot
+      // risquait de réencaisser ce qui était déjà entré.
+      final compteRendu = await repo.encaisserEnLot(
+        feeIds: selectedFees.map((fee) => fee.id).toList(growable: false),
+        method: selectedMethod,
+        reference: reference,
+        montantParFrais: fixedAmount,
+      );
 
       ref.invalidate(paymentsProvider);
       ref.invalidate(paymentsPaginatedProvider);
+      ref.invalidate(financeTotalsProvider);
       ref.invalidate(feesProvider);
 
       setState(() {
         _selectedOutstandingFeeIds.clear();
       });
 
-      _showMessage('Encaissement en lot terminé: $created paiement(s) créé(s).', isSuccess: true);
+      final created = (compteRendu['crees'] as num?)?.toInt() ?? 0;
+      final total = double.tryParse('${compteRendu['total'] ?? ''}') ?? 0;
+      final ignores = selectedFees.length - created;
+      _showMessage(
+        '$created frais encaissé${created > 1 ? 's' : ''} pour '
+        '${_formatMoney(total)}.'
+        '${ignores > 0 ? ' $ignores déjà soldé${ignores > 1 ? 's' : ''}, ignoré${ignores > 1 ? 's' : ''}.' : ''}',
+        isSuccess: true,
+      );
       await _refreshPayments();
     } catch (error) {
-      _showMessage('Erreur encaissement en lot: ${_extractApiErrorMessage(error)}');
+      // Rien n'a été écrit: le serveur annule tout le lot au premier refus.
+      // On le dit, sinon le caissier ne sait pas s'il doit reprendre.
+      _showMessage(
+        'Encaissement annulé, aucun paiement enregistré : '
+        '${_extractApiErrorMessage(error)}',
+      );
+      await _refreshPayments();
     } finally {
       if (mounted) {
         setState(() => _financeBusy = false);
@@ -1494,6 +1555,23 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
 
   DateTime _dayStart(DateTime value) {
     return DateTime(value.year, value.month, value.day);
+  }
+
+  /// Le nom que le serveur donne a cette periode.
+  ///
+  /// Ecrit ici plutot que dans l'enum: c'est un detail de protocole, et
+  /// l'enum sert aussi au filtrage local des listes affichees.
+  String _codeDePeriode(_FinancePeriod periode) {
+    switch (periode) {
+      case _FinancePeriod.day:
+        return 'jour';
+      case _FinancePeriod.week:
+        return 'semaine';
+      case _FinancePeriod.month:
+        return 'mois';
+      case _FinancePeriod.all:
+        return 'tout';
+    }
   }
 
   bool _isInPeriod(DateTime? value, _FinancePeriod period) {
@@ -1979,390 +2057,6 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     }
   }
 
-  Future<void> _saveTextExport({
-    required String content,
-    required String fileName,
-    required String dialogTitle,
-    required String successMessage,
-  }) async {
-    try {
-      final savePath = await FilePicker.platform.saveFile(
-        dialogTitle: dialogTitle,
-        fileName: fileName,
-        bytes: Uint8List.fromList(utf8.encode(content)),
-      );
-
-      if (savePath == null && !kIsWeb) {
-        _showMessage('Export annule.');
-        return;
-      }
-
-      _showMessage(successMessage, isSuccess: true);
-      return;
-    } catch (_) {
-      await Clipboard.setData(ClipboardData(text: content));
-      _showMessage(
-        'Export indisponible: contenu copie dans le presse-papiers.',
-        isSuccess: true,
-      );
-    }
-  }
-
-  Future<void> _savePdfExport({
-    required Uint8List bytes,
-    required String fileName,
-    required String dialogTitle,
-    required String successMessage,
-  }) async {
-    try {
-      final savePath = await FilePicker.platform.saveFile(
-        dialogTitle: dialogTitle,
-        fileName: fileName,
-        bytes: bytes,
-      );
-
-      if (savePath == null && !kIsWeb) {
-        _showMessage('Export PDF annule.');
-        return;
-      }
-
-      _showMessage(successMessage, isSuccess: true);
-      return;
-    } catch (_) {
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
-      _showMessage(
-        'Export PDF ouvert dans la boite d\'impression.',
-        isSuccess: true,
-      );
-    }
-  }
-
-  String _buildExpensesCsv(List<Map<String, dynamic>> rows) {
-    final buffer = StringBuffer();
-    buffer.writeln('id,date,libelle,categorie,montant,validation,paye_le,notes');
-
-    for (final row in rows) {
-      final amount = double.tryParse(row['amount']?.toString() ?? '0') ?? 0;
-      buffer.writeln(
-        [
-          _csvEscape((row['id'] ?? '').toString()),
-          _csvEscape((row['date'] ?? '').toString()),
-          _csvEscape((row['label'] ?? '').toString()),
-          _csvEscape((row['category'] ?? '').toString()),
-          _csvEscape(amount.toStringAsFixed(0)),
-          _csvEscape(_expenseStageLabel(row)),
-          _csvEscape((row['paid_on'] ?? '').toString()),
-          _csvEscape((row['notes'] ?? '').toString()),
-        ].join(','),
-      );
-    }
-
-    return buffer.toString();
-  }
-
-  String _buildPaymentsCsv(List<PaymentItem> rows) {
-    final buffer = StringBuffer();
-    buffer.writeln('id,date,eleve,matricule,type_frais,montant,methode,reference');
-
-    for (final row in rows) {
-      buffer.writeln(
-        [
-          _csvEscape(row.id.toString()),
-          _csvEscape(row.createdAt),
-          _csvEscape(row.studentFullName),
-          _csvEscape(row.studentMatricule),
-          _csvEscape(row.feeType),
-          _csvEscape(row.amount.toStringAsFixed(0)),
-          _csvEscape(row.method),
-          _csvEscape(row.reference),
-        ].join(','),
-      );
-    }
-
-    return buffer.toString();
-  }
-
-  Future<Uint8List> _buildJournalPdf({
-    required String title,
-    required String subtitle,
-    required List<String> summaryLines,
-    required List<String> headers,
-    required List<List<String>> rows,
-  }) async {
-    final doc = pw.Document();
-    final generatedAt = _formatDate(DateTime.now().toIso8601String());
-
-    doc.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4.landscape,
-        margin: const pw.EdgeInsets.all(24),
-        build: (_) {
-          return [
-            pw.Container(
-              padding: const pw.EdgeInsets.all(12),
-              decoration: pw.BoxDecoration(
-                color: PdfColors.blue50,
-                border: pw.Border.all(color: PdfColors.blue200),
-                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
-              ),
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text(
-                    title,
-                    style: pw.TextStyle(
-                      fontSize: 18,
-                      fontWeight: pw.FontWeight.bold,
-                      color: PdfColors.blue900,
-                    ),
-                  ),
-                  pw.SizedBox(height: 4),
-                  pw.Text(subtitle),
-                  pw.SizedBox(height: 4),
-                  pw.Text('Généré le : $generatedAt'),
-                ],
-              ),
-            ),
-            pw.SizedBox(height: 10),
-            pw.Wrap(
-              spacing: 10,
-              runSpacing: 8,
-              children: summaryLines
-                  .map(
-                    (line) => pw.Container(
-                      padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: pw.BoxDecoration(
-                        color: PdfColors.grey100,
-                        border: pw.Border.all(color: PdfColors.grey400),
-                        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
-                      ),
-                      child: pw.Text(line),
-                    ),
-                  )
-                  .toList(growable: false),
-            ),
-            pw.SizedBox(height: 10),
-            pw.TableHelper.fromTextArray(
-              headers: headers,
-              data: rows,
-              border: pw.TableBorder.all(color: PdfColors.grey400),
-              headerStyle: pw.TextStyle(
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.white,
-                fontSize: 10,
-              ),
-              headerDecoration: const pw.BoxDecoration(color: PdfColors.blue700),
-              cellStyle: const pw.TextStyle(fontSize: 9),
-              cellAlignment: pw.Alignment.centerLeft,
-              cellPadding: const pw.EdgeInsets.all(6),
-            ),
-          ];
-        },
-      ),
-    );
-
-    return doc.save();
-  }
-
-  Future<List<PaymentItem>> _loadPaymentExportRows({
-    required String search,
-    required String? method,
-    required _FinancePeriod period,
-  }) async {
-    final rows = await ref.read(paymentsRepositoryProvider).fetchPaymentsForJournal(
-          search: search,
-          method: method,
-        );
-    final sorted = _filteredPayments(rows);
-    return sorted
-        .where((payment) => _isInPeriod(DateTime.tryParse(payment.createdAt), period))
-        .toList(growable: false);
-  }
-
-  Future<void> _exportExpensesCsv(List<Map<String, dynamic>> rows) async {
-    final bounds = _periodDateBounds(_financePeriod);
-    try {
-      final bytes = await ref.read(paymentsRepositoryProvider).exportExpensesJournal(
-            format: 'csv',
-            dateFrom: bounds.from,
-            dateTo: bounds.to,
-          );
-      await _saveTextExport(
-        content: utf8.decode(bytes, allowMalformed: true),
-        fileName: 'journal_depenses_${_periodCode(_financePeriod)}_${_timestampSuffix()}.csv',
-        dialogTitle: 'Enregistrer le journal des dépenses',
-        successMessage: 'Export CSV dépenses backend reussi.',
-      );
-      return;
-    } catch (_) {
-      if (rows.isEmpty) {
-        _showMessage('Aucune dépense à exporter pour cette période.');
-        return;
-      }
-
-      final csv = _buildExpensesCsv(rows);
-      await _saveTextExport(
-        content: csv,
-        fileName: 'journal_depenses_${_periodCode(_financePeriod)}_${_timestampSuffix()}.csv',
-        dialogTitle: 'Enregistrer le journal des dépenses',
-        successMessage: 'Export CSV dépenses reussi (${rows.length} lignes).',
-      );
-    }
-  }
-
-  Future<void> _exportExpensesPdf(List<Map<String, dynamic>> rows) async {
-    final bounds = _periodDateBounds(_financePeriod);
-    try {
-      final bytes = await ref.read(paymentsRepositoryProvider).exportExpensesJournal(
-            format: 'pdf',
-            dateFrom: bounds.from,
-            dateTo: bounds.to,
-          );
-      await _savePdfExport(
-        bytes: bytes,
-        fileName: 'journal_depenses_${_periodCode(_financePeriod)}_${_timestampSuffix()}.pdf',
-        dialogTitle: 'Exporter le journal des dépenses en PDF',
-        successMessage: 'Export PDF dépenses backend reussi.',
-      );
-      return;
-    } catch (_) {
-      if (rows.isEmpty) {
-        _showMessage('Aucune dépense à exporter en PDF pour cette période.');
-        return;
-      }
-
-      final bytes = await _buildJournalPdf(
-        title: 'Journal des dépenses',
-        subtitle: 'Période ${_financePeriodLabel(_financePeriod).toLowerCase()} • ${rows.length} ligne(s)',
-        summaryLines: [
-          'Période: ${_financePeriodLabel(_financePeriod)}',
-          'Dépenses: ${rows.length}',
-          'Montant total: ${_formatMoney(rows.fold<double>(0, (sum, row) => sum + (double.tryParse(row['amount']?.toString() ?? '0') ?? 0)))}',
-        ],
-        headers: const ['Date', 'Libellé', 'Catégorie', 'Montant', 'Validation', 'Paye le'],
-        rows: rows
-            .map(
-              (row) => [
-                (row['date'] ?? '-').toString(),
-                (row['label'] ?? '-').toString(),
-                (row['category'] ?? '-').toString(),
-                _formatMoney(double.tryParse(row['amount']?.toString() ?? '0') ?? 0),
-                _expenseStageLabel(row),
-                ((row['paid_on'] ?? '').toString().trim().isEmpty) ? '-' : (row['paid_on'] ?? '-').toString(),
-              ],
-            )
-            .toList(growable: false),
-      );
-
-      await _savePdfExport(
-        bytes: bytes,
-        fileName: 'journal_depenses_${_periodCode(_financePeriod)}_${_timestampSuffix()}.pdf',
-        dialogTitle: 'Exporter le journal des dépenses en PDF',
-        successMessage: 'Export PDF dépenses reussi (${rows.length} lignes).',
-      );
-    }
-  }
-
-  Future<void> _exportPaymentsCsv({required String search, required String? method}) async {
-    final bounds = _periodDateBounds(_financePeriod);
-    try {
-      final bytes = await ref.read(paymentsRepositoryProvider).exportPaymentsJournal(
-            format: 'csv',
-            search: search,
-            method: method,
-            dateFrom: bounds.from,
-            dateTo: bounds.to,
-          );
-      await _saveTextExport(
-        content: utf8.decode(bytes, allowMalformed: true),
-        fileName: 'journal_encaissements_${_periodCode(_financePeriod)}_${_timestampSuffix()}.csv',
-        dialogTitle: 'Enregistrer le journal des encaissements',
-        successMessage: 'Export CSV encaissements backend reussi.',
-      );
-      return;
-    } catch (_) {
-      final rows = await _loadPaymentExportRows(
-        search: search,
-        method: method,
-        period: _financePeriod,
-      );
-      if (rows.isEmpty) {
-        _showMessage('Aucun encaissement a exporter pour cette période.');
-        return;
-      }
-
-      final csv = _buildPaymentsCsv(rows);
-      await _saveTextExport(
-        content: csv,
-        fileName: 'journal_encaissements_${_periodCode(_financePeriod)}_${_timestampSuffix()}.csv',
-        dialogTitle: 'Enregistrer le journal des encaissements',
-        successMessage: 'Export CSV encaissements reussi (${rows.length} lignes).',
-      );
-    }
-  }
-
-  Future<void> _exportPaymentsPdf({required String search, required String? method}) async {
-    final bounds = _periodDateBounds(_financePeriod);
-    try {
-      final bytes = await ref.read(paymentsRepositoryProvider).exportPaymentsJournal(
-            format: 'pdf',
-            search: search,
-            method: method,
-            dateFrom: bounds.from,
-            dateTo: bounds.to,
-          );
-      await _savePdfExport(
-        bytes: bytes,
-        fileName: 'journal_encaissements_${_periodCode(_financePeriod)}_${_timestampSuffix()}.pdf',
-        dialogTitle: 'Exporter le journal des encaissements en PDF',
-        successMessage: 'Export PDF encaissements backend reussi.',
-      );
-      return;
-    } catch (_) {
-      final rows = await _loadPaymentExportRows(
-        search: search,
-        method: method,
-        period: _financePeriod,
-      );
-      if (rows.isEmpty) {
-        _showMessage('Aucun encaissement a exporter en PDF pour cette période.');
-        return;
-      }
-
-      final amountTotal = rows.fold<double>(0, (sum, payment) => sum + payment.amount);
-      final bytes = await _buildJournalPdf(
-        title: 'Journal des encaissements',
-        subtitle: 'Période ${_financePeriodLabel(_financePeriod).toLowerCase()} • ${rows.length} ligne(s)',
-        summaryLines: [
-          'Période: ${_financePeriodLabel(_financePeriod)}',
-          'Encaissements: ${rows.length}',
-          'Montant total: ${_formatMoney(amountTotal)}',
-        ],
-        headers: const ['Date', 'Élève', 'Matricule', 'Type frais', 'Montant', 'Méthode', 'Référence'],
-        rows: rows
-            .map(
-              (payment) => [
-                _formatDate(payment.createdAt),
-                payment.studentFullName,
-                payment.studentMatricule,
-                payment.feeType,
-                _formatMoney(payment.amount),
-                payment.method,
-                payment.reference.isEmpty ? '-' : payment.reference,
-              ],
-            )
-            .toList(growable: false),
-      );
-
-      await _savePdfExport(
-        bytes: bytes,
-        fileName: 'journal_encaissements_${_periodCode(_financePeriod)}_${_timestampSuffix()}.pdf',
-        dialogTitle: 'Exporter le journal des encaissements en PDF',
-        successMessage: 'Export PDF encaissements reussi (${rows.length} lignes).',
-      );
-    }
-  }
-
   List<PaymentItem> _filteredPayments(List<PaymentItem> payments) {
     final rows = payments.toList();
 
@@ -2499,414 +2193,6 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
       return a.className.compareTo(b.className);
     });
     return rows;
-  }
-
-  List<_LateFeeAlert> _buildLateFeeAlerts(List<StudentFeeItem> fees) {
-    final today = _dayStart(DateTime.now());
-    final alerts = <_LateFeeAlert>[];
-    for (final fee in fees) {
-      if (fee.balance <= 0) {
-        continue;
-      }
-      final dueDate = _parseDateOnly(fee.dueDate);
-      if (dueDate == null || !dueDate.isBefore(today)) {
-        continue;
-      }
-
-      alerts.add(
-        _LateFeeAlert(
-          feeId: fee.id,
-          className: _classLabel(fee.classroomName),
-          studentFullName: fee.studentFullName,
-          studentMatricule: fee.studentMatricule,
-          feeType: fee.feeType,
-          dueDateRaw: fee.dueDate,
-          daysLate: today.difference(dueDate).inDays,
-          balance: fee.balance,
-        ),
-      );
-    }
-
-    alerts.sort((a, b) {
-      final byDays = b.daysLate.compareTo(a.daysLate);
-      if (byDays != 0) {
-        return byDays;
-      }
-      return b.balance.compareTo(a.balance);
-    });
-    return alerts;
-  }
-
-  List<_LateFeeAlert> _applyLateAlertThreshold(List<_LateFeeAlert> rows) {
-    return rows.where((row) => row.daysLate >= _lateAlertMinDays).toList(growable: false);
-  }
-
-  String _buildLateAlertsCsv(List<_LateFeeAlert> rows) {
-    final buffer = StringBuffer();
-    buffer.writeln('fee_id,classe,eleve,matricule,type_frais,echeance,jours_retard,solde');
-
-    for (final row in rows) {
-      buffer.writeln(
-        [
-          _csvEscape(row.feeId.toString()),
-          _csvEscape(row.className),
-          _csvEscape(row.studentFullName),
-          _csvEscape(row.studentMatricule),
-          _csvEscape(row.feeType),
-          _csvEscape(row.dueDateRaw),
-          _csvEscape(row.daysLate.toString()),
-          _csvEscape(row.balance.toStringAsFixed(0)),
-        ].join(','),
-      );
-    }
-
-    return buffer.toString();
-  }
-
-  String _buildClassReminderMessage({
-    required String className,
-    required List<_LateFeeAlert> alerts,
-  }) {
-    final buffer = StringBuffer();
-    final total = alerts.fold<double>(0, (sum, row) => sum + row.balance);
-    buffer.writeln('Objet: Relance paiement - Classe $className');
-    buffer.writeln('');
-    buffer.writeln('Bonjour,');
-    buffer.writeln(
-      'Merci de regulariser les frais en retard pour la classe $className. Montant total en attente: ${_formatMoney(total)}.',
-    );
-    buffer.writeln('');
-    buffer.writeln('Détails prioritaires:');
-    for (final alert in alerts.take(12)) {
-      buffer.writeln(
-        '- ${alert.studentFullName} (${alert.studentMatricule.isEmpty ? '-' : alert.studentMatricule}) | ${alert.feeType} | ${alert.daysLate} j de retard | ${_formatMoney(alert.balance)}',
-      );
-    }
-    if (alerts.length > 12) {
-      buffer.writeln('- ... et ${alerts.length - 12} autre(s) dossier(s).');
-    }
-    buffer.writeln('');
-    buffer.writeln('Cordialement,');
-    buffer.writeln('Service Finances');
-    return buffer.toString();
-  }
-
-  List<_LateStudentSummary> _buildTopLateStudents(List<_LateFeeAlert> alerts) {
-    final grouped = <String, _LateStudentSummary>{};
-    for (final alert in alerts) {
-      final key = alert.studentMatricule.trim().isEmpty
-          ? '${alert.className}|${alert.studentFullName}'
-          : alert.studentMatricule.trim();
-      final previous = grouped[key];
-      if (previous == null) {
-        grouped[key] = _LateStudentSummary(
-          studentKey: key,
-          studentFullName: alert.studentFullName,
-          studentMatricule: alert.studentMatricule,
-          className: alert.className,
-          lateFeesCount: 1,
-          maxDaysLate: alert.daysLate,
-          totalBalance: alert.balance,
-        );
-        continue;
-      }
-      grouped[key] = _LateStudentSummary(
-        studentKey: key,
-        studentFullName: previous.studentFullName,
-        studentMatricule: previous.studentMatricule,
-        className: previous.className,
-        lateFeesCount: previous.lateFeesCount + 1,
-        maxDaysLate: alert.daysLate > previous.maxDaysLate ? alert.daysLate : previous.maxDaysLate,
-        totalBalance: previous.totalBalance + alert.balance,
-      );
-    }
-
-    final rows = grouped.values.toList(growable: false);
-    rows.sort((a, b) {
-      final byDays = b.maxDaysLate.compareTo(a.maxDaysLate);
-      if (byDays != 0) {
-        return byDays;
-      }
-      return b.totalBalance.compareTo(a.totalBalance);
-    });
-    return rows;
-  }
-
-  _LateTrendMetrics _buildLateTrendMetrics(List<StudentFeeItem> fees) {
-    final today = _dayStart(DateTime.now());
-
-    var current7Count = 0;
-    var previous7Count = 0;
-    var current30Count = 0;
-    var previous30Count = 0;
-    var current7Amount = 0.0;
-    var previous7Amount = 0.0;
-    var current30Amount = 0.0;
-    var previous30Amount = 0.0;
-
-    for (final fee in fees) {
-      if (fee.balance <= 0) {
-        continue;
-      }
-      final dueDate = _parseDateOnly(fee.dueDate);
-      if (dueDate == null || !dueDate.isBefore(today)) {
-        continue;
-      }
-
-      final daysLate = today.difference(dueDate).inDays;
-
-      if (daysLate <= 7) {
-        current7Count += 1;
-        current7Amount += fee.balance;
-      } else if (daysLate <= 14) {
-        previous7Count += 1;
-        previous7Amount += fee.balance;
-      }
-
-      if (daysLate <= 30) {
-        current30Count += 1;
-        current30Amount += fee.balance;
-      } else if (daysLate <= 60) {
-        previous30Count += 1;
-        previous30Amount += fee.balance;
-      }
-    }
-
-    return _LateTrendMetrics(
-      current7Count: current7Count,
-      previous7Count: previous7Count,
-      current30Count: current30Count,
-      previous30Count: previous30Count,
-      current7Amount: current7Amount,
-      previous7Amount: previous7Amount,
-      current30Amount: current30Amount,
-      previous30Amount: previous30Amount,
-    );
-  }
-
-  Future<void> _copyClassReminder({
-    required String className,
-    required List<_LateFeeAlert> alerts,
-  }) async {
-    final message = _buildClassReminderMessage(className: className, alerts: alerts);
-    final total = alerts.fold<double>(0, (sum, row) => sum + row.balance);
-    await Clipboard.setData(ClipboardData(text: message));
-    _recordReminderHistory(
-      action: 'Relance classe',
-      scope: className,
-      itemCount: alerts.length,
-      totalAmount: total,
-    );
-    _showMessage(
-      'Message de relance copie pour la classe $className (${alerts.length} dossier(s)).',
-      isSuccess: true,
-    );
-  }
-
-  void _recordReminderHistory({
-    required String action,
-    required String scope,
-    required int itemCount,
-    required double totalAmount,
-  }) {
-    setState(() {
-      _reminderHistory.insert(
-        0,
-        _ReminderHistoryEntry(
-          createdAt: DateTime.now(),
-          action: action,
-          scope: scope,
-          itemCount: itemCount,
-          totalAmount: totalAmount,
-        ),
-      );
-      if (_reminderHistory.length > 30) {
-        _reminderHistory.removeRange(30, _reminderHistory.length);
-      }
-      _reminderHistoryPage = 1;
-    });
-    unawaited(_persistReminderHistory());
-  }
-
-  String _reminderHistoryAsText([List<_ReminderHistoryEntry>? rows]) {
-    final source = rows ?? _reminderHistory;
-    if (source.isEmpty) {
-      return 'Aucun historique de relance.';
-    }
-    final buffer = StringBuffer();
-    for (final entry in source) {
-      buffer.writeln(
-        '${_formatDate(entry.createdAt.toIso8601String())} | ${entry.action} | ${entry.scope} | ${entry.itemCount} dossier(s) | ${_formatMoney(entry.totalAmount)}',
-      );
-    }
-    return buffer.toString();
-  }
-
-  String _buildReminderHistoryCsv(List<_ReminderHistoryEntry> rows) {
-    final buffer = StringBuffer();
-    buffer.writeln('date,action,scope,nombre_dossiers,montant_total');
-    for (final entry in rows) {
-      buffer.writeln(
-        [
-          _csvEscape(entry.createdAt.toIso8601String()),
-          _csvEscape(entry.action),
-          _csvEscape(entry.scope),
-          _csvEscape(entry.itemCount.toString()),
-          _csvEscape(entry.totalAmount.toStringAsFixed(0)),
-        ].join(','),
-      );
-    }
-    return buffer.toString();
-  }
-
-  List<_ReminderHistoryEntry> _filteredReminderHistory() {
-    final text = _reminderHistorySearchTerm.trim().toLowerCase();
-    final rows = _reminderHistory.where((entry) {
-      if (_reminderHistoryActionFilter != 'all' && entry.action != _reminderHistoryActionFilter) {
-        return false;
-      }
-      if (!_matchesReminderPeriod(entry.createdAt)) {
-        return false;
-      }
-      if (text.isEmpty) {
-        return true;
-      }
-      return entry.action.toLowerCase().contains(text) || entry.scope.toLowerCase().contains(text);
-    }).toList(growable: false);
-
-    rows.sort((left, right) {
-      switch (_reminderHistorySort) {
-        case 'date_asc':
-          return left.createdAt.compareTo(right.createdAt);
-        case 'amount_desc':
-          return right.totalAmount.compareTo(left.totalAmount);
-        case 'amount_asc':
-          return left.totalAmount.compareTo(right.totalAmount);
-        case 'count_desc':
-          return right.itemCount.compareTo(left.itemCount);
-        case 'count_asc':
-          return left.itemCount.compareTo(right.itemCount);
-        case 'date_desc':
-        default:
-          return right.createdAt.compareTo(left.createdAt);
-      }
-    });
-
-    return rows;
-  }
-
-  bool _matchesReminderPeriod(DateTime value) {
-    if (_reminderHistoryPeriodFilter == 'all') {
-      return true;
-    }
-    final now = _dayStart(DateTime.now());
-    final target = _dayStart(value.toLocal());
-    if (_reminderHistoryPeriodFilter == 'today') {
-      return target == now;
-    }
-    if (_reminderHistoryPeriodFilter == '7d') {
-      final start = now.subtract(const Duration(days: 6));
-      return !target.isBefore(start) && !target.isAfter(now);
-    }
-    if (_reminderHistoryPeriodFilter == '30d') {
-      final start = now.subtract(const Duration(days: 29));
-      return !target.isBefore(start) && !target.isAfter(now);
-    }
-    return true;
-  }
-
-  String _reminderPeriodLabel(String value) {
-    switch (value) {
-      case 'today':
-        return 'Aujourd\'hui';
-      case '7d':
-        return '7 jours';
-      case '30d':
-        return '30 jours';
-      case 'all':
-      default:
-        return 'Tout';
-    }
-  }
-
-  Map<String, List<_LateFeeAlert>> _groupLateAlertsByClass(List<_LateFeeAlert> alerts) {
-    final grouped = <String, List<_LateFeeAlert>>{};
-    for (final alert in alerts) {
-      grouped.putIfAbsent(alert.className, () => <_LateFeeAlert>[]).add(alert);
-    }
-    final sortedKeys = grouped.keys.toList()..sort();
-    final sorted = <String, List<_LateFeeAlert>>{};
-    for (final key in sortedKeys) {
-      final rows = grouped[key]!;
-      rows.sort((a, b) {
-        final byDays = b.daysLate.compareTo(a.daysLate);
-        if (byDays != 0) {
-          return byDays;
-        }
-        return b.balance.compareTo(a.balance);
-      });
-      sorted[key] = rows;
-    }
-    return sorted;
-  }
-
-  String _buildClassRemindersCsv(Map<String, List<_LateFeeAlert>> groupedAlerts) {
-    final buffer = StringBuffer();
-    buffer.writeln('classe,nb_alertes,montant_total,message_relance');
-    groupedAlerts.forEach((className, alerts) {
-      final total = alerts.fold<double>(0, (sum, row) => sum + row.balance);
-      final message = _buildClassReminderMessage(className: className, alerts: alerts);
-      buffer.writeln(
-        [
-          _csvEscape(className),
-          _csvEscape(alerts.length.toString()),
-          _csvEscape(total.toStringAsFixed(0)),
-          _csvEscape(message),
-        ].join(','),
-      );
-    });
-    return buffer.toString();
-  }
-
-  Future<void> _copyGlobalReminders(Map<String, List<_LateFeeAlert>> groupedAlerts) async {
-    final blocks = <String>[];
-    var totalItems = 0;
-    var totalAmount = 0.0;
-    groupedAlerts.forEach((className, alerts) {
-      blocks.add(_buildClassReminderMessage(className: className, alerts: alerts));
-      totalItems += alerts.length;
-      totalAmount += alerts.fold<double>(0, (sum, row) => sum + row.balance);
-    });
-
-    final message = blocks.join('\n\n------------------------------\n\n');
-    await Clipboard.setData(ClipboardData(text: message));
-    _recordReminderHistory(
-      action: 'Relance globale',
-      scope: '${groupedAlerts.length} classes',
-      itemCount: totalItems,
-      totalAmount: totalAmount,
-    );
-    _showMessage(
-      'Relance globale copiée (${groupedAlerts.length} classe(s)).',
-      isSuccess: true,
-    );
-  }
-
-  void _selectLateAlertFee({
-    required _LateFeeAlert alert,
-    required List<StudentFeeItem> outstandingFees,
-  }) {
-    final index = outstandingFees.indexWhere((fee) => fee.id == alert.feeId);
-    if (index < 0) {
-      return;
-    }
-
-    final targetPage = (index ~/ _outstandingPageSize) + 1;
-    setState(() {
-      _selectedOutstandingFeeIds.add(alert.feeId);
-      _outstandingExpanded = true;
-      _outstandingPage = targetPage;
-    });
   }
 
   Map<String, List<StudentFeeItem>> _groupOutstandingByClass(List<StudentFeeItem> fees) {
@@ -3322,9 +2608,6 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     }
     _showMessage('Paiement annulé avec succès.', isSuccess: true);
   }
-
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
 
   Widget _methodTag(BuildContext context, String method) {
     final color = method.toLowerCase().contains('mobile')
@@ -3884,6 +3167,15 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     // classe: le lecteur seul n'y a pas acces.
     final peutEcrireEnFinance = !laFamille && droits.canWrite('finance');
 
+    // Les totaux viennent du serveur, qui agrege en base sur toute la
+    // periode. Nuls tant qu'ils n'ont pas repondu: la ligne de synthese
+    // affiche alors une attente, et non un zero qu'on lirait comme une
+    // caisse vide. Un echec les laisse nuls aussi -- l'ecran reste debout
+    // et le detail de chaque onglet, lui, est deja la.
+    final totauxDeLaPeriode = ref
+        .watch(financeTotalsProvider(_codeDePeriode(_financePeriod)))
+        .valueOrNull;
+
     final query = PaymentsPageQuery(
       page: _currentPage,
       pageSize: _pageSize,
@@ -4006,18 +3298,6 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                 _financePeriod,
               );
             }).toList(growable: false);
-            final periodValidatedExpenses = periodExpenses
-                .where((row) => (row['validation_stage'] ?? '').toString() == 'level_two')
-                .toList(growable: false);
-            final periodIncomeAmount = periodPayments.fold<double>(
-              0,
-              (sum, payment) => sum + payment.amount,
-            );
-            final periodValidatedExpensesAmount = periodValidatedExpenses.fold<double>(
-              0,
-              (sum, row) => sum + (double.tryParse(row['amount']?.toString() ?? '0') ?? 0),
-            );
-            final periodNetTreasury = periodIncomeAmount - periodValidatedExpensesAmount;
             final expenseDraftCount = periodExpenses
                 .where((row) => (row['validation_stage'] ?? '').toString() == 'draft')
                 .length;
@@ -4211,7 +3491,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                       expenseValidatedCount: expenseValidatedCount,
                       totalExpensesAmount: totalExpensesAmount,
                       periodValidatedExpensesAmount:
-                          periodValidatedExpensesAmount,
+                          totauxDeLaPeriode?.depensesValidees,
                     ),
                   ),
                 ),
@@ -4430,9 +3710,13 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                 // onglet.
                 _ligneDeSynthese(
                   scheme: colorScheme,
-                  encaisse: periodIncomeAmount,
+                  // Comptés par la base, sur toute la période. Additionner
+                  // les lignes chargées ici donnait le total de la page du
+                  // journal, pas celui du mois.
+                  encaisse: totauxDeLaPeriode?.recettes,
                   impayes: outstandingTotal,
-                  tresorerie: peutVoirLesDepenses ? periodNetTreasury : null,
+                  tresorerie: totauxDeLaPeriode?.resultat,
+                  tresorerieAttendue: peutVoirLesDepenses,
                 ),
                 // La barre ne sert a rien devant un seul onglet: le profil
                 // qui n'en ouvre qu'un y est deja.

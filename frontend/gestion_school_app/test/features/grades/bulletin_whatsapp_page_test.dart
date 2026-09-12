@@ -15,7 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gestion_school_app/core/network/api_client.dart';
 import 'package:gestion_school_app/core/permissions/module_permissions.dart';
-import 'package:gestion_school_app/features/reports/presentation/bulletin_whatsapp_page.dart';
+import 'package:gestion_school_app/features/grades/presentation/bulletin_whatsapp_page.dart';
 
 const _canalUrlLauncher = MethodChannel('plugins.flutter.io/url_launcher');
 

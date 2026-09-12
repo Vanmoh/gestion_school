@@ -1705,20 +1705,60 @@ class PaymentSerializer(serializers.ModelSerializer):
             )
 
         if normalized_method in self.NON_CASH_METHODS and cleaned_reference:
-            etablissement_id = getattr(getattr(fee, "student", None), "etablissement_id", None)
-            duplicate_qs = Payment.objects.filter(
+            # Une reference designe une transaction exterieure -- un transfert
+            # Mobile Money, un virement. Une meme transaction regle souvent
+            # plusieurs frais: trois mensualites d'un enfant, ou la scolarite
+            # de deux freres, payees d'un seul envoi. La regle refusait tout
+            # ce qui portait deja cette reference dans l'etablissement: le
+            # second frais du meme versement etait rejete, et encaisser un lot
+            # par Mobile Money s'arretait au premier eleve.
+            #
+            # Elle reste entiere entre familles, qui est le cas qu'elle vise:
+            # la meme reference sur deux foyers differents est une erreur de
+            # saisie, pas un versement groupe.
+            eleve = getattr(fee, "student", None)
+            etablissement_id = getattr(eleve, "etablissement_id", None)
+            deja_vue = Payment.objects.filter(
                 reference__iexact=cleaned_reference,
                 method=normalized_method,
             )
             if etablissement_id:
-                duplicate_qs = duplicate_qs.filter(fee__student__etablissement_id=etablissement_id)
+                deja_vue = deja_vue.filter(fee__student__etablissement_id=etablissement_id)
             if self.instance is not None:
-                duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
-            if duplicate_qs.exists():
+                deja_vue = deja_vue.exclude(pk=self.instance.pk)
+
+            # Deux fois la meme reference sur le meme frais: le versement a
+            # ete saisi deux fois. Le garde-fou des trois minutes ne l'attrape
+            # pas si les montants different.
+            if deja_vue.filter(fee_id=fee.id).exists():
                 raise serializers.ValidationError(
                     {
                         "reference": (
-                            "Cette reference existe deja pour la meme methode dans l'etablissement."
+                            "Ce versement est deja enregistre sur ce frais."
+                        )
+                    }
+                )
+
+            # Hors du foyer, en revanche, la meme reference designe une erreur
+            # de saisie: deux familles ne partagent pas une transaction.
+            famille = [eleve.id] if eleve is not None else []
+            parent_id = getattr(eleve, "parent_id", None)
+            if parent_id:
+                famille = list(
+                    Student.objects.filter(parent_id=parent_id).values_list(
+                        "id", flat=True
+                    )
+                )
+            if famille:
+                deja_vue = deja_vue.exclude(fee__student_id__in=famille)
+
+            if deja_vue.exists():
+                raise serializers.ValidationError(
+                    {
+                        "reference": (
+                            "Cette reference est deja portee par le versement "
+                            "d'une autre famille. Verifiez le numero de la "
+                            "transaction."
                         )
                     }
                 )

@@ -2896,9 +2896,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
-
   ButtonStyle _compactUnifiedActionButtonStyle() {
     return FilledButton.styleFrom(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),

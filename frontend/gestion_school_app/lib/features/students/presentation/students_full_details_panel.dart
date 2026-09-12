@@ -310,21 +310,21 @@ extension _PanneauDossierComplet on _StudentsPageState {
                 spacing: 10,
                 runSpacing: 10,
                 children: [
-                  _metricChip('Historique académique', '${_history.length}'),
-                  _metricChip(
-                    'Incidents ouverts',
+                  Indicateur(libelle: 'Historique académique', valeur: '${_history.length}'),
+                  Indicateur(libelle: 
+                    'Incidents ouverts', valeur:
                     '${_incidents.where((i) => (i['status']?.toString() ?? '') != 'resolved').length}',
                   ),
-                  _metricChip(
-                    'Absences',
+                  Indicateur(libelle: 
+                    'Absences', valeur:
                     '${_attendances.where((a) => a['is_absent'] == true).length}',
                   ),
-                  _metricChip(
-                    'Retards',
+                  Indicateur(libelle: 
+                    'Retards', valeur:
                     '${_attendances.where((a) => a['is_late'] == true).length}',
                   ),
-                  _metricChip(
-                    'Solde frais',
+                  Indicateur(libelle: 
+                    'Solde frais', valeur:
                     _money(
                       _fees.fold<double>(
                         0,

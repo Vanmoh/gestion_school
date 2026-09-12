@@ -7670,6 +7670,261 @@ class PaymentViewSet(BaseModelViewSet):
             details=f"fee={payment.fee_id};amount={payment.amount};method={payment.method}",
         )
 
+    @action(detail=False, methods=["get"], url_path="totaux")
+    def totaux(self, request):
+        """Recettes et depenses de la periode, comptees par la base.
+
+        L'ecran Finances additionnait les lignes qu'il avait sous la main.
+        Or le journal des encaissements est pagine par vingt-cinq: « Recettes
+        de la periode » ne decrivait donc pas la periode mais la page --
+        au-dela de vingt-cinq versements dans le mois, le chiffre etait faux,
+        et il changeait en tournant la page.
+
+        Compter ici plutot que la-bas donne aussi un seul resultat pour un
+        seul fait: le tableau de bord agregeait deja de son cote, et deux
+        additions du meme argent finissent par ne plus dire la meme chose.
+
+        Les depenses comptees dans le resultat sont les depenses validees aux
+        deux niveaux, comme au tableau de bord. Celles qui attendent encore
+        sont rendues a part: une ecole qui n'a pas fait tourner son circuit
+        doit voir ou est passe son argent, pas le voir disparaitre.
+        """
+        periode = str(request.query_params.get("periode") or "mois").strip().lower()
+        debut = self._debut_de_periode(periode)
+        if debut is False:
+            raise ValidationError(
+                {"periode": "Valeurs acceptees: jour, semaine, mois, tout."}
+            )
+
+        paiements = self.get_queryset()
+        if debut is not None:
+            paiements = paiements.filter(created_at__gte=debut)
+
+        agregat = paiements.aggregate(
+            montant=Sum("amount"),
+            nombre=Count("id"),
+        )
+        recettes = agregat["montant"] or Decimal("0")
+
+        # Par methode: c'est ce qui permet de rapprocher la caisse du relevé
+        # Mobile Money en fin de journee.
+        #
+        # `order_by()` vide avant le regroupement: le tri par defaut du modele
+        # entre sinon dans le GROUP BY, et chaque versement forme son propre
+        # groupe. La ventilation rendait alors le dernier montant de chaque
+        # methode au lieu de leur somme.
+        par_methode = {
+            ligne["method"]: str(ligne["montant"] or Decimal("0"))
+            for ligne in paiements.order_by()
+            .values("method")
+            .annotate(montant=Sum("amount"))
+        }
+
+        payload = {
+            "periode": periode,
+            "depuis": debut.isoformat() if debut is not None else None,
+            "recettes": str(recettes),
+            "encaissements": agregat["nombre"] or 0,
+            "recettes_par_methode": par_methode,
+        }
+
+        # La famille voit ses propres versements, jamais les depenses de
+        # l'ecole: la matrice lui donne « finance » en portee restreinte.
+        if is_scoped(getattr(request.user, "role", ""), "finance"):
+            return Response(payload)
+
+        depenses_qs = Expense.objects.all()
+        if debut is not None:
+            depenses_qs = depenses_qs.filter(date__gte=debut.date())
+        etablissement = self._resolve_target_etablissement()
+        if etablissement is not None:
+            depenses_qs = depenses_qs.filter(etablissement=etablissement)
+
+        validees = (
+            depenses_qs.filter(level_two_validated_at__isnull=False).aggregate(
+                montant=Sum("amount")
+            )["montant"]
+            or Decimal("0")
+        )
+        en_attente = (
+            depenses_qs.filter(level_two_validated_at__isnull=True).aggregate(
+                montant=Sum("amount")
+            )["montant"]
+            or Decimal("0")
+        )
+
+        payload.update(
+            {
+                "depenses_validees": str(validees),
+                "depenses_en_attente": str(en_attente),
+                "resultat": str(recettes - validees),
+            }
+        )
+        return Response(payload)
+
+    @staticmethod
+    def _debut_de_periode(periode: str):
+        """Le debut de la periode demandee, ou None pour « tout ».
+
+        Rend `False` sur une valeur inconnue: `None` signifie deja « depuis
+        toujours », et confondre les deux ferait passer une faute de frappe
+        pour une demande de tout l'historique.
+        """
+        maintenant = timezone.localtime()
+        debut_du_jour = maintenant.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+        if periode == "tout":
+            return None
+        if periode == "jour":
+            return debut_du_jour
+        if periode == "semaine":
+            # Semaine calendaire commencant le lundi, comme l'ecran.
+            return debut_du_jour - timedelta(days=debut_du_jour.weekday())
+        if periode == "mois":
+            return debut_du_jour.replace(day=1)
+        return False
+
+    @action(detail=False, methods=["post"], url_path="encaisser-en-lot")
+    def encaisser_en_lot(self, request):
+        """Enregistre un seul versement qui regle plusieurs frais.
+
+        L'ecran proposait deja l'encaissement en lot, mais en creant les
+        paiements un par un depuis le client. Deux consequences, toutes deux
+        payees par la caisse:
+
+        Le lot s'arretait au premier refus, en laissant derriere lui les
+        paiements deja passes -- sans dire lesquels. Le caissier voyait une
+        erreur, pas un compte: reprendre le lot risquait de reencaisser ce
+        qui etait deja entre.
+
+        Et un versement unique reglant trois echeances etait refuse des la
+        deuxieme, sa reference etant tenue pour un doublon. Hors especes,
+        c'est-a-dire pour quatre methodes sur six, le lot ne passait donc
+        jamais.
+
+        Ici, tout part ensemble ou rien ne part: un versement recu est un
+        fait unique, et le fractionner entre plusieurs frais est une
+        ecriture, pas plusieurs evenements. Le refus nomme le frais fautif
+        et laisse la base intacte.
+        """
+        charge = request.data if isinstance(request.data, dict) else {}
+
+        identifiants = charge.get("frais")
+        if not isinstance(identifiants, (list, tuple)) or not identifiants:
+            raise ValidationError({"frais": "Indiquez au moins un frais a encaisser."})
+
+        vus = set()
+        ordonnes = []
+        for brut in identifiants:
+            try:
+                identifiant = int(brut)
+            except (TypeError, ValueError):
+                raise ValidationError({"frais": f"Identifiant de frais invalide: {brut}."})
+            # Un frais cite deux fois serait encaisse deux fois: la selection
+            # de l'ecran est un ensemble, pas une liste.
+            if identifiant in vus:
+                continue
+            vus.add(identifiant)
+            ordonnes.append(identifiant)
+
+        montant_impose = charge.get("montant_par_frais")
+        if montant_impose not in (None, ""):
+            try:
+                montant_impose = Decimal(str(montant_impose))
+            except (InvalidOperation, TypeError, ValueError):
+                raise ValidationError({"montant_par_frais": "Montant invalide."})
+            if montant_impose <= 0:
+                raise ValidationError(
+                    {"montant_par_frais": "Le montant doit etre superieur a 0."}
+                )
+        else:
+            montant_impose = None
+
+        etablissement = self._resolve_target_etablissement()
+        frais_par_id = {
+            frais.id: frais
+            for frais in StudentFee.objects.select_related("student").filter(
+                id__in=ordonnes
+            )
+        }
+
+        cree = []
+        with transaction.atomic():
+            for identifiant in ordonnes:
+                frais = frais_par_id.get(identifiant)
+                if frais is None:
+                    raise ValidationError({"frais": f"Frais introuvable: {identifiant}."})
+                if etablissement and frais.student.etablissement_id != etablissement.id:
+                    raise ValidationError(
+                        {
+                            "frais": (
+                                f"Le frais {identifiant} n'appartient pas a "
+                                "l'etablissement actif."
+                            )
+                        }
+                    )
+
+                # Le solde est relu a chaque tour: un frais cite apres un
+                # premier versement du meme lot n'en reste pas au solde
+                # d'avant.
+                solde = frais.balance
+                montant = montant_impose if montant_impose is not None else solde
+                if montant > solde:
+                    montant = solde
+                if montant <= 0:
+                    # Deja solde entre-temps: ce n'est pas une erreur, il n'y
+                    # a simplement rien a encaisser.
+                    continue
+
+                serializer = PaymentSerializer(
+                    data={
+                        "fee": frais.id,
+                        "amount": str(montant),
+                        "method": charge.get("method"),
+                        "reference": charge.get("reference", ""),
+                    }
+                )
+                if not serializer.is_valid():
+                    raise ValidationError(
+                        {
+                            "frais": identifiant,
+                            "eleve": str(frais.student),
+                            "detail": serializer.errors,
+                        }
+                    )
+                paiement = serializer.save(
+                    etablissement=etablissement,
+                    received_by=request.user,
+                )
+                cree.append(paiement)
+
+            if not cree:
+                raise ValidationError(
+                    {"frais": "Aucun des frais selectionnes n'a de solde a encaisser."}
+                )
+
+            total = sum((paiement.amount for paiement in cree), Decimal("0"))
+            for paiement in cree:
+                self._log_payment_action(
+                    action="payment_created",
+                    payment=paiement,
+                    details=(
+                        f"lot={len(cree)};fee={paiement.fee_id};"
+                        f"amount={paiement.amount};method={paiement.method}"
+                    ),
+                )
+
+        return Response(
+            {
+                "crees": len(cree),
+                "total": str(total),
+                "paiements": PaymentSerializer(cree, many=True).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
     def destroy(self, request, *args, **kwargs):
         payment = self.get_object()
         if payment.is_cancelled:

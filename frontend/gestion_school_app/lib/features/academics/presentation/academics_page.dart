@@ -1854,9 +1854,22 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                 const SizedBox(height: 10),
                 TextField(
                   controller: _classSearchController,
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.search),
-                    labelText: 'Rechercher une classe',
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.search),
+                    labelText: 'Nom de classe ou niveau',
+                    suffixIcon: _classQuery.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Effacer',
+                            icon: const Icon(Icons.close),
+                            onPressed: () {
+                              _classSearchController.clear();
+                              setState(() {
+                                _classQuery = '';
+                                _classPage = 1;
+                              });
+                            },
+                          ),
                   ),
                   onChanged: (value) => setState(() {
                     _classQuery = value;

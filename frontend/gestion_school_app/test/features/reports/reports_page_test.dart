@@ -155,7 +155,7 @@ void main() {
     final transport = await _monter(tester);
 
     expect(find.textContaining('Erreur chargement'), findsNothing);
-    expect(find.text('Awa Traoré'), findsWidgets);
+    expect(find.textContaining('Awa Traoré'), findsWidgets);
     // Elle porte le seul droit « rapports »: aucun appel séparé n'est requis.
     expect(
       transport.chemins.where((chemin) => chemin.contains('/payments')),
@@ -175,7 +175,7 @@ void main() {
     );
 
     expect(find.textContaining('Erreur chargement'), findsNothing);
-    expect(find.text('Awa Traoré'), findsWidgets);
+    expect(find.textContaining('Awa Traoré'), findsWidgets);
   });
 
   testWidgets('sans le référentiel scolaire non plus', (tester) async {

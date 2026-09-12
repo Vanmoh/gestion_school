@@ -53,9 +53,9 @@ extension _OngletDesImpayes on _PaymentsPageState {
                 spacing: 10,
                 runSpacing: 10,
                 children: [
-                  _metricChip('Classes suivies', '${classKpiRows.length}'),
-                  _metricChip('Alertes retard', '${filteredLateFeeAlerts.length}'),
-                  _metricChip('Retards critiques', '$criticalLateAlerts'),
+                  Indicateur(libelle: 'Classes suivies', valeur: '${classKpiRows.length}'),
+                  Indicateur(libelle: 'Alertes retard', valeur: '${filteredLateFeeAlerts.length}'),
+                  Indicateur(libelle: 'Retards critiques', valeur: '$criticalLateAlerts'),
                 ],
               ),
               const SizedBox(height: 8),

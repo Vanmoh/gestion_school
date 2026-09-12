@@ -71,9 +71,6 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     );
   }
 
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
-
   @override
   Widget build(BuildContext context) {
     final isReadOnlyMode = !ref
@@ -203,10 +200,10 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _metricChip('Sessions', '$sessionsCount'),
-                _metricChip('Plannings', '$planningsCount'),
-                _metricChip('Surveillances', '$invigilationsCount'),
-                _metricChip('Resultats', '$resultsCount'),
+                Indicateur(libelle: 'Sessions', valeur: '$sessionsCount'),
+                Indicateur(libelle: 'Plannings', valeur: '$planningsCount'),
+                Indicateur(libelle: 'Surveillances', valeur: '$invigilationsCount'),
+                Indicateur(libelle: 'Resultats', valeur: '$resultsCount'),
               ],
             ),
           ),

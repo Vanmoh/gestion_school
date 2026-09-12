@@ -77,6 +77,10 @@ extension _DialogueDesBulletins on _GradesPageState {
 
     var selectedTerm = _currentTermOrDefault();
     var search = '';
+    // Un controleur plutot qu'une variable seule: sans lui le champ ne se
+    // vidait que caractere par caractere, et revenir a la classe entiere
+    // apres avoir cherche un eleve demandait de tout effacer a la main.
+    final rechercheEleve = TextEditingController();
 
     Future<Map<int, int>> fetchRankMapForSelection({
       required int? classroomId,
@@ -359,9 +363,22 @@ extension _DialogueDesBulletins on _GradesPageState {
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   TextField(
-                                    decoration: const InputDecoration(
-                                      labelText: 'Rechercher un élève',
-                                      prefixIcon: Icon(Icons.search),
+                                    controller: rechercheEleve,
+                                    decoration: InputDecoration(
+                                      labelText: 'Nom ou matricule',
+                                      prefixIcon: const Icon(Icons.search),
+                                      suffixIcon: search.isEmpty
+                                          ? null
+                                          : IconButton(
+                                              tooltip: 'Effacer',
+                                              icon: const Icon(Icons.close),
+                                              onPressed: () {
+                                                rechercheEleve.clear();
+                                                setDialogState(() {
+                                                  search = '';
+                                                });
+                                              },
+                                            ),
                                     ),
                                     onChanged: (value) {
                                       setDialogState(() {
@@ -576,5 +593,8 @@ extension _DialogueDesBulletins on _GradesPageState {
         );
       },
     );
+    // La fenetre est fermee: le controleur n'a plus d'usage, et un
+    // controleur non libere garde ses auditeurs en vie.
+    rechercheEleve.dispose();
   }
 }
