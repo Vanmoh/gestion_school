@@ -19,6 +19,23 @@ class Student {
   final DateTime? birthDate;
   final DateTime? enrollmentDate;
 
+  /// Où en est le règlement de l'inscription: « en_attente », « validee » ou
+  /// « exemptee ». L'élève existe et se note dans tous les cas; c'est la
+  /// délivrance du bulletin et de la carte qui attend.
+  final String inscriptionStatus;
+
+  /// Ce qu'il reste à encaisser pour libérer les documents.
+  final double inscriptionResteAPayer;
+
+  /// Vrai quand l'école applique la règle et que cet élève n'est pas à jour.
+  /// Calculé par le serveur: le montant dépend du barème, des versements et
+  /// du plancher de l'école, trois lectures que l'écran referait autrement.
+  final bool inscriptionBloqueDocuments;
+
+  /// Le motif de la dispense, et qui l'a accordée. Vides hors dispense.
+  final String inscriptionMotifDispense;
+  final String inscriptionDispensePar;
+
   const Student({
     required this.id,
     required this.userId,
@@ -39,7 +56,18 @@ class Student {
     this.photo = '',
     this.birthDate,
     this.enrollmentDate,
+    this.inscriptionStatus = 'validee',
+    this.inscriptionResteAPayer = 0,
+    this.inscriptionBloqueDocuments = false,
+    this.inscriptionMotifDispense = '',
+    this.inscriptionDispensePar = '',
   });
+
+  /// Vrai quand l'inscription retient les documents officiels de cet élève.
+  bool get inscriptionEnAttente => inscriptionBloqueDocuments;
+
+  /// Vrai quand la direction a dispensé cet élève du paiement.
+  bool get inscriptionDispensee => inscriptionStatus == 'exemptee';
 
   /// Une seule lecture du JSON d'un eleve, partagee par la liste et le dossier.
   factory Student.fromJson(Map<String, dynamic> map) {
@@ -64,6 +92,15 @@ class Student {
       photo: map['photo']?.toString() ?? '',
       birthDate: _toDate(map['birth_date']),
       enrollmentDate: _toDate(map['enrollment_date']),
+      inscriptionStatus:
+          map['inscription_status']?.toString() ?? 'validee',
+      inscriptionResteAPayer: _asDouble(map['inscription_reste_a_payer']),
+      inscriptionBloqueDocuments:
+          map['inscription_bloque_documents'] as bool? ?? false,
+      inscriptionMotifDispense:
+          map['inscription_exempted_reason']?.toString() ?? '',
+      inscriptionDispensePar:
+          map['inscription_exempted_by_display']?.toString() ?? '',
     );
   }
 
@@ -85,6 +122,14 @@ class Student {
   static int _asInt(dynamic value) {
     if (value is int) return value;
     return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  static double _asDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(
+          value?.toString().replaceAll(',', '.') ?? '',
+        ) ??
+        0;
   }
 
   static DateTime? _toDate(dynamic value) {

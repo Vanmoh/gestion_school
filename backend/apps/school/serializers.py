@@ -164,6 +164,11 @@ class EtablissementSerializer(serializers.ModelSerializer):
             # confondus. Fige a 2 dans le code jusqu'ici: une ecole qui note
             # la conduite sans la faire peser n'avait aucun moyen de le dire.
             'conduite_coefficient',
+            # L'inscription conditionnee au paiement, et son plancher. Sans
+            # ces deux champs dans l'API, la regle ne se reglerait que depuis
+            # l'admin Django -- donc jamais, pour une ecole.
+            'inscription_exige_paiement',
+            'inscription_montant_minimum',
         ]
 
     def validate_code(self, value):
@@ -981,9 +986,44 @@ class StudentSerializer(serializers.ModelSerializer):
                 )
         return attrs
 
+    # Ou en est le reglement de l'inscription, et ce qu'il reste a encaisser.
+    # Calcules ici plutot que dans l'ecran: le montant depend du bareme, des
+    # versements et du plancher de l'ecole -- trois lectures que le client
+    # referait, et referait autrement.
+    inscription_reste_a_payer = serializers.SerializerMethodField(read_only=True)
+    inscription_bloque_documents = serializers.SerializerMethodField(read_only=True)
+    inscription_exempted_by_display = serializers.SerializerMethodField(read_only=True)
+
+    def get_inscription_reste_a_payer(self, obj):
+        from apps.school.inscription import montant_regle, seuil_a_atteindre
+
+        reste = seuil_a_atteindre(obj) - montant_regle(obj)
+        return str(reste if reste > 0 else 0)
+
+    def get_inscription_bloque_documents(self, obj):
+        from apps.school.inscription import documents_bloques
+
+        return documents_bloques(obj)
+
+    def get_inscription_exempted_by_display(self, obj):
+        user = obj.inscription_exempted_by
+        if not user:
+            return ""
+        return user.get_full_name().strip() or user.username
+
     class Meta:
         model = Student
         fields = "__all__"
+        # Le statut se deduit de la caisse, il ne se saisit pas: sans cela un
+        # simple PATCH sur la fiche aurait suffi a se declarer en regle et a
+        # rouvrir les bulletins. La dispense passe par sa propre route, qui
+        # exige un motif et garde le nom de qui l'accorde.
+        read_only_fields = (
+            "inscription_status",
+            "inscription_exempted_reason",
+            "inscription_exempted_by",
+            "inscription_exempted_at",
+        )
 
 
 class StudentAcademicHistorySerializer(serializers.ModelSerializer):

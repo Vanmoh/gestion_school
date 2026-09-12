@@ -225,6 +225,22 @@ class StudentsRepository {
     return updateStudent(studentId, {'is_archived': archive});
   }
 
+  /// Dispense un élève du paiement de son inscription, ou lève la dispense.
+  ///
+  /// Sans elle, le secrétariat n'avait qu'un moyen de délivrer le bulletin
+  /// d'un boursier: saisir un faux versement, ce qui fausse la caisse.
+  Future<Student> dispenserInscription(
+    int studentId, {
+    String motif = '',
+    bool lever = false,
+  }) async {
+    final response = await dio.post(
+      '/students/$studentId/dispense-inscription/',
+      data: lever ? {'lever': true} : {'motif': motif},
+    );
+    return Student.fromJson(Map<String, dynamic>.from(response.data as Map));
+  }
+
   Future<Student> assignClassroom(int studentId, int classroomId) {
     return updateStudent(studentId, {'classroom': classroomId});
   }
@@ -488,6 +504,25 @@ class StudentsRepository {
     final bytes = response.data;
     if (bytes == null || bytes.isEmpty) {
       throw Exception('PDF vide');
+    }
+    return Uint8List.fromList(bytes);
+  }
+
+  /// Le certificat de fréquentation d'un élève, en PDF.
+  ///
+  /// La famille le réclame pour un dossier de bourse, une demande de visa,
+  /// un abonnement de transport ou une ouverture de compte. L'école le
+  /// rédigeait à la main sur papier à en-tête.
+  Future<Uint8List> fetchCertificatFrequentationPdf(int studentId) async {
+    final response = await dio.get<List<int>>(
+      '/reports/certificat-frequentation/$studentId/',
+      queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
+      options: Options(responseType: ResponseType.bytes),
+    );
+
+    final bytes = response.data;
+    if (bytes == null || bytes.isEmpty) {
+      throw Exception('Certificat de fréquentation vide');
     }
     return Uint8List.fromList(bytes);
   }

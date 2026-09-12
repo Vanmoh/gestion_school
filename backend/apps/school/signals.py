@@ -16,7 +16,7 @@ from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from .dashboard_cache import invalidate_stats
-from .models import Expense, ParentProfile, Payment
+from .models import Expense, ParentProfile, Payment, Student, StudentFee
 
 
 @receiver(post_save, sender=Payment)
@@ -114,3 +114,50 @@ def _reprendre_le_telephone_a_la_creation_du_profil(sender, instance, created, *
     # le reenregistrer relancerait le signal.
     ParentProfile.objects.filter(pk=instance.pk).update(whatsapp_phone=numero)
     instance.whatsapp_phone = numero
+
+
+# --- Inscription conditionnee au paiement ----------------------------------
+#
+# Le statut suit la caisse sans que personne ait a le mettre a jour. Le faire
+# a la main aurait garanti l'oubli: le jour ou un parent solde son
+# inscription, c'est au guichet, et la secretaire n'ira pas rouvrir la fiche
+# pour cocher une case.
+
+
+def _recalculer_pour(student):
+    from .inscription import recalculer
+
+    if student is None:
+        return
+    try:
+        recalculer(student)
+    except Exception:
+        # Le recalcul ne doit jamais faire echouer l'ecriture qui l'a
+        # declenche: un versement enregistre reste enregistre, meme si le
+        # statut se remet d'accord au passage suivant.
+        pass
+
+
+@receiver(post_save, sender=Payment)
+@receiver(post_delete, sender=Payment)
+def _suivre_le_reglement_de_l_inscription(sender, instance, **kwargs):
+    """Un versement -- ou son annulation -- peut liberer les documents."""
+    fee = getattr(instance, "fee", None)
+    _recalculer_pour(getattr(fee, "student", None))
+
+
+@receiver(post_save, sender=StudentFee)
+@receiver(post_delete, sender=StudentFee)
+def _suivre_les_frais_d_inscription(sender, instance, **kwargs):
+    """Poser le frais d'inscription est ce qui met l'eleve en attente.
+
+    Sans frais, il n'y a rien a payer: un eleve cree avant que le bareme
+    soit pose reste en regle jusqu'a ce qu'on lui en reclame un.
+    """
+    _recalculer_pour(getattr(instance, "student", None))
+
+
+@receiver(post_save, sender=Student)
+def _statuer_a_la_creation_de_la_fiche(sender, instance, created, **kwargs):
+    if created:
+        _recalculer_pour(instance)

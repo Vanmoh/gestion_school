@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/format/montant.dart';
 import '../../domain/student.dart';
 
 /// Photo de l'eleve, ou son emplacement quand elle manque.
@@ -200,6 +201,30 @@ class StudentPaletteCard extends StatelessWidget {
                       'Archivé',
                       couleur: scheme.errorContainer,
                       texteCouleur: scheme.onErrorContainer,
+                    ),
+                  // L'inscription non réglée retient le bulletin et la carte.
+                  // La pastille porte le montant manquant: la secrétaire doit
+                  // pouvoir dire au parent combien apporter, sans ouvrir un
+                  // autre écran.
+                  if (student.inscriptionEnAttente)
+                    _pastille(
+                      scheme,
+                      textTheme,
+                      student.inscriptionResteAPayer > 0
+                          ? 'Inscription : '
+                                '${montantEnFrancs(student.inscriptionResteAPayer)} '
+                                'à régler'
+                          : 'Inscription en attente',
+                      couleur: scheme.tertiaryContainer,
+                      texteCouleur: scheme.onTertiaryContainer,
+                    ),
+                  if (student.inscriptionDispensee)
+                    _pastille(
+                      scheme,
+                      textTheme,
+                      'Dispensé d\'inscription',
+                      couleur: scheme.secondaryContainer,
+                      texteCouleur: scheme.onSecondaryContainer,
                     ),
                 ],
               ),

@@ -4405,6 +4405,46 @@ class StudentViewSet(BaseModelViewSet):
             }
         )
 
+    @action(detail=True, methods=["post"], url_path="dispense-inscription")
+    def dispense_inscription(self, request, pk=None):
+        """Dispense un eleve du paiement de son inscription, ou leve la dispense.
+
+        Sans elle, le secretariat n'avait qu'un moyen de delivrer le bulletin
+        d'un boursier: saisir un faux versement. La caisse s'en trouvait
+        faussee, et la remise ne se voyait nulle part.
+
+        Le motif est exige. « Dispense » sans plus ne se relit pas six mois
+        plus tard, quand il faut justifier l'ecart entre les inscriptions
+        attendues et les inscriptions encaissees.
+        """
+        from apps.school.inscription import exempter, lever_l_exemption
+
+        if not affinement_autorise(
+            getattr(request.user, "role", ""), "dispense_inscription"
+        ):
+            raise PermissionDenied(
+                "La dispense d'inscription est reservee a la direction."
+            )
+
+        student = self.get_object()
+        charge = request.data if isinstance(request.data, dict) else {}
+        lever = str(charge.get("lever", "")).strip().lower() in {"1", "true", "oui", "yes"}
+
+        if lever:
+            lever_l_exemption(student)
+            student.refresh_from_db()
+            return Response(self.get_serializer(student).data)
+
+        motif = str(charge.get("motif") or "").strip()
+        if len(motif) < 3:
+            raise ValidationError(
+                {"motif": "Indiquez le motif de la dispense (boursier, fratrie...)."}
+            )
+
+        exempter(student, motif=motif, par=request.user)
+        student.refresh_from_db()
+        return Response(self.get_serializer(student).data)
+
     @action(detail=False, methods=["post"], url_path="bulk-update")
     @transaction.atomic
     def bulk_update(self, request):

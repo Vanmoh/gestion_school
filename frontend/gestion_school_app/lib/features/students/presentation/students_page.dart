@@ -594,6 +594,90 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     }
   }
 
+  /// Dispense un élève du paiement de son inscription, ou lève la dispense.
+  ///
+  /// Réservée à la direction: la caisse enregistre les versements, elle ne
+  /// décide pas des remises. Le motif est exigé — « dispense » sans plus ne
+  /// se relit pas six mois plus tard, quand il faut justifier l'écart entre
+  /// les inscriptions attendues et les inscriptions encaissées.
+  Future<void> _dispenserInscription(Student student) async {
+    final leve = student.inscriptionDispensee;
+    final motifControleur = TextEditingController();
+
+    final confirme = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          leve ? 'Lever la dispense ?' : 'Dispenser du paiement ?',
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              leve
+                  ? '${student.fullName} devra de nouveau régler son '
+                        'inscription pour recevoir bulletin et carte.'
+                  : '${student.fullName} recevra bulletin et carte sans '
+                        'régler son inscription.',
+            ),
+            if (!leve) ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: motifControleur,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Motif',
+                  hintText: 'Boursière de l\'État, fratrie, enfant du personnel…',
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Le motif reste attaché au dossier, avec votre nom et la date.',
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            key: const Key('confirmer-dispense-inscription'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(leve ? 'Lever' : 'Dispenser'),
+          ),
+        ],
+      ),
+    );
+
+    final motif = motifControleur.text.trim();
+    motifControleur.dispose();
+    if (confirme != true || !mounted) return;
+
+    if (!leve && motif.length < 3) {
+      _showMessage('Indiquez le motif de la dispense.');
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(studentsRepositoryProvider)
+          .dispenserInscription(student.id, motif: motif, lever: leve);
+      _showMessage(
+        leve ? 'Dispense levée.' : 'Dispense accordée.',
+        isSuccess: true,
+      );
+      await _loadBaseData(keepSelectedId: student.id);
+    } catch (error) {
+      _showMessage('Dispense impossible: $error');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   Future<bool> _confirmToggleArchive(Student student) async {
     if (!mounted) return false;
 
@@ -1042,6 +1126,47 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       _showMessage('Erreur impression carte élève: $error');
       return false;
     }
+  }
+
+  /// Imprime le certificat de fréquentation de l'élève affiché.
+  ///
+  /// Délivré à la demande: c'est la famille qui en a besoin, pour un dossier
+  /// qu'elle dépose ailleurs. L'écran ne le propose donc pas d'office, il
+  /// l'offre à côté des autres pièces de l'élève.
+  Future<bool> _imprimerCertificatFrequentation() async {
+    final student = _selectedStudent;
+    if (student == null) {
+      _showMessage('Sélectionne un élève.');
+      return false;
+    }
+
+    try {
+      final bytes = await ref
+          .read(studentsRepositoryProvider)
+          .fetchCertificatFrequentationPdf(student.id);
+      await Printing.layoutPdf(onLayout: (_) async => bytes);
+      return true;
+    } catch (error) {
+      _showMessage('Certificat impossible : ${_messageDErreur(error)}');
+      return false;
+    }
+  }
+
+  /// Le motif que le serveur donne, plutôt que la trace technique de Dio.
+  ///
+  /// Le certificat suit la règle d'inscription: quand elle retient la pièce,
+  /// le serveur nomme l'élève et le montant manquant. Afficher
+  /// « DioException [bad response] » à la place ferait conclure à une panne.
+  String _messageDErreur(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map && data['detail'] != null) {
+        return data['detail'].toString();
+      }
+      final code = error.response?.statusCode;
+      if (code != null) return 'erreur serveur HTTP $code.';
+    }
+    return error.toString();
   }
 
   Future<bool> _quickPreviewStudentCard() async {

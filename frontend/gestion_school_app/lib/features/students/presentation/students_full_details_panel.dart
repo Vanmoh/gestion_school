@@ -221,6 +221,27 @@ extension _PanneauDossierComplet on _StudentsPageState {
                           selected.isArchived ? 'Réactiver' : 'Archiver',
                         ),
                       ),
+                      // La dispense n'apparaît qu'à qui peut l'accorder, et
+                      // seulement quand elle a un objet: sur un élève à jour
+                      // dans une école qui n'applique pas la règle, le bouton
+                      // n'aurait rien à dispenser.
+                      if (ref
+                              .watch(currentPermissionsProvider)
+                              .can(Capacites.dispenseInscription) &&
+                          (selected.inscriptionEnAttente ||
+                              selected.inscriptionDispensee))
+                        OutlinedButton.icon(
+                          key: const Key('dispenser-inscription'),
+                          onPressed: _saving
+                              ? null
+                              : () => _dispenserInscription(selected),
+                          icon: const Icon(Icons.volunteer_activism_outlined),
+                          label: Text(
+                            selected.inscriptionDispensee
+                                ? 'Lever la dispense'
+                                : 'Dispenser d\'inscription',
+                          ),
+                        ),
                       OutlinedButton.icon(
                         onPressed: _saving
                             ? null
@@ -244,6 +265,35 @@ extension _PanneauDossierComplet on _StudentsPageState {
                                               if (success) {
                                                 _showMessage(
                                                   'Carte élève prête à l\'impression.',
+                                                  isSuccess: true,
+                                                );
+                                              }
+                                            },
+                                          ),
+                                          // Une pièce que la famille réclame
+                                          // pour un dossier déposé ailleurs:
+                                          // bourse, visa, transport, banque.
+                                          // Elle se rédigeait à la main.
+                                          ListTile(
+                                            key: const Key(
+                                              'certificat-frequentation',
+                                            ),
+                                            leading: const Icon(
+                                              Icons.verified_outlined,
+                                            ),
+                                            title: const Text(
+                                              'Certificat de fréquentation',
+                                            ),
+                                            subtitle: const Text(
+                                              'Bourse, visa, transport, banque',
+                                            ),
+                                            onTap: () async {
+                                              Navigator.of(sheetContext).pop();
+                                              final success =
+                                                  await _imprimerCertificatFrequentation();
+                                              if (success) {
+                                                _showMessage(
+                                                  'Certificat prêt à l\'impression.',
                                                   isSuccess: true,
                                                 );
                                               }
