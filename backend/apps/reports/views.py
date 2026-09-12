@@ -1637,6 +1637,36 @@ def _parse_page_size(request, default: int = 100, max_size: int = 1000) -> int:
     return max(1, min(max_size, parsed))
 
 
+def _refuser_si_inscription_en_attente(student: Student):
+    """Retient un document officiel tant que l'inscription n'est pas reglee.
+
+    Le bulletin et la carte scolaire portent le nom de l'ecole: les delivrer
+    a qui n'a pas paye son inscription est precisement ce que la regle
+    empeche. Le reste -- appel, notes, discipline -- demeure ouvert: un eleve
+    assis en classe doit etre pointe et note, sinon le registre ment.
+
+    Rend `None` quand rien ne s'y oppose, sinon la reponse a renvoyer. 402
+    plutot que 403: ce n'est pas un refus de droits, c'est un reglement qui
+    manque, et le message dit lequel.
+    """
+    from apps.school.inscription import documents_bloques, motif_du_blocage
+
+    if not documents_bloques(student):
+        return None
+    return Response({"detail": motif_du_blocage(student)}, status=402)
+
+
+def _sans_les_inscriptions_en_attente(students: list) -> list:
+    """Ecarte d'une impression de classe les eleves non a jour.
+
+    Les autres sortent quand meme: retenir trente bulletins parce qu'un seul
+    n'a pas paye punirait ceux qui sont en regle.
+    """
+    from apps.school.inscription import documents_bloques
+
+    return [student for student in students if not documents_bloques(student)]
+
+
 def _ensure_student_access(request, student: Student) -> None:
     user = request.user
     role = getattr(user, "role", "")
@@ -2046,6 +2076,9 @@ class BulletinPdfView(APIView):
             id=student_id,
         )
         _ensure_student_access(request, student)
+        retenu = _refuser_si_inscription_en_attente(student)
+        if retenu is not None:
+            return retenu
 
         payload = _build_bulletin_payload(
             student=student,
@@ -2550,9 +2583,11 @@ class ClassBulletinsPdfView(APIView):
         if target_etablissement_id and classroom.etablissement_id != target_etablissement_id:
             raise PermissionDenied("Accès refusé aux bulletins de cette classe.")
 
-        students = list(
-            _allowed_students_queryset(request)
-            .filter(classroom_id=classroom.id, is_archived=False)
+        students = _sans_les_inscriptions_en_attente(
+            list(
+                _allowed_students_queryset(request)
+                .filter(classroom_id=classroom.id, is_archived=False)
+            )
         )
 
         if students:
@@ -2982,6 +3017,13 @@ class _BulletinWhatsAppBase(APIView):
         # decouvrir que rien ne pouvait partir.
         if student.classroom_id is None:
             return "Cet élève n'est affecté à aucune classe."
+        # L'inscription avant la periode: un bulletin arrete ne se delivre
+        # pas davantage a qui n'a pas regle son inscription, et le
+        # secretariat doit voir le montant manquant plutot que de chercher.
+        from apps.school.inscription import documents_bloques, motif_du_blocage
+
+        if documents_bloques(student):
+            return motif_du_blocage(student)
         if not self._periode_validee(student, academic_year, normalized_term, publications=publications):
             return (
                 f"Les bulletins du {normalized_term} ne sont pas encore validés "
@@ -4067,6 +4109,300 @@ class ExpenseJournalExportView(APIView):
         )
 
 
+# --- Certificat de frequentation -------------------------------------------
+
+
+def _certificat_numero(student: Student, annee: str) -> str:
+    """Un numero d'ordre lisible et reproductible.
+
+    Reproductible a dessein: un parent qui redemande le meme certificat le
+    meme jour doit obtenir la meme piece, et non un second document qui
+    laisserait croire a deux inscriptions.
+    """
+    compact = "".join(c for c in str(annee) if c.isdigit())[:8] or "0000"
+    return f"CF-{compact}-{student.id:05d}"
+
+
+def _certificat_verification_url(student: Student, annee: str, base_url: str) -> str:
+    """Reutilise la verification de la carte: meme eleve, meme annee."""
+    return _carte_verification_url(student, annee, base_url)
+
+
+def _render_certificat_page(pdf: FPDF, payload: dict) -> None:
+    """Le certificat de frequentation, sur une page A4 portrait.
+
+    Une piece administrative se lit d'un coup: l'en-tete de l'ecole, le titre,
+    une phrase qui affirme, et la signature qui l'engage. Tout le reste --
+    encadrements, aplats, colonnes -- ne fait que retarder la lecture de la
+    seule chose que le guichet verifie.
+    """
+    marge = 18.0
+    largeur = pdf.w - (2 * marge)
+
+    # Un liseré discret plutôt qu'un cadre: la piece doit se reconnaitre au
+    # premier coup d'oeil sans ressembler a un diplome.
+    pdf.set_draw_color(27, 93, 168)
+    pdf.set_line_width(1.4)
+    pdf.line(marge, 14.0, marge + largeur, 14.0)
+
+    y = 20.0
+    if payload["logo_path"]:
+        try:
+            pdf.image(payload["logo_path"], x=marge, y=y, w=20)
+        except Exception:
+            pass
+
+    entete_x = marge + (24 if payload["logo_path"] else 0)
+    entete_w = largeur - (24 if payload["logo_path"] else 0)
+
+    pdf.set_xy(entete_x, y)
+    pdf.set_text_color(20, 70, 136)
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.cell(entete_w, 7.5, _pdf_text(payload["school_name"].upper()), align="C")
+
+    sous_titre = payload["school_level"]
+    if sous_titre:
+        pdf.set_xy(entete_x, y + 7.5)
+        pdf.set_text_color(48, 52, 62)
+        pdf.set_font("Helvetica", size=9.5)
+        pdf.cell(entete_w, 5.0, _pdf_text(sous_titre), align="C")
+
+    if payload["school_phone"]:
+        pdf.set_xy(entete_x, y + 12.5)
+        pdf.set_text_color(150, 52, 58)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(entete_w, 4.5, _pdf_text(f"Tél : {payload['school_phone']}"), align="C")
+
+    y += 24.0
+    pdf.set_draw_color(150, 160, 178)
+    pdf.set_line_width(0.3)
+    pdf.line(marge, y, marge + largeur, y)
+
+    # Le titre, au centre et respirant: c'est ce que le guichet cherche.
+    y += 16.0
+    pdf.set_xy(marge, y)
+    pdf.set_text_color(20, 70, 136)
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.cell(largeur, 10.0, _pdf_text("CERTIFICAT DE FRÉQUENTATION"), align="C")
+
+    y += 12.0
+    pdf.set_xy(marge, y)
+    pdf.set_text_color(90, 98, 112)
+    pdf.set_font("Helvetica", size=9.5)
+    pdf.cell(largeur, 5.0, _pdf_text(f"N° {payload['numero']}"), align="C")
+
+    # Le corps. `multi_cell` et non des `cell` juxtaposees: un nom long ne
+    # doit pas sortir de la page, et la phrase doit pouvoir se relire.
+    y += 16.0
+    pdf.set_xy(marge, y)
+    pdf.set_text_color(28, 32, 40)
+    pdf.set_font("Helvetica", size=12)
+    pdf.multi_cell(largeur, 8.0, _pdf_text(payload["corps"]), align="J")
+
+    y = pdf.get_y() + 8.0
+    pdf.set_xy(marge, y)
+    pdf.set_font("Helvetica", "I", 11)
+    pdf.multi_cell(
+        largeur,
+        7.0,
+        _pdf_text(
+            "En foi de quoi, le présent certificat lui est délivré pour servir "
+            "et valoir ce que de droit."
+        ),
+        align="J",
+    )
+
+    # Lieu et date, puis la signature en dessous: l'ordre d'une piece
+    # administrative, et celui dans lequel on la verifie.
+    y = pdf.get_y() + 14.0
+    pdf.set_xy(marge, y)
+    pdf.set_text_color(45, 50, 60)
+    pdf.set_font("Helvetica", size=11)
+    pdf.cell(largeur, 6.0, _pdf_text(payload["lieu_et_date"]), align="R")
+
+    bloc_y = y + 10.0
+    bloc_w = 62.0
+    bloc_x = marge + largeur - bloc_w
+
+    pdf.set_xy(bloc_x, bloc_y)
+    pdf.set_font("Helvetica", "B", 10.5)
+    pdf.cell(bloc_w, 5.0, _pdf_text(payload["signature_label"]), align="C")
+
+    if payload["signature_asset_path"]:
+        try:
+            hauteur = max(10.0, 22.0 * payload["signature_scale"])
+            pdf.image(
+                payload["signature_asset_path"],
+                x=bloc_x + 6,
+                y=bloc_y + 6,
+                w=bloc_w - 12,
+                h=hauteur,
+            )
+        except Exception:
+            pass
+
+    if payload["stamp_asset_path"]:
+        try:
+            taille = max(14.0, 30.0 * payload["stamp_scale"])
+            pdf.image(
+                payload["stamp_asset_path"],
+                x=marge + 6,
+                y=bloc_y + 2,
+                w=taille,
+                h=taille,
+            )
+        except Exception:
+            pass
+
+    # Le QR reprend celui de la carte: meme eleve, meme annee, meme page de
+    # verification. Un guichet qui doute scanne au lieu de telephoner.
+    if payload["qr_path"]:
+        try:
+            pdf.image(
+                payload["qr_path"],
+                x=marge,
+                y=pdf.h - 42.0,
+                w=22.0,
+                h=22.0,
+            )
+            pdf.set_xy(marge, pdf.h - 19.0)
+            pdf.set_text_color(120, 128, 140)
+            pdf.set_font("Helvetica", size=7.5)
+            pdf.cell(46.0, 4.0, _pdf_text("Vérifier en ligne"), align="C")
+        except Exception:
+            pass
+
+    pdf.set_draw_color(27, 93, 168)
+    pdf.set_line_width(0.8)
+    pdf.line(marge, pdf.h - 13.0, marge + largeur, pdf.h - 13.0)
+
+
+def _build_certificat_payload(student: Student, *, verify_base_url: str = "") -> dict:
+    """Ce que le certificat affirme, rassemble avant d'etre mis en page."""
+    school = _school_identity_for_student(student)
+    etablissement = _student_etablissement(student)
+    logo_path = _etablissement_logo_path(student) or _school_logo_path()
+
+    annee = _active_academic_year(etablissement)
+    annee_label = str(getattr(annee, "name", "") or "").strip() or _active_academic_year_label()
+
+    _, _, nom_complet = _student_name_parts(student)
+    classe = student.classroom.name if student.classroom else "non affectée"
+    matricule = student.matricule or "-"
+
+    # « né(e) le ... » seulement si la date existe: une piece administrative
+    # qui affirme une naissance au 1er janvier 1900 se retourne contre
+    # l'ecole qui l'a signee.
+    if student.birth_date:
+        etat_civil = f", né(e) le {student.birth_date.strftime('%d/%m/%Y')}"
+    else:
+        etat_civil = ""
+
+    signataire = str(
+        getattr(etablissement, "principal_signature_label", "") or ""
+    ).strip() or "Le Directeur"
+
+    corps = (
+        f"Je soussigné(e), {signataire} de {school['name']}, certifie que "
+        f"l'élève {nom_complet}{etat_civil}, immatriculé(e) sous le numéro "
+        f"{matricule}, est régulièrement inscrit(e) dans notre établissement "
+        f"en classe de {classe} au titre de l'année scolaire {annee_label}, "
+        f"et y suit assidûment les cours."
+    )
+
+    # L'etablissement ne porte pas de ville, seulement une adresse. « Fait a
+    # <adresse> » plutot qu'une ville devinee: une piece administrative dit ou
+    # elle a ete etablie, et une ville inventee se remarque au guichet.
+    lieu = (school.get("level") or "").strip()
+    aujourd_hui = timezone.localdate().strftime("%d/%m/%Y")
+    lieu_et_date = (
+        f"Fait à {lieu}, le {aujourd_hui}" if lieu else f"Fait le {aujourd_hui}"
+    )
+
+    signature_source = (
+        _etablissement_media_field_path(etablissement, "principal_signature_image")
+        or _school_signature_asset_path()
+    )
+    stamp_source = (
+        _etablissement_media_field_path(etablissement, "stamp_image")
+        or _school_stamp_asset_path()
+    )
+
+    qr_url = (
+        _certificat_verification_url(student, annee_label, verify_base_url)
+        if verify_base_url and getattr(student, "id", 0)
+        else ""
+    )
+
+    return {
+        "logo_path": logo_path,
+        "school_name": school["name"],
+        "school_level": school["level"],
+        "school_phone": school["phone"],
+        "numero": _certificat_numero(student, annee_label),
+        "corps": corps,
+        "lieu_et_date": lieu_et_date,
+        "signature_label": signataire,
+        "signature_asset_path": _pdf_compatible_image_path(
+            signature_source, cache_prefix="certificat_signature"
+        ),
+        "stamp_asset_path": _pdf_compatible_image_path(
+            stamp_source, cache_prefix="certificat_stamp"
+        ),
+        "signature_scale": _safe_scale_percent(
+            getattr(etablissement, "principal_signature_scale", 100)
+        )
+        / 100.0,
+        "stamp_scale": _safe_scale_percent(
+            getattr(etablissement, "stamp_scale", 100)
+        )
+        / 100.0,
+        "qr_path": _carte_qr_image_path(qr_url) if qr_url else None,
+        "matricule": matricule,
+    }
+
+
+class CertificatFrequentationPdfView(APIView):
+    """Le certificat de fréquentation d'un élève, à la demande.
+
+    Une famille en a besoin pour un dossier de bourse, une demande de visa,
+    un abonnement de transport ou une ouverture de compte. L'école le
+    rédigeait à la main, sur papier à en-tête, et le secrétariat le
+    ressaisissait à chaque demande.
+
+    Ouvert plus largement que le bulletin: une attestation de présence ne
+    révèle ni note ni moyenne, et c'est la famille qui la réclame. Elle
+    suit en revanche la règle d'inscription -- attester la scolarité de qui
+    n'a pas réglé son inscription reviendrait à la certifier.
+    """
+
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request, student_id: int):
+        student = get_object_or_404(
+            Student.objects.select_related("user", "classroom", "etablissement"),
+            id=student_id,
+        )
+        _ensure_student_access(request, student)
+        retenu = _refuser_si_inscription_en_attente(student)
+        if retenu is not None:
+            return retenu
+
+        payload = _build_certificat_payload(
+            student, verify_base_url=_verify_base_url(request)
+        )
+
+        pdf = FPDF(orientation="P", format="A4")
+        pdf.set_auto_page_break(auto=False)
+        pdf.add_page()
+        _render_certificat_page(pdf, payload)
+
+        return pdf_output_response(
+            pdf, f"certificat_frequentation_{student.matricule or student.id}.pdf"
+        )
+
+
 class StudentCardPdfView(APIView):
     access_module = "reports"
     permission_classes = [IsAuthenticated, HasModuleAccess]
@@ -4077,6 +4413,9 @@ class StudentCardPdfView(APIView):
             id=student_id,
         )
         _ensure_student_access(request, student)
+        retenu = _refuser_si_inscription_en_attente(student)
+        if retenu is not None:
+            return retenu
 
         card_format = _requested_card_format(request)
         if card_format is None:
@@ -4141,7 +4480,13 @@ class ClassStudentCardsPdfView(APIView):
         if not include_archived:
             queryset = queryset.filter(is_archived=False)
 
-        students = list(queryset.order_by("user__last_name", "user__first_name", "matricule"))
+        students = _sans_les_inscriptions_en_attente(
+            list(
+                queryset.order_by(
+                    "user__last_name", "user__first_name", "matricule"
+                )
+            )
+        )
         if not students:
             return Response(
                 {"detail": "Aucun élève trouvé pour cette classe."},

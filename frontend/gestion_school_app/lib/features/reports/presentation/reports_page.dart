@@ -10,7 +10,6 @@ import '../../../core/network/api_client.dart';
 import '../../../core/network/chargement_tolerant.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../../core/widgets/indicateur.dart';
-import 'bulletin_whatsapp_page.dart';
 
 class ReportsPage extends ConsumerStatefulWidget {
   const ReportsPage({super.key});
@@ -29,16 +28,13 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
   List<Map<String, dynamic>> _years = [];
   List<Map<String, dynamic>> _payments = [];
 
-  final _bulletinSearchController = TextEditingController();
   final _receiptSearchController = TextEditingController();
 
   int? _selectedStudentId;
   int? _selectedYearId;
-  String _term = 'T1';
   int? _selectedPaymentId;
   int? _selectedClassroomId;
   String _cardsLayoutMode = 'a4_6up';
-  int _bulletinPage = 1;
   int _receiptPage = 1;
 
   @override
@@ -49,7 +45,6 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
 
   @override
   void dispose() {
-    _bulletinSearchController.dispose();
     _receiptSearchController.dispose();
     super.dispose();
   }
@@ -116,60 +111,6 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
-  }
-
-  Future<void> _printBulletin() async {
-    if (_selectedStudentId == null || _selectedYearId == null) {
-      _showMessage('Sélectionnez un élève et une année académique.');
-      return;
-    }
-
-    await _runBusyTask(() async {
-      final dio = ref.read(dioProvider);
-      final response = await dio.get(
-        '/reports/bulletin/$_selectedStudentId/$_selectedYearId/$_term/',
-        options: Options(responseType: ResponseType.bytes),
-      );
-      final bytes = _toUint8List(response.data);
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
-    });
-  }
-
-  /// Ouvre l'envoi des bulletins aux familles pour la classe affichee.
-  ///
-  /// La classe est celle de l'eleve selectionne plutot qu'un choix separe:
-  /// l'ecran en compte deja quatre (annee, trimestre, recherche, eleve), et
-  /// un cinquieme controle qui redit ce que la selection dit deja n'aurait
-  /// servi qu'a se contredire.
-  void _ouvrirEnvoiWhatsApp() {
-    if (_selectedStudentId == null || _selectedYearId == null) {
-      _showMessage('Sélectionnez un élève et une année académique.');
-      return;
-    }
-
-    final eleve = _students.firstWhere(
-      (row) => _asInt(row['id']) == _selectedStudentId,
-      orElse: () => <String, dynamic>{},
-    );
-    final classroomId = _asInt(eleve['classroom'] ?? eleve['classroom_id']);
-    if (classroomId <= 0) {
-      _showMessage(
-        'Cet élève n\'est affecté à aucune classe: affectez-le avant '
-        'd\'envoyer les bulletins.',
-      );
-      return;
-    }
-
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => BulletinWhatsAppPage(
-          classroomId: classroomId,
-          classroomName: _studentClassName(eleve),
-          academicYearId: _selectedYearId!,
-          term: _term,
-        ),
-      ),
-    );
   }
 
   Future<void> _printReceipt() async {
@@ -290,29 +231,6 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
-    final peutEnvoyerAuxFamilles = ref
-        .watch(currentPermissionsProvider)
-        .canWrite('bulletin_whatsapp');
-
-    final bulletinSearch = _bulletinSearchController.text.trim().toLowerCase();
-    final bulletinRows = _students.where((row) {
-      if (bulletinSearch.isEmpty) return true;
-      return _studentLabel(row).toLowerCase().contains(bulletinSearch);
-    }).toList();
-    final bulletinTotalPages = bulletinRows.isEmpty
-        ? 1
-        : ((bulletinRows.length + _rowsPerPage - 1) ~/ _rowsPerPage);
-    final bulletinCurrentPage = math.min(_bulletinPage, bulletinTotalPages);
-    final bulletinStart = bulletinRows.isEmpty
-        ? 0
-        : (bulletinCurrentPage - 1) * _rowsPerPage;
-    final bulletinEnd = math.min(
-      bulletinStart + _rowsPerPage,
-      bulletinRows.length,
-    );
-    final pagedBulletinRows = bulletinRows.isEmpty
-        ? <Map<String, dynamic>>[]
-        : bulletinRows.sublist(bulletinStart, bulletinEnd);
 
     final receiptSearch = _receiptSearchController.text.trim().toLowerCase();
     final receiptRows = _payments.where((row) {
@@ -338,210 +256,6 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
     final totalPaymentsAmount = _payments.fold<double>(
       0,
       (sum, row) => sum + _toDouble(row['amount'] ?? row['paid_amount']),
-    );
-
-    final bulletinSection = Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Bulletin scolaire (PDF)',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              SizedBox(
-                width: 260,
-                child: DropdownButtonFormField<int>(
-                  isExpanded: true,
-                  initialValue: _selectedYearId,
-                  decoration: const InputDecoration(
-                    labelText: 'Année académique',
-                  ),
-                  items: _years
-                      .map(
-                        (row) => DropdownMenuItem<int>(
-                          value: _asInt(row['id']),
-                          child: Text(_yearLabel(row)),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    setState(() => _selectedYearId = value);
-                  },
-                ),
-              ),
-              SizedBox(
-                width: 220,
-                child: DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  initialValue: _term,
-                  decoration: const InputDecoration(labelText: 'Trimestre'),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'T1',
-                      child: Text('Trimestre 1 (T1)'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'T2',
-                      child: Text('Trimestre 2 (T2)'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'T3',
-                      child: Text('Trimestre 3 (T3)'),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    setState(() => _term = value ?? 'T1');
-                  },
-                ),
-              ),
-              SizedBox(
-                width: 300,
-                child: TextField(
-                  controller: _bulletinSearchController,
-                  decoration: const InputDecoration(
-                    labelText: 'Rechercher élève',
-                    prefixIcon: Icon(Icons.search),
-                  ),
-                  onChanged: (_) {
-                    setState(() => _bulletinPage = 1);
-                  },
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          if (pagedBulletinRows.isEmpty)
-            const Text('Aucun élève trouvé.')
-          else
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                headingRowHeight: 46,
-                dataRowMinHeight: 52,
-                dataRowMaxHeight: 62,
-                columns: const [
-                  DataColumn(label: Text('Matricule')),
-                  DataColumn(label: Text('Élève')),
-                  DataColumn(label: Text('Classe')),
-                  DataColumn(label: Text('Actions')),
-                ],
-                rows: pagedBulletinRows.map((row) {
-                  final rowId = _asInt(row['id']);
-                  final selected = rowId == _selectedStudentId;
-                  return DataRow(
-                    selected: selected,
-                    onSelectChanged: (_) {
-                      setState(() => _selectedStudentId = rowId);
-                    },
-                    cells: [
-                      DataCell(Text(_studentMatricule(row))),
-                      DataCell(Text(_studentName(row))),
-                      DataCell(Text(_studentClassName(row))),
-                      DataCell(
-                        Wrap(
-                          spacing: 4,
-                          children: [
-                            TextButton(
-                              onPressed: () {
-                                setState(() => _selectedStudentId = rowId);
-                              },
-                              child: const Text('Voir'),
-                            ),
-                            TextButton(
-                              onPressed: _busy
-                                  ? null
-                                  : () {
-                                      setState(() {
-                                        _selectedStudentId = rowId;
-                                      });
-                                      _printBulletin();
-                                    },
-                              child: const Text('Imprimer'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  );
-                }).toList(),
-              ),
-            ),
-          const SizedBox(height: 8),
-          Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Text(
-                bulletinRows.isEmpty
-                    ? 'Aucun resultat'
-                    : 'Affichage ${bulletinStart + 1}-$bulletinEnd sur ${bulletinRows.length}',
-              ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    tooltip: 'Page precedente',
-                    onPressed: bulletinCurrentPage > 1
-                        ? () {
-                            setState(() {
-                              _bulletinPage = bulletinCurrentPage - 1;
-                            });
-                          }
-                        : null,
-                    icon: const Icon(Icons.chevron_left),
-                  ),
-                  Text('Page $bulletinCurrentPage / $bulletinTotalPages'),
-                  IconButton(
-                    tooltip: 'Page suivante',
-                    onPressed: bulletinCurrentPage < bulletinTotalPages
-                        ? () {
-                            setState(() {
-                              _bulletinPage = bulletinCurrentPage + 1;
-                            });
-                          }
-                        : null,
-                    icon: const Icon(Icons.chevron_right),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              FilledButton.icon(
-                onPressed: _busy ? null : _printBulletin,
-                icon: const Icon(Icons.picture_as_pdf),
-                label: const Text('Imprimer le bulletin sélectionné'),
-              ),
-              // Visible seulement pour qui a le droit de diffuser: lire un
-              // bulletin n'emporte pas celui de l'envoyer aux familles.
-              if (peutEnvoyerAuxFamilles)
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _ouvrirEnvoiWhatsApp,
-                  icon: const Icon(Icons.chat_outlined),
-                  label: const Text('Envoyer aux familles (WhatsApp)'),
-                ),
-            ],
-          ),
-        ],
-      ),
     );
 
     final cardSection = Container(
@@ -680,9 +394,19 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
             width: 320,
             child: TextField(
               controller: _receiptSearchController,
-              decoration: const InputDecoration(
-                labelText: 'Rechercher paiement',
-                prefixIcon: Icon(Icons.search),
+              decoration: InputDecoration(
+                labelText: 'Élève, matricule ou montant',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _receiptSearchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Effacer',
+                        icon: const Icon(Icons.close),
+                        onPressed: () {
+                          _receiptSearchController.clear();
+                          setState(() => _receiptPage = 1);
+                        },
+                      ),
               ),
               onChanged: (_) {
                 setState(() => _receiptPage = 1);
@@ -857,7 +581,9 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Génération des bulletins, reçus et exports à partir des données en production.',
+                      'Cartes scolaires, reçus de paiement et exports. '
+                      'Les bulletins se préparent, se valident et s\'envoient '
+                      'depuis « Notes & Bulletins ».',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
@@ -888,12 +614,12 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _metricChip('Élèves', '${_students.length}'),
-                _metricChip('Années', '${_years.length}'),
-                _metricChip('Paiements', '${_payments.length}'),
-                _metricChip('Classes', '${classRows.length}'),
-                _metricChip(
-                  'Montants traces',
+                Indicateur(libelle: 'Élèves', valeur: '${_students.length}'),
+                Indicateur(libelle: 'Années', valeur: '${_years.length}'),
+                Indicateur(libelle: 'Paiements', valeur: '${_payments.length}'),
+                Indicateur(libelle: 'Classes', valeur: '${classRows.length}'),
+                Indicateur(libelle: 
+                  'Montants traces', valeur:
                   _paymentAmount({
                     'amount': totalPaymentsAmount.toStringAsFixed(0),
                   }),
@@ -911,28 +637,19 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(flex: 7, child: bulletinSection),
+                        Expanded(child: cardSection),
                         const SizedBox(width: 12),
-                        Expanded(flex: 5, child: cardSection),
+                        Expanded(child: receiptSection),
                       ],
                     ),
                     const SizedBox(height: 12),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(flex: 7, child: receiptSection),
-                        const SizedBox(width: 12),
-                        Expanded(flex: 5, child: exportSection),
-                      ],
-                    ),
+                    exportSection,
                   ],
                 );
               }
 
               return Column(
                 children: [
-                  bulletinSection,
-                  const SizedBox(height: 12),
                   cardSection,
                   const SizedBox(height: 12),
                   receiptSection,
@@ -946,9 +663,6 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
       ),
     );
   }
-
-  Widget _metricChip(String label, String value) =>
-      Indicateur(libelle: label, valeur: value);
 
   List<Map<String, dynamic>> _extractRows(dynamic data) {
     final List<dynamic> rows;
@@ -989,38 +703,6 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
         ? fullName
         : (fromParts.isNotEmpty ? fromParts : 'Élève ${row['id']}');
     return '$registration — $name';
-  }
-
-  String _studentMatricule(Map<String, dynamic> row) {
-    final value =
-        row['matricule']?.toString() ?? row['registration_number']?.toString();
-    if (value == null || value.trim().isEmpty) return 'N/A';
-    return value;
-  }
-
-  String _studentName(Map<String, dynamic> row) {
-    final fullName = row['user_full_name']?.toString().trim() ?? '';
-    if (fullName.isNotEmpty) return fullName;
-    final first = row['user_first_name']?.toString().trim() ?? '';
-    final last = row['user_last_name']?.toString().trim() ?? '';
-    final fromParts = '$first $last'.trim();
-    if (fromParts.isNotEmpty) return fromParts;
-    return 'Élève ${row['id']}';
-  }
-
-  String _studentClassName(Map<String, dynamic> row) {
-    final className =
-        row['classroom_name']?.toString() ?? row['classroom']?.toString() ?? '';
-    if (className.trim().isEmpty) return 'Non attribuée';
-    return className;
-  }
-
-  String _yearLabel(Map<String, dynamic> row) {
-    final name = row['name']?.toString();
-    if (name != null && name.isNotEmpty) return name;
-    final start = row['start_date']?.toString() ?? '';
-    final end = row['end_date']?.toString() ?? '';
-    return '$start - $end';
   }
 
   String _paymentLabel(Map<String, dynamic> row) {

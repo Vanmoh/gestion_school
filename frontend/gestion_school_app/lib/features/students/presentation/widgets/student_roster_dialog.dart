@@ -83,10 +83,22 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
     }
   }
 
+  /// Restreint la liste aux élèves dont l'inscription retient les documents.
+  ///
+  /// C'est la liste que le secrétariat sort pour relancer les familles: sans
+  /// elle, il faudrait ouvrir les fiches une par une pour savoir qui n'est
+  /// pas à jour.
+  bool _inscriptionEnAttenteSeulement = false;
+
   List<Student> get _visibles {
-    if (_query.trim().isEmpty) return _students;
+    final base = _inscriptionEnAttenteSeulement
+        ? _students
+              .where((eleve) => eleve.inscriptionEnAttente)
+              .toList(growable: false)
+        : _students;
+    if (_query.trim().isEmpty) return base;
     final needle = _query.trim().toLowerCase();
-    return _students
+    return base
         .where(
           (student) =>
               student.fullName.toLowerCase().contains(needle) ||
@@ -327,6 +339,17 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
                     _load();
                   },
           ),
+        ),
+        FilterChip(
+          key: const Key('filtre-inscription-en-attente'),
+          selected: _inscriptionEnAttenteSeulement,
+          label: const Text('Inscription en attente'),
+          avatar: const Icon(Icons.how_to_reg_outlined, size: 18),
+          onSelected: _loading
+              ? null
+              : (valeur) => setState(
+                  () => _inscriptionEnAttenteSeulement = valeur,
+                ),
         ),
         SizedBox(
           width: 180,

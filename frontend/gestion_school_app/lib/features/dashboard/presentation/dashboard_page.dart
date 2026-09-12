@@ -2349,9 +2349,10 @@ class _PerformanceStoryPanelState extends State<_PerformanceStoryPanel> {
         : ('Signal fragile', const Color(0xFFFF7A68));
 
     return _PanelShell(
-      title: 'Radar strategique & benchmark',
+      title: 'Quatre taux face à leur objectif',
       subtitle:
-          'Lecture rapide du niveau reel vs objectif sur 4 axes decisifs.',
+          'Recouvrement, présence, remplissage et croissance, comparés à la '
+          'cible que l\'école s\'est donnée.',
       trailing: _StoryPeriodSwitch(
         period: _period,
         onChanged: (next) => setState(() => _period = next),
@@ -2743,9 +2744,10 @@ class _OperationsPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _PanelShell(
-      title: 'Santé opérationnelle',
+      title: 'Marge et absences, en un score',
       subtitle:
-          'Mesure combinée de la rentabilité et de la discipline scolaire.',
+          'Ce que l\'école gagne, et ce que l\'absentéisme lui coûte, réunis '
+          'en un seul indicateur.',
       child: Column(
         children: [
           Row(
@@ -2901,8 +2903,10 @@ class _InsightsPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _PanelShell(
-      title: 'Insights & priorités',
-      subtitle: 'Suggestions automatiques pour le pilotage quotidien.',
+      title: 'Ce qui demande une décision',
+      subtitle:
+          'Tiré des chiffres du mois: ce qui sort de l\'ordinaire et mérite '
+          'un geste cette semaine.',
       child: Column(
         children: [
           for (var i = 0; i < insights.length; i++) ...[

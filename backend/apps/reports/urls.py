@@ -17,6 +17,7 @@ from .views import (
     PaymentReceiptPdfView,
     ReportsContextView,
     StaffRosterPdfView,
+    CertificatFrequentationPdfView,
     StudentCardPdfView,
     StudentCardVerifyView,
 )
@@ -64,6 +65,14 @@ urlpatterns = [
     path("journal/payments/", PaymentJournalPageView.as_view(), name="journal-payments-page"),
     path("journal/expenses/", ExpenseJournalPageView.as_view(), name="journal-expenses-page"),
     path("student-card/<int:student_id>/", StudentCardPdfView.as_view(), name="student-card-pdf"),
+    # Le certificat de frequentation, delivre a la demande d'une famille:
+    # dossier de bourse, demande de visa, abonnement de transport, ouverture
+    # de compte. Il etait redige a la main sur papier a en-tete.
+    path(
+        "certificat-frequentation/<int:student_id>/",
+        CertificatFrequentationPdfView.as_view(),
+        name="certificat-frequentation-pdf",
+    ),
     path("student-cards/class/<int:classroom_id>/", ClassStudentCardsPdfView.as_view(), name="class-student-cards-pdf"),
     # Cible du QR imprime sur la carte. Publique: celui qui controle au
     # portail n'a pas de compte. La signature tient lieu de cle d'acces.

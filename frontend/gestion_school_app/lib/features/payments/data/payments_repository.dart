@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 
 import '../../../core/constants/api_constants.dart';
 import '../../../core/models/paginated_result.dart';
+import '../domain/finance_totals.dart';
 import '../domain/payment.dart';
 import '../domain/student_fee.dart';
 
@@ -182,6 +183,47 @@ class PaymentsRepository {
         'reference': reference,
       },
     );
+  }
+
+  /// Les totaux de la période, comptés par la base.
+  ///
+  /// `periode` vaut « jour », « semaine », « mois » ou « tout ». Le serveur
+  /// agrège en SQL: l'écran n'a plus à additionner une page de journal en
+  /// croyant décrire un mois.
+  Future<TotauxFinance> totauxDeLaPeriode(String periode) async {
+    final response = await dio.get(
+      '/payments/totaux/',
+      queryParameters: {'periode': periode},
+    );
+    final data = response.data;
+    return TotauxFinance.fromJson(
+      data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{},
+    );
+  }
+
+  /// Encaisse plusieurs frais d'un seul versement.
+  ///
+  /// Le client creait les paiements un par un: un refus au milieu laissait
+  /// derriere lui ceux qui etaient passes, sans dire lesquels. Le serveur
+  /// les enregistre desormais ensemble ou pas du tout, et rend le compte
+  /// de ce qui est entre.
+  Future<Map<String, dynamic>> encaisserEnLot({
+    required List<int> feeIds,
+    required String method,
+    String reference = '',
+    double? montantParFrais,
+  }) async {
+    final response = await dio.post(
+      '/payments/encaisser-en-lot/',
+      data: {
+        'frais': feeIds,
+        'method': method,
+        'reference': reference,
+        'montant_par_frais': ?montantParFrais,
+      },
+    );
+    final data = response.data;
+    return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
   }
 
   Future<void> updatePayment({

@@ -436,6 +436,15 @@ AFFINEMENTS = {
         "module": "academics",
         "roles": frozenset({SUPER_ADMIN}),
     },
+    # Dispenser un eleve du paiement de son inscription, c'est renoncer a
+    # une recette. La caisse enregistre les versements, elle ne decide pas
+    # des remises: boursier, orphelin, enfant du personnel, fratrie -- cela
+    # se tranche a la direction, et la trace garde qui l'a tranche.
+    "dispense_inscription": {
+        "label": "Dispenser du paiement d'inscription",
+        "module": "students",
+        "roles": frozenset({SUPER_ADMIN, DIRECTOR}),
+    },
     "saisie_conduite": {
         "label": "Noter la conduite",
         "module": "discipline",

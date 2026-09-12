@@ -4,6 +4,7 @@ import '../../../core/models/paginated_result.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/providers/provider_cache.dart';
 import '../data/payments_repository.dart';
+import '../domain/finance_totals.dart';
 import '../domain/payment.dart';
 import '../domain/student_fee.dart';
 
@@ -60,6 +61,17 @@ final paymentsPaginatedProvider = FutureProvider.autoDispose
           );
     });
 
+/// Les totaux de la période, comptés par la base.
+///
+/// Séparé du journal: le journal se pagine et se filtre, les totaux non. Les
+/// mélanger avait donné un « montant encaissé » qui ne décrivait que la page
+/// affichée.
+final financeTotalsProvider = FutureProvider.autoDispose
+    .family<TotauxFinance, String>((ref, periode) async {
+      ref.cacheFor(const Duration(minutes: 3));
+      return ref.read(paymentsRepositoryProvider).totauxDeLaPeriode(periode);
+    });
+
 final feesProvider = FutureProvider.autoDispose<List<StudentFeeItem>>((
   ref,
 ) async {
@@ -98,6 +110,7 @@ class PaymentMutationController extends StateNotifier<AsyncValue<void>> {
     if (!state.hasError) {
       ref.invalidate(paymentsProvider);
       ref.invalidate(paymentsPaginatedProvider);
+      ref.invalidate(financeTotalsProvider);
       ref.invalidate(feesProvider);
     }
   }
@@ -125,6 +138,7 @@ class PaymentMutationController extends StateNotifier<AsyncValue<void>> {
     if (!state.hasError) {
       ref.invalidate(paymentsProvider);
       ref.invalidate(paymentsPaginatedProvider);
+      ref.invalidate(financeTotalsProvider);
       ref.invalidate(feesProvider);
     }
   }
@@ -138,6 +152,7 @@ class PaymentMutationController extends StateNotifier<AsyncValue<void>> {
     if (!state.hasError) {
       ref.invalidate(paymentsProvider);
       ref.invalidate(paymentsPaginatedProvider);
+      ref.invalidate(financeTotalsProvider);
       ref.invalidate(feesProvider);
     }
   }

@@ -494,13 +494,35 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
               controller: _searchController,
               textInputAction: TextInputAction.search,
               onSubmitted: (_) => _loadData(),
+              // La recherche part au serveur: la fleche reste, c'est elle
+              // qui la declenche. L'effacement s'ajoute a cote plutot qu'a
+              // sa place -- le champ ne se vidait que caractere par
+              // caractere, et revenir a la liste entiere demandait de tout
+              // supprimer a la main.
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 labelText: 'Rechercher (élève, matricule, motif, sanction)',
                 prefixIcon: const Icon(Icons.search),
-                suffixIcon: IconButton(
-                  tooltip: 'Rechercher',
-                  icon: const Icon(Icons.arrow_forward),
-                  onPressed: _loadData,
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_searchController.text.isNotEmpty)
+                      IconButton(
+                        key: const Key('incidents-search-effacer'),
+                        tooltip: 'Effacer',
+                        icon: const Icon(Icons.close),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {});
+                          _loadData();
+                        },
+                      ),
+                    IconButton(
+                      tooltip: 'Rechercher',
+                      icon: const Icon(Icons.arrow_forward),
+                      onPressed: _loadData,
+                    ),
+                  ],
                 ),
               ),
             ),

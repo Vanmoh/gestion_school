@@ -18,17 +18,6 @@ import 'personnalisation_controller.dart';
 class PersonnalisationPage extends ConsumerStatefulWidget {
   const PersonnalisationPage({super.key});
 
-  /// Ouvre l'écran en fenêtre. Rendue depuis le bouton de la barre du haut.
-  static Future<void> ouvrir(BuildContext context) {
-    return showDialog<void>(
-      context: context,
-      builder: (_) => const Dialog(
-        insetPadding: EdgeInsets.all(16),
-        child: SizedBox(width: 760, child: PersonnalisationPage()),
-      ),
-    );
-  }
-
   @override
   ConsumerState<PersonnalisationPage> createState() =>
       _PersonnalisationPageState();

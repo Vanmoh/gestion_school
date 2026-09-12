@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+export '../../../../core/format/montant.dart';
+
 /// Ce que la page des finances et son dialogue d'encaissement partagent.
 ///
 /// Les deux écrans avaient chacun leur pastille d'indicateur et leur mise en
@@ -61,20 +63,6 @@ class IndicateurFinance extends StatelessWidget {
   }
 }
 
-/// « 125 000 FCFA ». Les milliers séparés par une espace, comme on les écrit
-/// ici, et la devise collée au nombre.
-String montantEnFrancs(num valeur) {
-  final entier = valeur.round();
-  final chiffres = entier.abs().toString();
-  final groupes = chiffres.replaceAllMapped(
-    RegExp(r'(\d)(?=(\d{3})+$)'),
-    (correspondance) => '${correspondance[1]} ',
-  );
-  // Le signe se pose après le groupement: le glisser dans le compte des
-  // chiffres décalerait les espaces d'un rang.
-  final signe = entier < 0 ? '-' : '';
-  return '$signe$groupes FCFA';
-}
 
 /// « 31/08/2026 ». Pour une échéance ou une date de dépense, où l'heure
 /// n'apprend rien.

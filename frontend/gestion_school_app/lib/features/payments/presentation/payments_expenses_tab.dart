@@ -17,7 +17,10 @@ extension _OngletDesDepenses on _PaymentsPageState {
     required int expensePendingLevelTwoCount,
     required int expenseValidatedCount,
     required double totalExpensesAmount,
-    required double periodValidatedExpensesAmount,
+    /// Comptées par la base, sur toute la période. Nul tant que le serveur
+    /// n'a pas répondu: additionner les lignes chargées ici s'arrêterait aux
+    /// cinq cents que la requête ramène.
+    required double? periodValidatedExpensesAmount,
   }) {
     return <Widget>[
       const SizedBox(height: 12),
@@ -118,14 +121,16 @@ extension _OngletDesDepenses on _PaymentsPageState {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _metricChip('Dépenses', '${periodExpenses.length}'),
-                _metricChip('Brouillons', '$expenseDraftCount'),
-                _metricChip('En attente N2', '$expensePendingLevelTwoCount'),
-                _metricChip('Validées', '$expenseValidatedCount'),
-                _metricChip('Montant total', _formatMoney(totalExpensesAmount)),
-                _metricChip(
-                  'Dépenses validees',
-                  _formatMoney(periodValidatedExpensesAmount),
+                Indicateur(libelle: 'Dépenses', valeur: '${periodExpenses.length}'),
+                Indicateur(libelle: 'Brouillons', valeur: '$expenseDraftCount'),
+                Indicateur(libelle: 'En attente N2', valeur: '$expensePendingLevelTwoCount'),
+                Indicateur(libelle: 'Validées', valeur: '$expenseValidatedCount'),
+                Indicateur(libelle: 'Montant total', valeur: _formatMoney(totalExpensesAmount)),
+                Indicateur(libelle: 
+                  'Dépenses validées', valeur:
+                  periodValidatedExpensesAmount == null
+                      ? '…'
+                      : _formatMoney(periodValidatedExpensesAmount),
                 ),
               ],
             ),

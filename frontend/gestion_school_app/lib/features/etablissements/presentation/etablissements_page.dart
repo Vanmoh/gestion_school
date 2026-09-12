@@ -52,6 +52,11 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
   /// classement compris. Deux par defaut, comme la valeur qui etait figee
   /// dans le code; zero pour la noter sans qu'elle pese.
   final _conduiteCoefficientController = TextEditingController(text: '2');
+  // L'inscription conditionnee au paiement. Decochee au depart: une ecole
+  // qui ne demande rien ne doit pas voir ses bulletins se fermer le jour de
+  // la mise a jour.
+  bool _inscriptionExigePaiement = false;
+  final _inscriptionMinimumController = TextEditingController(text: '0');
 
   Uint8List? _logoBytes;
   String? _logoFileName;
@@ -89,6 +94,7 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     _stampScaleController.dispose();
     _libraryPenaltyController.dispose();
     _conduiteCoefficientController.dispose();
+    _inscriptionMinimumController.dispose();
     super.dispose();
   }
 
@@ -267,6 +273,8 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     _stampScaleController.text = '100';
     _libraryPenaltyController.text = '0';
     _conduiteCoefficientController.text = '2';
+    _inscriptionExigePaiement = false;
+    _inscriptionMinimumController.text = '0';
     _principalSignaturePosition = 'right';
     _stampPosition = 'right';
     _logoBytes = null;
@@ -303,6 +311,10 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
           (row['library_penalty_per_day'] ?? 0).toString();
         _conduiteCoefficientController.text =
           (row['conduite_coefficient'] ?? 2).toString();
+        _inscriptionExigePaiement =
+          row['inscription_exige_paiement'] as bool? ?? false;
+        _inscriptionMinimumController.text =
+          (row['inscription_montant_minimum'] ?? 0).toString();
         _principalSignaturePosition =
           (row['principal_signature_position'] ?? 'right').toString();
         _stampPosition = (row['stamp_position'] ?? 'right').toString();
@@ -350,6 +362,9 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     final conduiteCoefficient = double.tryParse(
       _conduiteCoefficientController.text.trim().replaceAll(',', '.'),
     );
+    final inscriptionMinimum = double.tryParse(
+      _inscriptionMinimumController.text.trim().replaceAll(',', '.'),
+    );
 
     if (name.isEmpty || address.isEmpty || phone.isEmpty || email.isEmpty) {
       _showMessage(
@@ -368,6 +383,10 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
     }
     if (libraryPenalty == null || libraryPenalty < 0) {
       _showMessage('Penalite bibliotheque invalide (0 ou plus).');
+      return;
+    }
+    if (inscriptionMinimum == null || inscriptionMinimum < 0) {
+      _showMessage('Montant minimum d\'inscription invalide (0 ou plus).');
       return;
     }
     if (conduiteCoefficient == null ||
@@ -400,6 +419,8 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
         'stamp_scale': stampScale,
         'library_penalty_per_day': libraryPenalty,
         'conduite_coefficient': conduiteCoefficient,
+        'inscription_exige_paiement': _inscriptionExigePaiement,
+        'inscription_montant_minimum': inscriptionMinimum,
         if (_logoBytes != null)
           'logo': MultipartFile.fromBytes(
             _logoBytes!,
@@ -586,6 +607,14 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
           // signature, au milieu d'une trentaine de champs de mise en page. Un
           // réglage qui change la moyenne de tous les bulletins de l'école ne
           // peut pas avoir le même poids visuel qu'une taille d'image.
+          _CarteDeLInscription(
+            exigePaiement: _inscriptionExigePaiement,
+            montantMinimum: _inscriptionMinimumController,
+            enregistrement: _saving,
+            onChange: (valeur) =>
+                setState(() => _inscriptionExigePaiement = valeur),
+          ),
+          const SizedBox(height: 12),
           _CarteDesReglesDeCalcul(
             coefficientDeConduite: _conduiteCoefficientController,
             penaliteDeRetard: _libraryPenaltyController,
@@ -914,6 +943,93 @@ class _EtablissementsPageState extends ConsumerState<EtablissementsPage> {
 /// dans le classement de chaque classe: le modifier en cours d'année déplace
 /// tous les rangs. La pénalité de retard, elle, ne touche que les emprunts.
 /// Les deux méritaient mieux qu'une case au milieu des échelles d'images.
+/// L'inscription conditionnée au règlement des frais d'inscription.
+///
+/// La règle ne bloque pas la création de l'élève: un paiement s'accroche à un
+/// frais, et un frais à un élève — sans fiche, il n'existe aucun endroit où
+/// enregistrer le versement, et la caisse repasserait au carnet papier. Ce
+/// sont les documents officiels qui attendent.
+///
+/// Séparée des règles de calcul: celles-ci déplacent des moyennes, celle-ci
+/// retient des documents. Les mêler ferait croire à un réglage d'impression.
+class _CarteDeLInscription extends StatelessWidget {
+  final bool exigePaiement;
+  final TextEditingController montantMinimum;
+  final bool enregistrement;
+  final ValueChanged<bool> onChange;
+
+  const _CarteDeLInscription({
+    required this.exigePaiement,
+    required this.montantMinimum,
+    required this.enregistrement,
+    required this.onChange,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.how_to_reg_outlined,
+                  size: 18,
+                  color: scheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Inscription',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'L\'élève est toujours créé et se note normalement. Seuls le '
+              'bulletin et la carte scolaire attendent le règlement.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              key: const Key('inscription-exige-paiement'),
+              value: exigePaiement,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Exiger le paiement de l\'inscription'),
+              subtitle: const Text(
+                'La direction peut dispenser un élève, avec motif.',
+              ),
+              onChanged: enregistrement ? null : onChange,
+            ),
+            SizedBox(
+              width: 280,
+              child: TextField(
+                controller: montantMinimum,
+                enabled: !enregistrement && exigePaiement,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Acompte suffisant (FCFA)',
+                  helperText:
+                      'Montant à partir duquel l\'inscription est validée.\n'
+                      '0 = le frais d\'inscription doit être soldé.',
+                  helperMaxLines: 2,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _CarteDesReglesDeCalcul extends StatelessWidget {
   final TextEditingController coefficientDeConduite;
   final TextEditingController penaliteDeRetard;
