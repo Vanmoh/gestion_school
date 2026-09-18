@@ -843,23 +843,15 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   Future<void> _deleteUser(UserAccount user) async {
     final controleur = ref.read(userMutationProvider.notifier);
 
+    // L'inventaire d'abord, et il ne supprime plus rien: il s'obtenait en
+    // lançant la suppression et en lisant le refus, si bien qu'un compte
+    // sans rien d'attaché partait à l'instant où l'écran cherchait à savoir
+    // ce qu'il emportait — sans qu'aucune question ait été posée.
     Map<String, int> lie;
     try {
-      lie = await controleur.donneesLiees(user.id) ?? const {};
+      lie = await controleur.donneesLiees(user.id);
     } catch (erreur) {
       _showMessage('Erreur suppression utilisateur: ${_errorText(erreur)}');
-      return;
-    }
-
-    // L'inventaire est vide et le serveur a deja supprime le compte: rien de
-    // plus a demander.
-    if (lie.isEmpty) {
-      ref.invalidate(usersProvider);
-      ref.invalidate(usersPaginatedProvider);
-      if (_selectedUserId == user.id) {
-        setState(() => _selectedUserId = null);
-      }
-      _showMessage('Compte supprimé.', isSuccess: true);
       return;
     }
 

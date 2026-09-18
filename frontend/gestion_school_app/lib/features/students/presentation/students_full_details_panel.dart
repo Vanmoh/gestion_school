@@ -341,8 +341,12 @@ extension _PanneauDossierComplet on _StudentsPageState {
                                   },
                                 );
                               },
-                        icon: const Icon(Icons.credit_card_outlined),
-                        label: const Text('Carte élève'),
+                        // « Documents » et non « Carte élève »: la feuille
+                        // porte aussi le certificat de fréquentation, et
+                        // personne ne cherche une attestation de scolarité
+                        // derrière un bouton qui annonce une carte.
+                        icon: const Icon(Icons.folder_open_outlined),
+                        label: const Text('Documents'),
                       ),
                     ],
                   ),

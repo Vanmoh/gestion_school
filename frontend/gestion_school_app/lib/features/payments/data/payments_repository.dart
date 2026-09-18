@@ -185,6 +185,24 @@ class PaymentsRepository {
     );
   }
 
+  /// Le bulletin de salaire d'un mois, en PDF.
+  ///
+  /// La paie se calculait, se validait à deux niveaux et se payait, sans
+  /// qu'aucune pièce n'en sorte: l'enseignant n'avait rien à présenter à une
+  /// banque, et rien pour vérifier le compte de ses heures.
+  Future<Uint8List> bulletinDeSalairePdf(int payrollId) async {
+    final response = await dio.get<List<int>>(
+      '/reports/bulletin-salaire/$payrollId/',
+      queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
+      options: Options(responseType: ResponseType.bytes),
+    );
+    final bytes = response.data;
+    if (bytes == null || bytes.isEmpty) {
+      throw Exception('Bulletin de salaire vide');
+    }
+    return Uint8List.fromList(bytes);
+  }
+
   /// Les totaux de la période, comptés par la base.
   ///
   /// `periode` vaut « jour », « semaine », « mois » ou « tout ». Le serveur
