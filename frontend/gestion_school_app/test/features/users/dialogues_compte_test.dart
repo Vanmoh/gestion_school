@@ -151,7 +151,23 @@ void main() {
 
       expect(find.textContaining('aucune donnée liée'), findsOneWidget);
       expect(find.text('Supprimer'), findsOneWidget);
-      expect(find.byKey(const Key('desactiver-plutot')), findsNothing);
+    });
+
+    testWidgets('un compte nu se supprime aussi definitivement', (
+      tester,
+    ) async {
+      // Ce dialogue ne s'affichait pas du tout dans ce cas: l'inventaire
+      // s'obtenait en lançant la suppression, et un compte sans rien
+      // d'attaché partait au premier clic, sans question.
+      await _ouvrir(
+        tester,
+        const DialogueSuppression(compte: _compte, donneesLiees: {}),
+      );
+
+      expect(find.textContaining('définitive'), findsOneWidget);
+      // Désactiver vaut pour tout départ, pas seulement pour un compte
+      // chargé de données.
+      expect(find.byKey(const Key('desactiver-plutot')), findsOneWidget);
     });
 
     testWidgets('l_inventaire de ce qui part est detaille', (tester) async {

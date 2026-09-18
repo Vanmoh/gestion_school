@@ -1465,6 +1465,34 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
 
   /// Liste imprimable du personnel, dans l'apercu deja utilise cote eleves.
   ///
+  /// Le certificat de travail d'un enseignant, à la demande.
+  ///
+  /// Le pendant du certificat de fréquentation d'un élève, de l'autre côté du
+  /// bureau: une banque, un bailleur ou une administration demande la preuve
+  /// qu'une personne travaille bien ici. Il se rédigeait à la main sur papier
+  /// à en-tête.
+  Future<void> _ouvrirCertificatDeTravail(int teacherId, String nom) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => RosterPdfPreviewDialog(
+        titre: 'Certificat de travail — $nom',
+        nomFichier: 'certificat_travail.pdf',
+        charger: () async {
+          final response = await ref.read(dioProvider).get<List<int>>(
+            '/reports/certificat-travail/$teacherId/',
+            queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
+            options: Options(responseType: ResponseType.bytes),
+          );
+          final bytes = response.data;
+          if (bytes == null || bytes.isEmpty) {
+            throw Exception('Certificat de travail vide');
+          }
+          return Uint8List.fromList(bytes);
+        },
+      ),
+    );
+  }
+
   /// Le PDF est monte par le serveur, comme les bulletins et la liste
   /// d'appel: c'est lui qui detient le logo, l'année scolaire et l'effectif.
   Future<void> _openStaffRoster() async {
@@ -1813,6 +1841,29 @@ class _TeachersPageState extends ConsumerState<TeachersPage> {
           Icons.list_alt_outlined,
           'Affectations',
           _openAssignmentManagementDialog,
+        ),
+        // Une pièce que l'enseignant réclame pour un dossier déposé
+        // ailleurs. Consulter sa propre fiche suffit à l'obtenir: elle
+        // n'écrit rien, et la refuser en lecture seule obligerait à passer
+        // par la direction pour un papier qui le concerne.
+        Tooltip(
+          message: 'Certificat de travail',
+          child: FilledButton.tonalIcon(
+            key: const Key('certificat-travail'),
+            onPressed: () => _ouvrirCertificatDeTravail(
+              _asInt(profile['id']),
+              (_findUserById(_selectedTeacherUserId ?? 0)?['full_name'] ?? '')
+                      .toString()
+                      .trim()
+                      .isEmpty
+                  ? 'Enseignant'
+                  : _findUserById(
+                      _selectedTeacherUserId ?? 0,
+                    )!['full_name'].toString().trim(),
+            ),
+            icon: const Icon(Icons.verified_outlined, size: 18),
+            label: const Text('Certificat'),
+          ),
         ),
       ],
     ];

@@ -184,7 +184,7 @@ class UserMutationController extends StateNotifier<AsyncValue<void>> {
   }
 
   /// Ce que la suppression emporterait, ou null si elle ne casse rien.
-  Future<Map<String, int>?> donneesLiees(int userId) {
+  Future<Map<String, int>> donneesLiees(int userId) {
     return ref.read(usersRepositoryProvider).donneesLiees(userId);
   }
 

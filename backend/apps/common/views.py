@@ -874,7 +874,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
                 self._set_restore_progress(backup, progress=62, phase="Chargement des donnees")
                 with connection.constraint_checks_disabled():
-                    call_command("loaddata", str(data_json), verbosity=0)
+                    self._charger_les_donnees(backup, payload)
                 connection.check_constraints()
                 self._set_restore_progress(backup, progress=82, phase="Donnees restaurees")
 
@@ -907,6 +907,45 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 "updated_at",
             ]
         )
+
+    # La tranche de la barre occupee par le chargement des donnees.
+    _PART_CHARGEMENT = (62, 82)
+
+    def _charger_les_donnees(self, backup, payload) -> None:
+        """Ecrit les lignes une a une, en avancant la barre au fil de l'eau.
+
+        Tout partait en un seul `loaddata`. Sur une base reelle, cela occupe
+        plusieurs minutes pendant lesquelles l'ecran affiche 62 % sans
+        bouger: la restauration parait figee alors qu'elle travaille, et
+        personne ne sait si elle avance ou si elle est morte.
+
+        Deserialiser ici plutot que d'appeler `loaddata` par morceaux: la
+        commande verifie les cles etrangeres a la fin de chacun de ses
+        appels, et un decoupage la ferait echouer des que la table chargee
+        en premier pointe vers une table qui vient apres. On fait ce que
+        `loaddata` fait -- desactiver les contraintes, ecrire, verifier une
+        seule fois a la fin -- mais en gardant la main sur l'avancement.
+        """
+        if not isinstance(payload, list) or not payload:
+            return
+
+        debut, fin = self._PART_CHARGEMENT
+        total = len(payload)
+        # Un signal toutes les 200 lignes au plus: ecrire l'avancement a
+        # chaque objet couterait plus de requetes que la restauration.
+        pas = max(1, total // 60)
+
+        texte = json.dumps(payload, ensure_ascii=False)
+        for rang, objet in enumerate(serializers.deserialize("json", texte), start=1):
+            objet.save()
+            if rang % pas and rang != total:
+                continue
+            avancement = debut + int((fin - debut) * (rang / total))
+            self._set_restore_progress(
+                backup,
+                progress=min(fin, avancement),
+                phase=f"Chargement des donnees ({rang}/{total})",
+            )
 
     def _resolve_unique_field_conflicts(self, payload):
         if not isinstance(payload, list):
@@ -1372,29 +1411,99 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         env = os.environ.copy()
         env.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
+        # La sortie du processus partait dans le vide. Quand il mourait --
+        # memoire epuisee sur une grosse base, erreur d'import, conteneur
+        # recycle -- la ligne restait « en cours » a son dernier pourcentage,
+        # indefiniment, et rien ne disait pourquoi. Elle est desormais
+        # gardee: `_verifier_les_restaurations_bloquees` la recopie dans le
+        # journal de l'archive.
+        journal = self._journal_de_restauration(backup_id)
+        try:
+            sortie = journal.open("wb")
+        except OSError:
+            sortie = subprocess.DEVNULL
+
         try:
             subprocess.Popen(
                 command,
                 cwd=str(settings.BASE_DIR),
                 env=env,
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=sortie,
+                stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
         except Exception as exc:
             self._mark_restore_failed(backup_id, exc)
             raise
 
+    # Au-dela de ce silence, une restauration est tenue pour morte.
+    #
+    # Le processus ecrit son avancement au fil de l'eau -- au plus quelques
+    # secondes entre deux signaux, meme sur une grosse base. Un quart d'heure
+    # sans rien n'est plus de la lenteur: le processus a ete tue, et personne
+    # ne l'apprendra jamais si l'ecran continue d'afficher sa barre.
+    SILENCE_AVANT_ABANDON = timedelta(minutes=15)
+
+    def _journal_de_restauration(self, backup_id: int) -> Path:
+        dossier = Path(settings.BASE_DIR) / "backups" / "journaux"
+        dossier.mkdir(parents=True, exist_ok=True)
+        return dossier / f"restauration_{backup_id}.log"
+
+    def _verifier_les_restaurations_bloquees(self, queryset):
+        """Marque en echec ce qui ne repond plus, et dit pourquoi.
+
+        Une restauration qui meurt laissait sa ligne « en cours » a son
+        dernier pourcentage, indefiniment. L'ecran affichait une barre qui
+        n'avancait plus et personne ne pouvait ni relancer ni comprendre.
+        """
+        limite = timezone.now() - self.SILENCE_AVANT_ABANDON
+        bloquees = queryset.filter(
+            status=BackupArchive.Status.RUNNING,
+            restore_phase__gt="",
+            updated_at__lt=limite,
+        )
+
+        for archive in bloquees:
+            journal = self._journal_de_restauration(archive.id)
+            trace = ""
+            try:
+                trace = journal.read_text(encoding="utf-8", errors="replace")[-4000:]
+            except OSError:
+                trace = ""
+
+            BackupArchive.objects.filter(pk=archive.id).update(
+                status=BackupArchive.Status.FAILED,
+                restore_phase="Interrompue",
+                restore_log=(
+                    "La restauration ne repond plus depuis "
+                    f"{int(self.SILENCE_AVANT_ABANDON.total_seconds() // 60)} minutes: "
+                    "le traitement a ete interrompu. Relancez-la, et si "
+                    "l'interruption se repete, la base est probablement trop "
+                    "volumineuse pour la memoire du serveur.\n\n"
+                    + trace
+                ).strip(),
+                updated_at=timezone.now(),
+            )
+
     def get_queryset(self):
         queryset = super().get_queryset()
         if self._is_super_admin():
-            return queryset
+            portee = queryset
+        else:
+            user_etablissement = getattr(self.request.user, "etablissement", None)
+            if user_etablissement is None:
+                return queryset.none()
+            portee = queryset.filter(
+                scope=BackupArchive.Scope.ETABLISSEMENT,
+                etablissement=user_etablissement,
+            )
 
-        user_etablissement = getattr(self.request.user, "etablissement", None)
-        if user_etablissement is None:
-            return queryset.none()
-        return queryset.filter(scope=BackupArchive.Scope.ETABLISSEMENT, etablissement=user_etablissement)
+        # L'ecran interroge cette liste toutes les quatre secondes pendant
+        # une restauration: c'est donc ici qu'on remarque qu'elle ne repond
+        # plus, sans tache planifiee ni minuteur.
+        self._verifier_les_restaurations_bloquees(portee)
+        return portee
 
     def create(self, request, *args, **kwargs):
         scope = str(request.data.get("scope") or BackupArchive.Scope.ETABLISSEMENT).strip()

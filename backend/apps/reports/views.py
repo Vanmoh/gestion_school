@@ -44,6 +44,7 @@ from apps.school.models import (
     Subject,
     Teacher,
     TeacherAssignment,
+    TeacherPayroll,
 )
 from django.utils.html import escape
 
@@ -4183,7 +4184,12 @@ def _render_certificat_page(pdf: FPDF, payload: dict) -> None:
     pdf.set_xy(marge, y)
     pdf.set_text_color(20, 70, 136)
     pdf.set_font("Helvetica", "B", 20)
-    pdf.cell(largeur, 10.0, _pdf_text("CERTIFICAT DE FRÉQUENTATION"), align="C")
+    pdf.cell(
+        largeur,
+        10.0,
+        _pdf_text(payload.get("titre") or "CERTIFICAT DE FRÉQUENTATION"),
+        align="C",
+    )
 
     y += 12.0
     pdf.set_xy(marge, y)
@@ -4359,6 +4365,7 @@ def _build_certificat_payload(student: Student, *, verify_base_url: str = "") ->
         / 100.0,
         "qr_path": _carte_qr_image_path(qr_url) if qr_url else None,
         "matricule": matricule,
+        "titre": "CERTIFICAT DE FRÉQUENTATION",
     }
 
 
@@ -4400,6 +4407,488 @@ class CertificatFrequentationPdfView(APIView):
 
         return pdf_output_response(
             pdf, f"certificat_frequentation_{student.matricule or student.id}.pdf"
+        )
+
+
+# --- Bulletin de salaire ----------------------------------------------------
+
+
+_MOIS_FR = (
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+)
+
+
+def _mois_en_toutes_lettres(valeur) -> str:
+    """« septembre 2025 », a partir du premier jour du mois."""
+    if valeur is None:
+        return "-"
+    return f"{_MOIS_FR[valeur.month - 1]} {valeur.year}"
+
+
+def _build_bulletin_de_paie_payload(payroll) -> dict:
+    """Ce que le bulletin de salaire affirme, rassemble avant mise en page."""
+    enseignant = payroll.teacher
+    utilisateur = getattr(enseignant, "user", None)
+    nom = ""
+    if utilisateur is not None:
+        nom = (utilisateur.get_full_name() or "").strip() or utilisateur.username
+
+    etablissement = getattr(enseignant, "etablissement", None)
+    school = (
+        _school_identity_for_student(enseignant)
+        if etablissement is not None
+        else _school_identity()
+    )
+    logo_path = (
+        _etablissement_media_field_path(etablissement, "logo") or _school_logo_path()
+    )
+
+    signature_source = (
+        _etablissement_media_field_path(etablissement, "principal_signature_image")
+        or _school_signature_asset_path()
+    )
+    stamp_source = (
+        _etablissement_media_field_path(etablissement, "stamp_image")
+        or _school_stamp_asset_path()
+    )
+
+    # Les heures telles que la paie les a retenues. Elles sont le calcul, et
+    # le bulletin doit les montrer: un enseignant qui conteste son montant
+    # conteste presque toujours un nombre d'heures, pas une multiplication.
+    lignes = [
+        ("Heures attribuées", f"{payroll.hours_attributed:.2f} h"),
+        ("Heures assurées", f"{payroll.hours_worked:.2f} h"),
+        ("Heures non assurées", f"{payroll.hours_missed:.2f} h"),
+        ("Heures hors emploi du temps", f"{payroll.hours_off_schedule:.2f} h"),
+        ("Taux horaire", _format_fcfa(payroll.hourly_rate)),
+    ]
+
+    etape = payroll.validation_stage
+    if etape == "level_two":
+        mention = "Validé et arrêté"
+    elif etape == "level_one":
+        mention = "Validé au premier niveau, en attente de contreseing"
+    else:
+        mention = "Brouillon : non validé"
+
+    return {
+        "logo_path": logo_path,
+        "school_name": school["name"],
+        "school_level": school["level"],
+        "school_phone": school["phone"],
+        "numero": f"BS-{payroll.month.strftime('%Y%m')}-{payroll.id:05d}",
+        "periode": _mois_en_toutes_lettres(payroll.month),
+        "nom": nom or "-",
+        "matricule": enseignant.employee_code or "-",
+        "embauche": (
+            enseignant.hire_date.strftime("%d/%m/%Y")
+            if enseignant.hire_date
+            else "-"
+        ),
+        "lignes": lignes,
+        "montant": _format_fcfa(payroll.amount),
+        "mention": mention,
+        "paye_le": payroll.paid_on.strftime("%d/%m/%Y") if payroll.paid_on else "",
+        "notes": (payroll.notes or "").strip(),
+        "signature_label": str(
+            getattr(etablissement, "principal_signature_label", "") or ""
+        ).strip()
+        or "Direction",
+        "signature_asset_path": _pdf_compatible_image_path(
+            signature_source, cache_prefix="paie_signature"
+        ),
+        "stamp_asset_path": _pdf_compatible_image_path(
+            stamp_source, cache_prefix="paie_stamp"
+        ),
+        "signature_scale": _safe_scale_percent(
+            getattr(etablissement, "principal_signature_scale", 100)
+        )
+        / 100.0,
+        "stamp_scale": _safe_scale_percent(
+            getattr(etablissement, "stamp_scale", 100)
+        )
+        / 100.0,
+    }
+
+
+def _render_bulletin_de_paie_page(pdf: FPDF, payload: dict) -> None:
+    """Le bulletin de salaire d'un mois, sur une page A4 portrait."""
+    marge = 16.0
+    largeur = pdf.w - (2 * marge)
+
+    pdf.set_draw_color(27, 93, 168)
+    pdf.set_line_width(1.4)
+    pdf.line(marge, 12.0, marge + largeur, 12.0)
+
+    y = 17.0
+    if payload["logo_path"]:
+        try:
+            pdf.image(payload["logo_path"], x=marge, y=y, w=18)
+        except Exception:
+            pass
+
+    entete_x = marge + (22 if payload["logo_path"] else 0)
+    entete_w = largeur - (22 if payload["logo_path"] else 0)
+
+    pdf.set_xy(entete_x, y)
+    pdf.set_text_color(20, 70, 136)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(entete_w, 7.0, _pdf_text(payload["school_name"].upper()), align="C")
+
+    if payload["school_level"]:
+        pdf.set_xy(entete_x, y + 7.0)
+        pdf.set_text_color(48, 52, 62)
+        pdf.set_font("Helvetica", size=9)
+        pdf.cell(entete_w, 4.5, _pdf_text(payload["school_level"]), align="C")
+
+    if payload["school_phone"]:
+        pdf.set_xy(entete_x, y + 11.5)
+        pdf.set_text_color(150, 52, 58)
+        pdf.set_font("Helvetica", "B", 8.5)
+        pdf.cell(entete_w, 4.0, _pdf_text(f"Tél : {payload['school_phone']}"), align="C")
+
+    y += 22.0
+    pdf.set_fill_color(27, 93, 168)
+    pdf.rect(marge, y, largeur, 9.0, style="F")
+    pdf.set_xy(marge, y + 0.6)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(largeur, 7.5, _pdf_text("BULLETIN DE SALAIRE"), align="C")
+
+    y += 11.0
+    pdf.set_xy(marge, y)
+    pdf.set_text_color(90, 98, 112)
+    pdf.set_font("Helvetica", size=9)
+    pdf.cell(largeur / 2, 5.0, _pdf_text(f"N° {payload['numero']}"), align="L")
+    pdf.set_xy(marge + largeur / 2, y)
+    pdf.cell(
+        largeur / 2,
+        5.0,
+        _pdf_text(f"Période : {payload['periode']}"),
+        align="R",
+    )
+
+    # L'identite du salarie: c'est ce qu'une banque ou un bailleur verifie
+    # avant le montant.
+    y += 8.0
+    pdf.set_fill_color(238, 243, 251)
+    pdf.set_draw_color(160, 175, 198)
+    pdf.set_line_width(0.2)
+    pdf.rect(marge, y, largeur, 20.0, style="DF")
+
+    pdf.set_text_color(34, 38, 48)
+    for rang, (libelle, valeur) in enumerate(
+        (
+            ("Salarié", payload["nom"]),
+            ("Matricule", payload["matricule"]),
+            ("Embauché le", payload["embauche"]),
+        )
+    ):
+        pdf.set_xy(marge + 3, y + 2.5 + (rang * 5.2))
+        pdf.set_font("Helvetica", "B", 9.5)
+        pdf.cell(32, 4.6, _pdf_text(f"{libelle} :"))
+        pdf.set_font("Helvetica", size=9.5)
+        pdf.cell(largeur - 38, 4.6, _pdf_text(valeur))
+
+    # Le detail des heures. C'est lui qui explique le montant: un enseignant
+    # qui conteste sa paie conteste un nombre d'heures, pas une
+    # multiplication.
+    y += 24.0
+    pdf.set_fill_color(27, 93, 168)
+    pdf.rect(marge, y, largeur, 7.0, style="F")
+    pdf.set_xy(marge + 3, y + 0.6)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(largeur * 0.62, 5.6, _pdf_text("DÉTAIL DU CALCUL"))
+    pdf.cell(largeur * 0.32, 5.6, _pdf_text("Valeur"), align="R")
+
+    y += 7.0
+    for rang, (libelle, valeur) in enumerate(payload["lignes"]):
+        if rang % 2 == 0:
+            pdf.set_fill_color(247, 249, 253)
+            pdf.rect(marge, y, largeur, 7.0, style="F")
+        pdf.set_xy(marge + 3, y + 0.8)
+        pdf.set_text_color(38, 42, 52)
+        pdf.set_font("Helvetica", size=10)
+        pdf.cell(largeur * 0.62, 5.4, _pdf_text(libelle))
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(largeur * 0.32, 5.4, _pdf_text(valeur), align="R")
+        y += 7.0
+
+    # Le net, seul et en grand: c'est le chiffre qu'on cherche.
+    y += 4.0
+    hauteur_net = 18.0
+    largeur_net = largeur * 0.52
+    x_net = marge + largeur - largeur_net
+    pdf.set_fill_color(232, 241, 252)
+    pdf.set_draw_color(27, 93, 168)
+    pdf.set_line_width(0.5)
+    pdf.rect(x_net, y, largeur_net, hauteur_net, style="DF")
+
+    pdf.set_xy(x_net, y + 2.2)
+    pdf.set_text_color(60, 72, 92)
+    pdf.set_font("Helvetica", "B", 9.5)
+    pdf.cell(largeur_net, 4.4, _pdf_text("NET À PAYER"), align="C")
+
+    pdf.set_xy(x_net, y + 8.0)
+    pdf.set_text_color(20, 70, 136)
+    pdf.set_font("Helvetica", "B", 17)
+    pdf.cell(largeur_net, 8.0, _pdf_text(payload["montant"]), align="C")
+
+    # L'etat de validation, dit sans detour: un bulletin de brouillon ne vaut
+    # pas engagement, et celui qui le recoit doit le savoir.
+    pdf.set_xy(marge, y + 3.0)
+    pdf.set_text_color(110, 118, 132)
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.multi_cell(largeur - largeur_net - 4, 5.0, _pdf_text(payload["mention"]))
+
+    if payload["paye_le"]:
+        pdf.set_xy(marge, y + 13.0)
+        pdf.set_text_color(45, 50, 60)
+        pdf.set_font("Helvetica", size=9)
+        pdf.cell(
+            largeur - largeur_net - 4,
+            5.0,
+            _pdf_text(f"Payé le {payload['paye_le']}"),
+        )
+
+    y += hauteur_net + 8.0
+    if payload["notes"]:
+        pdf.set_xy(marge, y)
+        pdf.set_text_color(70, 76, 88)
+        pdf.set_font("Helvetica", size=9)
+        pdf.multi_cell(largeur, 5.0, _pdf_text(f"Observations : {payload['notes']}"))
+        y = pdf.get_y() + 4.0
+
+    bloc_w = 62.0
+    bloc_x = marge + largeur - bloc_w
+    bloc_y = max(y + 6.0, pdf.h - 58.0)
+
+    pdf.set_xy(bloc_x, bloc_y)
+    pdf.set_text_color(40, 46, 58)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(bloc_w, 5.0, _pdf_text(payload["signature_label"]), align="C")
+
+    if payload["signature_asset_path"]:
+        try:
+            pdf.image(
+                payload["signature_asset_path"],
+                x=bloc_x + 6,
+                y=bloc_y + 6,
+                w=bloc_w - 12,
+                h=max(10.0, 20.0 * payload["signature_scale"]),
+            )
+        except Exception:
+            pass
+
+    if payload["stamp_asset_path"]:
+        try:
+            taille = max(14.0, 28.0 * payload["stamp_scale"])
+            pdf.image(
+                payload["stamp_asset_path"], x=marge, y=bloc_y, w=taille, h=taille
+            )
+        except Exception:
+            pass
+
+    pdf.set_xy(marge, pdf.h - 20.0)
+    pdf.set_text_color(130, 138, 150)
+    pdf.set_font("Helvetica", size=7.5)
+    pdf.cell(
+        largeur,
+        4.0,
+        _pdf_text(
+            "Ce bulletin est délivré à titre de justificatif de rémunération."
+        ),
+        align="C",
+    )
+
+    pdf.set_draw_color(27, 93, 168)
+    pdf.set_line_width(0.8)
+    pdf.line(marge, pdf.h - 13.0, marge + largeur, pdf.h - 13.0)
+
+
+def _build_certificat_travail_payload(teacher) -> dict:
+    """Ce que le certificat de travail affirme d'un enseignant.
+
+    L'equivalent du certificat de frequentation d'un eleve: une banque, un
+    bailleur ou une administration demande la preuve qu'une personne
+    travaille bien ici. Elle se redigeait a la main sur papier a en-tete.
+    """
+    utilisateur = getattr(teacher, "user", None)
+    nom = ""
+    if utilisateur is not None:
+        nom = (utilisateur.get_full_name() or "").strip() or utilisateur.username
+
+    etablissement = getattr(teacher, "etablissement", None)
+    school = (
+        _school_identity_for_student(teacher)
+        if etablissement is not None
+        else _school_identity()
+    )
+    logo_path = (
+        _etablissement_media_field_path(etablissement, "logo") or _school_logo_path()
+    )
+
+    signataire = str(
+        getattr(etablissement, "principal_signature_label", "") or ""
+    ).strip() or "Le Directeur"
+
+    # « depuis le ... » seulement si la date existe: une attestation qui
+    # invente une date d'embauche se retourne contre l'ecole qui l'a signee.
+    depuis = (
+        f" depuis le {teacher.hire_date.strftime('%d/%m/%Y')}"
+        if teacher.hire_date
+        else ""
+    )
+
+    corps = (
+        f"Je soussigné(e), {signataire} de {school['name']}, certifie que "
+        f"M./Mme {nom}, immatriculé(e) sous le numéro "
+        f"{teacher.employee_code or '-'}, exerce{depuis} les fonctions "
+        f"d'enseignant(e) au sein de notre établissement."
+    )
+
+    lieu = (school.get("level") or "").strip()
+    aujourd_hui = timezone.localdate().strftime("%d/%m/%Y")
+
+    signature_source = (
+        _etablissement_media_field_path(etablissement, "principal_signature_image")
+        or _school_signature_asset_path()
+    )
+    stamp_source = (
+        _etablissement_media_field_path(etablissement, "stamp_image")
+        or _school_stamp_asset_path()
+    )
+
+    return {
+        "logo_path": logo_path,
+        "school_name": school["name"],
+        "school_level": school["level"],
+        "school_phone": school["phone"],
+        "numero": f"CT-{(teacher.hire_date.year if teacher.hire_date else 0):04d}-{teacher.id:05d}",
+        "corps": corps,
+        "lieu_et_date": (
+            f"Fait à {lieu}, le {aujourd_hui}" if lieu else f"Fait le {aujourd_hui}"
+        ),
+        "signature_label": signataire,
+        "signature_asset_path": _pdf_compatible_image_path(
+            signature_source, cache_prefix="certificat_travail_signature"
+        ),
+        "stamp_asset_path": _pdf_compatible_image_path(
+            stamp_source, cache_prefix="certificat_travail_stamp"
+        ),
+        "signature_scale": _safe_scale_percent(
+            getattr(etablissement, "principal_signature_scale", 100)
+        )
+        / 100.0,
+        "stamp_scale": _safe_scale_percent(
+            getattr(etablissement, "stamp_scale", 100)
+        )
+        / 100.0,
+        "qr_path": None,
+        "titre": "CERTIFICAT DE TRAVAIL",
+    }
+
+
+class CertificatTravailPdfView(APIView):
+    """Le certificat de travail d'un enseignant, a la demande.
+
+    Meme piece que le certificat de frequentation d'un eleve, de l'autre
+    cote du bureau: une banque, un bailleur ou une administration demande la
+    preuve qu'une personne travaille bien ici.
+
+    Rattache au module des enseignants, qui porte deja les fiches du
+    personnel. Un enseignant obtient la sienne, la direction celles de tous.
+    """
+
+    access_module = "teachers"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request, teacher_id: int):
+        teacher = get_object_or_404(
+            Teacher.objects.select_related("user", "etablissement"), id=teacher_id
+        )
+
+        if getattr(request.user, "role", "") == UserRole.TEACHER:
+            if getattr(teacher, "user_id", None) != request.user.id:
+                raise PermissionDenied(
+                    "Accès refusé au certificat d'un autre enseignant."
+                )
+
+        etablissement_id = _effective_etablissement_id(request)
+        if (
+            etablissement_id
+            and teacher.etablissement_id
+            and teacher.etablissement_id != etablissement_id
+        ):
+            raise PermissionDenied(
+                "Cet enseignant n'appartient pas à l'établissement actif."
+            )
+
+        payload = _build_certificat_travail_payload(teacher)
+
+        pdf = FPDF(orientation="P", format="A4")
+        pdf.set_auto_page_break(auto=False)
+        pdf.add_page()
+        _render_certificat_page(pdf, payload)
+
+        return pdf_output_response(
+            pdf,
+            f"certificat_travail_{teacher.employee_code or teacher.id}.pdf",
+        )
+
+
+class BulletinDePaiePdfView(APIView):
+    """Le bulletin de salaire d'un enseignant, pour un mois.
+
+    La paie se calculait, se validait a deux niveaux et se payait, sans
+    qu'aucune piece n'en sorte: l'enseignant n'avait rien a presenter a une
+    banque, a un bailleur ou a une administration, et rien non plus pour
+    verifier le compte de ses heures.
+
+    Reserve au module paie, qui porte deja la double validation. Un
+    enseignant y lit sa propre fiche -- c'est la sienne -- et la direction
+    les lit toutes.
+    """
+
+    access_module = "payroll"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request, payroll_id: int):
+        payroll = get_object_or_404(
+            TeacherPayroll.objects.select_related(
+                "teacher", "teacher__user", "teacher__etablissement"
+            ),
+            id=payroll_id,
+        )
+
+        # Un enseignant ne voit que sa propre paie. La matrice lui ouvre le
+        # module pour cela; sans ce controle elle lui ouvrirait celle de ses
+        # collegues.
+        if getattr(request.user, "role", "") == UserRole.TEACHER:
+            if getattr(payroll.teacher, "user_id", None) != request.user.id:
+                raise PermissionDenied("Accès refusé à la paie d'un autre enseignant.")
+
+        etablissement_id = _effective_etablissement_id(request)
+        if (
+            etablissement_id
+            and payroll.teacher.etablissement_id
+            and payroll.teacher.etablissement_id != etablissement_id
+        ):
+            raise PermissionDenied("Ce bulletin n'appartient pas à l'établissement actif.")
+
+        payload = _build_bulletin_de_paie_payload(payroll)
+
+        pdf = FPDF(orientation="P", format="A4")
+        pdf.set_auto_page_break(auto=False)
+        pdf.add_page()
+        _render_bulletin_de_paie_page(pdf, payload)
+
+        return pdf_output_response(
+            pdf,
+            f"bulletin_salaire_{payroll.teacher.employee_code or payroll.teacher_id}"
+            f"_{payroll.month.strftime('%Y_%m')}.pdf",
         )
 
 

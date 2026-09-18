@@ -355,13 +355,32 @@ class UserViewSet(viewsets.ModelViewSet):
 
         return {nom: compte for nom, compte in inventaire.items() if compte}
 
-    def destroy(self, request, *args, **kwargs):
-        """La suppression dit d'abord ce qu'elle emporte.
+    @action(detail=True, methods=["get"], url_path="donnees-liees")
+    def donnees_liees(self, request, pk=None):
+        """Ce qu'une suppression emporterait, sans rien supprimer.
 
-        Elle reste possible -- c'est une decision d'administration --, mais
-        plus a l'aveugle: le premier appel rend l'inventaire, et il faut le
-        confirmer explicitement pour qu'elle ait lieu. Desactiver reste
-        preferable dans presque tous les cas, et le message le rappelle.
+        Le client obtenait cet inventaire en lancant la suppression et en
+        lisant le refus. Un compte sans rien d'attache n'etait donc jamais
+        refuse: il partait a l'instant ou l'ecran cherchait a savoir ce qu'il
+        emportait, sans qu'aucune question ait ete posee. Demander est
+        desormais une lecture, et supprimer reste une ecriture.
+        """
+        cible = self.get_object()
+        self._verifier_la_cible(cible, "Lecture impossible")
+        return Response({"linked_data": self._donnees_liees(cible)})
+
+    def destroy(self, request, *args, **kwargs):
+        """Supprimer un compte demande toujours une confirmation explicite.
+
+        Elle n'etait exigee que si le compte portait des donnees liees. Un
+        compte nu -- un parent sans enfant rattache, un comptable, un
+        surveillant -- partait donc au premier appel, sans question. C'est
+        le geste le plus irreversible de l'administration des comptes: il ne
+        doit jamais tenir a un seul clic, que le compte porte quelque chose
+        ou non.
+
+        Desactiver reste preferable dans presque tous les cas, et le message
+        le rappelle.
         """
         cible = self.get_object()
         self._verifier_la_cible(cible, "Suppression impossible")
@@ -377,16 +396,20 @@ class UserViewSet(viewsets.ModelViewSet):
             or (request.data.get("confirm") if isinstance(request.data, dict) else "")
         ).lower() in ("1", "true", "oui")
 
-        if lie and not confirme:
-            detail = ", ".join(f"{compte} {nom}" for nom, compte in lie.items())
-            raise ValidationError(
-                {
-                    "detail": f"Ce compte porte des données liées : {detail}. "
-                              "Elles seront définitivement supprimées avec lui. "
-                              "Désactivez-le plutôt, ou confirmez avec « confirm ».",
-                    "linked_data": lie,
-                }
-            )
+        if not confirme:
+            if lie:
+                detail = ", ".join(f"{compte} {nom}" for nom, compte in lie.items())
+                message = (
+                    f"Ce compte porte des données liées : {detail}. "
+                    "Elles seront définitivement supprimées avec lui. "
+                    "Désactivez-le plutôt, ou confirmez avec « confirm »."
+                )
+            else:
+                message = (
+                    "La suppression d'un compte est définitive. "
+                    "Désactivez-le plutôt, ou confirmez avec « confirm »."
+                )
+            raise ValidationError({"detail": message, "linked_data": lie})
 
         return super().destroy(request, *args, **kwargs)
 

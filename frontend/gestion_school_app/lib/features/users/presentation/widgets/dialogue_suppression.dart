@@ -87,12 +87,23 @@ class DialogueSuppression extends StatelessWidget {
                 'C’est ce qu’il faut faire pour un départ.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
-            ] else
+            ] else ...[
               Text(
-                'Ce compte ne porte aucune donnée liée. Sa suppression est '
-                'sans effet sur le reste de l’application.',
+                'Ce compte ne porte aucune donnée liée : sa suppression '
+                'n’emporte rien d’autre.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
+              const SizedBox(height: 8),
+              // Nu ou non, le compte ne revient pas. Ce dialogue ne
+              // s'affichait pas du tout dans ce cas, et le compte partait
+              // au premier clic.
+              Text(
+                'Elle reste définitive : identifiant, mot de passe et '
+                'historique de connexion disparaissent. Désactiver retire '
+                'l’accès sans rien détruire.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
           ],
         ),
       ),
@@ -101,12 +112,11 @@ class DialogueSuppression extends StatelessWidget {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Annuler'),
         ),
-        if (porteDesDonnees)
-          TextButton(
-            key: const Key('desactiver-plutot'),
-            onPressed: () => Navigator.of(context).pop(ChoixSuppression.desactiver),
-            child: const Text('Désactiver plutôt'),
-          ),
+        TextButton(
+          key: const Key('desactiver-plutot'),
+          onPressed: () => Navigator.of(context).pop(ChoixSuppression.desactiver),
+          child: const Text('Désactiver plutôt'),
+        ),
         FilledButton(
           key: const Key('confirmer-suppression'),
           style: porteDesDonnees

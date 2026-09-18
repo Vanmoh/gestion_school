@@ -1244,6 +1244,26 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     }
   }
 
+  /// Imprime le bulletin de salaire d'une ligne de paie.
+  ///
+  /// La pièce que l'enseignant présente à une banque ou à un bailleur, et
+  /// sur laquelle il vérifie le compte de ses heures. Elle n'existait pas.
+  Future<void> _imprimerBulletinDeSalaire(int payrollId) async {
+    setState(() => _financeBusy = true);
+    try {
+      final bytes = await ref
+          .read(paymentsRepositoryProvider)
+          .bulletinDeSalairePdf(payrollId);
+      await Printing.layoutPdf(onLayout: (_) async => bytes);
+    } catch (error) {
+      _showMessage(
+        'Bulletin de salaire impossible: ${_extractApiErrorMessage(error)}',
+      );
+    } finally {
+      if (mounted) setState(() => _financeBusy = false);
+    }
+  }
+
   String _payrollStageLabel(Map<String, dynamic> row) {
     final stage = (row['validation_stage'] ?? '').toString();
     if (stage == 'level_two') return 'N2 validé';
@@ -3078,6 +3098,24 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                                     ? null
                                     : () => _resetPayrollValidation(payrollId),
                                 child: const Text('Reset'),
+                              ),
+                            // Offert quel que soit l'état de validation: un
+                            // brouillon se relit avant d'être signé, et la
+                            // pièce annonce elle-même qu'elle n'est pas
+                            // arrêtée.
+                            if (payrollId != null)
+                              IconButton(
+                                key: Key('bulletin-salaire-$payrollId'),
+                                tooltip: 'Bulletin de salaire',
+                                onPressed: _financeBusy
+                                    ? null
+                                    : () => _imprimerBulletinDeSalaire(
+                                        payrollId,
+                                      ),
+                                icon: const Icon(
+                                  Icons.receipt_long_outlined,
+                                  size: 20,
+                                ),
                               ),
                           ],
                         ),
