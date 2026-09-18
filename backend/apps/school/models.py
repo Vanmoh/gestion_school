@@ -280,11 +280,22 @@ class Subject(TimeStampedModel):
 
 class Teacher(TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="teacher_profile")
-    employee_code = models.CharField(max_length=30, unique=True)
+    # Vide a la saisie: il se genere comme le matricule d'un eleve (voir
+    # apps/school/matricule.py). Il fallait l'inventer a la main, et son
+    # unicite est globale a la plateforme: deux ecoles se disputaient le
+    # meme « P001 ».
+    employee_code = models.CharField(max_length=30, unique=True, blank=True)
     hire_date = models.DateField()
     salary_base = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     hourly_rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="teachers", null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.employee_code:
+            from apps.school import matricule as service
+
+            self.employee_code = service.generer_pour_enseignant(self)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.user.get_full_name() or self.user.username

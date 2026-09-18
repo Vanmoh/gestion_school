@@ -17,7 +17,9 @@ from .views import (
     PaymentReceiptPdfView,
     ReportsContextView,
     StaffRosterPdfView,
+    BulletinDePaiePdfView,
     CertificatFrequentationPdfView,
+    CertificatTravailPdfView,
     StudentCardPdfView,
     StudentCardVerifyView,
 )
@@ -68,10 +70,24 @@ urlpatterns = [
     # Le certificat de frequentation, delivre a la demande d'une famille:
     # dossier de bourse, demande de visa, abonnement de transport, ouverture
     # de compte. Il etait redige a la main sur papier a en-tete.
+    # Le bulletin de salaire d'un enseignant. La paie se calculait, se
+    # validait et se payait sans qu'aucune piece n'en sorte.
+    path(
+        "bulletin-salaire/<int:payroll_id>/",
+        BulletinDePaiePdfView.as_view(),
+        name="bulletin-salaire-pdf",
+    ),
     path(
         "certificat-frequentation/<int:student_id>/",
         CertificatFrequentationPdfView.as_view(),
         name="certificat-frequentation-pdf",
+    ),
+    # Le pendant pour le personnel: une banque ou un bailleur demande la
+    # preuve qu'une personne travaille bien ici.
+    path(
+        "certificat-travail/<int:teacher_id>/",
+        CertificatTravailPdfView.as_view(),
+        name="certificat-travail-pdf",
     ),
     path("student-cards/class/<int:classroom_id>/", ClassStudentCardsPdfView.as_view(), name="class-student-cards-pdf"),
     # Cible du QR imprime sur la carte. Publique: celui qui controle au

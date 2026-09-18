@@ -140,16 +140,38 @@ void main() {
     );
   });
 
-  testWidgets('la direction dispose des trois creations', (tester) async {
+  testWidgets('la direction dispose des creations', (tester) async {
     await _monter(tester, AccessLevel.admin);
 
-    expect(find.byKey(const Key('creer-annee')), findsOneWidget);
     expect(find.byKey(const Key('creer-matiere')), findsOneWidget);
     expect(find.byKey(const Key('creer-classe')), findsOneWidget);
     expect(
       find.text('Mode lecture seule: consultation uniquement pour ce profil.'),
       findsNothing,
     );
+  });
+
+  testWidgets('le formulaire plat d_annee a disparu', (tester) async {
+    // L'ecran portait trois chemins vers une annee neuve: « Creer annee »,
+    // un formulaire plat qui rendait une annee vide -- ni classes, ni
+    // matieres, ni affectations, ni emploi du temps --, « Ouvrir une annee »
+    // juste a cote, et le meme geste dans la carte de l'annee active. Celui
+    // qui prenait le premier devait tout ressaisir a la main.
+    await _monter(tester, AccessLevel.admin);
+
+    expect(find.text('Créer année'), findsNothing);
+    expect(find.text('Créer une année scolaire'), findsNothing);
+  });
+
+  testWidgets('l_ouverture d_annee ne s_offre qu_une fois', (tester) async {
+    // Elle vit desormais dans la carte de l'annee: c'est la qu'on lit
+    // l'annee en cours, donc la qu'on ouvre la suivante.
+    await _monter(tester, AccessLevel.admin);
+
+    final chemins =
+        find.text('Ouvrir une année').evaluate().length +
+        find.text('Ouvrir une nouvelle année').evaluate().length;
+    expect(chemins, 1);
   });
 
   testWidgets('actualiser reste offert a tous', (tester) async {

@@ -173,3 +173,60 @@ def est_conforme(matricule: str) -> bool:
     personne.
     """
     return bool(FORMAT_MATRICULE.match((matricule or "").strip().upper()))
+
+
+# --- Matricule enseignant ---------------------------------------------------
+#
+#     RC15    ENS   25   0042
+#     ecole   type  an   sequence
+#
+# Le champ existait -- `Teacher.employee_code`, unique a l'echelle de la
+# plateforme -- mais rien ne le produisait: il fallait l'inventer a la saisie,
+# et deux ecoles pouvaient se disputer le meme « P001 ». La forme reprend
+# celle du matricule eleve, en remplacant le code de classe par un marqueur de
+# corps: un enseignant n'appartient pas a une classe, il en dessert plusieurs.
+
+TYPE_ENSEIGNANT = "ENS"
+
+FORMAT_MATRICULE_ENSEIGNANT = re.compile(r"^[A-Z0-9]{2,8}ENS\d{2}\d{4}$")
+
+
+def prefixe_enseignant(etablissement, annee: int) -> str:
+    return f"{code_etablissement(etablissement)}{TYPE_ENSEIGNANT}{annee % 100:02d}"
+
+
+def prochaine_sequence_enseignant(prefixe_vise: str, modele_enseignant) -> int:
+    """Le rang suivant pour ce prefixe, lu sur les codes deja attribues.
+
+    Meme principe que pour les eleves: on relit les codes existants plutot
+    que de tenir un compteur, qui se desynchroniserait a la premiere reprise
+    de donnees.
+    """
+    existants = modele_enseignant.objects.filter(
+        employee_code__startswith=prefixe_vise
+    ).values_list("employee_code", flat=True)
+
+    maximum = 0
+    longueur = len(prefixe_vise)
+    for code in existants:
+        reste = code[longueur:]
+        if len(reste) >= 4 and reste[:4].isdigit():
+            maximum = max(maximum, int(reste[:4]))
+    return maximum + 1
+
+
+def generer_pour_enseignant(teacher, modele_enseignant=None) -> str:
+    """Le matricule d'un enseignant, deduit de sa fiche.
+
+    L'annee d'embauche plutot que l'annee scolaire: un enseignant traverse
+    les annees, et son code doit rester celui de son entree dans l'ecole.
+    """
+    if modele_enseignant is None:
+        from apps.school.models import Teacher as modele_enseignant  # noqa: N813
+
+    embauche = getattr(teacher, "hire_date", None)
+    annee = embauche.year if embauche is not None else 0
+
+    debut = prefixe_enseignant(getattr(teacher, "etablissement", None), annee)
+    sequence = prochaine_sequence_enseignant(debut, modele_enseignant)
+    return f"{debut}{sequence:04d}"

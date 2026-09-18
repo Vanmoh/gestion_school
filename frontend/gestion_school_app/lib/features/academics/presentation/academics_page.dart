@@ -21,11 +21,6 @@ class AcademicsPage extends ConsumerStatefulWidget {
 
 class _AcademicsPageState extends ConsumerState<AcademicsPage> {
   static const int _rowsPerPage = 8;
-  final _yearNameController = TextEditingController();
-  DateTime _yearStart = DateTime(DateTime.now().year, 9, 1);
-  DateTime _yearEnd = DateTime(DateTime.now().year + 1, 7, 31);
-  bool _yearActive = true;
-
   final _subjectNameController = TextEditingController();
   final _subjectCoefController = TextEditingController(text: '1');
   final _classSearchController = TextEditingController();
@@ -68,7 +63,6 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
 
   @override
   void dispose() {
-    _yearNameController.dispose();
     _subjectNameController.dispose();
     _subjectCoefController.dispose();
     _classSearchController.dispose();
@@ -533,102 +527,6 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
         navigator.pop();
       }
     }
-  }
-
-  Future<void> _openYearForm() {
-    return _openFloatingPanel(
-      title: 'Créer une année scolaire',
-      contentBuilder: (panelContext, refreshPanel) {
-        return Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            SizedBox(
-              width: 320,
-              child: TextField(
-                controller: _yearNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Nom (ex: 2025-2026)',
-                ),
-              ),
-            ),
-            OutlinedButton.icon(
-              onPressed: () async {
-                final picked = await showDatePicker(
-                  context: panelContext,
-                  initialDate: _yearStart,
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime(2100),
-                );
-                if (picked != null) {
-                  _yearStart = picked;
-                  refreshPanel();
-                }
-              },
-              icon: const Icon(Icons.calendar_month_outlined),
-              label: Text('Début: ${_apiDate(_yearStart)}'),
-            ),
-            OutlinedButton.icon(
-              onPressed: () async {
-                final picked = await showDatePicker(
-                  context: panelContext,
-                  initialDate: _yearEnd,
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime(2100),
-                );
-                if (picked != null) {
-                  _yearEnd = picked;
-                  refreshPanel();
-                }
-              },
-              icon: const Icon(Icons.event_available_outlined),
-              label: Text('Fin: ${_apiDate(_yearEnd)}'),
-            ),
-            SizedBox(
-              width: 260,
-              child: Row(
-                children: [
-                  Switch(
-                    value: _yearActive,
-                    onChanged: (value) {
-                      _yearActive = value;
-                      refreshPanel();
-                    },
-                  ),
-                  const Text('Année active'),
-                ],
-              ),
-            ),
-            FilledButton.icon(
-              onPressed: _saving
-                  ? null
-                  : () => _submitFromPanel(
-                      panelContext: panelContext,
-                      action: () async {
-                        final name = _yearNameController.text.trim();
-                        if (name.isEmpty) {
-                          _showMessage('Renseigne le nom de l’année scolaire.');
-                          return false;
-                        }
-                        final success = await _post('/academic-years/', {
-                          'name': name,
-                          'start_date': _apiDate(_yearStart),
-                          'end_date': _apiDate(_yearEnd),
-                          'is_active': _yearActive,
-                        }, 'Année scolaire créée');
-                        if (success) {
-                          _yearNameController.clear();
-                        }
-                        return success;
-                      },
-                    ),
-              icon: const Icon(Icons.calendar_month_outlined),
-              label: const Text('Créer année scolaire'),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   Future<void> _openSubjectForm() {
@@ -1660,29 +1558,23 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
                             runSpacing: 10,
                             children: [
                               if (peutEcrire) ...[
-                                FilledButton.icon(
-                                  key: const Key('creer-annee'),
-                                  onPressed: _saving ? null : _openYearForm,
-                                  icon: const Icon(Icons.calendar_month_outlined),
-                                  label: const Text('Créer année'),
-                                ),
-                                // Ouvrir une annee reprend toute la
-                                // structure de la precedente: c'est
-                                // l'operation de rentree, au meme niveau
-                                // que la passation.
-                                if (peutSupprimer)
-                                  FilledButton.icon(
-                                    key: const Key('ouvrir-annee'),
-                                    onPressed: _saving
-                                        ? null
-                                        : () => showDialog<void>(
-                                            context: context,
-                                            builder: (_) =>
-                                                const AssistantOuvertureAnnee(),
-                                          ).then((_) => _loadData()),
-                                    icon: const Icon(Icons.auto_awesome_outlined),
-                                    label: const Text('Ouvrir une année'),
-                                  ),
+                                // Ouvrir une annee ne figure plus ici.
+                                //
+                                // L'ecran en portait trois chemins: « Creer
+                                // annee », un formulaire plat qui rendait
+                                // une annee vide -- ni classes, ni matieres,
+                                // ni affectations, ni emploi du temps --,
+                                // « Ouvrir une annee » juste a cote, et le
+                                // meme geste dans la carte de l'annee
+                                // active. Celui qui prenait le premier
+                                // devait tout ressaisir a la main.
+                                //
+                                // Il n'en reste qu'un, dans cette carte:
+                                // c'est la qu'on lit l'annee en cours, donc
+                                // la qu'on ouvre la suivante. L'assistant
+                                // reprend la structure de la precedente, et
+                                // tout decocher redonne exactement l'annee
+                                // vide que l'ancien formulaire produisait.
                                 FilledButton.tonalIcon(
                                   key: const Key('creer-matiere'),
                                   onPressed: _saving ? null : _openSubjectForm,
@@ -2239,7 +2131,4 @@ class _AcademicsPageState extends ConsumerState<AcademicsPage> {
     return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
-  String _apiDate(DateTime value) {
-    return '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
-  }
 }

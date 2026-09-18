@@ -239,19 +239,23 @@ class UsersRepository {
   ///
   /// Lu depuis le refus du serveur: lui seul sait ce qui pend au compte, et
   /// le recalculer cote client donnerait un inventaire qui pourrait mentir.
-  Future<Map<String, int>?> donneesLiees(int userId) async {
+  /// Ce qu'une suppression emporterait, sans rien supprimer.
+  ///
+  /// Cet inventaire s'obtenait en lançant la suppression et en lisant le
+  /// refus. Un compte sans rien d'attaché n'était donc jamais refusé: il
+  /// partait à l'instant où l'écran cherchait à savoir ce qu'il emportait,
+  /// sans qu'aucune question ait été posée. C'est désormais une lecture.
+  Future<Map<String, int>> donneesLiees(int userId) async {
     try {
-      await dio.delete('/auth/users/$userId/');
-      // Aucune donnee liee: la suppression a eu lieu. Le cas est traite par
-      // l'appelant, qui ne demande cet inventaire qu'avant de confirmer.
-      return null;
-    } on DioException catch (error) {
-      final payload = error.response?.data;
+      final response = await dio.get('/auth/users/$userId/donnees-liees/');
+      final payload = response.data;
       if (payload is Map && payload['linked_data'] is Map) {
         return (payload['linked_data'] as Map).map(
           (cle, valeur) => MapEntry(cle.toString(), (valeur as num).toInt()),
         );
       }
+      return const {};
+    } on DioException catch (error) {
       throw Exception(_extractApiErrorMessage(error));
     }
   }

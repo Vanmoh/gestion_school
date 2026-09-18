@@ -231,10 +231,23 @@ class SuppressionTests(_ComptesMixin, APITestCase):
             url, HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id)
         )
 
-    def test_un_compte_sans_donnees_liees_se_supprime(self):
+    def test_un_compte_sans_donnees_liees_attend_lui_aussi_la_confirmation(self):
+        # Ce test figeait l'inverse: un compte nu partait au premier appel.
+        # L'ecran obtenait pourtant l'inventaire de ce qu'une suppression
+        # emporterait en lancant cette suppression -- un compte sans rien
+        # d'attache etait donc detruit a l'instant ou l'on cherchait a savoir
+        # ce qu'il emportait, sans qu'aucune question ait ete posee.
         simple = self._compte("compte_nu", UserRole.ACCOUNTANT)
 
         reponse = self._supprimer(simple)
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(User.objects.filter(pk=simple.pk).exists())
+
+    def test_un_compte_sans_donnees_liees_se_supprime_une_fois_confirme(self):
+        simple = self._compte("compte_nu_confirme", UserRole.ACCOUNTANT)
+
+        reponse = self._supprimer(simple, confirme=True)
 
         self.assertEqual(reponse.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(User.objects.filter(pk=simple.pk).exists())
