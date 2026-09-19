@@ -13,6 +13,7 @@ from unittest.mock import patch
 from django.conf import settings
 from django.core import serializers
 from rest_framework import status
+from django.test import TransactionTestCase
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import User, UserRole
@@ -308,3 +309,125 @@ class DossierDesSauvegardesTests(APITestCase):
 
         self.assertNotEqual(courant, vrai)
         self.assertNotIn(vrai, courant.parents)
+
+
+class ChargementParLotsTests(_Decor, APITestCase):
+    """Le chargement: par lots, en ecrasant l'existant, avec ses liens."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls._monter()
+
+    def _compte(self, pk, username, **champs):
+        return {
+            "model": "accounts.user",
+            "pk": pk,
+            "fields": {
+                "username": username,
+                "password": "x",
+                "role": "teacher",
+                "is_active": True,
+                "first_name": champs.get("prenom", ""),
+                "last_name": "",
+                "email": "",
+                "is_staff": False,
+                "is_superuser": False,
+                "date_joined": "2026-01-01T00:00:00Z",
+                "groups": champs.get("groupes", []),
+                "user_permissions": [],
+            },
+        }
+
+    def test_une_ligne_existante_est_ecrasee_sans_echouer(self):
+        # Une restauration d'etablissement recharge aussi les comptes
+        # d'autres ecoles que ses enseignants referencent, et ceux-la n'ont
+        # pas ete supprimes.
+        existant = User.objects.create_user(
+            username="deja_la", password="Pass1234!", role=UserRole.TEACHER, first_name="Ancien"
+        )
+        en_cours = BackupArchive.objects.create(scope="global", status="running")
+
+        BackupArchiveViewSet()._charger_les_donnees(
+            en_cours, [self._compte(existant.pk, "deja_la", prenom="Restaure")]
+        )
+
+        existant.refresh_from_db()
+        self.assertEqual(existant.first_name, "Restaure")
+
+    def test_les_groupes_d_un_compte_sont_restaures(self):
+        # Les liens multiples ne passent pas par l'insertion en lot.
+        from django.contrib.auth.models import Group
+
+        groupe = Group.objects.create(name="Surveillance")
+        en_cours = BackupArchive.objects.create(scope="global", status="running")
+
+        BackupArchiveViewSet()._charger_les_donnees(
+            en_cours, [self._compte(880001, "avec_groupe", groupes=[groupe.pk])]
+        )
+
+        self.assertEqual(
+            list(User.objects.get(pk=880001).groups.values_list("name", flat=True)),
+            ["Surveillance"],
+        )
+
+    def test_mille_lignes_ne_font_pas_mille_allers_retours(self):
+        # Le coeur de la lenteur en production: un aller-retour par ligne,
+        # vers une base distante.
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        en_cours = BackupArchive.objects.create(scope="global", status="running")
+        lignes = [self._compte(870000 + rang, f"lot_{rang}") for rang in range(1000)]
+
+        with CaptureQueriesContext(connection) as requetes:
+            BackupArchiveViewSet()._charger_les_donnees(en_cours, lignes)
+
+        ecritures = [
+            q for q in requetes.captured_queries if q["sql"].lstrip().upper().startswith("INSERT")
+        ]
+        self.assertEqual(User.objects.filter(username__startswith="lot_").count(), 1000)
+        self.assertLessEqual(len(ecritures), 3, f"{len(ecritures)} insertions pour 1000 lignes")
+
+
+class CompteursApresRestaurationTests(TransactionTestCase):
+    """La saisie qui suit une restauration ne doit pas heurter une ligne restauree."""
+
+    def test_la_saisie_suivante_recoit_un_identifiant_libre(self):
+        from django.db import connection
+
+        if connection.vendor != "postgresql":
+            self.skipTest("Les sequences n'existent qu'avec PostgreSQL.")
+
+        en_cours = BackupArchive.objects.create(scope="global", status="running")
+        self.addCleanup(lambda: User.objects.filter(pk=900000).delete())
+        BackupArchiveViewSet()._charger_les_donnees(
+            en_cours,
+            [
+                {
+                    "model": "accounts.user",
+                    "pk": 900000,
+                    "fields": {
+                        "username": "restaure_haut",
+                        "password": "x",
+                        "role": "teacher",
+                        "is_active": True,
+                        "first_name": "",
+                        "last_name": "",
+                        "email": "",
+                        "is_staff": False,
+                        "is_superuser": False,
+                        "date_joined": "2026-01-01T00:00:00Z",
+                        "groups": [],
+                        "user_permissions": [],
+                    },
+                }
+            ],
+        )
+
+        suivant = User.objects.create_user(
+            username="saisi_apres", password="Pass1234!", role=UserRole.TEACHER
+        )
+        self.addCleanup(suivant.delete)
+
+        # Prouve avant correction: la saisie suivante recevait le numero 1.
+        self.assertGreater(suivant.pk, 900000)
