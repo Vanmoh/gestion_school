@@ -111,7 +111,9 @@ class RestaurationBoutEnBoutTests(APITestCase):
         chargement = [
             pourcent
             for pourcent, phase in etapes
-            if phase.startswith("Chargement des donnees (")
+            # La phase nomme desormais la table en cours: « Chargement :
+            # school.Grade (12000/58719) ».
+            if phase.startswith("Chargement : ")
         ]
         self.assertTrue(chargement, "Aucun avancement pendant le chargement.")
         self.assertEqual(chargement, sorted(chargement))

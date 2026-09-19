@@ -1247,20 +1247,31 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
     # La tranche de la barre occupee par le chargement des donnees.
     _PART_CHARGEMENT = (62, 82)
 
+    # Combien de lignes partent en un seul aller-retour vers la base.
+    TAILLE_DE_LOT_DE_CHARGEMENT = 500
+
     def _charger_les_donnees(self, backup, payload) -> None:
-        """Ecrit les lignes une a une, en avancant la barre au fil de l'eau.
+        """Recharge les lignes table par table, par lots, puis realigne les compteurs.
 
-        Tout partait en un seul `loaddata`. Sur une base reelle, cela occupe
-        plusieurs minutes pendant lesquelles l'ecran affiche 62 % sans
-        bouger: la restauration parait figee alors qu'elle travaille, et
-        personne ne sait si elle avance ou si elle est morte.
+        Trois etapes, et chacune repare un defaut constate.
 
-        Deserialiser ici plutot que d'appeler `loaddata` par morceaux: la
-        commande verifie les cles etrangeres a la fin de chacun de ses
-        appels, et un decoupage la ferait echouer des que la table chargee
-        en premier pointe vers une table qui vient apres. On fait ce que
-        `loaddata` fait -- desactiver les contraintes, ecrire, verifier une
-        seule fois a la fin -- mais en gardant la main sur l'avancement.
+        Par lots. Chaque ligne partait seule, un aller-retour vers la base par
+        ligne. En local, 58 719 lignes passaient en 1 min 35; en production,
+        base distante et 0,1 processeur, l'ecran annoncait « reste ~12 min »
+        apres 3 912 lignes. Pendant ce quart d'heure, une mise en veille ou
+        un redemarrage de Render suffisait a tuer la restauration. Cinq cents
+        lignes par aller-retour divisent d'autant le nombre de trajets.
+
+        En ecrasant les lignes deja presentes plutot qu'en echouant. C'est ce
+        que faisait l'enregistrement ligne a ligne: une restauration
+        d'etablissement recharge aussi les comptes d'autres ecoles que ses
+        enseignants referencent, et ceux-la n'ont pas ete supprimes.
+
+        Puis en realignant les compteurs d'identifiants. `loaddata` le faisait,
+        et l'avoir remplace l'avait perdu: apres une restauration, la
+        prochaine saisie recevait un identifiant deja pris par une ligne
+        restauree. Prouve: un compte restaure sous le numero 900 000, la
+        saisie suivante recevait le numero 1.
         """
         if not isinstance(payload, list) or not payload:
             return
@@ -1278,26 +1289,69 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
         debut, fin = self._PART_CHARGEMENT
         total = len(payload)
-        # Un signal toutes les 200 lignes au plus: ecrire l'avancement a
-        # chaque objet couterait plus de requetes que la restauration.
-        pas = max(1, total // 60)
+        charges = 0
 
-        # Le format « python » prend la liste deja analysee. Repasser par du
-        # JSON aurait refabrique une chaine de la taille de la base, pour la
-        # relire aussitot -- deux copies de plus dans un conteneur qui n'en
-        # supporte pas une.
-        for rang, objet in enumerate(
-            serializers.deserialize("python", payload), start=1
-        ):
-            objet.save()
-            if rang % pas and rang != total:
-                continue
-            avancement = debut + int((fin - debut) * (rang / total))
-            self._set_restore_progress(
-                backup,
-                progress=min(fin, avancement),
-                phase=f"Chargement des donnees ({rang}/{total})",
+        # Par table, dans l'ordre d'apparition: c'est celui de la
+        # serialisation, qui suit les dependances.
+        par_modele: dict = {}
+        for objet in serializers.deserialize("python", payload):
+            par_modele.setdefault(type(objet.object), []).append(objet)
+
+        for modele, objets in par_modele.items():
+            for depart in range(0, len(objets), self.TAILLE_DE_LOT_DE_CHARGEMENT):
+                lot = objets[depart : depart + self.TAILLE_DE_LOT_DE_CHARGEMENT]
+                self._ecrire_un_lot_en_base(modele, lot)
+                charges += len(lot)
+                self._set_restore_progress(
+                    backup,
+                    progress=min(fin, debut + int((fin - debut) * (charges / total))),
+                    phase=f"Chargement : {modele._meta.label} ({charges}/{total})",
+                )
+
+        self._realigner_les_compteurs(list(par_modele))
+
+    def _ecrire_un_lot_en_base(self, modele, lot) -> None:
+        """Insere un lot, en ecrasant les lignes dont l'identifiant existe deja."""
+        instances = [objet.object for objet in lot]
+        cle = modele._meta.pk
+        a_mettre_a_jour = [
+            champ.attname
+            for champ in modele._meta.concrete_fields
+            if not champ.primary_key
+        ]
+
+        if a_mettre_a_jour:
+            modele.objects.bulk_create(
+                instances,
+                update_conflicts=True,
+                unique_fields=[cle.name],
+                update_fields=a_mettre_a_jour,
             )
+        else:
+            # Une table qui ne porte que sa cle: rien a mettre a jour.
+            modele.objects.bulk_create(instances, ignore_conflicts=True)
+
+        # Les liens multiples ne passent pas par `bulk_create`. On ne les
+        # pose que s'ils existent: la table de liaison vient d'etre videe
+        # avec les comptes, et un `set([])` par compte couterait un
+        # aller-retour pour rien.
+        for objet in lot:
+            for champ, identifiants in (objet.m2m_data or {}).items():
+                if identifiants:
+                    getattr(objet.object, champ).set(identifiants)
+
+    def _realigner_les_compteurs(self, modeles) -> None:
+        """Place chaque compteur d'identifiants apres la plus grande valeur restauree."""
+        from django.core.management.color import no_style
+
+        if not modeles:
+            return
+        requetes = connection.ops.sequence_reset_sql(no_style(), modeles)
+        if not requetes:
+            return
+        with connection.cursor() as curseur:
+            for requete in requetes:
+                curseur.execute(requete)
 
     def _resolve_unique_field_conflicts(self, payload):
         if not isinstance(payload, list):
