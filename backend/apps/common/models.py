@@ -110,6 +110,10 @@ class BackupArchive(TimeStampedModel):
     restore_log = models.TextField(blank=True)
     restore_phase = models.CharField(max_length=120, blank=True)
     restore_progress = models.PositiveSmallIntegerField(default=0)
+    # Depuis quand elle tourne. Sans ce reperage, l'ecran ne pouvait pas
+    # annoncer de duree restante: une restauration ne compte pas d'octets,
+    # seulement des lignes, et le pourcentage seul ne dit rien du temps.
+    restore_started_at = models.DateTimeField(null=True, blank=True)
     restored_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

@@ -313,3 +313,42 @@ class SuppressionDesArchivesTests(APITestCase):
         self.client.post("/api/backup-archives/purge/", {"conserver": 1}, format="json")
 
         self.assertTrue(BackupArchive.objects.filter(pk=encours.id).exists())
+
+    def test_une_operation_morte_finit_par_se_supprimer(self):
+        # Le defaut signale: certaines lignes de l'historique refusaient de
+        # partir. Une archive figee restait « en cours » pour toujours, donc
+        # protegee par la garde qui epargne les operations actives.
+        from django.utils import timezone
+
+        from apps.common.views import BackupArchiveViewSet
+
+        figee = self._archive("test_menage_figee.zip", status_=BackupArchive.Status.RUNNING)
+        BackupArchive.objects.filter(pk=figee.pk).update(
+            updated_at=timezone.now() - BackupArchiveViewSet.SILENCE_AVANT_ABANDON * 2
+        )
+        self.client.force_authenticate(self.super_admin)
+
+        reponse = self.client.delete(f"/api/backup-archives/{figee.id}/")
+
+        self.assertEqual(reponse.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(BackupArchive.objects.filter(pk=figee.id).exists())
+
+    def test_le_menage_emporte_aussi_les_operations_mortes(self):
+        from django.utils import timezone
+
+        from apps.common.views import BackupArchiveViewSet
+
+        # La figee d'abord: le menage garde les plus recentes, et c'est la
+        # plus ancienne qu'on veut voir partir.
+        figee = self._archive(
+            "test_purge_figee.zip", status_=BackupArchive.Status.RUNNING
+        )
+        BackupArchive.objects.filter(pk=figee.pk).update(
+            updated_at=timezone.now() - BackupArchiveViewSet.SILENCE_AVANT_ABANDON * 2
+        )
+        self._archive("test_purge_vivante.zip")
+        self.client.force_authenticate(self.super_admin)
+
+        self.client.post("/api/backup-archives/purge/", {"conserver": 1}, format="json")
+
+        self.assertFalse(BackupArchive.objects.filter(pk=figee.id).exists())
