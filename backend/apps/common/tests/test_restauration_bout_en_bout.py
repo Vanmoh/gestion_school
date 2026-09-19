@@ -203,8 +203,10 @@ class RestaurationBoutEnBoutTests(APITestCase):
         vue = BackupArchiveViewSet()
         phases = []
 
-        reel = vue._set_restore_progress
-        vue._set_restore_progress = lambda ref, **kw: (
+        # La lecture est une etape de la sauvegarde: elle s'ecrit dans ses
+        # champs a elle, jamais dans ceux de la restauration.
+        reel = vue._set_build_progress
+        vue._set_build_progress = lambda ref, **kw: (
             phases.append(kw.get("phase") or ""),
             reel(ref, **kw),
         )[1]
@@ -294,47 +296,187 @@ class RestaurationBoutEnBoutTests(APITestCase):
 
 
 class AvancementHorsTransactionTests(TransactionTestCase):
-    """Le « fige a 28 % ».
+    """Le « fige a 28 % », puis le « fige a 40 % ».
 
-    La restauration nettoie puis charge dans une seule transaction -- il le
-    faut, sinon un echec en cours de chargement laisserait la base videe.
-    Mais tout ce qui est ecrit dans une transaction reste invisible aux
-    autres connexions jusqu'au commit: l'ecran, qui interroge sur sa propre
-    connexion, lisait la derniere valeur commitee -- 28 -- pendant toute la
-    duree du travail. Et si le processus mourait, la transaction etait
-    annulee et cette valeur restait la pour toujours.
+    Ecrit dans la transaction, l'avancement restait invisible jusqu'au
+    commit. Ecrit sur une seconde connexion, il se bloquait sur le verrou
+    que la restauration pose en mettant a NULL l'auteur des archives -- la
+    seconde connexion attendait la premiere, qui attendait en Python que la
+    seconde revienne. Constate dans Postgres, figee a 40 %.
+
+    Ces tests tournent sur une vraie transaction, parce que c'est SQLite, qui
+    verrouille la base entiere, qui avait masque le blocage.
     """
 
-    def test_l_avancement_survit_a_une_transaction_annulee(self):
-        from django.db import connection, transaction
-
-        if connection.vendor == "sqlite":
-            self.skipTest(
-                "SQLite verrouille la base pendant une transaction en "
-                "ecriture: une seconde connexion ne peut pas y ecrire. La "
-                "production tourne sur PostgreSQL, ou c'est le cas nominal."
-            )
-
-        vue = BackupArchiveViewSet()
+    def _archive(self):
         archive = BackupArchive.objects.create(
             scope=BackupArchive.Scope.GLOBAL,
             status=BackupArchive.Status.RUNNING,
             restore_phase="Donnees preparees",
             restore_progress=28,
         )
+        self.addCleanup(lambda: BackupArchive.objects.filter(pk=archive.pk).delete())
         self.addCleanup(
-            lambda: BackupArchive.objects.filter(pk=archive.pk).delete()
+            lambda: BackupArchiveViewSet._fichier_d_avancement(archive.pk).unlink(
+                missing_ok=True
+            )
         )
+        return archive
 
-        try:
-            with transaction.atomic():
-                vue._set_restore_progress(
-                    archive, progress=62, phase="Chargement des donnees"
-                )
-                raise RuntimeError("le processus meurt ici")
-        except RuntimeError:
-            pass
+    def test_dans_la_transaction_l_avancement_part_sur_disque(self):
+        from django.db import transaction
+
+        vue = BackupArchiveViewSet()
+        archive = self._archive()
+
+        with transaction.atomic():
+            vue._set_restore_progress(archive, progress=62, phase="Chargement")
+
+        sur_disque = BackupArchiveViewSet.avancement_sur_disque(archive.pk)
+        self.assertEqual(sur_disque["restore_progress"], 62)
+        self.assertEqual(sur_disque["restore_phase"], "Chargement")
+
+    def test_l_avancement_ne_se_bloque_pas_sur_la_ligne_verrouillee(self):
+        # Le coeur du « fige a 40 % »: la restauration tient la ligne meme
+        # dont on ecrit l'avancement. Ecrire en base depuis une autre
+        # connexion attendait ce verrou pour toujours.
+        import threading
+
+        from django.db import connection, transaction
+
+        if connection.vendor != "postgresql":
+            self.skipTest("Le verrou de ligne n'existe qu'avec PostgreSQL.")
+
+        vue = BackupArchiveViewSet()
+        archive = self._archive()
+        termine = threading.Event()
+
+        with transaction.atomic():
+            # La ligne est verrouillee, comme le nettoyage la verrouille en
+            # mettant a NULL l'auteur des archives.
+            BackupArchive.objects.select_for_update().get(pk=archive.pk)
+
+            def _ecrire():
+                vue._set_restore_progress(archive, progress=62, phase="Chargement")
+                termine.set()
+
+            # Meme fil que la restauration: c'est ainsi qu'elle l'appelle.
+            _ecrire()
+
+        self.assertTrue(termine.is_set(), "L'ecriture de l'avancement s'est bloquee.")
+
+    def test_l_api_presente_l_avancement_ecrit_sur_disque(self):
+        # Sans cette lecture, l'ecran afficherait la derniere valeur
+        # commitee en base -- figee, exactement comme avant.
+        from django.db import transaction
+
+        from apps.common.serializers import BackupArchiveSerializer
+
+        vue = BackupArchiveViewSet()
+        archive = self._archive()
+
+        with transaction.atomic():
+            vue._set_restore_progress(archive, progress=70, phase="Chargement (3/10)")
 
         archive.refresh_from_db()
-        self.assertEqual(archive.restore_progress, 62)
-        self.assertEqual(archive.restore_phase, "Chargement des donnees")
+        donnees = BackupArchiveSerializer(archive).data
+
+        self.assertEqual(archive.restore_progress, 28)
+        self.assertEqual(donnees["restore_progress"], 70)
+        self.assertEqual(donnees["restore_phase"], "Chargement (3/10)")
+
+    def test_une_restauration_saine_n_est_pas_declaree_morte(self):
+        # Son avancement ne passe plus par la base pendant la transaction:
+        # ne regarder que la base l'aurait tuee au bout d'un quart d'heure.
+        from django.db import transaction
+        from django.utils import timezone
+
+        vue = BackupArchiveViewSet()
+        archive = self._archive()
+        BackupArchive.objects.filter(pk=archive.pk).update(
+            updated_at=timezone.now() - vue.SILENCE_AVANT_ABANDON * 2
+        )
+
+        with transaction.atomic():
+            vue._set_restore_progress(archive, progress=70, phase="Chargement")
+
+        vue._verifier_les_restaurations_bloquees(BackupArchive.objects.all())
+
+        archive.refresh_from_db()
+        self.assertEqual(archive.status, BackupArchive.Status.RUNNING)
+
+
+class RestaurationCommeEnProductionTests(TransactionTestCase):
+    """Le trajet complet, sans transaction de test autour.
+
+    Un `TestCase` enveloppe chaque test dans une transaction: la
+    restauration y tourne deja « dans un bloc atomique » des la premiere
+    ligne, ce qui ne ressemble pas a la production. Ici rien n'enveloppe
+    rien -- le nettoyage verrouille pour de vrai, l'avancement doit
+    reellement contourner ces verrous, et la restauration doit aller au bout.
+    """
+
+    def test_sauvegarde_puis_restauration_globales_vont_a_cent(self):
+        from datetime import date
+
+        from apps.accounts.models import User, UserRole
+        from apps.school.models import AcademicYear, ClassRoom, Etablissement, Student
+
+        etablissement = Etablissement.objects.create(name="Etab Production", code="EPRD")
+        annee = AcademicYear.objects.create(
+            name="2025-2026 prod",
+            start_date=date(2025, 9, 1),
+            end_date=date(2026, 7, 31),
+            is_active=True,
+            etablissement=etablissement,
+        )
+        classe = ClassRoom.objects.create(
+            name="6eme A", academic_year=annee, etablissement=etablissement
+        )
+        admin = User.objects.create_user(
+            username="admin_prod",
+            password="Pass1234!",
+            role=UserRole.SUPER_ADMIN,
+            etablissement=etablissement,
+        )
+        for rang in range(12):
+            eleve = User.objects.create_user(
+                username=f"eleve_prod_{rang}",
+                password="Pass1234!",
+                role=UserRole.STUDENT,
+                etablissement=etablissement,
+            )
+            Student.objects.create(
+                user=eleve, classroom=classe, etablissement=etablissement, gender="F"
+            )
+
+        vue = BackupArchiveViewSet()
+        with tempfile.TemporaryDirectory() as media:
+            with override_settings(MEDIA_ROOT=media):
+                sauvegarde = BackupArchive.objects.create(
+                    scope=BackupArchive.Scope.GLOBAL,
+                    created_by=admin,
+                    include_media=False,
+                    status=BackupArchive.Status.PENDING,
+                )
+                vue._build_archive(sauvegarde)
+                sauvegarde.refresh_from_db()
+                self.assertEqual(sauvegarde.status, BackupArchive.Status.COMPLETED)
+                # Une sauvegarde n'ecrit pas dans les champs de restauration:
+                # l'ecran s'en sert pour distinguer les deux gestes.
+                self.assertEqual(sauvegarde.restore_phase, "")
+
+                archive = Path(sauvegarde.file_path)
+                self.addCleanup(lambda: archive.unlink(missing_ok=True))
+
+                vue._restore_from_archive(sauvegarde, archive, actor=admin)
+
+        ligne = BackupArchive.objects.get(pk=sauvegarde.pk)
+        self.assertEqual(ligne.restore_progress, 100, ligne.restore_phase)
+        self.assertEqual(ligne.status, BackupArchive.Status.COMPLETED)
+        self.assertEqual(Student.objects.count(), 12)
+        self.assertFalse(
+            BackupArchiveViewSet._fichier_d_avancement(ligne.pk).exists(),
+            "Le fichier d'avancement doit disparaitre une fois revenu en base.",
+        )
+
