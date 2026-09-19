@@ -31,7 +31,14 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import AuditLogPagination
-from .sauvegarde import fichiers_a_archiver, poids_total, volume_de_la_bibliotheque
+from .sauvegarde import (
+    fichiers_a_archiver,
+    lire as lire_le_media,
+    mesurer as mesurer_les_medias,
+    poids_total,
+    reposer as reposer_le_media,
+    volume_de_la_bibliotheque,
+)
 from .models import ActivityLog, BackupArchive, PersonnalisationPlateforme
 from .serializers import ActivityLogSerializer, BackupArchiveSerializer, PersonnalisationSerializer
 
@@ -813,9 +820,13 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             # denominateur, il n'y a ni pourcentage ni reste a annoncer.
             fichiers = []
             if backup.include_media:
-                fichiers = fichiers_a_archiver(
-                    settings.MEDIA_ROOT,
-                    avec_bibliotheque=backup.include_library_documents,
+                # Par le stockage configure, et non par le dossier du
+                # conteneur: en production les fichiers vivent chez Supabase,
+                # et ce dossier-la est vide.
+                fichiers = mesurer_les_medias(
+                    fichiers_a_archiver(
+                        avec_bibliotheque=backup.include_library_documents
+                    )
                 )
             octets_des_medias = poids_total(fichiers)
             octets_a_ecrire = octets_des_donnees + octets_des_medias
@@ -863,13 +874,18 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
                 for rang, fichier in enumerate(fichiers, start=1):
                     try:
-                        zf.write(fichier.chemin, arcname=fichier.nom_dans_l_archive)
-                    except OSError:
+                        # Copie par morceaux: un fichier de quarante
+                        # mega-octets n'a pas a tenir en memoire, et le
+                        # stockage distant se lit en flux comme le disque.
+                        with lire_le_media(fichier) as source_media:
+                            with zf.open(fichier.nom_dans_l_archive, "w") as cible:
+                                shutil.copyfileobj(source_media, cible)
+                    except Exception:
                         # Un fichier efface ou illisible entre le listage et
                         # l'ecriture ne doit pas faire perdre toute l'archive.
                         continue
 
-                    ecrits += fichier.octets
+                    ecrits += fichier.octets or 0
                     maintenant = time.monotonic()
                     if maintenant - dernier_signal < self._INTERVALLE_DE_SIGNAL and rang != total_fichiers:
                         continue
@@ -1205,15 +1221,24 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 self._set_restore_progress(backup, progress=82, phase="Donnees restaurees")
 
             if media_dir.exists() and media_dir.is_dir():
-                media_root = Path(settings.MEDIA_ROOT)
-                media_root.mkdir(parents=True, exist_ok=True)
-                for src in media_dir.rglob("*"):
+                # Dans le stockage configure, et non sur le disque du
+                # conteneur: en production, les fiches vont chercher leurs
+                # images chez Supabase, et ce disque est efface au prochain
+                # deploiement. Les images d'une archive locale restauree en
+                # production n'apparaissaient donc jamais.
+                reposes = 0
+                for src in sorted(media_dir.rglob("*")):
                     if not src.is_file():
                         continue
-                    dst = media_root / src.relative_to(media_dir)
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src, dst)
-                restore_notes.append("Medias restaures.")
+                    nom = src.relative_to(media_dir).as_posix()
+                    try:
+                        reposer_le_media(nom, src.read_bytes())
+                        reposes += 1
+                    except Exception:
+                        # Un fichier refuse par le stockage ne doit pas faire
+                        # perdre une restauration de donnees deja ecrite.
+                        continue
+                restore_notes.append(f"Medias restaures ({reposes}).")
             self._set_restore_progress(backup, progress=94, phase="Finalisation")
 
         # Le compte qui a lance la restauration peut ne plus exister: une
@@ -2014,11 +2039,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         giga-octets: la case se cochait a l'aveugle, et la sauvegarde
         devenait interminable sans qu'on comprenne pourquoi.
         """
-        media_root = Path(settings.MEDIA_ROOT)
         sans_bibliotheque = poids_total(
-            fichiers_a_archiver(media_root, avec_bibliotheque=False)
+            mesurer_les_medias(fichiers_a_archiver(avec_bibliotheque=False))
         )
-        bibliotheque = volume_de_la_bibliotheque(media_root)
+        bibliotheque = volume_de_la_bibliotheque()
         archives = BackupArchive.objects.aggregate(
             nombre=models.Count("id"),
             octets=models.Sum("file_size_bytes"),
