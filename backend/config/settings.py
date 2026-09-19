@@ -1,3 +1,4 @@
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -183,6 +184,16 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# Ou vivent les archives de sauvegarde, leurs journaux et leurs fichiers
+# d'avancement. Un reglage plutot qu'un chemin ecrit en quatre endroits: les
+# tests ecrivaient leurs archives dans le vrai dossier, a cote de celles de
+# l'ecole, et y laissaient des fichiers qu'aucune ligne ne referencait.
+BACKUP_ROOT = Path(config("BACKUP_ROOT", default=str(BASE_DIR / "backups")))
+if "test" in sys.argv[1:2]:
+    import tempfile as _tempfile
+
+    BACKUP_ROOT = Path(_tempfile.mkdtemp(prefix="gestion_school_backups_test_"))
 
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},

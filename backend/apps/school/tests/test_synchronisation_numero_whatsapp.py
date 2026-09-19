@@ -87,7 +87,7 @@ class SynchronisationDuNumeroTests(TestCase):
         profil.refresh_from_db()
         avant = profil.whatsapp_phone
 
-        user.phone = "76 12 34 56 / bureau 66 74 22 32"
+        user.phone = "76123456 / 66742232"
         user.save(update_fields=["phone"])
 
         profil.refresh_from_db()

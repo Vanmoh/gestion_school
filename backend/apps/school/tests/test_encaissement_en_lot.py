@@ -177,7 +177,7 @@ class EncaissementEnLotTests(_FinanceMixin, APITestCase):
     def test_un_frais_d_une_autre_ecole_fait_echouer_le_lot(self):
         voisine = Etablissement.objects.create(name="Ecole voisine lot", code="EVL")
         annee_voisine = AcademicYear.objects.create(
-            name="2025-2026 voisine lot",
+            name="2025-26 voisine",
             start_date=date(2025, 9, 1),
             end_date=date(2026, 7, 31),
             etablissement=voisine,

@@ -214,7 +214,7 @@ class SuppressionDesArchivesTests(APITestCase):
             password="pass12345",
             role=UserRole.DIRECTOR,
         )
-        self.racine = Path(settings.BASE_DIR) / "backups" / "archives"
+        self.racine = Path(settings.BACKUP_ROOT) / "archives"
         self.racine.mkdir(parents=True, exist_ok=True)
 
     def _archive(self, nom: str, *, status_=BackupArchive.Status.COMPLETED):
