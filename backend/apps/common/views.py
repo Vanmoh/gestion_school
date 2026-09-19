@@ -16,7 +16,6 @@ from django.apps import apps
 from django.core import serializers
 from django.core.files.uploadedfile import UploadedFile
 from django.db import close_old_connections, connection, transaction
-from django.db.utils import ConnectionHandler
 from django.db import models
 from django.db.models import Q
 from django.db.models.deletion import ProtectedError
@@ -501,6 +500,22 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
     # d'un conteneur a 512 Mo -- meme sur une table large.
     TAILLE_DE_LOT = 500
 
+    # Des tables d'etat instantane, sans rien a proteger. Elles ne partent
+    # pas dans une archive et une restauration n'y touche pas.
+    #
+    # La presence du chat dit qui est connecte a la seconde meme. La
+    # restaurer depuis une archive d'hier n'aurait aucun sens -- et surtout,
+    # chaque utilisateur connecte la met a jour toutes les dix secondes. Tant
+    # que la restauration la tenait verrouillee dans sa transaction, ces
+    # mises a jour s'empilaient: trente-trois requetes bloquees constatees
+    # dans Postgres, soit toute l'application gelee. En production, avec
+    # deux workers seulement, cela les sature, le controle de sante echoue,
+    # Render redemarre le conteneur -- et tue la restauration.
+    TABLES_EPHEMERES = frozenset({"chat.chatpresence"})
+
+    def _est_ephemere(self, model) -> bool:
+        return model._meta.label_lower in self.TABLES_EPHEMERES
+
     def _modeles_a_sauvegarder(self):
         """Les tables qu'une archive emporte, dans l'ordre de leurs dependances.
 
@@ -512,6 +527,8 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             if opts.proxy or not opts.managed:
                 continue
             if opts.app_label in {"contenttypes", "sessions", "admin"}:
+                continue
+            if self._est_ephemere(model):
                 continue
             yield model
 
@@ -570,7 +587,12 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             premier = True
             for rang, model in enumerate(modeles, start=1):
                 if backup is not None:
-                    self._set_restore_progress(
+                    # Dans les champs de la sauvegarde, pas de la
+                    # restauration: l'ecran et la detection de blocage
+                    # distinguent les deux gestes a la phase de restauration.
+                    # Ecrite ici, elle faisait passer chaque sauvegarde pour
+                    # une restauration.
+                    self._set_build_progress(
                         backup,
                         phase=f"Lecture : {model._meta.label} ({rang}/{len(modeles)})",
                     )
@@ -719,6 +741,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         restait « en cours » indefiniment: l'ecran affichait une barre qui
         n'avancait plus, sans jamais rien expliquer.
         """
+        try:
+            self._fichier_d_avancement(backup_id).unlink(missing_ok=True)
+        except OSError:
+            pass
         try:
             BackupArchive.objects.filter(pk=backup_id).update(
                 status=BackupArchive.Status.FAILED,
@@ -878,46 +904,92 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         return backup
 
     def _ecrire_l_avancement(self, backup_id: int, champs: dict) -> None:
-        """Ecrit l'avancement hors de la transaction en cours.
+        """Rend l'avancement visible, sans jamais attendre la base.
 
-        C'est le coeur du « fige a 28 % ». La restauration nettoie puis
-        charge dans une seule transaction -- il le faut, sinon un echec en
-        cours de chargement laisserait la base videe. Mais tout ce qui est
-        ecrit dans une transaction reste invisible aux autres connexions
-        jusqu'au commit: l'ecran, qui interroge sur sa propre connexion,
-        lisait donc la derniere valeur commitee -- 28 -- pendant toute la
-        duree du travail. Et si le processus mourait, la transaction etait
-        annulee et cette valeur restait la pour toujours.
+        Deux essais ont precede celui-ci, et chacun a sa lecon.
 
-        L'avancement n'a pas a etre atomique avec les donnees: il decrit le
-        travail, il n'en fait pas partie. On l'ecrit donc sur une connexion
-        a part, qui commite tout de suite.
+        Ecrit dans la transaction de la restauration, l'avancement restait
+        invisible: l'ecran lisait sur sa propre connexion la derniere valeur
+        commitee -- 28 -- pendant toute la duree du travail.
+
+        Ecrit sur une seconde connexion, il se bloquait: le nettoyage met a
+        NULL l'auteur des archives en supprimant les comptes, ce qui verrouille
+        la ligne meme dont on voulait ecrire l'avancement. La seconde
+        connexion attendait ce verrou, la restauration attendait en Python
+        que l'ecriture revienne -- chacune attendant l'autre, pour toujours.
+        Constate dans Postgres, restauration figee a 40 %.
+
+        Pendant la transaction, l'avancement part donc dans un fichier: le
+        processus detache et l'API partagent le disque du conteneur, et un
+        fichier ne prend aucun verrou en base. Hors transaction, il reprend
+        sa place dans la ligne.
         """
-        if not transaction.get_connection().in_atomic_block:
-            BackupArchive.objects.filter(pk=backup_id).update(**champs)
+        if transaction.get_connection().in_atomic_block:
+            self._ecrire_l_avancement_sur_disque(backup_id, champs)
             return
 
-        colonnes = ", ".join(f"{nom} = %s" for nom in champs)
-        valeurs = list(champs.values()) + [backup_id]
-        handler = ConnectionHandler(settings.DATABASES)
+        BackupArchive.objects.filter(pk=backup_id).update(**champs)
+        # Revenu en base: le fichier ne dirait plus rien de plus juste.
         try:
-            connexion = handler["default"]
-            with connexion.cursor() as curseur:
-                curseur.execute(
-                    f"UPDATE {BackupArchive._meta.db_table} SET {colonnes} WHERE id = %s",
-                    valeurs,
-                )
-            if not connexion.get_autocommit():
-                connexion.commit()
-        except Exception:
-            # L'avancement n'est qu'un renseignement: son echec ne doit pas
-            # faire perdre la restauration qui, elle, travaille.
-            try:
-                BackupArchive.objects.filter(pk=backup_id).update(**champs)
-            except Exception:
-                pass
-        finally:
-            handler.close_all()
+            self._fichier_d_avancement(backup_id).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _est_silencieuse(self, archive) -> bool:
+        """Vrai si l'operation ne donne plus signe de vie depuis trop longtemps.
+
+        Le dernier signe est le plus recent des deux: la ligne en base, ou
+        le fichier d'avancement que la restauration ecrit pendant sa
+        transaction. Ne regarder que la base ferait passer pour morte une
+        restauration saine -- et la rendrait supprimable pendant qu'elle lit
+        encore son archive.
+        """
+        limite = timezone.now() - self.SILENCE_AVANT_ABANDON
+        if archive.updated_at and archive.updated_at >= limite:
+            return False
+        try:
+            mtime = self._fichier_d_avancement(archive.id).stat().st_mtime
+        except OSError:
+            return True
+        dernier = datetime.fromtimestamp(mtime, tz=timezone.get_current_timezone())
+        # Un fichier plus ancien que la ligne appartient a une archive
+        # precedente qui portait le meme numero -- une base restauree
+        # recommence ses numeros. Le prendre pour un signe de vie ferait
+        # passer une operation morte pour vivante, indefiniment.
+        if archive.created_at and dernier < archive.created_at:
+            return True
+        return dernier < limite
+
+    @staticmethod
+    def _fichier_d_avancement(backup_id: int) -> Path:
+        dossier = Path(settings.BASE_DIR) / "backups" / "journaux"
+        dossier.mkdir(parents=True, exist_ok=True)
+        return dossier / f"avancement_{backup_id}.json"
+
+    def _ecrire_l_avancement_sur_disque(self, backup_id: int, champs: dict) -> None:
+        donnees = {
+            cle: (valeur.isoformat() if hasattr(valeur, "isoformat") else valeur)
+            for cle, valeur in champs.items()
+        }
+        fichier = self._fichier_d_avancement(backup_id)
+        provisoire = fichier.with_suffix(".tmp")
+        try:
+            provisoire.write_text(json.dumps(donnees), encoding="utf-8")
+            # Remplacement atomique: l'API ne lit jamais un fichier a moitie
+            # ecrit, qui la ferait echouer au decodage.
+            os.replace(provisoire, fichier)
+        except OSError:
+            pass
+
+    @classmethod
+    def avancement_sur_disque(cls, backup_id: int) -> dict:
+        """L'avancement que le processus a ecrit hors base, s'il y en a un."""
+        try:
+            return json.loads(
+                cls._fichier_d_avancement(backup_id).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return {}
 
     def _set_restore_progress(self, backup_ref, *, progress=None, phase=None):
         backup_id = backup_ref.id if isinstance(backup_ref, BackupArchive) else int(backup_ref)
@@ -936,6 +1008,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         self._ecrire_l_avancement(backup_id, update_kwargs)
 
     def _mark_restore_failed(self, backup_id: int, exc: Exception):
+        try:
+            self._fichier_d_avancement(backup_id).unlink(missing_ok=True)
+        except OSError:
+            pass
         try:
             backup = BackupArchive.objects.get(pk=backup_id)
             backup.status = BackupArchive.Status.FAILED
@@ -1429,6 +1505,8 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 continue
             if model.__name__ in {"BackupArchive"}:
                 continue
+            if self._est_ephemere(model):
+                continue
             global_models.append(model)
 
         retry_models = []
@@ -1610,7 +1688,12 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         for archive in queryset.filter(
             status=BackupArchive.Status.RUNNING, updated_at__lt=limite
         ):
-            restauration = bool((archive.restore_phase or "").strip())
+            if not self._est_silencieuse(archive):
+                continue
+
+            restauration = bool((archive.restore_phase or "").strip()) or bool(
+                self.avancement_sur_disque(archive.id).get("restore_phase")
+            )
             geste = "restauration" if restauration else "sauvegarde"
 
             trace = ""
@@ -1785,10 +1868,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             # donc impossible a supprimer: l'ecran refusait sans fin une
             # archive que plus personne ne touchait. On la laisse partir des
             # qu'elle s'est tue assez longtemps.
-            silencieuse = backup.updated_at and backup.updated_at < (
-                timezone.now() - self.SILENCE_AVANT_ABANDON
-            )
-            if not silencieuse:
+            if not self._est_silencieuse(backup):
                 return Response(
                     {
                         "detail": (
@@ -1837,13 +1917,12 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         # traitement est mort, non. Sans cette nuance, une archive figee
         # survivait a tous les nettoyages et encombrait l'historique pour
         # toujours.
-        silence = timezone.now() - self.SILENCE_AVANT_ABANDON
         candidates = [
             archive
             for archive in self.filter_queryset(self.get_queryset())
             if archive.status
             not in {BackupArchive.Status.RUNNING, BackupArchive.Status.PENDING}
-            or (archive.updated_at and archive.updated_at < silence)
+            or self._est_silencieuse(archive)
         ]
         candidates.sort(key=lambda row: (row.created_at, row.id), reverse=True)
 

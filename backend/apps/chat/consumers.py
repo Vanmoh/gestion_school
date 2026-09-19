@@ -4,14 +4,16 @@ from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth.models import AnonymousUser
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.utils import timezone
 
 from apps.accounts.access import affinement_autorise
-from apps.common.presence import presence_en_ligne
+from apps.common.presence import presence_en_ligne, sans_attendre_les_verrous
 from apps.school.models import Etablissement
 
 from .models import ChatMessage, ChatPresence, Conversation, ConversationParticipant
+
+
 
 # Qui peut faire surgir la fenetre de discussion chez quelqu'un d'autre.
 #
@@ -526,37 +528,45 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
         paraitrait hors ligne pendant les vingt secondes qui separent la
         connexion du premier battement.
         """
-        with transaction.atomic():
-            row, _ = ChatPresence.objects.select_for_update().get_or_create(
-                user=self.user,
-                defaults={"is_online": True, "connection_count": 0},
-            )
-            row.connection_count += 1
-            row.is_online = True
-            row.last_seen_at = timezone.now()
-            row.save(
-                update_fields=["connection_count", "is_online", "last_seen_at", "updated_at"]
-            )
+        try:
+            with sans_attendre_les_verrous():
+                row, _ = ChatPresence.objects.select_for_update().get_or_create(
+                    user=self.user,
+                    defaults={"is_online": True, "connection_count": 0},
+                )
+                row.connection_count += 1
+                row.is_online = True
+                row.last_seen_at = timezone.now()
+                row.save(
+                    update_fields=["connection_count", "is_online", "last_seen_at", "updated_at"]
+                )
+                return True
+        except OperationalError:
+            # Ligne verrouillee par une restauration en cours: la connexion
+            # reste ouverte, le compteur se remettra d'accord au battement.
             return True
 
     @database_sync_to_async
     def _decrement_presence(self):
-        with transaction.atomic():
-            row, _ = ChatPresence.objects.select_for_update().get_or_create(
-                user=self.user,
-                defaults={"is_online": False, "connection_count": 0},
-            )
-            row.connection_count = max(0, row.connection_count - 1)
-            reste_un_socket = row.connection_count > 0
-            row.is_online = reste_un_socket
-            # L'heure de depart se pose meme s'il reste un autre onglet: c'est
-            # la derniere fois qu'on a vu la personne, pas la fin de sa
-            # session.
-            row.last_seen_at = timezone.now()
-            row.save(
-                update_fields=["connection_count", "is_online", "last_seen_at", "updated_at"]
-            )
-            return reste_un_socket, row.last_seen_at
+        try:
+            with sans_attendre_les_verrous():
+                row, _ = ChatPresence.objects.select_for_update().get_or_create(
+                    user=self.user,
+                    defaults={"is_online": False, "connection_count": 0},
+                )
+                row.connection_count = max(0, row.connection_count - 1)
+                reste_un_socket = row.connection_count > 0
+                row.is_online = reste_un_socket
+                # L'heure de depart se pose meme s'il reste un autre onglet:
+                # c'est la derniere fois qu'on a vu la personne, pas la fin
+                # de sa session.
+                row.last_seen_at = timezone.now()
+                row.save(
+                    update_fields=["connection_count", "is_online", "last_seen_at", "updated_at"]
+                )
+                return reste_un_socket, row.last_seen_at
+        except OperationalError:
+            return False, timezone.now()
 
     @database_sync_to_async
     def _battre_presence(self):
@@ -567,11 +577,17 @@ class ChatStreamConsumer(AsyncJsonWebsocketConsumer):
         ligne au bout d'une minute.
         """
         maintenant = timezone.now()
-        row, _ = ChatPresence.objects.get_or_create(
-            user=self.user,
-            defaults={"is_online": True, "connection_count": 1, "last_seen_at": maintenant},
-        )
-        row.is_online = True
-        row.last_seen_at = maintenant
-        row.save(update_fields=["is_online", "last_seen_at", "updated_at"])
+        try:
+            with sans_attendre_les_verrous():
+                row, _ = ChatPresence.objects.get_or_create(
+                    user=self.user,
+                    defaults={"is_online": True, "connection_count": 1, "last_seen_at": maintenant},
+                )
+                row.is_online = True
+                row.last_seen_at = maintenant
+                row.save(update_fields=["is_online", "last_seen_at", "updated_at"])
+        except OperationalError:
+            # Un battement manque est rattrape au suivant, dix secondes plus
+            # tard: il ne vaut pas qu'on bloque un fil pour lui.
+            pass
         return maintenant

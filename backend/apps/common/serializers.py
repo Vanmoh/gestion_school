@@ -40,6 +40,38 @@ class BackupArchiveSerializer(serializers.ModelSerializer):
         etablissement = obj.etablissement
         return etablissement.name if etablissement else ""
 
+    # Les champs que le processus detache ecrit sur disque pendant sa
+    # transaction, et qu'il faut donc lire la plutot qu'en base.
+    CHAMPS_D_AVANCEMENT = (
+        "restore_progress",
+        "restore_phase",
+        "build_progress",
+        "build_phase",
+        "bytes_done",
+        "bytes_total",
+        "updated_at",
+    )
+
+    def to_representation(self, instance):
+        """Presente l'avancement le plus recent, qu'il soit en base ou sur disque.
+
+        Pendant sa transaction, la restauration n'ecrit plus son avancement
+        en base -- elle s'y bloquerait sur ses propres verrous. Elle l'ecrit
+        dans un fichier, et c'est ici qu'on le reprend: sans cela l'ecran
+        afficherait de nouveau la derniere valeur commitee, figee.
+        """
+        donnees = super().to_representation(instance)
+        if instance.status != BackupArchive.Status.RUNNING:
+            return donnees
+
+        from .views import BackupArchiveViewSet
+
+        sur_disque = BackupArchiveViewSet.avancement_sur_disque(instance.id)
+        for cle in self.CHAMPS_D_AVANCEMENT:
+            if cle in sur_disque:
+                donnees[cle] = sur_disque[cle]
+        return donnees
+
     class Meta:
         model = BackupArchive
         fields = "__all__"
