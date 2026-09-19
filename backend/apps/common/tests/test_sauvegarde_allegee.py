@@ -11,9 +11,12 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import User, UserRole
 from apps.common.models import BackupArchive
+from django.core.files.storage import FileSystemStorage
+
 from apps.common.sauvegarde import (
     est_un_document_de_bibliotheque,
     fichiers_a_archiver,
+    mesurer,
     poids_total,
     volume_de_la_bibliotheque,
 )
@@ -35,6 +38,10 @@ class SelectionDesFichiersTests(SimpleTestCase):
         self.dossier = tempfile.TemporaryDirectory()
         self.addCleanup(self.dossier.cleanup)
         self.racine = Path(self.dossier.name)
+        # Le parcours passe desormais par le stockage que Django utilise, et
+        # non par un chemin: c'est ce qui permet a la sauvegarde de voir les
+        # fichiers de production, qui vivent dans un stockage objet.
+        self.stockage = FileSystemStorage(location=str(self.racine))
 
         _poser(self.racine, "students/photo.jpg", 100)
         _poser(self.racine, "profiles/avatar.png", 50)
@@ -42,35 +49,38 @@ class SelectionDesFichiersTests(SimpleTestCase):
         _poser(self.racine, "library_docs/etab_3/Reglement/regle.pdf", 3000)
 
     def test_la_bibliotheque_reste_dehors_par_defaut(self):
-        retenus = fichiers_a_archiver(self.racine, avec_bibliotheque=False)
+        retenus = mesurer(
+            fichiers_a_archiver(self.stockage, avec_bibliotheque=False), self.stockage
+        )
 
-        noms = sorted(str(fichier.relatif) for fichier in retenus)
+        noms = sorted(fichier.nom for fichier in retenus)
         self.assertEqual(noms, ["profiles/avatar.png", "students/photo.jpg"])
         self.assertEqual(poids_total(retenus), 150)
 
     def test_la_bibliotheque_entre_quand_on_la_demande(self):
-        retenus = fichiers_a_archiver(self.racine, avec_bibliotheque=True)
+        retenus = mesurer(
+            fichiers_a_archiver(self.stockage, avec_bibliotheque=True), self.stockage
+        )
 
         self.assertEqual(len(retenus), 4)
         self.assertEqual(poids_total(retenus), 8150)
 
     def test_le_volume_de_la_bibliotheque_se_mesure_a_part(self):
-        self.assertEqual(volume_de_la_bibliotheque(self.racine), 8000)
+        self.assertEqual(volume_de_la_bibliotheque(self.stockage), 8000)
 
     def test_un_dossier_absent_ne_fait_pas_echouer(self):
-        self.assertEqual(fichiers_a_archiver(self.racine / "nulle_part", avec_bibliotheque=True), [])
-        self.assertEqual(volume_de_la_bibliotheque(self.racine / "nulle_part"), 0)
+        vide = FileSystemStorage(location=str(self.racine / "nulle_part"))
+        self.assertEqual(fichiers_a_archiver(vide, avec_bibliotheque=True), [])
+        self.assertEqual(volume_de_la_bibliotheque(vide), 0)
 
     def test_un_dossier_qui_commence_pareil_n_est_pas_la_bibliotheque(self):
         # « library_docs_archive » n'est pas « library_docs »: comparer sur
         # le prefixe de la chaine aurait exclu les deux.
-        self.assertFalse(
-            est_un_document_de_bibliotheque(Path("library_docs_archive/a.pdf"))
-        )
-        self.assertTrue(est_un_document_de_bibliotheque(Path("library_docs/a.pdf")))
+        self.assertFalse(est_un_document_de_bibliotheque("library_docs_archive/a.pdf"))
+        self.assertTrue(est_un_document_de_bibliotheque("library_docs/a.pdf"))
 
     def test_le_nom_dans_l_archive_est_prefixe_par_media(self):
-        retenus = fichiers_a_archiver(self.racine, avec_bibliotheque=False)
+        retenus = fichiers_a_archiver(self.stockage, avec_bibliotheque=False)
         noms = sorted(fichier.nom_dans_l_archive for fichier in retenus)
         self.assertEqual(noms, ["media/profiles/avatar.png", "media/students/photo.jpg"])
 

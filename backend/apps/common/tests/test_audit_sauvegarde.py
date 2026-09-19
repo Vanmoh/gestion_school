@@ -386,7 +386,13 @@ class ChargementParLotsTests(_Decor, APITestCase):
             q for q in requetes.captured_queries if q["sql"].lstrip().upper().startswith("INSERT")
         ]
         self.assertEqual(User.objects.filter(username__startswith="lot_").count(), 1000)
-        self.assertLessEqual(len(ecritures), 3, f"{len(ecritures)} insertions pour 1000 lignes")
+        # Le seuil tient pour les deux moteurs: PostgreSQL passe en deux ou
+        # trois insertions, SQLite en une quinzaine -- il borne le nombre de
+        # parametres par requete. Les deux sont sans commune mesure avec les
+        # mille allers-retours d'avant.
+        self.assertLessEqual(
+            len(ecritures), 25, f"{len(ecritures)} insertions pour 1000 lignes"
+        )
 
 
 class CompteursApresRestaurationTests(TransactionTestCase):
@@ -431,3 +437,90 @@ class CompteursApresRestaurationTests(TransactionTestCase):
 
         # Prouve avant correction: la saisie suivante recevait le numero 1.
         self.assertGreater(suivant.pk, 900000)
+
+
+class MediasDansLeStockageTests(_Decor, APITestCase):
+    """Les medias suivent le stockage configure, pas le disque du conteneur.
+
+    En production, les fichiers vivent chez Supabase et le dossier `media` du
+    conteneur est vide. La sauvegarde lisait ce dossier: une archive faite en
+    production n'emportait aucune photo d'eleve, aucune piece jointe, aucun
+    logo -- alors que « inclure les medias » etait coche. Et une archive faite
+    en local deposait ses images sur ce disque, ou rien ne va les chercher et
+    que le prochain deploiement efface.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls._monter()
+
+    def setUp(self):
+        super().setUp()
+        from django.core.files.storage import FileSystemStorage
+
+        self.dossier = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dossier.cleanup)
+        # Un stockage qui n'est pas MEDIA_ROOT: c'est exactement la situation
+        # de la production, ou le stockage est ailleurs que le disque.
+        self.stockage = FileSystemStorage(location=self.dossier.name)
+
+    def _poser(self, nom, contenu=b"x"):
+        from django.core.files.base import ContentFile
+
+        return self.stockage.save(nom, ContentFile(contenu))
+
+    def test_la_sauvegarde_voit_les_fichiers_du_stockage(self):
+        from apps.common.sauvegarde import fichiers_a_archiver
+
+        self._poser("personnalisation/fonds/login.png")
+        self._poser("students/photo.jpg")
+
+        noms = {f.nom for f in fichiers_a_archiver(self.stockage, avec_bibliotheque=False)}
+
+        self.assertIn("personnalisation/fonds/login.png", noms)
+        self.assertIn("students/photo.jpg", noms)
+
+    def test_la_bibliotheque_reste_dehors_sans_etre_parcourue(self):
+        from apps.common.sauvegarde import fichiers_a_archiver
+
+        self._poser("library_docs/TSExp/annale.pdf")
+        self._poser("students/photo.jpg")
+
+        noms = {f.nom for f in fichiers_a_archiver(self.stockage, avec_bibliotheque=False)}
+
+        self.assertEqual(noms, {"students/photo.jpg"})
+
+    def test_la_bibliotheque_entre_quand_on_la_demande(self):
+        from apps.common.sauvegarde import fichiers_a_archiver
+
+        self._poser("library_docs/TSExp/annale.pdf")
+
+        noms = {f.nom for f in fichiers_a_archiver(self.stockage, avec_bibliotheque=True)}
+
+        self.assertEqual(noms, {"library_docs/TSExp/annale.pdf"})
+
+    def test_la_restauration_repose_le_fichier_a_son_nom(self):
+        # Le stockage objet de production est configure pour ne pas ecraser:
+        # sans effacement prealable, il renommerait le fichier en
+        # « login_a1b2c3.png », et la fiche qui le reference pointerait dans
+        # le vide.
+        from apps.common.sauvegarde import reposer
+
+        self._poser("personnalisation/fonds/login.png", b"ancienne image")
+
+        reposer("personnalisation/fonds/login.png", b"nouvelle image", self.stockage)
+
+        with self.stockage.open("personnalisation/fonds/login.png") as fichier:
+            self.assertEqual(fichier.read(), b"nouvelle image")
+        self.assertEqual(
+            len(self.stockage.listdir("personnalisation/fonds")[1]),
+            1,
+            "Le fichier a ete double au lieu d'etre remplace.",
+        )
+
+    def test_un_fichier_absent_se_repose_quand_meme(self):
+        from apps.common.sauvegarde import reposer
+
+        reposer("etablissements/logos/neuf.png", b"image", self.stockage)
+
+        self.assertTrue(self.stockage.exists("etablissements/logos/neuf.png"))
