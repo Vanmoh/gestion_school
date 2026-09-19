@@ -7,6 +7,7 @@ from django.middleware.gzip import GZipMiddleware as DjangoGZipMiddleware
 from django.utils import timezone
 
 from apps.common.models import ActivityLog
+from apps.common.presence import sans_attendre_les_verrous
 
 
 class GZipMiddleware(DjangoGZipMiddleware):
@@ -99,21 +100,27 @@ class ActivityLogMiddleware:
             user_agent = (request.META.get("HTTP_USER_AGENT", "") or "")[:255]
             details = self._build_details(request)
 
-            ActivityLog.objects.create(
-                user=user,
-                etablissement=etablissement,
-                role=role,
-                action=action,
-                method=request.method,
-                path=path[:255],
-                module=module,
-                target=target,
-                status_code=getattr(response, "status_code", 0) or 0,
-                success=200 <= (getattr(response, "status_code", 0) or 0) < 400,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                details=details,
-            )
+            # Sans attendre non plus: la verification de ses cles
+            # etrangeres attendait, pendant une restauration globale, que la
+            # suppression des comptes soit validee. Une ligne de journal
+            # perdue pendant qu'on remplace toute la plateforme vaut mieux
+            # qu'une requete gelee.
+            with sans_attendre_les_verrous():
+                ActivityLog.objects.create(
+                    user=user,
+                    etablissement=etablissement,
+                    role=role,
+                    action=action,
+                    method=request.method,
+                    path=path[:255],
+                    module=module,
+                    target=target,
+                    status_code=getattr(response, "status_code", 0) or 0,
+                    success=200 <= (getattr(response, "status_code", 0) or 0) < 400,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    details=details,
+                )
         except Exception:
             pass
 
@@ -225,10 +232,20 @@ class PresenceMiddleware:
             return response
 
         try:
-            self._marquer(user)
+            # Sans attendre les verrous. Cette ecriture traverse chaque
+            # requete authentifiee, lectures comprises. Pendant une
+            # restauration globale, qui tient la table de presence
+            # verrouillee le temps de sa transaction, elle attendait la fin:
+            # toute l'application gelait -- constate en local, une lecture
+            # partie a 17 h 56 et revenue a 17 h 59, a la seconde ou la
+            # restauration validait. Le socket du chat et sa route REST
+            # etaient deja proteges; celle-ci, la plus frequentee, avait ete
+            # oubliee.
+            with sans_attendre_les_verrous():
+                self._marquer(user)
         except Exception:
             # La presence est un confort d'affichage: elle ne fait echouer
-            # aucune requete si sa table est indisponible.
+            # aucune requete, qu'elle soit indisponible ou verrouillee.
             pass
 
         return response
