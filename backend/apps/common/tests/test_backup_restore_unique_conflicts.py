@@ -1,3 +1,4 @@
+from pathlib import Path
 import json
 
 from django.test import TestCase
@@ -239,8 +240,17 @@ class BackupRestoreUniqueConflictTests(TestCase):
             etablissement=self.etablissement,
         )
 
-        payload_json = self.viewset._serialize_etablissement(self.etablissement)
-        payload = json.loads(payload_json)
+        # La methode rend desormais les requetes a parcourir, et non plus une
+        # chaine JSON portant toute la selection: la base entiere tenait en
+        # memoire plusieurs fois, ce que les 512 Mo du conteneur de
+        # production ne supportent pas. On ecrit donc dans un fichier, comme
+        # la sauvegarde le fait.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as dossier:
+            donnees = Path(dossier) / "data.json"
+            self.viewset._serialize_etablissement_vers(self.etablissement, donnees)
+            payload = json.loads(donnees.read_text(encoding="utf-8"))
 
         user_entry_pks = {
             entry["pk"]

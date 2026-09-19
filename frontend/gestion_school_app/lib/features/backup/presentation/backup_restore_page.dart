@@ -769,9 +769,13 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
         libelle: 'Restauration',
         pourcentage: _pourcentage(row['restore_progress']),
         phase: phaseRestauration,
+        // Une restauration ne compte pas d'octets, seulement des lignes: sa
+        // durée restante se déduit du pourcentage et du temps écoulé.
         octetsFaits: 0,
         octetsTotal: 0,
-        debut: null,
+        debut: DateTime.tryParse(
+          row['restore_started_at']?.toString() ?? '',
+        )?.toLocal(),
       );
     }
 
@@ -799,23 +803,39 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
   /// a se dedire.
   String _resteAFaire(_Avancement avancement) {
     final debut = avancement.debut;
-    if (debut == null || avancement.octetsTotal <= 0) return '';
-    final restant = avancement.octetsTotal - avancement.octetsFaits;
-    if (restant <= 0) return '';
+    if (debut == null) return '';
 
     final ecoule = DateTime.now().difference(debut).inMilliseconds;
-    if (ecoule < 1500 || avancement.octetsFaits <= 0) return '';
+    if (ecoule < 1500) return '';
 
-    final octetsParSeconde = avancement.octetsFaits * 1000 / ecoule;
-    if (octetsParSeconde <= 0) return '';
+    // Deux façons de mesurer, selon ce que l'opération sait compter. La
+    // sauvegarde connaît son volume, donc son débit. La restauration ne
+    // compte que des lignes: c'est son pourcentage qui sert d'avancement.
+    final double? part;
+    if (avancement.octetsTotal > 0) {
+      if (avancement.octetsFaits <= 0) return '';
+      part = avancement.octetsFaits / avancement.octetsTotal;
+    } else if (avancement.pourcentage > 0 && avancement.pourcentage < 100) {
+      part = avancement.pourcentage / 100.0;
+    } else {
+      part = null;
+    }
+    if (part == null || part <= 0 || part >= 1) return '';
 
-    final secondes = (restant / octetsParSeconde).round();
-    if (secondes < 5) return 'reste quelques secondes';
-    if (secondes < 60) return 'reste ~$secondes s';
+    final secondes = ((ecoule / 1000) * (1 - part) / part).round();
+    return 'reste ${_dureeLisible(secondes)}';
+  }
+
+  /// « ~12 s », « ~4 min », « ~2 h ». Arrondi à dessein: annoncer une
+  /// seconde près sur une estimation la ferait se contredire à chaque
+  /// rafraîchissement.
+  String _dureeLisible(int secondes) {
+    if (secondes < 5) return 'quelques secondes';
+    if (secondes < 60) return '~$secondes s';
     final minutes = (secondes / 60).round();
-    if (minutes < 60) return 'reste ~$minutes min';
+    if (minutes < 60) return '~$minutes min';
     final heures = (minutes / 60).round();
-    return 'reste ~$heures h';
+    return '~$heures h';
   }
 
   @override
@@ -1126,8 +1146,22 @@ class _BackupRestorePageState extends ConsumerState<BackupRestorePage> {
                             ),
                         ],
                       ),
+                      // La date de l'archive, et celle de sa restauration
+                      // quand elle a servi. La ligne ne portait que la
+                      // portée et le statut: deux archives du même jour ne
+                      // se distinguaient que par l'horodatage caché dans le
+                      // nom de fichier.
                       Text(
-                        '${_scopeLabel(row['scope']?.toString() ?? '')} • Statut: $statusValue',
+                        [
+                          _scopeLabel(row['scope']?.toString() ?? ''),
+                          'Statut : $statusValue',
+                          if (_dateLisible(row['created_at']).isNotEmpty)
+                            'Créée le ${_dateLisible(row['created_at'])}',
+                          if (_dateLisible(row['restored_at']).isNotEmpty)
+                            'Restaurée le ${_dateLisible(row['restored_at'])}',
+                          if (_octets(row) > 0) _tailleLisible(_octets(row)),
+                        ].join(' • '),
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                       if (isRunning) ...[
                         const SizedBox(height: 8),

@@ -52,3 +52,8 @@ core.*
 # n'ont pas de sens ailleurs. Le reste de .claude/ (settings.json partages,
 # skills, commandes) reste suivi pour profiter a toute l'equipe.
 .claude/settings.local.json
+
+# Captures d'ecran deposees pour signaler un defaut. Elles servent a la
+# discussion, pas au depot -- et `deploy_one_click.sh` fait un `git add -A`,
+# qui les embarquerait en production sans que personne le demande.
+capture_a_corriger/

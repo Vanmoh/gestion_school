@@ -16,6 +16,7 @@ from django.apps import apps
 from django.core import serializers
 from django.core.files.uploadedfile import UploadedFile
 from django.db import close_old_connections, connection, transaction
+from django.db.utils import ConnectionHandler
 from django.db import models
 from django.db.models import Q
 from django.db.models.deletion import ProtectedError
@@ -495,28 +496,107 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 digest.update(chunk)
         return digest.hexdigest()
 
-    def _serialize_global(self) -> str:
-        serialized_payload = []
+    # Combien de lignes on serialise d'un coup. Assez pour que le cout par
+    # lot reste negligeable, assez peu pour qu'un lot tienne dans la memoire
+    # d'un conteneur a 512 Mo -- meme sur une table large.
+    TAILLE_DE_LOT = 500
+
+    def _modeles_a_sauvegarder(self):
+        """Les tables qu'une archive emporte, dans l'ordre de leurs dependances.
+
+        Trois tables techniques de Django restent dehors: elles se
+        reconstituent seules et n'ont aucune valeur metier.
+        """
         for model in apps.get_models():
             opts = model._meta
             if opts.proxy or not opts.managed:
                 continue
             if opts.app_label in {"contenttypes", "sessions", "admin"}:
                 continue
-            queryset = model.objects.all().order_by("pk")
-            if not queryset.exists():
-                continue
-            serialized_payload.append(serializers.serialize("json", queryset))
+            yield model
 
-        if not serialized_payload:
-            return "[]"
+    def _ecrire_les_donnees(self, flux, querysets) -> int:
+        """Ecrit un tableau JSON dans `flux`, lot par lot. Rend le nombre de lignes.
 
-        merged = []
-        for payload in serialized_payload:
-            merged.extend(json.loads(payload))
-        return json.dumps(merged, ensure_ascii=False)
+        La serialisation tenait la base entiere en memoire quatre fois: une
+        chaine JSON par table, les memes donnees reconverties en objets
+        Python, la concatenation de tout cela en une seule chaine, puis cette
+        chaine gardee pendant la compression. Sur un conteneur a 512 Mo, le
+        systeme tuait le processus -- et comme il ecrivait dans le vide,
+        l'ecran restait fige sur « Lecture de la base ».
 
-    def _serialize_etablissement(self, etablissement) -> str:
+        Ici rien ne depasse un lot: on ecrit au fil de l'eau, et la memoire
+        ne depend plus de la taille de la base.
+        """
+        flux.write("[")
+        premier = True
+        total = 0
+
+        for queryset in querysets:
+            lot = []
+            for objet in queryset.iterator(chunk_size=self.TAILLE_DE_LOT):
+                lot.append(objet)
+                if len(lot) < self.TAILLE_DE_LOT:
+                    continue
+                premier = self._ecrire_un_lot(flux, lot, premier)
+                total += len(lot)
+                lot = []
+            if lot:
+                premier = self._ecrire_un_lot(flux, lot, premier)
+                total += len(lot)
+
+        flux.write("]")
+        return total
+
+    def _ecrire_un_lot(self, flux, lot, premier: bool) -> bool:
+        """Ajoute un lot au tableau deja ouvert, sans ses crochets."""
+        fragment = serializers.serialize("json", lot, ensure_ascii=False)
+        # `serialize` rend un tableau complet: on retire ses crochets pour
+        # coudre les lots bout a bout dans un seul tableau.
+        interieur = fragment.strip()[1:-1].strip()
+        if not interieur:
+            return premier
+        if not premier:
+            flux.write(",")
+        flux.write(interieur)
+        return False
+
+    def _serialize_global_vers(self, chemin: Path, backup=None) -> int:
+        """Ecrit toute la base dans `chemin`, table par table."""
+        modeles = list(self._modeles_a_sauvegarder())
+        total = 0
+        with chemin.open("w", encoding="utf-8") as flux:
+            flux.write("[")
+            premier = True
+            for rang, model in enumerate(modeles, start=1):
+                if backup is not None:
+                    self._set_restore_progress(
+                        backup,
+                        phase=f"Lecture : {model._meta.label} ({rang}/{len(modeles)})",
+                    )
+                lot = []
+                for objet in model.objects.all().order_by("pk").iterator(
+                    chunk_size=self.TAILLE_DE_LOT
+                ):
+                    lot.append(objet)
+                    if len(lot) < self.TAILLE_DE_LOT:
+                        continue
+                    premier = self._ecrire_un_lot(flux, lot, premier)
+                    total += len(lot)
+                    lot = []
+                if lot:
+                    premier = self._ecrire_un_lot(flux, lot, premier)
+                    total += len(lot)
+            flux.write("]")
+        return total
+
+    def _serialize_etablissement(self, etablissement):
+        """Les requetes a sauvegarder pour un etablissement, sans les executer.
+
+        Elle rendait une chaine JSON portant toute la selection. Elle rend
+        desormais les requetes elles-memes: l'appelant les parcourt en flux,
+        et la memoire cesse de dependre de la taille de l'ecole.
+        """
         from apps.accounts.models import User
 
         scoped_user_ids = set(
@@ -559,24 +639,27 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                         queryset.exclude(user_id__isnull=True).values_list("user_id", flat=True)
                     )
 
-            if queryset is None or not queryset.exists():
+            if queryset is None:
                 continue
 
-            serialized_payload.append(serializers.serialize("json", queryset.order_by("pk")))
+            # `exists()` retire: c'etait une requete de plus par table, et le
+            # parcours en flux ne coute rien sur une table vide.
+            serialized_payload.append(queryset.order_by("pk"))
 
         missing_referenced_user_ids = referenced_user_ids - scoped_user_ids
         if missing_referenced_user_ids:
-            user_queryset = User.objects.filter(pk__in=missing_referenced_user_ids).order_by("pk")
-            if user_queryset.exists():
-                serialized_payload.append(serializers.serialize("json", user_queryset))
+            serialized_payload.append(
+                User.objects.filter(pk__in=missing_referenced_user_ids).order_by("pk")
+            )
 
-        if not serialized_payload:
-            return "[]"
+        return serialized_payload
 
-        merged = []
-        for payload in serialized_payload:
-            merged.extend(json.loads(payload))
-        return json.dumps(merged, ensure_ascii=False)
+    def _serialize_etablissement_vers(self, etablissement, chemin: Path) -> int:
+        """Ecrit les donnees d'un etablissement dans `chemin`, lot par lot."""
+        with chemin.open("w", encoding="utf-8") as flux:
+            return self._ecrire_les_donnees(
+                flux, self._serialize_etablissement(etablissement)
+            )
 
     # L'ecriture des medias occupe la tranche 5 %-95 % de la barre: avant, on
     # lit la base; apres, on calcule l'empreinte du fichier. Annoncer 100 %
@@ -619,7 +702,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             return
 
         update_kwargs["updated_at"] = timezone.now()
-        BackupArchive.objects.filter(pk=backup_id).update(**update_kwargs)
+        self._ecrire_l_avancement(backup_id, update_kwargs)
 
     def _pourcentage_des_medias(self, ecrits: int, total: int) -> int:
         """Position dans la barre pour `ecrits` octets deja archives."""
@@ -675,87 +758,101 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             ]
         )
 
-        payload_json = self._serialize_global()
-        if backup.scope == BackupArchive.Scope.ETABLISSEMENT:
-            payload_json = self._serialize_etablissement(backup.etablissement)
-        octets_des_donnees = len(payload_json.encode("utf-8"))
+        # Les donnees partent dans un fichier temporaire, et non dans une
+        # chaine: la base entiere tenait en memoire quatre fois, ce que les
+        # 512 Mo du conteneur ne supportent pas. Le systeme tuait alors le
+        # processus, et l'ecran restait fige sur « Lecture de la base ».
+        dossier_temporaire = tempfile.TemporaryDirectory(prefix="backup_data_")
+        donnees = Path(dossier_temporaire.name) / "data.json"
+        try:
+            if backup.scope == BackupArchive.Scope.ETABLISSEMENT:
+                self._serialize_etablissement_vers(backup.etablissement, donnees)
+            else:
+                self._serialize_global_vers(donnees, backup=backup)
+            octets_des_donnees = donnees.stat().st_size
 
-        # Le listage precede l'ecriture pour connaitre le volume total: sans
-        # denominateur, il n'y a ni pourcentage ni reste a annoncer.
-        fichiers = []
-        if backup.include_media:
-            fichiers = fichiers_a_archiver(
-                settings.MEDIA_ROOT,
-                avec_bibliotheque=backup.include_library_documents,
-            )
-        octets_des_medias = poids_total(fichiers)
-        octets_a_ecrire = octets_des_donnees + octets_des_medias
+            # Le listage precede l'ecriture pour connaitre le volume total: sans
+            # denominateur, il n'y a ni pourcentage ni reste a annoncer.
+            fichiers = []
+            if backup.include_media:
+                fichiers = fichiers_a_archiver(
+                    settings.MEDIA_ROOT,
+                    avec_bibliotheque=backup.include_library_documents,
+                )
+            octets_des_medias = poids_total(fichiers)
+            octets_a_ecrire = octets_des_donnees + octets_des_medias
 
-        manifest = {
-            "version": 1,
-            "kind": backup.kind,
-            "scope": backup.scope,
-            "created_at": timezone.localtime().isoformat(),
-            "created_by": getattr(backup.created_by, "username", ""),
-            "etablissement_id": backup.etablissement_id,
-            "include_media": bool(backup.include_media),
-            "include_library_documents": bool(backup.include_library_documents),
-            "media_files": len(fichiers),
-            "bytes_source": octets_a_ecrire,
-        }
+            manifest = {
+                "version": 1,
+                "kind": backup.kind,
+                "scope": backup.scope,
+                "created_at": timezone.localtime().isoformat(),
+                "created_by": getattr(backup.created_by, "username", ""),
+                "etablissement_id": backup.etablissement_id,
+                "include_media": bool(backup.include_media),
+                "include_library_documents": bool(backup.include_library_documents),
+                "media_files": len(fichiers),
+                "bytes_source": octets_a_ecrire,
+            }
 
-        debut, _ = self._PART_MEDIAS
-        self._set_build_progress(
-            backup,
-            progress=debut,
-            phase="Ecriture des donnees",
-            bytes_done=0,
-            bytes_total=octets_a_ecrire,
-        )
-
-        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-            zf.writestr("data.json", payload_json)
-
-            ecrits = octets_des_donnees
-            total_fichiers = len(fichiers)
-            dernier_signal = time.monotonic()
+            debut, _ = self._PART_MEDIAS
             self._set_build_progress(
                 backup,
-                bytes_done=ecrits,
-                progress=self._pourcentage_des_medias(ecrits, octets_a_ecrire),
-                phase=(
-                    f"Medias (0/{total_fichiers})" if total_fichiers else "Donnees archivees"
-                ),
+                progress=debut,
+                phase="Ecriture des donnees",
+                bytes_done=0,
+                bytes_total=octets_a_ecrire,
             )
 
-            for rang, fichier in enumerate(fichiers, start=1):
-                try:
-                    zf.write(fichier.chemin, arcname=fichier.nom_dans_l_archive)
-                except OSError:
-                    # Un fichier efface ou illisible entre le listage et
-                    # l'ecriture ne doit pas faire perdre toute l'archive.
-                    continue
+            with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+                # `write` et non `writestr`: la seconde relit tout le contenu en
+                # memoire avant de le compresser, ce qu'on vient precisement
+                # d'eviter en ecrivant les donnees dans un fichier.
+                zf.write(donnees, arcname="data.json")
 
-                ecrits += fichier.octets
-                maintenant = time.monotonic()
-                if maintenant - dernier_signal < self._INTERVALLE_DE_SIGNAL and rang != total_fichiers:
-                    continue
-                dernier_signal = maintenant
+                ecrits = octets_des_donnees
+                total_fichiers = len(fichiers)
+                dernier_signal = time.monotonic()
                 self._set_build_progress(
                     backup,
                     bytes_done=ecrits,
                     progress=self._pourcentage_des_medias(ecrits, octets_a_ecrire),
-                    phase=f"Medias ({rang}/{total_fichiers})",
+                    phase=(
+                        f"Medias (0/{total_fichiers})" if total_fichiers else "Donnees archivees"
+                    ),
                 )
 
-        self._set_build_progress(
-            backup,
-            progress=self._PART_MEDIAS[1] + 2,
-            phase="Empreinte de controle",
-            bytes_done=octets_a_ecrire,
-            bytes_total=octets_a_ecrire,
-        )
+                for rang, fichier in enumerate(fichiers, start=1):
+                    try:
+                        zf.write(fichier.chemin, arcname=fichier.nom_dans_l_archive)
+                    except OSError:
+                        # Un fichier efface ou illisible entre le listage et
+                        # l'ecriture ne doit pas faire perdre toute l'archive.
+                        continue
+
+                    ecrits += fichier.octets
+                    maintenant = time.monotonic()
+                    if maintenant - dernier_signal < self._INTERVALLE_DE_SIGNAL and rang != total_fichiers:
+                        continue
+                    dernier_signal = maintenant
+                    self._set_build_progress(
+                        backup,
+                        bytes_done=ecrits,
+                        progress=self._pourcentage_des_medias(ecrits, octets_a_ecrire),
+                        phase=f"Medias ({rang}/{total_fichiers})",
+                    )
+
+            self._set_build_progress(
+                backup,
+                progress=self._PART_MEDIAS[1] + 2,
+                phase="Empreinte de controle",
+                bytes_done=octets_a_ecrire,
+                bytes_total=octets_a_ecrire,
+            )
+
+        finally:
+            dossier_temporaire.cleanup()
 
         backup.file_size_bytes = archive_path.stat().st_size
         backup.sha256 = self._sha256_file(archive_path)
@@ -780,26 +877,63 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         )
         return backup
 
+    def _ecrire_l_avancement(self, backup_id: int, champs: dict) -> None:
+        """Ecrit l'avancement hors de la transaction en cours.
+
+        C'est le coeur du « fige a 28 % ». La restauration nettoie puis
+        charge dans une seule transaction -- il le faut, sinon un echec en
+        cours de chargement laisserait la base videe. Mais tout ce qui est
+        ecrit dans une transaction reste invisible aux autres connexions
+        jusqu'au commit: l'ecran, qui interroge sur sa propre connexion,
+        lisait donc la derniere valeur commitee -- 28 -- pendant toute la
+        duree du travail. Et si le processus mourait, la transaction etait
+        annulee et cette valeur restait la pour toujours.
+
+        L'avancement n'a pas a etre atomique avec les donnees: il decrit le
+        travail, il n'en fait pas partie. On l'ecrit donc sur une connexion
+        a part, qui commite tout de suite.
+        """
+        if not transaction.get_connection().in_atomic_block:
+            BackupArchive.objects.filter(pk=backup_id).update(**champs)
+            return
+
+        colonnes = ", ".join(f"{nom} = %s" for nom in champs)
+        valeurs = list(champs.values()) + [backup_id]
+        handler = ConnectionHandler(settings.DATABASES)
+        try:
+            connexion = handler["default"]
+            with connexion.cursor() as curseur:
+                curseur.execute(
+                    f"UPDATE {BackupArchive._meta.db_table} SET {colonnes} WHERE id = %s",
+                    valeurs,
+                )
+            if not connexion.get_autocommit():
+                connexion.commit()
+        except Exception:
+            # L'avancement n'est qu'un renseignement: son echec ne doit pas
+            # faire perdre la restauration qui, elle, travaille.
+            try:
+                BackupArchive.objects.filter(pk=backup_id).update(**champs)
+            except Exception:
+                pass
+        finally:
+            handler.close_all()
+
     def _set_restore_progress(self, backup_ref, *, progress=None, phase=None):
         backup_id = backup_ref.id if isinstance(backup_ref, BackupArchive) else int(backup_ref)
         update_kwargs = {}
-        update_fields = []
 
         if progress is not None:
-            bounded = max(0, min(100, int(progress)))
-            update_kwargs["restore_progress"] = bounded
-            update_fields.append("restore_progress")
+            update_kwargs["restore_progress"] = max(0, min(100, int(progress)))
 
         if phase is not None:
             update_kwargs["restore_phase"] = str(phase or "")[:120]
-            update_fields.append("restore_phase")
 
         if not update_kwargs:
             return
 
         update_kwargs["updated_at"] = timezone.now()
-        update_fields.append("updated_at")
-        BackupArchive.objects.filter(pk=backup_id).update(**update_kwargs)
+        self._ecrire_l_avancement(backup_id, update_kwargs)
 
     def _mark_restore_failed(self, backup_id: int, exc: Exception):
         try:
@@ -834,7 +968,11 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             if not data_json.exists():
                 raise ValueError("Archive invalide: data.json manquant.")
 
-            payload = json.loads(data_json.read_text(encoding="utf-8"))
+            # `json.load` sur le fichier ouvert plutot que `loads` sur son
+            # contenu: la seconde forme tient la chaine entiere et le graphe
+            # d'objets en meme temps, soit deux fois la base en memoire.
+            with data_json.open("r", encoding="utf-8") as flux:
+                payload = json.load(flux)
             self._set_restore_progress(backup, progress=20, phase="Verification integrite")
             payload, orphan_stats = self._drop_orphan_foreign_key_relations(
                 payload,
@@ -853,7 +991,9 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                     details = ", ".join(f"{k}: {v}" for k, v in rewrite_stats.items())
                     restore_notes.append(f"Identifiants uniques adaptes ({details}).")
 
-            data_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            # Le fichier n'est pas reecrit: le chargement lit desormais
+            # `payload` directement. Le recopier en JSON refabriquait une
+            # chaine de la taille de la base, pour personne.
             self._set_restore_progress(backup, progress=28, phase="Donnees preparees")
 
             media_dir = tmp_path / "media"
@@ -935,8 +1075,13 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         # chaque objet couterait plus de requetes que la restauration.
         pas = max(1, total // 60)
 
-        texte = json.dumps(payload, ensure_ascii=False)
-        for rang, objet in enumerate(serializers.deserialize("json", texte), start=1):
+        # Le format « python » prend la liste deja analysee. Repasser par du
+        # JSON aurait refabrique une chaine de la taille de la base, pour la
+        # relire aussitot -- deux copies de plus dans un conteneur qui n'en
+        # supporte pas une.
+        for rang, objet in enumerate(
+            serializers.deserialize("python", payload), start=1
+        ):
             objet.save()
             if rang % pas and rang != total:
                 continue
@@ -1453,38 +1598,47 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
     def _verifier_les_restaurations_bloquees(self, queryset):
         """Marque en echec ce qui ne repond plus, et dit pourquoi.
 
-        Une restauration qui meurt laissait sa ligne « en cours » a son
-        dernier pourcentage, indefiniment. L'ecran affichait une barre qui
-        n'avancait plus et personne ne pouvait ni relancer ni comprendre.
+        Une operation qui meurt laissait sa ligne « en cours » a son dernier
+        pourcentage, indefiniment. L'ecran affichait une barre qui n'avancait
+        plus et personne ne pouvait ni relancer ni comprendre. Les deux sens
+        sont concernes: une sauvegarde reste figee sur « Lecture de la base »
+        exactement comme une restauration reste figee sur son chargement.
         """
         limite = timezone.now() - self.SILENCE_AVANT_ABANDON
-        bloquees = queryset.filter(
-            status=BackupArchive.Status.RUNNING,
-            restore_phase__gt="",
-            updated_at__lt=limite,
-        )
+        minutes = int(self.SILENCE_AVANT_ABANDON.total_seconds() // 60)
 
-        for archive in bloquees:
-            journal = self._journal_de_restauration(archive.id)
+        for archive in queryset.filter(
+            status=BackupArchive.Status.RUNNING, updated_at__lt=limite
+        ):
+            restauration = bool((archive.restore_phase or "").strip())
+            geste = "restauration" if restauration else "sauvegarde"
+
             trace = ""
-            try:
-                trace = journal.read_text(encoding="utf-8", errors="replace")[-4000:]
-            except OSError:
-                trace = ""
+            if restauration:
+                try:
+                    trace = self._journal_de_restauration(archive.id).read_text(
+                        encoding="utf-8", errors="replace"
+                    )[-4000:]
+                except OSError:
+                    trace = ""
 
-            BackupArchive.objects.filter(pk=archive.id).update(
-                status=BackupArchive.Status.FAILED,
-                restore_phase="Interrompue",
-                restore_log=(
-                    "La restauration ne repond plus depuis "
-                    f"{int(self.SILENCE_AVANT_ABANDON.total_seconds() // 60)} minutes: "
-                    "le traitement a ete interrompu. Relancez-la, et si "
-                    "l'interruption se repete, la base est probablement trop "
-                    "volumineuse pour la memoire du serveur.\n\n"
-                    + trace
-                ).strip(),
-                updated_at=timezone.now(),
-            )
+            message = (
+                f"La {geste} ne repond plus depuis {minutes} minutes: "
+                "le traitement a ete interrompu. Relancez-la, et si "
+                "l'interruption se repete, la base est probablement trop "
+                f"volumineuse pour la memoire du serveur.\n\n{trace}"
+            ).strip()
+
+            champs = {
+                "status": BackupArchive.Status.FAILED,
+                "restore_log": message,
+                "updated_at": timezone.now(),
+            }
+            if restauration:
+                champs["restore_phase"] = "Interrompue"
+            else:
+                champs["build_phase"] = "Interrompue"
+            BackupArchive.objects.filter(pk=archive.id).update(**champs)
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -1625,10 +1779,25 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         if backup.status in {BackupArchive.Status.RUNNING, BackupArchive.Status.PENDING}:
             # Effacer le fichier qu'un processus est en train d'ecrire
             # laisserait une archive tronquee et une ligne qui la reclame.
-            return Response(
-                {"detail": "Operation en cours: attendez la fin avant de supprimer."},
-                status=status.HTTP_409_CONFLICT,
+            #
+            # Encore faut-il qu'un processus l'ecrive vraiment. Une ligne
+            # dont le traitement est mort restait « en cours » pour toujours,
+            # donc impossible a supprimer: l'ecran refusait sans fin une
+            # archive que plus personne ne touchait. On la laisse partir des
+            # qu'elle s'est tue assez longtemps.
+            silencieuse = backup.updated_at and backup.updated_at < (
+                timezone.now() - self.SILENCE_AVANT_ABANDON
             )
+            if not silencieuse:
+                return Response(
+                    {
+                        "detail": (
+                            "Opération en cours : attendez la fin avant de "
+                            "supprimer."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
         self._supprimer_le_fichier(backup)
         backup.delete()
@@ -1664,11 +1833,18 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
         # `get_queryset` cantonne deja la direction a son etablissement: le
         # menage ne peut pas atteindre les archives d'une autre ecole.
-        candidates = list(
-            self.filter_queryset(self.get_queryset()).exclude(
-                status__in=[BackupArchive.Status.RUNNING, BackupArchive.Status.PENDING]
-            )
-        )
+        # Une operation vraiment en cours est epargnee; une ligne dont le
+        # traitement est mort, non. Sans cette nuance, une archive figee
+        # survivait a tous les nettoyages et encombrait l'historique pour
+        # toujours.
+        silence = timezone.now() - self.SILENCE_AVANT_ABANDON
+        candidates = [
+            archive
+            for archive in self.filter_queryset(self.get_queryset())
+            if archive.status
+            not in {BackupArchive.Status.RUNNING, BackupArchive.Status.PENDING}
+            or (archive.updated_at and archive.updated_at < silence)
+        ]
         candidates.sort(key=lambda row: (row.created_at, row.id), reverse=True)
 
         supprimees = 0
@@ -1722,8 +1898,16 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         backup.restore_log = "Restauration lancee en arriere-plan."
         backup.restore_phase = "En attente du traitement"
         backup.restore_progress = 1
+        backup.restore_started_at = timezone.now()
         backup.save(
-            update_fields=["status", "restore_log", "restore_phase", "restore_progress", "updated_at"]
+            update_fields=[
+                "status",
+                "restore_log",
+                "restore_phase",
+                "restore_progress",
+                "restore_started_at",
+                "updated_at",
+            ]
         )
         self._run_restore_in_background(backup.id, str(archive_path), getattr(request.user, "id", None))
         return Response(
