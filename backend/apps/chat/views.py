@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.http import FileResponse
 import threading
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.db.models import Q
 from django.utils import timezone
 from datetime import timedelta
@@ -13,7 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.permissions import HasModuleAccess
-from apps.common.presence import presence_en_ligne
+from apps.common.presence import presence_en_ligne, sans_attendre_les_verrous
 from .correspondants import peut_correspondre, roles_exclus_pour, roles_joignables_par
 from apps.school.models import Etablissement
 
@@ -252,13 +252,20 @@ def _is_allowed_chat_attachment(upload) -> bool:
 
 
 def _touch_presence(user):
-    row, _ = ChatPresence.objects.get_or_create(
-        user=user,
-        defaults={"is_online": True, "connection_count": 0, "last_seen_at": timezone.now()},
-    )
-    row.is_online = True
-    row.last_seen_at = timezone.now()
-    row.save(update_fields=["is_online", "last_seen_at", "updated_at"])
+    # Appelee a chaque requete REST du chat: elle bloquait directement un
+    # worker HTTP -- celui-la meme qui repond au controle de sante -- tant
+    # qu'une restauration tenait la ligne. Elle renonce desormais vite.
+    try:
+        with sans_attendre_les_verrous():
+            row, _ = ChatPresence.objects.get_or_create(
+                user=user,
+                defaults={"is_online": True, "connection_count": 0, "last_seen_at": timezone.now()},
+            )
+            row.is_online = True
+            row.last_seen_at = timezone.now()
+            row.save(update_fields=["is_online", "last_seen_at", "updated_at"])
+    except OperationalError:
+        pass
 
 
 def _presence_online_from_values(last_seen_at):

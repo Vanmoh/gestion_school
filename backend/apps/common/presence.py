@@ -18,8 +18,10 @@ fenetre ci-dessous sans un signe de vie, la personne est hors ligne -- que le
 compteur dise ce qu'il veut.
 """
 
+from contextlib import contextmanager
 from datetime import timedelta
 
+from django.db import connection, transaction
 from django.utils import timezone
 
 # Trois battements manques avant de declarer quelqu'un parti: assez pour
@@ -47,3 +49,33 @@ def presence_last_seen(presence):
     if presence is None:
         return None
     return getattr(presence, "last_seen_at", None)
+
+
+# Combien de temps une ecriture de presence accepte d'attendre un verrou.
+#
+# La presence est du suivi, pas une donnee: chaque utilisateur connecte la
+# rafraichit sans cesse -- battement du socket toutes les dix secondes, et
+# chaque appel REST. Pendant une restauration, qui tient ces lignes
+# verrouillees le temps de sa transaction, ces ecritures attendaient
+# indefiniment: trente-trois constatees dans Postgres, chacune occupant un fil
+# d'execution. En production, avec deux workers, cela gelait toute
+# l'application, le controle de sante echouait et Render redemarrait le
+# conteneur, tuant la restauration au passage. Un signe de vie manque est
+# rattrape au suivant: mieux vaut renoncer vite qu'attendre.
+DELAI_DE_VERROU_PRESENCE = "2s"
+
+
+@contextmanager
+def sans_attendre_les_verrous():
+    """Une transaction qui renonce plutot que d'attendre un verrou.
+
+    Leve `OperationalError` au bout du delai: a l'appelant de l'ignorer,
+    puisque rien de ce qu'il ecrivait ne meritait qu'on patiente.
+    """
+    with transaction.atomic():
+        if connection.vendor == "postgresql":
+            with connection.cursor() as curseur:
+                curseur.execute(
+                    f"SET LOCAL lock_timeout = '{DELAI_DE_VERROU_PRESENCE}'"
+                )
+        yield
