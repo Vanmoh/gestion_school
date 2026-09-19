@@ -25,6 +25,7 @@ from rest_framework import permissions, status, viewsets
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
@@ -484,7 +485,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         return Etablissement.objects.filter(id=parsed).first()
 
     def _backups_root(self) -> Path:
-        root = Path(settings.BASE_DIR) / "backups" / "archives"
+        root = Path(settings.BACKUP_ROOT) / "archives"
         root.mkdir(parents=True, exist_ok=True)
         return root
 
@@ -513,8 +514,16 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
     # Render redemarre le conteneur -- et tue la restauration.
     TABLES_EPHEMERES = frozenset({"chat.chatpresence"})
 
+    # L'historique des sauvegardes ne voyage pas non plus. Il decrit les
+    # archives, il n'est pas une donnee de l'ecole: l'emporter dans une
+    # archive puis le restaurer ecrasait l'historique actuel avec celui du
+    # jour de la sauvegarde. Une ligne recevait alors le nom de fichier
+    # d'une autre, et le vrai fichier restait sur le disque sans rien qui le
+    # reference -- neuf archives orphelines constatees en local.
+    TABLES_HORS_ARCHIVE = TABLES_EPHEMERES | frozenset({"common.backuparchive"})
+
     def _est_ephemere(self, model) -> bool:
-        return model._meta.label_lower in self.TABLES_EPHEMERES
+        return model._meta.label_lower in self.TABLES_HORS_ARCHIVE
 
     def _modeles_a_sauvegarder(self):
         """Les tables qu'une archive emporte, dans l'ordre de leurs dependances.
@@ -638,6 +647,9 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
             field_names = {field.name for field in opts.fields}
             queryset = None
+
+            if self._est_ephemere(model):
+                continue
 
             if model.__name__ == "Etablissement":
                 queryset = model.objects.filter(pk=etablissement.pk)
@@ -962,7 +974,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
 
     @staticmethod
     def _fichier_d_avancement(backup_id: int) -> Path:
-        dossier = Path(settings.BASE_DIR) / "backups" / "journaux"
+        dossier = Path(settings.BACKUP_ROOT) / "journaux"
         dossier.mkdir(parents=True, exist_ok=True)
         return dossier / f"avancement_{backup_id}.json"
 
@@ -1030,8 +1042,106 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         except Exception:
             pass
 
+    def _refuser_si_une_operation_tourne(self):
+        """Une seule sauvegarde ou restauration a la fois.
+
+        Rien ne l'empechait. Chaque operation charge des tables entieres en
+        memoire, et le conteneur n'a que 512 Mo: deux a la fois, c'est le
+        systeme qui tue l'une des deux -- ou les deux. Une restauration lancee
+        pendant une sauvegarde pouvait aussi archiver une base a moitie
+        videe.
+
+        Une operation silencieuse depuis trop longtemps ne compte pas: elle
+        est morte, et la tenir pour active bloquerait tout indefiniment.
+        """
+        for archive in BackupArchive.objects.filter(
+            status__in=[BackupArchive.Status.RUNNING, BackupArchive.Status.PENDING]
+        ):
+            if not self._est_silencieuse(archive):
+                geste = (
+                    "une restauration"
+                    if (archive.restore_phase or "").strip()
+                    else "une sauvegarde"
+                )
+                raise ValidationError(
+                    {
+                        "detail": (
+                            f"{geste[0].upper()}{geste[1:]} est déjà en cours "
+                            f"({archive.filename or f'archive n° {archive.id}'}). "
+                            "Attendez qu'elle se termine: deux opérations à la "
+                            "fois épuiseraient la mémoire du serveur."
+                        )
+                    }
+                )
+
+    def _verifier_la_portee(self, archive_path: Path, scope: str, etablissement_id) -> None:
+        """Refuse de restaurer une archive dans une portee qui n'est pas la sienne.
+
+        La portee venait du menu deroulant et l'archive n'etait jamais
+        consultee. Choisir « Restauration globale plateforme » avec l'archive
+        d'un seul etablissement effacait donc toutes les autres ecoles, puis
+        n'en rechargeait qu'une. Et l'archive de l'ecole A restauree « dans »
+        l'ecole B videait B, puis ecrasait A avec ses anciennes donnees.
+
+        Le manifeste de l'archive dit ce qu'elle contient: c'est lui qui
+        tranche, pas le choix fait dans l'ecran.
+        """
+        try:
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                noms = set(zf.namelist())
+                if "data.json" not in noms:
+                    raise ValidationError(
+                        {"file": "Archive invalide: elle ne contient pas de données."}
+                    )
+                if "manifest.json" not in noms:
+                    raise ValidationError(
+                        {
+                            "file": (
+                                "Archive sans manifeste: impossible de savoir ce "
+                                "qu'elle contient, elle n'est donc pas restaurée."
+                            )
+                        }
+                    )
+                manifeste = json.loads(zf.read("manifest.json").decode("utf-8"))
+        except zipfile.BadZipFile:
+            raise ValidationError({"file": "Le fichier envoyé n'est pas une archive ZIP."})
+        except (ValueError, UnicodeDecodeError):
+            raise ValidationError({"file": "Manifeste d'archive illisible."})
+
+        portee_archive = str(manifeste.get("scope") or "").strip()
+        if portee_archive != scope:
+            libelles = {
+                BackupArchive.Scope.GLOBAL: "toute la plateforme",
+                BackupArchive.Scope.ETABLISSEMENT: "un seul établissement",
+            }
+            raise ValidationError(
+                {
+                    "scope": (
+                        f"Cette archive couvre {libelles.get(portee_archive, portee_archive or 'une portée inconnue')}, "
+                        f"et la restauration demandée vise {libelles.get(scope, scope)}. "
+                        "Choisissez le mode qui correspond à l'archive."
+                    )
+                }
+            )
+
+        if scope == BackupArchive.Scope.ETABLISSEMENT:
+            source = manifeste.get("etablissement_id")
+            if source is not None and etablissement_id is not None and int(source) != int(etablissement_id):
+                raise ValidationError(
+                    {
+                        "scope": (
+                            "Cette archive appartient à un autre établissement. La "
+                            "restaurer ici viderait celui-ci puis écraserait "
+                            "l'autre avec ses anciennes données."
+                        )
+                    }
+                )
+
     def _restore_from_archive(self, backup: BackupArchive, archive_path: Path, actor=None):
         self._set_restore_progress(backup, progress=3, phase="Preparation de l'archive")
+        # Verifiee a la reception, verifiee encore ici: c'est le dernier
+        # instant avant que le nettoyage efface quoi que ce soit.
+        self._verifier_la_portee(archive_path, backup.scope, backup.etablissement_id)
         restore_notes = []
         is_global_restore = backup.scope == BackupArchive.Scope.GLOBAL
         with tempfile.TemporaryDirectory(prefix="restore_backup_") as tmp:
@@ -1106,7 +1216,17 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 restore_notes.append("Medias restaures.")
             self._set_restore_progress(backup, progress=94, phase="Finalisation")
 
-        backup.restored_by = actor
+        # Le compte qui a lance la restauration peut ne plus exister: une
+        # restauration globale remplace tous les comptes par ceux de
+        # l'archive. Le noter tel quel faisait echouer cet enregistrement
+        # final sur une cle etrangere -- apres que toutes les donnees etaient
+        # chargees, si bien qu'une restauration reussie s'affichait en echec.
+        from apps.accounts.models import User
+
+        acteur_id = getattr(actor, "pk", None)
+        backup.restored_by = (
+            User.objects.filter(pk=acteur_id).first() if acteur_id else None
+        )
         backup.restored_at = timezone.now()
         backup.restore_log = "\n".join(restore_notes) if restore_notes else "Restauration terminee."
         backup.restore_phase = "Terminee"
@@ -1143,6 +1263,17 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         seule fois a la fin -- mais en gardant la main sur l'avancement.
         """
         if not isinstance(payload, list) or not payload:
+            return
+
+        # Les archives faites avant ce correctif emportaient encore
+        # l'historique des sauvegardes et la presence: on les ecarte ici
+        # plutot que de laisser un vieux fichier reecrire le present.
+        payload = [
+            ligne
+            for ligne in payload
+            if str(ligne.get("model") or "").lower() not in self.TABLES_HORS_ARCHIVE
+        ]
+        if not payload:
             return
 
         debut, fin = self._PART_CHARGEMENT
@@ -1609,13 +1740,21 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         env = os.environ.copy()
         env.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
+        # La sortie partait dans le vide, comme celle de la restauration avant
+        # elle: une sauvegarde tuee par la memoire restait figee sur
+        # « Lecture de la base » sans que rien dise pourquoi.
+        try:
+            sortie = self._journal_de_sauvegarde(backup_id).open("wb")
+        except OSError:
+            sortie = subprocess.DEVNULL
+
         subprocess.Popen(
             command,
             cwd=str(settings.BASE_DIR),
             env=env,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=sortie,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
         )
 
@@ -1668,8 +1807,13 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
     # ne l'apprendra jamais si l'ecran continue d'afficher sa barre.
     SILENCE_AVANT_ABANDON = timedelta(minutes=15)
 
+    def _journal_de_sauvegarde(self, backup_id: int) -> Path:
+        dossier = Path(settings.BACKUP_ROOT) / "journaux"
+        dossier.mkdir(parents=True, exist_ok=True)
+        return dossier / f"sauvegarde_{backup_id}.log"
+
     def _journal_de_restauration(self, backup_id: int) -> Path:
-        dossier = Path(settings.BASE_DIR) / "backups" / "journaux"
+        dossier = Path(settings.BACKUP_ROOT) / "journaux"
         dossier.mkdir(parents=True, exist_ok=True)
         return dossier / f"restauration_{backup_id}.log"
 
@@ -1696,14 +1840,15 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             )
             geste = "restauration" if restauration else "sauvegarde"
 
-            trace = ""
-            if restauration:
-                try:
-                    trace = self._journal_de_restauration(archive.id).read_text(
-                        encoding="utf-8", errors="replace"
-                    )[-4000:]
-                except OSError:
-                    trace = ""
+            journal = (
+                self._journal_de_restauration(archive.id)
+                if restauration
+                else self._journal_de_sauvegarde(archive.id)
+            )
+            try:
+                trace = journal.read_text(encoding="utf-8", errors="replace")[-4000:]
+            except OSError:
+                trace = ""
 
             message = (
                 f"La {geste} ne repond plus depuis {minutes} minutes: "
@@ -1775,6 +1920,8 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                     {"detail": "Vous ne pouvez sauvegarder que votre etablissement."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
+
+        self._refuser_si_une_operation_tourne()
 
         backup = BackupArchive.objects.create(
             scope=scope,
@@ -1973,6 +2120,9 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         if not archive_path.exists() or not archive_path.is_file():
             return Response({"detail": "Fichier backup introuvable."}, status=status.HTTP_404_NOT_FOUND)
 
+        self._refuser_si_une_operation_tourne()
+        self._verifier_la_portee(archive_path, backup.scope, backup.etablissement_id)
+
         backup.status = BackupArchive.Status.RUNNING
         backup.restore_log = "Restauration lancee en arriere-plan."
         backup.restore_phase = "En attente du traitement"
@@ -2003,6 +2153,9 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         if denied is not None:
             return denied
 
+        # Avant meme de recevoir le fichier: inutile de televerser plusieurs
+        # centaines de mega-octets pour se les voir refuser a l'arrivee.
+        self._refuser_si_une_operation_tourne()
         uploaded = request.FILES.get("file")
         if not isinstance(uploaded, UploadedFile):
             return Response({"detail": "Fichier requis."}, status=status.HTTP_400_BAD_REQUEST)
@@ -2038,6 +2191,18 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             for chunk in uploaded.chunks():
                 out.write(chunk)
 
+        # A la reception, avant toute ligne en base et tout processus: une
+        # archive qui ne correspond pas au mode choisi est refusee sur le
+        # champ, avec la raison, au lieu d'echouer plus tard en arriere-plan
+        # -- ou pire, de reussir en effacant les autres ecoles.
+        try:
+            self._verifier_la_portee(
+                target, scope, getattr(etablissement, "id", None)
+            )
+        except ValidationError:
+            target.unlink(missing_ok=True)
+            raise
+
         backup = BackupArchive.objects.create(
             scope=scope,
             etablissement=etablissement,
@@ -2050,6 +2215,10 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
             status=BackupArchive.Status.RUNNING,
             restore_phase="Archive recue",
             restore_progress=1,
+            # Sans lui, l'ecran ne pouvait pas estimer la duree restante des
+            # restaurations televersees -- celles-la memes qu'on fait pour
+            # passer d'un serveur a l'autre.
+            restore_started_at=timezone.now(),
         )
         backup.restore_log = "Archive recue. Restauration lancee en arriere-plan."
         backup.save(update_fields=["restore_log", "restore_phase", "restore_progress", "updated_at"])

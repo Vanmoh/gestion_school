@@ -30,7 +30,7 @@ class BackupRestorePermissionsApiTests(APITestCase):
             role=UserRole.SUPER_ADMIN,
         )
 
-        archives_dir = Path(settings.BASE_DIR) / "backups" / "archives"
+        archives_dir = Path(settings.BACKUP_ROOT) / "archives"
         archives_dir.mkdir(parents=True, exist_ok=True)
         archive_path = archives_dir / "test_restore_permission.zip"
         archive_path.write_bytes(b"dummy")

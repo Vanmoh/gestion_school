@@ -72,7 +72,7 @@ class NumeroWhatsAppDuParentTests(APITestCase):
             username="parent_illisible",
             password="Pass1234!",
             role=UserRole.PARENT,
-            phone="76 12 34 56 / bureau 66 74 22 32",
+            phone="76123456 / 66742232",
             etablissement=self.etablissement,
         )
         ParentProfile.objects.create(
@@ -94,7 +94,7 @@ class NumeroWhatsAppDuParentTests(APITestCase):
         """« 76 12 34 56 / bureau 66 74 22 32 » ne se tranche pas tout seul."""
         self.parent.whatsapp_phone = ""
         self.parent.save(update_fields=["whatsapp_phone"])
-        self.parent_user.phone = "76 12 34 56 / bureau 66 74 22 32"
+        self.parent_user.phone = "76123456 / 66742232"
         self.parent_user.save(update_fields=["phone"])
 
         self.assertEqual(self._fiche()["whatsapp_phone_suggestion"], "")
