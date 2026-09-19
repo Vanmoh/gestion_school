@@ -38,6 +38,11 @@ def _memoriser_l_ancien_telephone(sender, instance, **kwargs):
     distinguer un numero WhatsApp laisse tel quel d'un numero saisi
     volontairement different.
     """
+    # Chargement brut -- une restauration: la donnee arrive telle qu'elle
+    # etait, on n'en deduit rien. Sans cette garde, ce signal reecrivait ce
+    # qu'on restaurait, sur des donnees a moitie chargees.
+    if kwargs.get("raw"):
+        return
     if not instance.pk:
         instance._ancien_telephone = ""
         return
@@ -69,6 +74,11 @@ def _propager_le_telephone_au_numero_whatsapp(sender, instance, created, **kwarg
     66 74 22 32 ») ne produit rien plutot qu'un numero devine, et l'ecole
     tranche a la main.
     """
+    # Chargement brut -- une restauration: la donnee arrive telle qu'elle
+    # etait, on n'en deduit rien. Sans cette garde, ce signal reecrivait ce
+    # qu'on restaurait, sur des donnees a moitie chargees.
+    if kwargs.get("raw"):
+        return
     from apps.school.phone_utils import normaliser_numero
 
     profil = getattr(instance, "parent_profile", None)
@@ -101,6 +111,11 @@ def _reprendre_le_telephone_a_la_creation_du_profil(sender, instance, created, *
     rien a viser. Un parent cree avec son telephone se retrouvait sans numero
     WhatsApp, donc injoignable, sans que rien ne le signale.
     """
+    # Chargement brut -- une restauration: la donnee arrive telle qu'elle
+    # etait, on n'en deduit rien. Sans cette garde, ce signal reecrivait ce
+    # qu'on restaurait, sur des donnees a moitie chargees.
+    if kwargs.get("raw"):
+        return
     if not created or (instance.whatsapp_phone or "").strip():
         return
 
@@ -142,6 +157,11 @@ def _recalculer_pour(student):
 @receiver(post_delete, sender=Payment)
 def _suivre_le_reglement_de_l_inscription(sender, instance, **kwargs):
     """Un versement -- ou son annulation -- peut liberer les documents."""
+    # Chargement brut -- une restauration: la donnee arrive telle qu'elle
+    # etait, on n'en deduit rien. Sans cette garde, ce signal reecrivait ce
+    # qu'on restaurait, sur des donnees a moitie chargees.
+    if kwargs.get("raw"):
+        return
     fee = getattr(instance, "fee", None)
     _recalculer_pour(getattr(fee, "student", None))
 
@@ -154,10 +174,20 @@ def _suivre_les_frais_d_inscription(sender, instance, **kwargs):
     Sans frais, il n'y a rien a payer: un eleve cree avant que le bareme
     soit pose reste en regle jusqu'a ce qu'on lui en reclame un.
     """
+    # Chargement brut -- une restauration: la donnee arrive telle qu'elle
+    # etait, on n'en deduit rien. Sans cette garde, ce signal reecrivait ce
+    # qu'on restaurait, sur des donnees a moitie chargees.
+    if kwargs.get("raw"):
+        return
     _recalculer_pour(getattr(instance, "student", None))
 
 
 @receiver(post_save, sender=Student)
 def _statuer_a_la_creation_de_la_fiche(sender, instance, created, **kwargs):
+    # Chargement brut -- une restauration: la donnee arrive telle qu'elle
+    # etait, on n'en deduit rien. Sans cette garde, ce signal reecrivait ce
+    # qu'on restaurait, sur des donnees a moitie chargees.
+    if kwargs.get("raw"):
+        return
     if created:
         _recalculer_pour(instance)
