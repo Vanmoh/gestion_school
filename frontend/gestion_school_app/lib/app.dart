@@ -367,6 +367,12 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     // quelque part, et c'est ce quelque part qui doit nommer l'entree. C'est
     // aussi la seule page qui montre a une famille tout ce que l'ecole sait
     // de son enfant -- notes, absences, discipline, frais -- en consultation.
+    //
+    // L'entree ne s'affiche que pour qui n'atteint pas « Gestion des
+    // eleves », ou le dossier se prend desormais par un bouton a cote de la
+    // liste. Parents et eleves n'y entrent pas: la matrice leur ferme le
+    // module academique, dont cet ecran a besoin pour charger les classes.
+    // Personne n'a donc les deux chemins, et personne n'en a zero.
     _AdminMenuItem(
       keyName: 'student_lookup',
       label: 'Dossier élève',
@@ -572,9 +578,21 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   /// Une entree est visible des qu'une seule de ses cles l'est -- et a
   /// condition que ce dont son ecran depend le soit aussi.
-  bool _isEntryVisible(_AdminMenuItem item) =>
-      item.allKeys.any(_isItemVisible) &&
-      item.clesRequises.every(_isItemVisible);
+  bool _isEntryVisible(_AdminMenuItem item) {
+    // Le dossier eleve se prend par un bouton dans « Gestion des eleves ».
+    // L'entree de menu ne sert donc qu'a ceux qui n'ouvrent pas cet ecran.
+    if (item.keyName == 'student_lookup' && _atteintLaGestionDesEleves()) {
+      return false;
+    }
+    return item.allKeys.any(_isItemVisible) &&
+        item.clesRequises.every(_isItemVisible);
+  }
+
+  bool _atteintLaGestionDesEleves() {
+    final entree = _items.firstWhere((item) => item.keyName == 'students');
+    return entree.allKeys.any(_isItemVisible) &&
+        entree.clesRequises.every(_isItemVisible);
+  }
 
   bool _isItemReadOnly(String key) => _permissions.isReadOnly(key);
 

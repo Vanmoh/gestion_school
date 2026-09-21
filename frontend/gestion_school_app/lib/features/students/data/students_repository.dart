@@ -527,21 +527,6 @@ class StudentsRepository {
     return Uint8List.fromList(bytes);
   }
 
-  Future<Uint8List> fetchStudentCardPdf(int studentId) async {
-    final cacheBust = DateTime.now().millisecondsSinceEpoch;
-    final response = await dio.get<List<int>>(
-      '/reports/student-card/$studentId/',
-      queryParameters: {'_ts': cacheBust},
-      options: Options(responseType: ResponseType.bytes),
-    );
-
-    final bytes = response.data;
-    if (bytes == null || bytes.isEmpty) {
-      throw Exception('PDF carte élève vide');
-    }
-    return Uint8List.fromList(bytes);
-  }
-
   /// Liste d'appel imprimable.
   ///
   /// Sans classe, le serveur rend toutes les classes de l'etablissement, une
@@ -566,29 +551,6 @@ class StudentsRepository {
     final bytes = response.data;
     if (bytes == null || bytes.isEmpty) {
       throw Exception('PDF liste de classe vide');
-    }
-    return Uint8List.fromList(bytes);
-  }
-
-  Future<Uint8List> fetchClassStudentCardsPdf(
-    int classroomId, {
-    String layoutMode = 'standard',
-  }) async {
-    final query = <String, dynamic>{};
-    if (layoutMode.trim().isNotEmpty) {
-      query['layout_mode'] = layoutMode.trim();
-    }
-    query['_ts'] = DateTime.now().millisecondsSinceEpoch;
-
-    final response = await dio.get<List<int>>(
-      '/reports/student-cards/class/$classroomId/',
-      queryParameters: query,
-      options: Options(responseType: ResponseType.bytes),
-    );
-
-    final bytes = response.data;
-    if (bytes == null || bytes.isEmpty) {
-      throw Exception('PDF cartes classe vide');
     }
     return Uint8List.fromList(bytes);
   }

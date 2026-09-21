@@ -9,6 +9,7 @@ from .views import (
     ClassBulletinsWhatsAppView,
     ClassRosterPdfView,
     ClassStudentCardsPdfView,
+    ClassStudentCardsPreflightView,
     ExpenseJournalExportView,
     ExpenseJournalPageView,
     PaymentExcelExportView,
@@ -90,6 +91,14 @@ urlpatterns = [
         name="certificat-travail-pdf",
     ),
     path("student-cards/class/<int:classroom_id>/", ClassStudentCardsPdfView.as_view(), name="class-student-cards-pdf"),
+    # Interroge avant d'imprimer: combien d'eleves, combien sans photo,
+    # et le QR sera-t-il vivant. Rien de tout cela ne se corrige apres
+    # la decoupe.
+    path(
+        "student-cards/class/<int:classroom_id>/verification/",
+        ClassStudentCardsPreflightView.as_view(),
+        name="class-student-cards-preflight",
+    ),
     # Cible du QR imprime sur la carte. Publique: celui qui controle au
     # portail n'a pas de compte. La signature tient lieu de cle d'acces.
     path(

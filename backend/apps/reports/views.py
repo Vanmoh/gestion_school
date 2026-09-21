@@ -1,5 +1,6 @@
 import hashlib
 import io
+import os
 import tempfile
 import unicodedata
 from urllib.parse import quote
@@ -104,6 +105,113 @@ def _school_logo_path() -> str | None:
     return str(path) if path.exists() else None
 
 
+# Le conteneur de production tient sur un petit disque partage avec
+# l'application. Le cache ne contenait jusqu'ici que des vignettes recadrees;
+# il recoit maintenant les originaux rapatries du bucket, soit quelques
+# megaoctets par eleve et par classe imprimee.
+PLAFOND_CACHE_MEDIA = 200 * 1024 * 1024
+
+
+def _menage_du_cache_media(cache_dir: Path) -> None:
+    """Ramene le cache sous son plafond, en sacrifiant les plus anciens.
+
+    Appele seulement avant un telechargement, donc rarement: un fichier deja
+    rapatrie est servi sans repasser par ici.
+    """
+    try:
+        fichiers = []
+        total = 0
+        with os.scandir(cache_dir) as entrees:
+            for entree in entrees:
+                if not entree.is_file():
+                    continue
+                infos = entree.stat()
+                total += infos.st_size
+                fichiers.append((infos.st_mtime, infos.st_size, entree.path))
+
+        if total <= PLAFOND_CACHE_MEDIA:
+            return
+
+        # Descendre jusqu'a la moitie: s'arreter pile sous la barre ferait
+        # recommencer le menage au telechargement suivant.
+        fichiers.sort()
+        for _, taille, chemin in fichiers:
+            if total <= PLAFOND_CACHE_MEDIA // 2:
+                return
+            try:
+                os.unlink(chemin)
+            except OSError:
+                continue
+            total -= taille
+    except OSError:
+        return
+
+
+def _media_local(media_field) -> str | None:
+    """Chemin local lisible par FPDF pour un fichier stocke en base.
+
+    FPDF ne sait ouvrir qu'un fichier sur disque. Tant que les medias vivaient
+    a cote du code, `field.path` suffisait. En production ils sont dans un
+    bucket: le stockage objet n'implemente pas `path()`, le repli sous
+    MEDIA_ROOT ne trouve rien non plus, et chaque PDF sortait sans photo, sans
+    logo, sans signature et sans tampon. En silence, puisque tous les
+    appelants lisent l'absence comme « l'ecole n'en a pas ».
+
+    On rapatrie donc le fichier une fois dans le cache temporaire. Le nom
+    suffit comme cle: le stockage objet refuse d'ecraser
+    (AWS_S3_FILE_OVERWRITE = False), un nouveau televersement porte donc un
+    nouveau nom.
+    """
+    if not media_field:
+        return None
+
+    try:
+        direct_path = Path(getattr(media_field, "path", "") or "")
+    except Exception:
+        direct_path = None
+    if direct_path and direct_path.exists():
+        return str(direct_path)
+
+    nom = str(getattr(media_field, "name", "") or "").strip()
+    if not nom:
+        return None
+
+    media_root = str(getattr(settings, "MEDIA_ROOT", "") or "").strip()
+    if media_root:
+        candidat = Path(media_root) / nom
+        if candidat.exists():
+            return str(candidat)
+
+    stockage = getattr(media_field, "storage", None)
+    if stockage is None:
+        return None
+
+    try:
+        cache_dir = Path(tempfile.gettempdir()) / "gestion_school_pdf_assets"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        empreinte = hashlib.sha1(nom.encode("utf-8")).hexdigest()[:16]
+        cible = cache_dir / f"media_{empreinte}{Path(nom).suffix.lower()}"
+        if cible.exists() and cible.stat().st_size > 0:
+            return str(cible)
+
+        # Ecrire a cote puis renommer: deux workers peuvent tirer la meme
+        # planche en meme temps, et un fichier a moitie ecrit ferait echouer
+        # la lecture de l'image chez l'autre.
+        _menage_du_cache_media(cache_dir)
+
+        provisoire = cible.with_name(f"{cible.name}.{os.getpid()}.part")
+        with stockage.open(nom, "rb") as source:
+            with open(provisoire, "wb") as sortie:
+                for morceau in iter(lambda: source.read(256 * 1024), b""):
+                    sortie.write(morceau)
+        os.replace(provisoire, cible)
+        return str(cible)
+    except Exception:
+        # Une ecole sans logo garde ses bulletins; une exception ici les lui
+        # retirerait tous.
+        return None
+
+
 def _etablissement_logo_path(student: Student) -> str | None:
     etablissement = getattr(student, "etablissement", None)
     if etablissement is None and getattr(student, "classroom", None) is not None:
@@ -111,26 +219,7 @@ def _etablissement_logo_path(student: Student) -> str | None:
     if etablissement is None:
         return None
 
-    logo_field = getattr(etablissement, "logo", None)
-    if not logo_field:
-        return None
-
-    try:
-        direct_path = Path(getattr(logo_field, "path", "") or "")
-    except Exception:
-        direct_path = None
-
-    if direct_path and direct_path.exists():
-        return str(direct_path)
-
-    logo_name = str(getattr(logo_field, "name", "") or "").strip()
-    media_root = str(getattr(settings, "MEDIA_ROOT", "") or "").strip()
-    if logo_name and media_root:
-        candidate = Path(media_root) / logo_name
-        if candidate.exists():
-            return str(candidate)
-
-    return None
+    return _media_local(getattr(etablissement, "logo", None))
 
 
 def _student_etablissement(student: Student | None) -> Etablissement | None:
@@ -157,26 +246,7 @@ def _etablissement_media_field_path(etablissement: Etablissement | None, field_n
     if etablissement is None:
         return None
 
-    media_field = getattr(etablissement, field_name, None)
-    if not media_field:
-        return None
-
-    try:
-        direct_path = Path(getattr(media_field, "path", "") or "")
-    except Exception:
-        direct_path = None
-
-    if direct_path and direct_path.exists():
-        return str(direct_path)
-
-    media_name = str(getattr(media_field, "name", "") or "").strip()
-    media_root = str(getattr(settings, "MEDIA_ROOT", "") or "").strip()
-    if media_name and media_root:
-        candidate = Path(media_root) / media_name
-        if candidate.exists():
-            return str(candidate)
-
-    return None
+    return _media_local(getattr(etablissement, field_name, None))
 
 
 def _safe_scale_percent(value, default: int = 100) -> int:
@@ -479,26 +549,7 @@ def _student_name_parts(student: Student) -> tuple[str, str, str]:
 
 
 def _student_photo_path(student: Student) -> str | None:
-    photo_field = getattr(student, "photo", None)
-    if not photo_field:
-        return None
-
-    try:
-        direct_path = Path(getattr(photo_field, "path", "") or "")
-    except Exception:
-        direct_path = None
-
-    if direct_path and direct_path.exists():
-        return str(direct_path)
-
-    photo_name = str(getattr(photo_field, "name", "") or "").strip()
-    media_root = str(getattr(settings, "MEDIA_ROOT", "") or "").strip()
-    if photo_name and media_root:
-        candidate = Path(media_root) / photo_name
-        if candidate.exists():
-            return str(candidate)
-
-    return None
+    return _media_local(getattr(student, "photo", None))
 
 
 def _format_fcfa(value) -> str:
@@ -591,22 +642,72 @@ def _draw_student_card_template(
     header_sub_font = header_name_font * 0.86
     header_phone_font = header_name_font * 0.66
 
+    # Le logo, enfin dessine.
+    #
+    # Il etait lu par l'appelant, passe a _build_student_cards_pdf, puis a
+    # _add_student_card_page, puis ici -- et jamais pose sur la carte. Une
+    # piece d'identite scolaire sans embleme ne ressemble a rien d'officiel
+    # et s'imite avec un traitement de texte.
+    logo_dessinable = _pdf_compatible_image_path(logo_path, cache_prefix="logo")
+    entete_x, entete_w = content_x, content_w
+    if logo_dessinable:
+        cote = max(5.5, min(header_h * 0.86, content_w * 0.17))
+        ecart = max(0.8, min(2.4, content_w * 0.018))
+        try:
+            pdf.image(
+                logo_dessinable,
+                x=content_x,
+                y=content_y + max(0.0, (header_h - cote) * 0.42),
+                w=cote,
+                h=cote,
+            )
+            # Meme retrait a droite qu'a gauche: sans lui le nom se centrerait
+            # sur la place restante et paraitrait pousse contre le bord.
+            entete_x = content_x + cote + ecart
+            entete_w = max(12.0, content_w - (2 * (cote + ecart)))
+        except Exception:
+            entete_x, entete_w = content_x, content_w
+
+    def _ligne_d_entete(texte: str, y: float, hauteur: float, police: float) -> None:
+        """Une ligne centree, retrecie jusqu'a tenir dans sa largeur.
+
+        `cell` ne coupe pas: un nom d'ecole trop long depassait du cadre et
+        allait mordre le logo. Mieux vaut deux dixiemes de point en moins
+        qu'un nom qui sort de la carte.
+        """
+        taille = police
+        pdf.set_font("Helvetica", "B", taille)
+        while taille > 4.0 and pdf.get_string_width(texte) > entete_w:
+            taille -= 0.25
+            pdf.set_font("Helvetica", "B", taille)
+        pdf.set_xy(entete_x, y)
+        pdf.cell(entete_w, hauteur, texte, align="C")
+
     pdf.set_text_color(20, 70, 136)
-    pdf.set_xy(content_x, content_y)
-    pdf.set_font("Helvetica", "B", header_name_font)
-    pdf.cell(content_w, max(2.7, header_h * 0.34), school_name, align="C")
+    _ligne_d_entete(
+        school_name,
+        content_y,
+        max(2.7, header_h * 0.34),
+        header_name_font,
+    )
 
     if school_subtitle:
         pdf.set_text_color(44, 45, 59)
-        pdf.set_xy(content_x, content_y + max(2.5, header_h * 0.31))
-        pdf.set_font("Helvetica", "B", header_sub_font)
-        pdf.cell(content_w, max(2.3, header_h * 0.25), school_subtitle, align="C")
+        _ligne_d_entete(
+            school_subtitle,
+            content_y + max(2.5, header_h * 0.31),
+            max(2.3, header_h * 0.25),
+            header_sub_font,
+        )
 
     if school_phone:
         pdf.set_text_color(177, 59, 67)
-        pdf.set_xy(content_x, content_y + max(4.8, header_h * 0.56))
-        pdf.set_font("Helvetica", "B", header_phone_font)
-        pdf.cell(content_w, max(2.0, header_h * 0.18), school_phone, align="C")
+        _ligne_d_entete(
+            school_phone,
+            content_y + max(4.8, header_h * 0.56),
+            max(2.0, header_h * 0.18),
+            header_phone_font,
+        )
 
     title_y = content_y + header_h + max(0.45, content_h * 0.008)
     title_h = max(3.1, min(5.9, content_h * 0.088))
@@ -798,16 +899,43 @@ def _draw_student_card_template(
         except Exception:
             texte_x = number_x
 
+    largeur_pied = max(2.0, number_max_x - texte_x)
+
     if validity_label:
         pdf.set_xy(texte_x, number_y)
         pdf.set_text_color(44, 48, 59)
         pdf.set_font("Helvetica", "B", number_label_font * 0.82)
         pdf.cell(
-            max(2.0, number_max_x - texte_x),
+            largeur_pied,
             max(2.1, footer_h * 0.26),
             _pdf_text(validity_label),
             align="L",
         )
+
+    # La mention qui ramene une carte trouvee dans la cour.
+    #
+    # Sans elle, celui qui la ramasse n'a aucune raison de la rapporter: rien
+    # sur le carton ne dit a qui elle appartient ni qu'elle doit revenir.
+    # Ecrite seulement si elle tient vraiment: une ligne qui deborde sur la
+    # signature abime la carte au lieu de la servir.
+    mention_y = number_y + max(2.2, footer_h * 0.28)
+    if width >= 72 and mention_y + 1.8 <= footer_y + footer_h:
+        for mention in (
+            "Propriété de l'établissement - à restituer",
+            "Propriété de l'établissement",
+        ):
+            texte = _pdf_text(mention)
+            taille = max(3.6, number_label_font * 0.58)
+            pdf.set_font("Helvetica", "", taille)
+            while taille > 3.6 and pdf.get_string_width(texte) > largeur_pied:
+                taille -= 0.2
+                pdf.set_font("Helvetica", "", taille)
+            if pdf.get_string_width(texte) > largeur_pied:
+                continue
+            pdf.set_xy(texte_x, mention_y)
+            pdf.set_text_color(105, 112, 128)
+            pdf.cell(largeur_pied, max(1.7, footer_h * 0.19), texte, align="L")
+            break
 
     if signature_asset_path:
         try:
@@ -874,17 +1002,29 @@ def _add_student_card_page(
     pdf.add_page()
     pdf.set_auto_page_break(auto=False)
 
+    # La page est au format de la carte: la carte doit donc la remplir.
+    #
+    # Un retrait de quatre millimetres la ramenait a 77,6 x 46 mm au lieu de
+    # 85,6 x 54. Sortie d'une imprimante a cartes, elle flottait dans son
+    # porte-badge avec un liseré blanc tout autour. Le retrait avait un autre
+    # effet, invisible celui-la: les tailles de police se choisissent par
+    # paliers de largeur, et la carte bancaire tombait sous la barre des
+    # 85 mm -- elle etait composee dans les corps du format reduit.
+    #
+    # Il reste la moitie de l'epaisseur du cadre, sans quoi le liseré serait
+    # coupe dans sa longueur par le bord de la page.
     page_w = pdf.w
     page_h = pdf.h
+    marge = max(0.12, min(0.44, page_w * 0.0034)) / 2.0
     _draw_student_card_template(
         pdf,
         student,
         school=school,
         logo_path=logo_path,
-        x=4,
-        y=4,
-        width=page_w - 8,
-        height=page_h - 8,
+        x=marge,
+        y=marge,
+        width=page_w - (2 * marge),
+        height=page_h - (2 * marge),
         verify_base_url=verify_base_url,
     )
 
@@ -1268,6 +1408,11 @@ def _grille_a4(card_w: float, card_h: float) -> tuple[int, int, float, float]:
     L'ancienne grille imposait 3x3 et etirait chaque case aux dimensions
     obtenues: les cartes devenaient portrait alors que la maquette est
     paysage, d'ou un quart de vide par carte et un en-tete a 4 points.
+
+    Donne huit cartes au format bancaire (2 x 4) et deux en A6 (1 x 2).
+    Resserrer les marges en logerait dix au format bancaire, mais les
+    imprimantes de bureau ne savent pas imprimer a moins de cinq millimetres
+    du bord: la derniere rangee sortirait amputee.
     """
     marge = 10.0
     gap = 5.0
@@ -1304,17 +1449,20 @@ def _build_student_cards_pdf(
     pdf = FPDF(format="A4")
     pdf.set_auto_page_break(auto=False)
 
-    if layout_mode == "a4":
-        cols, rows, marge, gap = _grille_a4(card_w, card_h)
-    else:
-        # a4_6up / a4_9up: grille imposee, mais la carte garde desormais ses
-        # proportions et se centre dans sa case au lieu d'y etre etiree.
-        cols, rows = (2, 3) if layout_mode == "a4_6up" else (3, 3)
-        marge, gap = 10.0, 5.0
-        case_w = (210.0 - (2 * marge) - ((cols - 1) * gap)) / cols
-        case_h = (297.0 - (2 * marge) - ((rows - 1) * gap)) / rows
-        echelle = min(case_w / card_w, case_h / card_h)
-        card_w, card_h = card_w * echelle, card_h * echelle
+    # Une seule planche possible: celle qui tient a taille reelle.
+    #
+    # « a4_6up » et « a4_9up » imposaient leur grille puis redimensionnaient
+    # la carte pour la faire entrer. Une carte scolaire se decoupe et se
+    # glisse dans un porte-badge: ses millimetres sont sa raison d'etre. Au
+    # format bancaire, 6 par page l'agrandissait de 8 % -- elle n'entrait
+    # plus nulle part; en A6, 9 par page la reduisait de 59 %, libelles a
+    # 4,7 points et prenoms coupes a dix-sept caracteres.
+    #
+    # Les deux valeurs restent acceptees pour ne pas casser un lien deja
+    # enregistre, mais elles produisent la meme planche que « a4 ». Le nombre
+    # de cartes par feuille se choisit desormais par le format: huit au
+    # format bancaire, deux en A6.
+    cols, rows, marge, gap = _grille_a4(card_w, card_h)
 
     par_planche = cols * rows
     for index, student in enumerate(students):
@@ -1364,15 +1512,45 @@ def _requested_card_format(request) -> str | None:
 
 
 def _verify_base_url(request) -> str:
-    """Racine publique a inscrire dans le QR.
+    """Racine publique a graver dans le QR de la carte.
 
-    Deduite de la requete: le projet n'a pas de reglage d'URL publique, et
-    l'ecrire en dur reproduirait exactement la faute que ce lot corrige.
+    Elle etait deduite de la requete, sur la foi d'un commentaire affirmant
+    que le projet n'avait pas de reglage d'URL publique. C'etait vrai; ca ne
+    l'est plus depuis le lien public des bulletins, qui a apporte
+    PUBLIC_BASE_URL. Une planche tiree depuis l'application servie en reseau
+    local gravait donc « http://192.168.1.25:8000 » dans le papier: un QR qui
+    n'ouvre rien hors du Wi-Fi de l'ecole, et qu'on ne rattrape qu'en
+    reimprimant la classe entiere.
+
+    Rien plutot qu'un QR mort: sans adresse publique la carte sort sans QR,
+    et l'interface l'annonce avant l'impression (_etat_du_qr).
     """
+    base = _base_du_qr(request)
+    return base if base_est_publique(base) else ""
+
+
+def _base_du_qr(request) -> str:
     try:
-        return request.build_absolute_uri("/").rstrip("/")
+        return base_publique(request)
     except Exception:
         return ""
+
+
+def _etat_du_qr(request) -> tuple[bool, str]:
+    """(QR imprimable, motif a montrer quand il ne l'est pas)."""
+    base = _base_du_qr(request)
+    if base_est_publique(base):
+        return True, ""
+    if base:
+        detail = f"« {base} » n'est joignable que depuis le reseau local"
+    else:
+        detail = "aucune adresse publique n'est configuree"
+    return False, (
+        f"Les cartes sortiront sans QR de verification: {detail}. "
+        "Un QR grave sur du papier ne se corrige plus. "
+        "Renseignez PUBLIC_BASE_URL avec l'adresse publique de l'API, "
+        "puis redemarrez le service."
+    )
 
 
 def _requested_etablissement_id(request):
@@ -4928,27 +5106,100 @@ class StudentCardPdfView(APIView):
         return pdf_output_response(pdf, f"carte_eleve_{student.matricule}.pdf")
 
 
+def _classe_pour_cartes(request, classroom_id: int) -> ClassRoom:
+    """La classe demandee, une fois verifie qu'on a le droit de la tirer."""
+    _ensure_sensitive_export_access(request)
+
+    if getattr(request.user, "role", "") in {UserRole.PARENT, UserRole.STUDENT}:
+        raise PermissionDenied("Accès refusé aux cartes de classe.")
+
+    classroom = get_object_or_404(ClassRoom, id=classroom_id)
+    target_etablissement_id = _effective_etablissement_id(request)
+    if getattr(request.user, "role", "") == UserRole.SUPER_ADMIN and target_etablissement_id is None:
+        raise PermissionDenied("Selectionnez un etablissement actif.")
+    if target_etablissement_id and classroom.etablissement_id != target_etablissement_id:
+        raise PermissionDenied("Accès refusé aux cartes de cette classe.")
+    return classroom
+
+
+def _cartes_avec_archives(request) -> bool:
+    return (
+        str(request.query_params.get("include_archived", "false")).strip().lower()
+        in {"1", "true", "yes"}
+    )
+
+
+def _eleves_pour_cartes(classroom: ClassRoom, *, include_archived: bool) -> list[Student]:
+    queryset = Student.objects.select_related(
+        "user", "classroom", "parent", "parent__user"
+    ).filter(classroom_id=classroom.id)
+    if not include_archived:
+        queryset = queryset.filter(is_archived=False)
+
+    return _sans_les_inscriptions_en_attente(
+        list(queryset.order_by("user__last_name", "user__first_name", "matricule"))
+    )
+
+
+class ClassStudentCardsPreflightView(APIView):
+    """Ce qu'on peut savoir avant d'engager le papier.
+
+    Tirer une classe, c'est une planche qu'on decoupe. On ne s'apercevait
+    qu'apres coup que quarante cartes sur soixante portaient un cadre
+    « PHOTO » vide, ou que le QR pointait vers une adresse du reseau local.
+    Ni l'un ni l'autre ne se rattrape sur du carton deja coupe.
+    """
+
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request, classroom_id: int):
+        classroom = _classe_pour_cartes(request, classroom_id)
+
+        card_format = _requested_card_format(request)
+        if card_format is None:
+            return Response(
+                {"detail": f"card_format invalide. Valeurs: {', '.join(CARD_FORMATS)}."},
+                status=400,
+            )
+
+        students = _eleves_pour_cartes(
+            classroom, include_archived=_cartes_avec_archives(request)
+        )
+
+        # On regarde si le champ est renseigne, sans rapatrier le fichier: en
+        # stockage objet, compter les photos couterait soixante
+        # telechargements pour une simple question posee avant d'imprimer.
+        sans_photo = [
+            eleve for eleve in students if not getattr(eleve, "photo", None)
+        ]
+
+        qr_actif, motif_qr = _etat_du_qr(request)
+        cols, rows, _, _ = _grille_a4(*CARD_FORMATS[card_format])
+
+        return Response(
+            {
+                "classe": classroom.name,
+                "effectif": len(students),
+                "sans_photo": len(sans_photo),
+                "noms_sans_photo": [
+                    _student_name_parts(eleve)[2] for eleve in sans_photo[:12]
+                ],
+                "qr_actif": qr_actif,
+                "motif_qr": motif_qr,
+                "cartes_par_planche": cols * rows,
+            }
+        )
+
+
 class ClassStudentCardsPdfView(APIView):
     access_module = "reports"
     permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request, classroom_id: int):
-        _ensure_sensitive_export_access(request)
+        classroom = _classe_pour_cartes(request, classroom_id)
 
-        if getattr(request.user, "role", "") in {UserRole.PARENT, UserRole.STUDENT}:
-            raise PermissionDenied("Accès refusé aux cartes de classe.")
-
-        classroom = get_object_or_404(ClassRoom, id=classroom_id)
-        target_etablissement_id = _effective_etablissement_id(request)
-        if getattr(request.user, "role", "") == UserRole.SUPER_ADMIN and target_etablissement_id is None:
-            raise PermissionDenied("Selectionnez un etablissement actif.")
-        if target_etablissement_id and classroom.etablissement_id != target_etablissement_id:
-            raise PermissionDenied("Accès refusé aux cartes de cette classe.")
-
-        include_archived = (
-            str(request.query_params.get("include_archived", "false")).strip().lower()
-            in {"1", "true", "yes"}
-        )
+        include_archived = _cartes_avec_archives(request)
         layout_mode = str(request.query_params.get("layout_mode", "standard")).strip().lower()
         if layout_mode not in {"standard", "a4", "a4_6up", "a4_9up"}:
             return Response(
@@ -4963,19 +5214,7 @@ class ClassStudentCardsPdfView(APIView):
                 status=400,
             )
 
-        queryset = Student.objects.select_related(
-            "user", "classroom", "parent", "parent__user"
-        ).filter(classroom_id=classroom.id)
-        if not include_archived:
-            queryset = queryset.filter(is_archived=False)
-
-        students = _sans_les_inscriptions_en_attente(
-            list(
-                queryset.order_by(
-                    "user__last_name", "user__first_name", "matricule"
-                )
-            )
-        )
+        students = _eleves_pour_cartes(classroom, include_archived=include_archived)
         if not students:
             return Response(
                 {"detail": "Aucun élève trouvé pour cette classe."},
@@ -4994,11 +5233,7 @@ class ClassStudentCardsPdfView(APIView):
         )
 
         class_slug = classroom.name.replace(" ", "_")
-        suffix = {
-            "a4": "_plancheA4",
-            "a4_6up": "_6parA4",
-            "a4_9up": "_9parA4",
-        }.get(layout_mode, "")
+        suffix = "" if layout_mode == "standard" else "_plancheA4"
         if card_format != CARD_FORMAT_DEFAUT:
             suffix += f"_{card_format}"
         return pdf_output_response(pdf, f"cartes_{class_slug}{suffix}.pdf")

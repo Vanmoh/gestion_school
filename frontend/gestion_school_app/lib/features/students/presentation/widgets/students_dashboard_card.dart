@@ -25,8 +25,6 @@ class StudentsDashboardCard extends StatelessWidget {
 
   final VoidCallback onRefresh;
   final VoidCallback onAddStudent;
-  final VoidCallback onOpenByClass;
-  final VoidCallback onOpenClassCards;
 
   const StudentsDashboardCard({
     super.key,
@@ -40,8 +38,6 @@ class StudentsDashboardCard extends StatelessWidget {
     required this.readOnly,
     required this.onRefresh,
     required this.onAddStudent,
-    required this.onOpenByClass,
-    required this.onOpenClassCards,
   });
 
   static ButtonStyle compactActionStyle() {
@@ -176,30 +172,6 @@ class StudentsDashboardCard extends StatelessWidget {
               icon: const Icon(Icons.person_add_alt_1),
               label: const Text('Ajouter élève'),
             ),
-          ),
-          const SizedBox(width: 10),
-          MenuAnchor(
-            builder: (context, controller, _) => IconButton(
-              tooltip: 'Autres vues',
-              onPressed: saving
-                  ? null
-                  : () => controller.isOpen
-                        ? controller.close()
-                        : controller.open(),
-              icon: const Icon(Icons.more_horiz),
-            ),
-            menuChildren: [
-              MenuItemButton(
-                onPressed: saving ? null : onOpenByClass,
-                leadingIcon: const Icon(Icons.groups_2_outlined),
-                child: const Text('Vue par classe'),
-              ),
-              MenuItemButton(
-                onPressed: saving ? null : onOpenClassCards,
-                leadingIcon: const Icon(Icons.badge_outlined),
-                child: const Text('Cartes'),
-              ),
-            ],
           ),
         ],
       ),

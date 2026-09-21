@@ -5,8 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:printing/printing.dart';
 
+import '../../student_lookup/presentation/student_lookup_page.dart';
 import '../../../core/models/paginated_result.dart';
 import '../../../core/network/media_url.dart';
 import '../../../core/permissions/module_permissions.dart';
@@ -14,7 +14,6 @@ import '../../../core/theme/academic_imports_ui_reference.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../../../features/auth/presentation/auth_controller.dart';
 import '../../payments/presentation/payment_entry_dialog.dart';
-import '../../student_lookup/presentation/student_lookup_page.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../../../models/etablissement.dart';
 import '../domain/student.dart';
@@ -25,10 +24,7 @@ import 'students_controller.dart';
 import 'widgets/student_palette_card.dart';
 import 'widgets/students_dashboard_card.dart';
 import 'widgets/student_roster_dialog.dart';
-import '../../../core/widgets/indicateur.dart';
 
-part 'students_full_details_panel.dart';
-part 'students_card_preview.dart';
 part 'students_registration_form.dart';
 part 'students_profile_form.dart';
 
@@ -44,11 +40,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   final _pageScrollController = ScrollController();
   Timer? _searchDebounce;
 
-  static const double _studentCardTemplateAspectRatio = 148 / 105;
-  static const String _studentCardStampAsset =
-      'assets/images/str_cachet_signature.png';
-  static const String _studentCardSignatureAsset =
-      'assets/images/str_signature.png';
   final int _tableRowsPerPage = 15;
   int _tablePage = 1;
   StudentsStats _stats = const StudentsStats.empty();
@@ -107,9 +98,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   List<Map<String, dynamic>> _parents = [];
   List<Map<String, dynamic>> _years = [];
 
-  int? _classFilterId;
-  int? _cardsClassroomId;
-  String _cardsLayoutMode = 'a4_6up';
   String _sortBy = 'name';
   bool _sortAscending = true;
 
@@ -248,9 +236,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         _registrationClassroomId ??= _classrooms.isNotEmpty
             ? _asInt(_classrooms.first['id'])
             : null;
-        _cardsClassroomId ??= _classrooms.isNotEmpty
-            ? _asInt(_classrooms.first['id'])
-            : null;
         _historyYearId ??= _years.isNotEmpty
             ? _asInt(_years.first['id'])
             : null;
@@ -347,7 +332,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     _searchDebounce?.cancel();
     _searchController.clear();
     setState(() {
-      _classFilterId = null;
       _selectedStudent = null;
       _sortBy = defaultStudentSortKey;
       _sortAscending = true;
@@ -1078,6 +1062,25 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   ///
   /// La fenetre reprend les filtres courants comme point de depart, sans s'y
   /// enfermer: on y change de classe ou de statut sans refermer.
+  /// Ouvre le dossier d'un eleve: sa fiche complete et ses documents.
+  ///
+  /// En fenetre plutot qu'en module a part: l'ecran de recherche reste
+  /// derriere, et refermer le dossier y ramene sans recharger la page.
+  /// L'eleve affiche dans la palette est propose d'emblee.
+  Future<void> _ouvrirLeDossierEleve() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        child: SizedBox(
+          width: 1100,
+          height: 720,
+          child: StudentLookupPage(initialStudentId: _selectedStudent?.id),
+        ),
+      ),
+    );
+  }
+
   Future<void> _openStudentRoster() async {
     await showDialog<void>(
       context: context,
@@ -1087,45 +1090,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         classroomId: null,
         status: 'active',
         classrooms: _classrooms,
+        // Une ligne mene desormais a la palette de l'eleve, celle de cette
+        // page: il fallait refermer la fenetre et le chercher par son nom.
+        onOuvrirEleve: _activateStudent,
       ),
     );
-  }
-
-  String _classCardsExportFileName(int classroomId) {
-    String className = 'classe';
-    for (final row in _classrooms) {
-      if (_asInt(row['id']) == classroomId) {
-        className = (row['name'] ?? 'classe').toString();
-        break;
-      }
-    }
-
-    final classSlug = className.trim().replaceAll(RegExp(r'\s+'), '_');
-    final suffix = _cardsLayoutMode == 'a4_6up'
-        ? '_6parA4'
-        : _cardsLayoutMode == 'a4_9up'
-        ? '_9parA4'
-        : '';
-    return 'cartes_${classSlug.isEmpty ? 'classe' : classSlug}$suffix.pdf';
-  }
-
-  Future<bool> _printStudentCard() async {
-    final student = _selectedStudent;
-    if (student == null) {
-      _showMessage('Sélectionne un élève.');
-      return false;
-    }
-
-    try {
-      final bytes = await ref
-          .read(studentsRepositoryProvider)
-          .fetchStudentCardPdf(student.id);
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
-      return true;
-    } catch (error) {
-      _showMessage('Erreur impression carte élève: $error');
-      return false;
-    }
   }
 
   /// Imprime le certificat de fréquentation de l'élève affiché.
@@ -1133,356 +1102,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   /// Délivré à la demande: c'est la famille qui en a besoin, pour un dossier
   /// qu'elle dépose ailleurs. L'écran ne le propose donc pas d'office, il
   /// l'offre à côté des autres pièces de l'élève.
-  Future<bool> _imprimerCertificatFrequentation() async {
-    final student = _selectedStudent;
-    if (student == null) {
-      _showMessage('Sélectionne un élève.');
-      return false;
-    }
-
-    try {
-      final bytes = await ref
-          .read(studentsRepositoryProvider)
-          .fetchCertificatFrequentationPdf(student.id);
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
-      return true;
-    } catch (error) {
-      _showMessage('Certificat impossible : ${_messageDErreur(error)}');
-      return false;
-    }
-  }
-
   /// Le motif que le serveur donne, plutôt que la trace technique de Dio.
   ///
   /// Le certificat suit la règle d'inscription: quand elle retient la pièce,
   /// le serveur nomme l'élève et le montant manquant. Afficher
   /// « DioException [bad response] » à la place ferait conclure à une panne.
-  String _messageDErreur(Object error) {
-    if (error is DioException) {
-      final data = error.response?.data;
-      if (data is Map && data['detail'] != null) {
-        return data['detail'].toString();
-      }
-      final code = error.response?.statusCode;
-      if (code != null) return 'erreur serveur HTTP $code.';
-    }
-    return error.toString();
-  }
-
-  Future<bool> _quickPreviewStudentCard() async {
-    final student = _selectedStudent;
-    if (student == null) {
-      _showMessage('Sélectionne un élève.');
-      return false;
-    }
-
-    try {
-      final bytes = await ref
-          .read(studentsRepositoryProvider)
-          .fetchStudentCardPdf(student.id);
-      if (!mounted) return false;
-
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) {
-          return Dialog(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 920, maxHeight: 760),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'Aperçu rapide: ${student.fullName}',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    _studentDesignCardPreview(student, compact: true),
-                    const SizedBox(height: 8),
-                    Expanded(
-                      child: PdfPreview(
-                        build: (_) async => bytes,
-                        canChangePageFormat: false,
-                        canChangeOrientation: false,
-                        canDebug: false,
-                        useActions: false,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: () => Navigator.of(dialogContext).pop(),
-                        child: const Text('Fermer'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      );
-      return true;
-    } catch (error) {
-      _showMessage('Erreur aperçu carte élève: $error');
-      return false;
-    }
-  }
-
-  Future<bool> _exportStudentCardPdf() async {
-    final student = _selectedStudent;
-    if (student == null) {
-      _showMessage('Sélectionne un élève.');
-      return false;
-    }
-
-    try {
-      final bytes = await ref
-          .read(studentsRepositoryProvider)
-          .fetchStudentCardPdf(student.id);
-      await Printing.sharePdf(
-        bytes: bytes,
-        filename: 'carte_eleve_${student.matricule}.pdf',
-      );
-      return true;
-    } catch (error) {
-      _showMessage('Erreur export carte élève: $error');
-      return false;
-    }
-  }
-
-  Future<bool> _printClassStudentCards() async {
-    final classroomId = _cardsClassroomId;
-    if (classroomId == null || classroomId <= 0) {
-      _showMessage('Sélectionne une classe.');
-      return false;
-    }
-
-    try {
-      final bytes = await ref
-          .read(studentsRepositoryProvider)
-          .fetchClassStudentCardsPdf(classroomId, layoutMode: _cardsLayoutMode);
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
-      return true;
-    } catch (error) {
-      _showMessage('Erreur impression cartes classe: $error');
-      return false;
-    }
-  }
-
-  Future<bool> _exportClassStudentCardsPdf() async {
-    final classroomId = _cardsClassroomId;
-    if (classroomId == null || classroomId <= 0) {
-      _showMessage('Sélectionne une classe.');
-      return false;
-    }
-
-    try {
-      final bytes = await ref
-          .read(studentsRepositoryProvider)
-          .fetchClassStudentCardsPdf(classroomId, layoutMode: _cardsLayoutMode);
-      await Printing.sharePdf(
-        bytes: bytes,
-        filename: _classCardsExportFileName(classroomId),
-      );
-      return true;
-    } catch (error) {
-      _showMessage('Erreur export cartes classe: $error');
-      return false;
-    }
-  }
-
-  Future<bool> _quickPreviewClassStudentCards() async {
-    final classroomId = _cardsClassroomId;
-    if (classroomId == null || classroomId <= 0) {
-      _showMessage('Sélectionne une classe.');
-      return false;
-    }
-
-    String className = 'Classe';
-    for (final row in _classrooms) {
-      if (_asInt(row['id']) == classroomId) {
-        className = (row['name'] ?? 'Classe').toString();
-        break;
-      }
-    }
-    final layoutLabel = _cardsLayoutMode == 'a4_6up'
-        ? 'A4 • 6 cartes/page'
-        : _cardsLayoutMode == 'a4_9up'
-        ? 'A4 • 9 cartes/page'
-        : 'Standard • 1 carte/page';
-
-    try {
-      final bytes = await ref
-          .read(studentsRepositoryProvider)
-          .fetchClassStudentCardsPdf(classroomId, layoutMode: _cardsLayoutMode);
-      if (!mounted) return false;
-
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) {
-          return Dialog(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 920, maxHeight: 760),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'Aperçu rapide: cartes $className',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _studentCardTag('Classe', className),
-                        _studentCardTag('Format', layoutLabel),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Expanded(
-                      child: PdfPreview(
-                        build: (_) async => bytes,
-                        canChangePageFormat: false,
-                        canChangeOrientation: false,
-                        canDebug: false,
-                        useActions: false,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: () => Navigator.of(dialogContext).pop(),
-                        child: const Text('Fermer'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      );
-      return true;
-    } catch (error) {
-      _showMessage('Erreur aperçu cartes classe: $error');
-      return false;
-    }
-  }
-
-  Future<void> _openClassCardsPanel() {
-    _cardsClassroomId ??= _classFilterId;
-    _cardsClassroomId ??= _classrooms.isNotEmpty
-        ? _asInt(_classrooms.first['id'])
-        : null;
-
-    return _openFloatingPanel(
-      title: 'Imprimer / Exporter cartes d’élèves',
-      contentBuilder: (panelContext, refreshPanel) {
-        return Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            SizedBox(
-              width: 320,
-              child: DropdownButtonFormField<int?>(
-                isExpanded: true,
-                initialValue: _cardsClassroomId,
-                decoration: const InputDecoration(labelText: 'Classe'),
-                items: _classrooms
-                    .map(
-                      (row) => DropdownMenuItem<int?>(
-                        value: _asInt(row['id']),
-                        child: Text('${row['name']}'),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  _cardsClassroomId = value;
-                  refreshPanel();
-                },
-              ),
-            ),
-            SizedBox(
-              width: 320,
-              child: DropdownButtonFormField<String>(
-                isExpanded: true,
-                initialValue: _cardsLayoutMode,
-                decoration: const InputDecoration(labelText: 'Mode impression'),
-                items: const [
-                  DropdownMenuItem(
-                    value: 'standard',
-                    child: Text('Standard (1 carte / page)'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'a4_6up',
-                    child: Text('A4 (6 cartes / page - conseillé)'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'a4_9up',
-                    child: Text('A4 (9 cartes / page)'),
-                  ),
-                ],
-                onChanged: (value) {
-                  _cardsLayoutMode = value ?? 'a4_6up';
-                  refreshPanel();
-                },
-              ),
-            ),
-            OutlinedButton.icon(
-              onPressed: _saving
-                  ? null
-                  : () async {
-                      final success = await _quickPreviewClassStudentCards();
-                      if (success) {
-                        _showMessage('Aperçu rapide affiché.', isSuccess: true);
-                      }
-                    },
-              icon: const Icon(Icons.visibility_outlined),
-              label: const Text('Aperçu rapide'),
-            ),
-            FilledButton.tonalIcon(
-              onPressed: _saving
-                  ? null
-                  : () => _submitFromPanel(
-                      panelContext: panelContext,
-                      action: _printClassStudentCards,
-                      successMessage: _cardsLayoutMode == 'a4_6up'
-                          ? 'Cartes élèves prêtes à l’impression (A4 - 6 cartes/page).'
-                          : _cardsLayoutMode == 'a4_9up'
-                          ? 'Cartes élèves prêtes à l’impression (A4 - 9 cartes/page).'
-                          : 'Cartes élèves générées.',
-                    ),
-              icon: const Icon(Icons.badge_outlined),
-              label: const Text('Imprimer cartes'),
-            ),
-            OutlinedButton.icon(
-              onPressed: _saving
-                  ? null
-                  : () => _submitFromPanel(
-                      panelContext: panelContext,
-                      action: _exportClassStudentCardsPdf,
-                      successMessage: _cardsLayoutMode == 'a4_6up'
-                          ? 'PDF exporté (A4 - 6 cartes/page).'
-                          : _cardsLayoutMode == 'a4_9up'
-                          ? 'PDF exporté (A4 - 9 cartes/page).'
-                          : 'PDF exporté.',
-                    ),
-              icon: const Icon(Icons.picture_as_pdf_outlined),
-              label: const Text('Exporter PDF'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   Future<void> _openFloatingPanel({
     required String title,
     required Widget Function(
@@ -2196,213 +1820,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
-  Future<List<Student>> _fetchStudentsForClassPanel() async {
-    final repository = ref.read(studentsRepositoryProvider);
-    final allStudents = <Student>[];
-    var page = 1;
-    const pageSize = 200;
-
-    while (true) {
-      final result = await repository.fetchStudentsPage(
-        page: page,
-        pageSize: pageSize,
-        search: '',
-        classroomId: null,
-        isArchived: null,
-        ordering: _studentsOrdering(),
-      );
-      allStudents.addAll(result.results);
-
-      if (!result.hasNext || result.results.isEmpty) {
-        break;
-      }
-      page += 1;
-      if (page > 100) {
-        break;
-      }
-    }
-
-    return allStudents;
-  }
-
-  Future<void> _openStudentsByClassPanel() async {
-    final classPanelSearchController = TextEditingController();
-    String panelQuery = '';
-    List<Student> panelStudents;
-
-    try {
-      panelStudents = await _fetchStudentsForClassPanel();
-    } catch (error) {
-      _showMessage('Impossible de charger la vue par classe: $error');
-      classPanelSearchController.dispose();
-      return;
-    }
-
-    final studentsByClass = <String, List<Student>>{};
-    for (final student in panelStudents) {
-      final className = student.classroomName.trim().isEmpty
-          ? 'Sans classe'
-          : student.classroomName.trim();
-      studentsByClass.putIfAbsent(className, () => []).add(student);
-    }
-
-    for (final group in studentsByClass.values) {
-      group.sort(
-        (a, b) => a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase()),
-      );
-    }
-
-    final orderedClassNames = <String>[];
-    final knownClassNames = <String>{};
-    for (final row in _classrooms) {
-      final name = (row['name'] ?? '').toString().trim();
-      if (name.isEmpty || !studentsByClass.containsKey(name)) continue;
-      knownClassNames.add(name);
-      orderedClassNames.add(name);
-    }
-
-    final otherClassNames =
-        studentsByClass.keys
-            .where(
-              (name) =>
-                  name != 'Sans classe' && !knownClassNames.contains(name),
-            )
-            .toList()
-          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-
-    final classNames = <String>[
-      ...orderedClassNames,
-      ...otherClassNames,
-      if (studentsByClass.containsKey('Sans classe')) 'Sans classe',
-    ];
-
-    return _openFloatingPanel(
-      title: 'Liste des élèves par classe',
-      contentBuilder: (panelContext, refreshPanel) {
-        if (panelStudents.isEmpty) {
-          return const Text('Aucun élève disponible.');
-        }
-
-        final normalizedQuery = panelQuery.trim().toLowerCase();
-        final filteredStudentsByClass = <String, List<Student>>{};
-        for (final className in classNames) {
-          final group = studentsByClass[className] ?? const <Student>[];
-          final filteredGroup = normalizedQuery.isEmpty
-              ? group
-              : group
-                    .where(
-                      (student) => _matchesClassPanelQuery(
-                        student: student,
-                        className: className,
-                        query: normalizedQuery,
-                      ),
-                    )
-                    .toList();
-          if (filteredGroup.isNotEmpty) {
-            filteredStudentsByClass[className] = filteredGroup;
-          }
-        }
-
-        final displayedStudentsCount = filteredStudentsByClass.values.fold<int>(
-          0,
-          (sum, group) => sum + group.length,
-        );
-
-        return SizedBox(
-          width: double.infinity,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                '$displayedStudentsCount élèves affichés • ${filteredStudentsByClass.length} classes',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Clique sur un élève pour ouvrir son dossier.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: classPanelSearchController,
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  labelText: 'Recherche (nom ou matricule)',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: panelQuery.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: 'Effacer',
-                          icon: const Icon(Icons.clear),
-                          onPressed: () {
-                            classPanelSearchController.clear();
-                            panelQuery = '';
-                            refreshPanel();
-                          },
-                        ),
-                ),
-                onChanged: (value) {
-                  panelQuery = value;
-                  refreshPanel();
-                },
-              ),
-              const SizedBox(height: 8),
-              if (filteredStudentsByClass.isEmpty)
-                Text(
-                  panelQuery.trim().isEmpty
-                      ? 'Aucun élève disponible.'
-                      : 'Aucun résultat pour "${panelQuery.trim()}".',
-                )
-              else
-                ...filteredStudentsByClass.entries.map((entry) {
-                  final className = entry.key;
-                  final group = entry.value;
-                  final totalInClass =
-                      (studentsByClass[className] ?? const <Student>[]).length;
-                  return Card(
-                    child: ExpansionTile(
-                      title: Text(
-                        normalizedQuery.isEmpty
-                            ? '$className (${group.length})'
-                            : '$className (${group.length}/$totalInClass)',
-                      ),
-                      children: group
-                          .map(
-                            (student) => ListTile(
-                              dense: true,
-                              onTap: () async {
-                                if (panelContext.mounted) {
-                                  final navigator = Navigator.of(panelContext);
-                                  if (navigator.canPop()) {
-                                    navigator.pop();
-                                  }
-                                }
-
-                                if (!mounted) return;
-                                await _openStudentFullDetailsPanel(student);
-                              },
-                              leading: Icon(
-                                student.isArchived
-                                    ? Icons.archive_outlined
-                                    : Icons.school_outlined,
-                              ),
-                              title: Text(student.fullName),
-                              subtitle: Text(
-                                'Matricule: ${student.matricule} • ${student.isArchived ? 'Archivé' : 'Actif'}',
-                              ),
-                            ),
-                          )
-                          .toList(),
-                    ),
-                  );
-                }),
-            ],
-          ),
-        );
-      },
-    ).whenComplete(classPanelSearchController.dispose);
-  }
-
   @override
   Widget build(BuildContext context) {
     final authUser = ref.watch(authControllerProvider).value;
@@ -2471,8 +1888,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
           readOnly: _isStudentsReadOnlyRole(),
           onRefresh: _reloadStudentsTable,
           onAddStudent: _openRegistrationForm,
-          onOpenByClass: _openStudentsByClassPanel,
-          onOpenClassCards: _openClassCardsPanel,
         ),
         SizedBox(height: sectionGap),
         _buildStudentSearchCard(
@@ -2558,6 +1973,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   /// « Mode lecture seule » decouvert une fois le formulaire ouvert et
   /// parfois rempli. Le refus se lit maintenant avant l'effort.
   List<Widget> _paletteActions() {
+    final eleve = _selectedStudent;
+    final peutDispenser = ref
+        .watch(currentPermissionsProvider)
+        .can(Capacites.dispenseInscription);
+
     final handlers = <String, VoidCallback>{
       'Éditer': _openProfileForm,
       'Historique': _openHistoryForm,
@@ -2565,13 +1985,28 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       'Absence': _openAttendanceForm,
       'Frais': _openFeeForm,
       'Paiement': _openPaymentForm,
+      if (eleve != null) ...{
+        'Archiver': () => _toggleArchive(eleve),
+        'Réactiver': () => _toggleArchive(eleve),
+        'Dispenser d\'inscription': () => _dispenserInscription(eleve),
+        'Lever la dispense': () => _dispenserInscription(eleve),
+      },
     };
 
     return [
       for (final action in buildStudentActions(
         canWrite: !_isStudentsReadOnlyRole(),
         saving: _saving,
-        studentName: _selectedStudent?.fullName ?? '',
+        studentName: eleve?.fullName ?? '',
+        archive: eleve?.isArchived ?? false,
+        // La dispense ne s'offre qu'a qui peut l'accorder, et seulement quand
+        // elle a un objet: sur un eleve a jour dans une ecole qui n'applique
+        // pas la regle, le bouton n'aurait rien a dispenser.
+        peutDispenser:
+            peutDispenser &&
+            eleve != null &&
+            (eleve.inscriptionEnAttente || eleve.inscriptionDispensee),
+        dispenseEnCours: eleve?.inscriptionDispensee ?? false,
       ))
         Tooltip(
           message: action.tooltip,
@@ -2652,6 +2087,17 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
                   onPressed: _openStudentRoster,
                   icon: const Icon(Icons.groups_2_outlined),
                   label: const Text('Liste des élèves'),
+                ),
+                // Le dossier quitte la barre laterale pour se poser ici, a
+                // cote de la liste: on ouvre le dossier d'un eleve depuis
+                // l'ecran ou on le cherche, pas depuis un autre module. Il
+                // reste dans la barre pour les parents et les eleves, qui
+                // n'atteignent pas cet ecran.
+                OutlinedButton.icon(
+                  key: const Key('ouvrir-dossier-eleve'),
+                  onPressed: _ouvrirLeDossierEleve,
+                  icon: const Icon(Icons.folder_open_outlined),
+                  label: const Text('Dossier élève'),
                 ),
                 OutlinedButton.icon(
                   onPressed: (_saving || !canOpenAcademicImports)
@@ -2824,202 +2270,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     );
   }
 
-  Widget _statusBadge(String label, bool archived) {
-    final scheme = Theme.of(context).colorScheme;
-    final background = archived
-        ? scheme.surfaceContainerHighest
-        : scheme.primary.withValues(alpha: 0.14);
-    final foreground = archived ? scheme.onSurfaceVariant : scheme.primary;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: foreground,
-          fontWeight: FontWeight.w600,
-          fontSize: 12,
-        ),
-      ),
-    );
-  }
-
-  Widget _studentInfoPill({
-    required IconData icon,
-    required String label,
-    required String value,
-  }) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      constraints: const BoxConstraints(minWidth: 190, maxWidth: 320),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: scheme.primary),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelSmall,
-                ),
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _studentCardTag(String label, String value, {bool onDark = false}) {
-    final scheme = Theme.of(context).colorScheme;
-    final backgroundColor = onDark
-        ? Colors.white.withValues(alpha: 0.2)
-        : scheme.surfaceContainerHighest.withValues(alpha: 0.55);
-    final borderColor = onDark
-        ? Colors.white.withValues(alpha: 0.35)
-        : scheme.outlineVariant.withValues(alpha: 0.55);
-    final textColor = onDark ? Colors.white : null;
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 240),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(999),
-          color: backgroundColor,
-          border: Border.all(color: borderColor),
-        ),
-        child: Text(
-          '$label: $value',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(
-            context,
-          ).textTheme.labelSmall?.copyWith(color: textColor),
-        ),
-      ),
-    );
-  }
-
-
-  Widget _studentCardPhoto(Student student) {
-    final rawPath = student.photo.trim();
-    if (rawPath.isEmpty) {
-      return _studentCardPhotoPlaceholder();
-    }
-
-    final imageUrl = _resolveMediaUrl(rawPath);
-    return Image.network(
-      imageUrl,
-      fit: BoxFit.cover,
-      errorBuilder: (context, error, stackTrace) {
-        return _studentCardPhotoPlaceholder();
-      },
-    );
-  }
-
-  Widget _studentCardPhotoPlaceholder() {
-    return Container(
-      color: const Color(0xFFE8EEF8),
-      child: const Center(
-        child: Icon(Icons.person_outline, color: Color(0xFF6A7D99)),
-      ),
-    );
-  }
-
-  Widget _studentCardInfoRow(
-    String label,
-    String value, {
-    required bool compact,
-  }) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: compact ? 2.2 : 2.8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          RichText(
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            text: TextSpan(
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: const Color(0xFF1A2A3C),
-                fontSize: compact ? 6.2 : 7.4,
-              ),
-              children: [
-                TextSpan(
-                  text: '$label : ',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF2C303B),
-                  ),
-                ),
-                TextSpan(
-                  text: value.trim().isEmpty ? '-' : value,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF19488A),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(height: compact ? 1.1 : 1.5),
-          Container(height: 1, color: const Color(0xFFB8C6DA)),
-        ],
-      ),
-    );
-  }
-
-  Widget _dossierSectionCard({
-    required String title,
-    required List<Widget> children,
-  }) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
-        color: scheme.surface,
-      ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          collapsedShape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-          childrenPadding: const EdgeInsets.only(bottom: 8),
-          title: Text(title, style: Theme.of(context).textTheme.titleSmall),
-          children: children,
-        ),
-      ),
-    );
-  }
 
   ButtonStyle _compactUnifiedActionButtonStyle() {
     return FilledButton.styleFrom(
@@ -3049,35 +2299,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     return 'Parent';
   }
 
-  bool _matchesClassPanelQuery({
-    required Student student,
-    required String className,
-    required String query,
-  }) {
-    if (query.isEmpty) return true;
-    final haystack = '${student.fullName} ${student.matricule} $className'
-        .toLowerCase();
-    return haystack.contains(query);
-  }
-
-  String _classroomName(int classroomId) {
-    for (final row in _classrooms) {
-      if (_asInt(row['id']) == classroomId) {
-        return row['name']?.toString() ?? 'Classe $classroomId';
-      }
-    }
-    return 'Classe $classroomId';
-  }
-
-  String _yearName(int yearId) {
-    for (final row in _years) {
-      if (_asInt(row['id']) == yearId) {
-        return row['name']?.toString() ?? 'Année $yearId';
-      }
-    }
-    return 'Année $yearId';
-  }
-
   int _asInt(dynamic value) {
     if (value is int) return value;
     return int.tryParse(value?.toString() ?? '') ?? 0;
@@ -3100,17 +2321,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         return 'Examen';
       default:
         return value.isEmpty ? 'Non défini' : value;
-    }
-  }
-
-  String _severityLabel(String value) {
-    switch (value) {
-      case 'low':
-        return 'Faible';
-      case 'high':
-        return 'Élevée';
-      default:
-        return 'Moyenne';
     }
   }
 
@@ -3244,14 +2454,6 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       title: 'Photo de profil',
       mediaPath: photoPath,
       emptyMessage: 'Aucune photo de profil disponible.',
-    );
-  }
-
-  Future<void> _viewAttendanceProof(String proofPath) async {
-    return _showNetworkImageDialog(
-      title: 'Justificatif',
-      mediaPath: proofPath,
-      emptyMessage: 'Aucun justificatif disponible.',
     );
   }
 

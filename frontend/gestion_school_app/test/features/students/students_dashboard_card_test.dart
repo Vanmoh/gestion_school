@@ -38,8 +38,6 @@ Future<void> _pump(
           readOnly: readOnly,
           onRefresh: () {},
           onAddStudent: onAddStudent ?? () {},
-          onOpenByClass: () {},
-          onOpenClassCards: () {},
         ),
       ),
     ),
