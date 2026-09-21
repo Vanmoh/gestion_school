@@ -5,8 +5,10 @@ Ce test fait le trajet complet -- sauvegarde puis restauration -- et regarde
 ou il s'arrete.
 """
 
+import json
+import os
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from django.test import override_settings
@@ -181,6 +183,50 @@ class RestaurationBoutEnBoutTests(APITestCase):
         ecriture.refresh_from_db()
         self.assertEqual(ecriture.status, BackupArchive.Status.FAILED)
         self.assertEqual(ecriture.build_phase, "Interrompue")
+        self.assertIn("sauvegarde ne repond plus", ecriture.restore_log)
+
+    def test_un_avancement_laisse_par_l_archive_precedente_est_ignore(self):
+        """Une base restauree recommence ses numeros.
+
+        Le fichier d'avancement laisse par l'archive n° 7 faisait prendre la
+        nouvelle n° 7 -- une sauvegarde -- pour une restauration:
+        « Interrompue » partait dans la colonne de la restauration, et
+        l'ecran annoncait une restauration qui n'avait jamais eu lieu. La
+        verification existait, mais dans `_est_silencieuse` seule.
+        """
+        from django.utils import timezone
+
+        vue = BackupArchiveViewSet()
+        ecriture = BackupArchive.objects.create(
+            scope=BackupArchive.Scope.GLOBAL,
+            created_by=self.admin,
+            status=BackupArchive.Status.RUNNING,
+            build_phase="Lecture de la base",
+            build_progress=1,
+        )
+        BackupArchive.objects.filter(pk=ecriture.pk).update(
+            updated_at=timezone.now() - vue.SILENCE_AVANT_ABANDON * 2
+        )
+        ecriture.refresh_from_db()
+
+        fichier = BackupArchiveViewSet._fichier_d_avancement(ecriture.pk)
+        fichier.write_text(
+            json.dumps(
+                {"restore_phase": "Chargement des donnees", "restore_progress": 40}
+            ),
+            encoding="utf-8",
+        )
+        self.addCleanup(fichier.unlink, True)
+        # Ecrit avant que cette archive existe: il est a la precedente.
+        ancien = (ecriture.created_at - timedelta(minutes=5)).timestamp()
+        os.utime(fichier, (ancien, ancien))
+
+        vue._verifier_les_restaurations_bloquees(BackupArchive.objects.all())
+
+        ecriture.refresh_from_db()
+        self.assertEqual(ecriture.status, BackupArchive.Status.FAILED)
+        self.assertEqual(ecriture.build_phase, "Interrompue")
+        self.assertEqual(ecriture.restore_phase or "", "")
         self.assertIn("sauvegarde ne repond plus", ecriture.restore_log)
 
     def test_une_sauvegarde_qui_avance_est_laissee_tranquille(self):

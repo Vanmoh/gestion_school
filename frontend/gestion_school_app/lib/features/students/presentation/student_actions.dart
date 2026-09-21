@@ -34,14 +34,26 @@ List<StudentAction> buildStudentActions({
   required bool canWrite,
   required bool saving,
   required String studentName,
+  bool archive = false,
+  bool peutDispenser = false,
+  bool dispenseEnCours = false,
 }) {
-  const definitions = <(String, IconData)>[
+  final definitions = <(String, IconData)>[
     ('Éditer', Icons.edit_outlined),
     ('Historique', Icons.history_edu_outlined),
     ('Incident', Icons.gavel_outlined),
     ('Absence', Icons.fact_check_outlined),
     ('Frais', Icons.add_card_outlined),
     ('Paiement', Icons.payments_outlined),
+    // Remontees ici depuis le panneau du dossier complet, supprime avec la
+    // vue par classe: elles portent sur l'eleve affiche, donc elles vivent
+    // dans sa palette. Sans ce deplacement, archiver un eleve n'aurait plus
+    // eu aucun chemin.
+    (archive ? 'Réactiver' : 'Archiver',
+     archive ? Icons.unarchive_outlined : Icons.archive_outlined),
+    if (peutDispenser)
+      (dispenseEnCours ? 'Lever la dispense' : 'Dispenser d\'inscription',
+       Icons.volunteer_activism_outlined),
   ];
 
   final actif = canWrite && !saving;

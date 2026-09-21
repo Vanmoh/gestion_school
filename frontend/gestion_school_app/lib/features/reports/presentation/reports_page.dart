@@ -10,6 +10,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/network/chargement_tolerant.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../../core/widgets/indicateur.dart';
+import '../../student_lookup/presentation/student_lookup_page.dart';
 
 class ReportsPage extends ConsumerStatefulWidget {
   const ReportsPage({super.key});
@@ -33,8 +34,6 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
   int? _selectedStudentId;
   int? _selectedYearId;
   int? _selectedPaymentId;
-  int? _selectedClassroomId;
-  String _cardsLayoutMode = 'a4_6up';
   int _receiptPage = 1;
 
   @override
@@ -87,7 +86,6 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
       }
 
       if (!mounted) return;
-      final classroomOptions = _classroomsFromStudents(students);
       setState(() {
         _students = students;
         _years = years;
@@ -98,9 +96,6 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
         _selectedYearId ??= years.isNotEmpty ? _asInt(years.first['id']) : null;
         _selectedPaymentId ??= payments.isNotEmpty
             ? _asInt(payments.first['id'])
-            : null;
-        _selectedClassroomId ??= classroomOptions.isNotEmpty
-            ? _asInt(classroomOptions.first['id'])
             : null;
       });
     } catch (error) {
@@ -130,42 +125,29 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
     });
   }
 
-  Future<void> _printStudentCard() async {
+  /// Ouvre le dossier de l'eleve choisi, la ou vivent ses pieces.
+  ///
+  /// Cette page imprimait la carte elle-meme, avec son propre choix de mise
+  /// en page -- un deuxieme jeu de reglages pour le meme document, qu'il
+  /// fallait tenir a jour en double et qui partait sans apercu, directement
+  /// dans la boite d'impression du systeme.
+  Future<void> _ouvrirLeDossierEleve() async {
     if (_selectedStudentId == null) {
       _showMessage('Sélectionnez un élève.');
       return;
     }
 
-    await _runBusyTask(() async {
-      final dio = ref.read(dioProvider);
-      final cacheBust = DateTime.now().millisecondsSinceEpoch;
-      final response = await dio.get(
-        '/reports/student-card/$_selectedStudentId/',
-        queryParameters: {'_ts': cacheBust},
-        options: Options(responseType: ResponseType.bytes),
-      );
-      final bytes = _toUint8List(response.data);
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
-    });
-  }
-
-  Future<void> _printClassCards() async {
-    if (_selectedClassroomId == null || _selectedClassroomId! <= 0) {
-      _showMessage('Sélectionnez une classe.');
-      return;
-    }
-
-    await _runBusyTask(() async {
-      final dio = ref.read(dioProvider);
-      final cacheBust = DateTime.now().millisecondsSinceEpoch;
-      final response = await dio.get(
-        '/reports/student-cards/class/$_selectedClassroomId/',
-        queryParameters: {'layout_mode': _cardsLayoutMode, '_ts': cacheBust},
-        options: Options(responseType: ResponseType.bytes),
-      );
-      final bytes = _toUint8List(response.data);
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
-    });
+    await showDialog<void>(
+      context: context,
+      builder: (_) => Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        child: SizedBox(
+          width: 1100,
+          height: 720,
+          child: StudentLookupPage(initialStudentId: _selectedStudentId),
+        ),
+      ),
+    );
   }
 
   Future<void> _downloadPaymentsExcel() async {
@@ -271,103 +253,43 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Carte scolaire (PDF)',
+            'Documents de l\'élève',
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
-          const Text('Impression carte élève individuelle ou par classe.'),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              SizedBox(
-                width: 320,
-                child: DropdownButtonFormField<int>(
-                  isExpanded: true,
-                  initialValue: _selectedStudentId,
-                  decoration: const InputDecoration(labelText: 'Élève'),
-                  items: _students
-                      .map(
-                        (row) => DropdownMenuItem<int>(
-                          value: _asInt(row['id']),
-                          child: Text(_studentLabel(row)),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    setState(() => _selectedStudentId = value);
-                  },
-                ),
-              ),
-              SizedBox(
-                width: 260,
-                child: DropdownButtonFormField<int>(
-                  isExpanded: true,
-                  initialValue: _selectedClassroomId,
-                  decoration: const InputDecoration(labelText: 'Classe'),
-                  items: classRows
-                      .map(
-                        (row) => DropdownMenuItem<int>(
-                          value: _asInt(row['id']),
-                          child: Text(row['name']?.toString() ?? ''),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: classRows.isEmpty
-                      ? null
-                      : (value) {
-                          setState(() => _selectedClassroomId = value);
-                        },
-                ),
-              ),
-              SizedBox(
-                width: 250,
-                child: DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  initialValue: _cardsLayoutMode,
-                  decoration: const InputDecoration(
-                    labelText: 'Mode impression cartes classe',
-                  ),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'standard',
-                      child: Text('Standard (1 carte / page)'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'a4_6up',
-                      child: Text('A4 (6 cartes / page)'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'a4_9up',
-                      child: Text('A4 (9 cartes / page)'),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    setState(() {
-                      _cardsLayoutMode = value ?? 'a4_6up';
-                    });
-                  },
-                ),
-              ),
-            ],
+          const Text(
+            'Carte scolaire, certificat de fréquentation et cartes de toute '
+            'la classe se délivrent depuis le dossier de l\'élève, avec '
+            'aperçu avant impression.',
           ),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              FilledButton.icon(
-                onPressed: _busy ? null : _printStudentCard,
-                icon: const Icon(Icons.badge_outlined),
-                label: const Text('Imprimer carte élève'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: _busy || classRows.isEmpty ? null : _printClassCards,
-                icon: const Icon(Icons.grid_view_outlined),
-                label: const Text('Imprimer cartes classe'),
-              ),
-            ],
+          SizedBox(
+            width: 320,
+            child: DropdownButtonFormField<int>(
+              isExpanded: true,
+              initialValue: _selectedStudentId,
+              decoration: const InputDecoration(labelText: 'Élève'),
+              items: _students
+                  .map(
+                    (row) => DropdownMenuItem<int>(
+                      value: _asInt(row['id']),
+                      child: Text(_studentLabel(row)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                setState(() => _selectedStudentId = value);
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              onPressed: _busy ? null : _ouvrirLeDossierEleve,
+              icon: const Icon(Icons.folder_open_outlined),
+              label: const Text('Ouvrir le dossier élève'),
+            ),
           ),
         ],
       ),
@@ -581,9 +503,9 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Cartes scolaires, reçus de paiement et exports. '
-                      'Les bulletins se préparent, se valident et s\'envoient '
-                      'depuis « Notes & Bulletins ».',
+                      'Reçus de paiement et exports. Les pièces d\'un élève '
+                      '— carte scolaire, certificat — se délivrent depuis son '
+                      'dossier; les bulletins depuis « Notes & Bulletins ».',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],

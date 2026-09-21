@@ -7,6 +7,7 @@ import '../../../core/network/media_url.dart';
 import '../../students/domain/student.dart';
 import '../data/student_lookup_repository.dart';
 import '../domain/student_dossier.dart';
+import 'widgets/carte_des_documents.dart';
 import 'widgets/dossier_identity_card.dart';
 import 'widgets/dossier_sections_panel.dart';
 
@@ -596,6 +597,7 @@ class _DossierBody extends StatelessWidget {
       photoUrl: photoUrl,
     );
     final sections = DossierSectionsPanel(sections: dossier.sections);
+    final documents = CarteDesDocuments(student: dossier.student);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -603,14 +605,26 @@ class _DossierBody extends StatelessWidget {
         if (constraints.maxWidth < 900) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [identite, const SizedBox(height: 16), sections],
+            children: [
+              identite,
+              const SizedBox(height: 16),
+              documents,
+              const SizedBox(height: 16),
+              sections,
+            ],
           );
         }
 
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(flex: 6, child: identite),
+            Expanded(
+              flex: 6,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [identite, const SizedBox(height: 16), documents],
+              ),
+            ),
             const SizedBox(width: 16),
             Expanded(flex: 5, child: sections),
           ],
