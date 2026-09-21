@@ -66,7 +66,10 @@ class BackupArchiveSerializer(serializers.ModelSerializer):
 
         from .views import BackupArchiveViewSet
 
-        sur_disque = BackupArchiveViewSet.avancement_sur_disque(instance.id)
+        # Par l'archive et non par son numero: une base restauree
+        # recommence ses numeros, et le fichier laisse par l'archive
+        # precedente afficherait son pourcentage sur celle-ci.
+        sur_disque = BackupArchiveViewSet.avancement_de(instance)
         for cle in self.CHAMPS_D_AVANCEMENT:
             if cle in sur_disque:
                 donnees[cle] = sur_disque[cle]

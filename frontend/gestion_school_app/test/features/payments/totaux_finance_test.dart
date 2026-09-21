@@ -12,7 +12,6 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gestion_school_app/features/payments/data/payments_repository.dart';
-import 'package:gestion_school_app/features/payments/domain/finance_totals.dart';
 
 class _Transport implements HttpClientAdapter {
   _Transport(this.charge);

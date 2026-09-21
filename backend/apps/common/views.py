@@ -975,18 +975,41 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
         limite = timezone.now() - self.SILENCE_AVANT_ABANDON
         if archive.updated_at and archive.updated_at >= limite:
             return False
+        if not self._avancement_appartient_a(archive):
+            return True
         try:
             mtime = self._fichier_d_avancement(archive.id).stat().st_mtime
         except OSError:
             return True
         dernier = datetime.fromtimestamp(mtime, tz=timezone.get_current_timezone())
-        # Un fichier plus ancien que la ligne appartient a une archive
-        # precedente qui portait le meme numero -- une base restauree
-        # recommence ses numeros. Le prendre pour un signe de vie ferait
-        # passer une operation morte pour vivante, indefiniment.
-        if archive.created_at and dernier < archive.created_at:
-            return True
         return dernier < limite
+
+    @classmethod
+    def _avancement_appartient_a(cls, archive) -> bool:
+        """Le fichier d'avancement est-il bien celui de cette archive ?
+
+        Un fichier plus ancien que la ligne vient d'une archive precedente
+        qui portait le meme numero -- une base restauree recommence ses
+        numeros. Cette verification vivait dans `_est_silencieuse` seule,
+        alors que trois endroits lisent ce fichier. Les deux autres le
+        prenaient pour argent comptant: une sauvegarde morte passait pour une
+        restauration, « Interrompue » atterrissait dans la colonne de la
+        restauration, et l'ecran annoncait une restauration qui n'avait
+        jamais eu lieu.
+        """
+        try:
+            mtime = cls._fichier_d_avancement(archive.id).stat().st_mtime
+        except OSError:
+            return False
+        ecrit_le = datetime.fromtimestamp(mtime, tz=timezone.get_current_timezone())
+        return not (archive.created_at and ecrit_le < archive.created_at)
+
+    @classmethod
+    def avancement_de(cls, archive) -> dict:
+        """L'avancement sur disque, quand il appartient bien a cette archive."""
+        if not cls._avancement_appartient_a(archive):
+            return {}
+        return cls.avancement_sur_disque(archive.id)
 
     @staticmethod
     def _fichier_d_avancement(backup_id: int) -> Path:
@@ -1915,7 +1938,7 @@ class BackupArchiveViewSet(viewsets.ModelViewSet):
                 continue
 
             restauration = bool((archive.restore_phase or "").strip()) or bool(
-                self.avancement_sur_disque(archive.id).get("restore_phase")
+                self.avancement_de(archive).get("restore_phase")
             )
             geste = "restauration" if restauration else "sauvegarde"
 

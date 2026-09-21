@@ -18,11 +18,20 @@ class StudentRosterDialog extends ConsumerStatefulWidget {
   final String status;
   final List<Map<String, dynamic>> classrooms;
 
+  /// Ouvre la palette de l'élève cliqué, celle de « Gestion des élèves ».
+  ///
+  /// Une ligne ne menait nulle part: pour regarder un élève aperçu dans la
+  /// liste, il fallait refermer la fenêtre et le chercher par son nom. Et la
+  /// vue par classe, qui rendait ce service, ouvrait une présentation
+  /// concurrente de la palette — deux fiches pour un même élève.
+  final void Function(Student)? onOuvrirEleve;
+
   const StudentRosterDialog({
     super.key,
     required this.classroomId,
     required this.status,
     required this.classrooms,
+    this.onOuvrirEleve,
   });
 
   @override
@@ -402,6 +411,120 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
     );
   }
 
+  /// Referme la fenêtre, puis ouvre la palette de l'élève.
+  ///
+  /// Dans cet ordre: la palette s'affiche dans la page qui est derrière, et
+  /// la laisser sous une fenêtre ouverte la rendrait invisible.
+  void _ouvrir(Student student) {
+    final ouvrir = widget.onOuvrirEleve;
+    if (ouvrir == null) return;
+    Navigator.of(context).pop();
+    ouvrir(student);
+  }
+
+  /// Les élèves groupés par classe, dans l'ordre alphabétique des classes.
+  ///
+  /// « Sans classe » ferme la marche: c'est une anomalie à traiter, pas une
+  /// classe, et la placer entre deux niveaux la ferait passer pour telle.
+  Map<String, List<Student>> _parClasse(List<Student> eleves) {
+    const sansClasse = 'Sans classe';
+    final groupes = <String, List<Student>>{};
+    for (final eleve in eleves) {
+      final nom = eleve.classroomName.trim().isEmpty
+          ? sansClasse
+          : eleve.classroomName.trim();
+      groupes.putIfAbsent(nom, () => <Student>[]).add(eleve);
+    }
+
+    final noms = groupes.keys.where((nom) => nom != sansClasse).toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    if (groupes.containsKey(sansClasse)) noms.add(sansClasse);
+
+    return {for (final nom in noms) nom: groupes[nom]!};
+  }
+
+  Widget _buildGroupes(
+    ColorScheme scheme,
+    TextTheme textTheme,
+    List<Student> visibles,
+  ) {
+    final groupes = _parClasse(visibles);
+
+    return Scrollbar(
+      child: ListView(
+        children: [
+          for (final entree in groupes.entries) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 12, 4, 6),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.groups_2_outlined,
+                    size: 18,
+                    color: scheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    entree.key,
+                    style: textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // L'effectif de la classe, et non celui de l'affichage:
+                  // une recherche en cours ne doit pas faire croire qu'une
+                  // classe a perdu des élèves.
+                  Text(
+                    '${entree.value.length} sur ${_effectifDeLaClasse(entree.key)}',
+                    style: textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            for (final eleve in entree.value)
+              ListTile(
+                key: Key('eleve-${eleve.id}'),
+                dense: true,
+                leading: CircleAvatar(
+                  radius: 14,
+                  backgroundColor: scheme.primaryContainer,
+                  child: Text(
+                    eleve.fullName.characters.take(1).toString().toUpperCase(),
+                    style: textTheme.labelMedium?.copyWith(
+                      color: scheme.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+                title: Text(eleve.fullName),
+                subtitle: Text(eleve.matricule),
+                trailing: widget.onOuvrirEleve == null
+                    ? null
+                    : const Icon(Icons.chevron_right),
+                onTap: widget.onOuvrirEleve == null
+                    ? null
+                    : () => _ouvrir(eleve),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  int _effectifDeLaClasse(String nom) {
+    const sansClasse = 'Sans classe';
+    return _students
+        .where(
+          (eleve) =>
+              (eleve.classroomName.trim().isEmpty
+                  ? sansClasse
+                  : eleve.classroomName.trim()) ==
+              nom,
+        )
+        .length;
+  }
+
   Widget _buildTable(
     ColorScheme scheme,
     TextTheme textTheme,
@@ -439,6 +562,13 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
       );
     }
 
+    // Sans classe choisie, la liste couvre l'école entière: elle se lit par
+    // classe, avec son effectif. C'est ce que « Vue par classe » offrait à
+    // part, et qui n'a plus de raison d'être un écran de son côté.
+    if (_classroomId == null) {
+      return _buildGroupes(scheme, textTheme, visibles);
+    }
+
     return Scrollbar(
       child: SingleChildScrollView(
         child: SizedBox(
@@ -457,6 +587,9 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
             rows: [
               for (final student in visibles)
                 DataRow(
+                  onSelectChanged: widget.onOuvrirEleve == null
+                      ? null
+                      : (_) => _ouvrir(student),
                   cells: [
                     // Le numero suit la liste complete: renumeroter la vue
                     // filtree ferait diverger l'ecran du papier.

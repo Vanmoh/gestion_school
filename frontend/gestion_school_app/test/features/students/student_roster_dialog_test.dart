@@ -69,6 +69,7 @@ Future<_FakeRepository> _pump(
   int? classroomId = 7,
   String status = 'active',
   List<Student>? eleves,
+  void Function(Student)? onOuvrirEleve,
 }) async {
   final repository = _FakeRepository(eleves ?? _eleves);
 
@@ -90,6 +91,7 @@ Future<_FakeRepository> _pump(
               {'id': 7, 'name': '6A'},
               {'id': 8, 'name': '5B'},
             ],
+            onOuvrirEleve: onOuvrirEleve,
           ),
         ),
       ),
@@ -243,5 +245,56 @@ void main() {
 
     expect(find.text('Aucun élève ne correspond à la recherche.'), findsOneWidget);
     expect(find.text('Aucun élève dans cette sélection.'), findsNothing);
+  });
+
+  group('la liste mene a la palette', () {
+    testWidgets('cliquer une ligne ouvre l_eleve et referme la fenetre', (
+      tester,
+    ) async {
+      // Une ligne ne menait nulle part: pour regarder un eleve apercu dans
+      // la liste, il fallait refermer la fenetre et le chercher par son nom.
+      final ouverts = <Student>[];
+      await _pump(tester, onOuvrirEleve: ouverts.add);
+
+      await tester.tap(find.text('Boubacar Diallo'));
+      await tester.pumpAndSettle();
+
+      expect(ouverts.map((e) => e.fullName).toList(), ['Boubacar Diallo']);
+    });
+
+    testWidgets('sans rappel, les lignes ne reagissent pas', (tester) async {
+      await _pump(tester);
+
+      // `DataRow` n'est pas un widget: on lit le tableau qui les porte.
+      final tableau = tester.widget<DataTable>(find.byType(DataTable));
+      expect(
+        tableau.rows.every((ligne) => ligne.onSelectChanged == null),
+        isTrue,
+      );
+    });
+  });
+
+  group('sans classe choisie, la liste se lit par classe', () {
+    testWidgets('chaque classe porte son nom et son effectif', (tester) async {
+      // Ce que « Vue par classe » offrait a part, dans un ecran de plus qui
+      // ouvrait sa propre fiche d_eleve.
+      await _pump(
+        tester,
+        classroomId: null,
+        eleves: [
+          _eleve(1, 'Aminata Coulibaly', 'M001', 'F'),
+          _eleve(2, 'Boubacar Diallo', 'M002', 'M'),
+        ],
+      );
+
+      expect(find.text('6A'), findsWidgets);
+      expect(find.textContaining('2 sur 2'), findsOneWidget);
+    });
+
+    testWidgets('une classe choisie garde le tableau', (tester) async {
+      await _pump(tester, classroomId: 7);
+
+      expect(find.text('Nom et prénoms'), findsOneWidget);
+    });
   });
 }
