@@ -111,6 +111,8 @@ class PersonnalisationSerializer(serializers.ModelSerializer):
             "couleur_principale",
             "image_fond",
             "image_fond_url",
+            "mot_de_passe_eleve_modele",
+            "imposer_changement_mot_de_passe",
         ]
         extra_kwargs = {
             "logo": {"write_only": True, "required": False},
@@ -123,6 +125,7 @@ class PersonnalisationSerializer(serializers.ModelSerializer):
             "telephone": {"allow_blank": True},
             "email": {"allow_blank": True},
             "adresse": {"allow_blank": True},
+            "mot_de_passe_eleve_modele": {"allow_blank": True},
             "titre_connexion": {"allow_blank": True},
             "sous_titre_connexion": {"allow_blank": True},
             "titre_portail": {"allow_blank": True},

@@ -676,3 +676,60 @@ class DeviceTokenView(APIView):
 
 
 token_refresh_view = CustomTokenRefreshView.as_view()
+
+
+class ChangerSonMotDePasseView(APIView):
+    """Choisir son propre mot de passe.
+
+    Le mot de passe remis a une famille est ecrit sur un papier et suit une
+    regle que l'ecole applique a tous: il ne protege rien par lui-meme. Tant
+    que son titulaire ne l'a pas remplace, l'application ne lui ouvre que cet
+    ecran (voir `ChangementDeMotDePasseMiddleware`).
+
+    L'ancien mot de passe n'est pas demande a la premiere connexion: il vient
+    d'etre saisi pour arriver ici, et le redemander n'ajoute rien qu'une
+    occasion de se tromper. Il l'est pour tout changement ulterieur, ou un
+    jeton vole suffirait sinon a prendre le compte.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        utilisateur = request.user
+        nouveau = str(request.data.get("nouveau_mot_de_passe") or "")
+        ancien = str(request.data.get("ancien_mot_de_passe") or "")
+
+        if not utilisateur.doit_changer_mot_de_passe:
+            if not utilisateur.check_password(ancien):
+                raise ValidationError(
+                    {"ancien_mot_de_passe": "Mot de passe actuel incorrect."}
+                )
+
+        if len(nouveau) < LONGUEUR_MINIMALE_MOT_DE_PASSE:
+            raise ValidationError(
+                {
+                    "nouveau_mot_de_passe": f"Le mot de passe doit faire "
+                    f"{LONGUEUR_MINIMALE_MOT_DE_PASSE} caractères au moins."
+                }
+            )
+
+        # Garder le meme laisserait le compte ouvert avec ce que porte le
+        # papier remis a la famille, et l'ecran annoncerait le contraire.
+        if utilisateur.check_password(nouveau):
+            raise ValidationError(
+                {
+                    "nouveau_mot_de_passe": "Choisissez un mot de passe "
+                    "différent de celui qui vous a été remis."
+                }
+            )
+
+        utilisateur.set_password(nouveau)
+        utilisateur.doit_changer_mot_de_passe = False
+        utilisateur.save(update_fields=["password", "doit_changer_mot_de_passe"])
+
+        return Response(
+            {
+                "detail": "Mot de passe enregistré. Il remplace celui qui vous "
+                          "a été remis.",
+            }
+        )

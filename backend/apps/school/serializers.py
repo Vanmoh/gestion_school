@@ -169,6 +169,9 @@ class EtablissementSerializer(serializers.ModelSerializer):
             # l'admin Django -- donc jamais, pour une ecole.
             'inscription_exige_paiement',
             'inscription_montant_minimum',
+            # Le mot de passe remis aux familles de CETTE ecole. Vide, elle
+            # suit la regle de la maison (Personnalisation).
+            'mot_de_passe_eleve_modele',
         ]
 
     def validate_code(self, value):
@@ -2700,3 +2703,85 @@ class PromotionRunSerializer(serializers.ModelSerializer):
     class Meta:
         model = PromotionRun
         fields = "__all__"
+
+
+class InscriptionSerializer(serializers.Serializer):
+    """Ce que le guichet saisit pour inscrire un eleve.
+
+    Plat et non imbrique: le formulaire envoie une photo, donc un multipart,
+    qui ne transporte pas d'objets imbriques. Le prefixe `parent_` suffit a
+    separer les deux fiches.
+    """
+
+    LIENS = ["pere", "mere", "tuteur"]
+
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150)
+    gender = serializers.ChoiceField(choices=["M", "F"])
+    classroom = serializers.PrimaryKeyRelatedField(queryset=ClassRoom.objects.all())
+    birth_date = serializers.DateField(required=False, allow_null=True)
+    enrollment_date = serializers.DateField(required=False, allow_null=True)
+    email = serializers.CharField(required=False, allow_blank=True, default="")
+    phone = serializers.CharField(required=False, allow_blank=True, default="")
+    photo = serializers.ImageField(required=False, allow_null=True)
+
+    lien_parente = serializers.ChoiceField(choices=LIENS)
+
+    # La famille: un parent deja connu, ou un nouveau.
+    parent_id = serializers.PrimaryKeyRelatedField(
+        queryset=ParentProfile.objects.all(), required=False, allow_null=True
+    )
+    parent_first_name = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=150
+    )
+    parent_last_name = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=150
+    )
+    parent_phone = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=30
+    )
+    parent_whatsapp_phone = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=30
+    )
+    parent_whatsapp_consent = serializers.BooleanField(required=False, default=False)
+    parent_email = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        from apps.school.phone_utils import normaliser_numero
+
+        parent = attrs.get("parent_id")
+        nom_parent = (attrs.get("parent_last_name") or "").strip()
+        tel_parent = (attrs.get("parent_phone") or "").strip()
+
+        # Un eleve sans famille joignable, c'est un dossier qu'on ne peut ni
+        # relancer ni prevenir. Le champ etait facultatif, et la moitie des
+        # fiches n'en portaient pas.
+        if parent is None and not (nom_parent and tel_parent):
+            raise serializers.ValidationError(
+                {
+                    "parent": "Choisissez un parent déjà enregistré, ou "
+                              "renseignez au minimum son nom et son téléphone."
+                }
+            )
+
+        whatsapp = (attrs.get("parent_whatsapp_phone") or "").strip()
+        if whatsapp and not normaliser_numero(whatsapp):
+            raise serializers.ValidationError(
+                {
+                    "parent_whatsapp_phone": "Numéro WhatsApp illisible. Attendu : "
+                                             "76 12 34 56 ou +223 76 12 34 56."
+                }
+            )
+
+        # Le consentement porte sur un numero: coche sans numero, il ne
+        # consent a rien, et l'ecran laisserait croire que les bulletins
+        # partiront.
+        if attrs.get("parent_whatsapp_consent") and not whatsapp and parent is None:
+            raise serializers.ValidationError(
+                {
+                    "parent_whatsapp_consent": "Renseignez le numéro WhatsApp "
+                                               "avant de cocher le consentement."
+                }
+            )
+
+        return attrs

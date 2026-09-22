@@ -97,6 +97,11 @@ MIDDLEWARE = [
     "apps.common.middleware.RequestTimingMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Ferme tout sauf la connexion et le changement de mot de passe tant que
+    # le mot de passe provisoire remis a la famille n'a pas ete remplace.
+    # Avant le journal d'activite: une requete refusee ici n'a rien fait, et
+    # n'a donc rien a y inscrire.
+    "apps.accounts.middleware.ChangementDeMotDePasseMiddleware",
     "apps.common.middleware.ActivityLogMiddleware",
     # Apres l'authentification: c'est `request.user` qu'il note comme present.
     "apps.common.middleware.PresenceMiddleware",

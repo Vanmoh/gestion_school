@@ -34,6 +34,12 @@ class Etablissement(TimeStampedModel):
     phone = models.CharField(max_length=30, blank=True)
     email = models.EmailField(blank=True)
     logo = models.ImageField(upload_to="etablissements/logos/", blank=True, null=True)
+
+    # Le mot de passe remis aux familles de CETTE ecole. Vide, l'ecole suit
+    # la regle de la maison (PersonnalisationPlateforme). Le champ existe
+    # pour qu'un groupe n'ait pas a choisir entre une regle unique et quatre
+    # reglages a tenir a jour: il ne remplit que ce qui differe.
+    mot_de_passe_eleve_modele = models.CharField(max_length=60, blank=True)
     # Photo de l'ecole, affichee en fond de l'ecran de connexion.
     #
     # Distincte du logo: celui-ci est un dessin sur fond blanc, cadre serre,
@@ -717,6 +723,18 @@ class Student(TimeStampedModel):
         related_name="students",
     )
     parent = models.ForeignKey(ParentProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name="children")
+
+    # Le lien vit ici et non sur la fiche du parent: le meme homme est pere
+    # de l'un et tuteur de l'autre. Porte par le parent, il aurait ete faux
+    # pour l'un des deux enfants.
+    class LienParente(models.TextChoices):
+        PERE = "pere", "Père"
+        MERE = "mere", "Mère"
+        TUTEUR = "tuteur", "Tuteur"
+
+    lien_parente = models.CharField(
+        max_length=10, choices=LienParente.choices, blank=True
+    )
     photo = models.ImageField(upload_to="students/", null=True, blank=True)
     # `auto_now_add` imposait la date du jour et interdisait toute correction:
     # une ecole qui saisit en novembre les inscriptions de septembre, ou qui

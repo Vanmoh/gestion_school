@@ -37,6 +37,13 @@ class Personnalisation {
 
   final String couleurPrincipale;
 
+  /// Le mot de passe remis aux familles à l'inscription, et l'obligation
+  /// de le remplacer. Ce mot de passe suit une règle connue de tous et
+  /// l'identifiant est le matricule, imprimé sur la carte scolaire: c'est
+  /// le changement imposé qui le rend sans danger, pas le modèle.
+  final String motDePasseEleveModele;
+  final bool imposerChangementMotDePasse;
+
   const Personnalisation({
     this.nomApplication = 'GESTION SCOLAIRE',
     this.nomEcole = '',
@@ -53,6 +60,8 @@ class Personnalisation {
     this.messageAccueil = '',
     this.piedDePage = '',
     this.couleurPrincipale = '#6D5BFF',
+    this.motDePasseEleveModele = '{matricule}',
+    this.imposerChangementMotDePasse = true,
   });
 
   factory Personnalisation.fromJson(Map<String, dynamic> json) {
@@ -77,6 +86,11 @@ class Personnalisation {
       couleurPrincipale: texte('couleur_principale').isEmpty
           ? '#6D5BFF'
           : texte('couleur_principale'),
+      motDePasseEleveModele: texte('mot_de_passe_eleve_modele').isEmpty
+          ? '{matricule}'
+          : texte('mot_de_passe_eleve_modele'),
+      imposerChangementMotDePasse:
+          json['imposer_changement_mot_de_passe'] != false,
     );
   }
 
@@ -96,6 +110,8 @@ class Personnalisation {
     'message_accueil': messageAccueil,
     'pied_de_page': piedDePage,
     'couleur_principale': couleurPrincipale,
+    'mot_de_passe_eleve_modele': motDePasseEleveModele,
+    'imposer_changement_mot_de_passe': imposerChangementMotDePasse,
   };
 
   /// La couleur d'accent, ou celle par défaut si la valeur est illisible.
