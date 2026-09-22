@@ -39,6 +39,9 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
   final _messageAccueil = TextEditingController();
   final _piedDePage = TextEditingController();
   final _couleur = TextEditingController();
+  // Le mot de passe remis aux familles a l'inscription.
+  final _motDePasseEleve = TextEditingController();
+  bool _imposerChangement = true;
 
   /// Le logo choisi, pas encore envoyé. Nul tant qu'on n'en change pas :
   /// modifier un numéro de téléphone ne doit pas effacer l'image en place.
@@ -80,6 +83,8 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
     _messageAccueil.text = p.messageAccueil;
     _piedDePage.text = p.piedDePage;
     _couleur.text = p.couleurPrincipale;
+    _motDePasseEleve.text = p.motDePasseEleveModele;
+    _imposerChangement = p.imposerChangementMotDePasse;
     if (mounted) setState(() {});
   }
 
@@ -99,6 +104,7 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
       _messageAccueil,
       _piedDePage,
       _couleur,
+      _motDePasseEleve,
     ]) {
       c.dispose();
     }
@@ -183,6 +189,8 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
               'message_accueil': _messageAccueil.text.trim(),
               'pied_de_page': _piedDePage.text.trim(),
               'couleur_principale': _couleur.text.trim(),
+              'mot_de_passe_eleve_modele': _motDePasseEleve.text.trim(),
+              'imposer_changement_mot_de_passe': _imposerChangement,
             },
             logo: _logoChoisi,
             nomDuLogo: _nomDuLogo,
@@ -334,6 +342,9 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
                   _section(context, 'Partout'),
                   _champ(_piedDePage, 'Pied de page', lignes: 2),
                   _couleurPrincipale(context),
+
+                  _section(context, 'Inscription des élèves'),
+                  _reglagesDInscription(context),
                 ],
               ),
             ),
@@ -366,6 +377,53 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
               ),
             ],
           ),
+        ),
+      ],
+    );
+  }
+
+  /// Ce qui est remis à la famille le jour de l'inscription.
+  ///
+  /// L'identifiant de l'élève est son matricule — imprimé sur sa carte
+  /// scolaire, ses bulletins et les listes d'appel. Le mot de passe, lui,
+  /// suit une règle appliquée à tous: il ne protège rien par lui-même. C'est
+  /// le changement imposé à la première connexion qui le rend sans danger.
+  Widget _reglagesDInscription(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _champ(
+          _motDePasseEleve,
+          'Mot de passe remis à la famille',
+          aide: 'Jetons : {matricule}, {annee}, {sigle}, {nom}, {prenom}. '
+              'Une école peut avoir le sien, sur sa propre fiche.',
+        ),
+        const SizedBox(height: 6),
+        CheckboxListTile(
+          key: const Key('imposer-changement-mot-de-passe'),
+          value: _imposerChangement,
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          title: const Text(
+            'Imposer le changement à la première connexion',
+          ),
+          subtitle: Text(
+            _imposerChangement
+                ? 'Le mot de passe remis ne sert qu\'une fois.'
+                : 'Attention : le mot de passe remis reste valable '
+                      'indéfiniment, et il se devine à partir d\'un seul '
+                      'exemple et d\'un matricule.',
+            style: textTheme.bodySmall?.copyWith(
+              color: _imposerChangement ? null : scheme.error,
+            ),
+          ),
+          onChanged: (valeur) {
+            setState(() => _imposerChangement = valeur ?? true);
+          },
         ),
       ],
     );

@@ -51,6 +51,14 @@ class AuthController extends StateNotifier<AsyncValue<AuthUser?>> {
     state = restored;
   }
 
+  /// Relit la fiche du compte connecté.
+  ///
+  /// Appelée après un changement de mot de passe: c'est elle qui porte
+  /// l'obligation, et le savoir tombé est ce qui rouvre l'application.
+  Future<void> refreshCurrentUser() async {
+    state = await AsyncValue.guard(() => _repository.fetchCurrentUser());
+  }
+
   Future<void> logout() async {
     await _repository.logout();
     state = const AsyncValue.data(null);

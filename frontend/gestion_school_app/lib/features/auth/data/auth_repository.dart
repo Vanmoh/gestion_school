@@ -37,6 +37,7 @@ class AuthRepository {
       role: data['role'] as String,
       etablissementId: (data['etablissement'] as num?)?.toInt(),
       etablissementName: data['etablissement_name']?.toString() ?? '',
+      doitChangerMotDePasse: data['doit_changer_mot_de_passe'] == true,
     );
 
     await tokenStorage.saveCachedUser(
@@ -47,10 +48,29 @@ class AuthRepository {
         'role': user.role,
         'etablissementId': user.etablissementId,
         'etablissementName': user.etablissementName,
+        'doitChangerMotDePasse': user.doitChangerMotDePasse,
       }),
     );
 
     return user;
+  }
+
+  /// Choisit son propre mot de passe.
+  ///
+  /// `ancien` n'est pas demandé à la première connexion: il vient d'être
+  /// saisi pour arriver là, et le redemander n'ajouterait qu'une occasion de
+  /// se tromper au guichet.
+  Future<void> changerLeMotDePasse({
+    required String nouveau,
+    String ancien = '',
+  }) async {
+    await dio.post(
+      '/auth/changer-mot-de-passe/',
+      data: {
+        'nouveau_mot_de_passe': nouveau,
+        if (ancien.isNotEmpty) 'ancien_mot_de_passe': ancien,
+      },
+    );
   }
 
   Future<bool> hasSession() async {

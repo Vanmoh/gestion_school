@@ -144,6 +144,7 @@ from .serializers import (
     StudentAcademicHistorySerializer,
     FeeScheduleSerializer,
     StudentFeeSerializer,
+    InscriptionSerializer,
     StudentSerializer,
     SubjectSerializer,
     SupplierSerializer,
@@ -3951,6 +3952,41 @@ class ParentProfileViewSet(BaseModelViewSet):
     queryset = ParentProfile.objects.all().order_by("id")
     serializer_class = ParentProfileSerializer
 
+    @action(detail=False, methods=["get"], url_path="recherche")
+    def recherche(self, request):
+        """Ce parent est-il deja enregistre ?
+
+        Pose avant toute creation. Trois freres inscrits separement
+        donnaient trois comptes parents, et le pere recevait trois acces
+        pour voir ses trois enfants -- avec trois mots de passe a retenir et
+        aucun ecran qui les reunisse.
+        """
+        from apps.school.admission import chercher_les_parents
+
+        etablissement_id = self._requested_etablissement_id()
+        profils = chercher_les_parents(
+            etablissement_id,
+            telephone=request.query_params.get("telephone", ""),
+            texte=request.query_params.get("q", ""),
+        )
+
+        resultats = []
+        for profil in profils.distinct()[:10]:
+            compte = profil.user
+            resultats.append(
+                {
+                    "id": profil.id,
+                    "nom": compte.get_full_name().strip() or compte.username,
+                    "telephone": compte.phone,
+                    "whatsapp_phone": profil.whatsapp_phone,
+                    # Le nombre d'enfants deja rattaches: c'est ce qui permet
+                    # au guichet de reconnaitre la bonne famille.
+                    "enfants": profil.children.filter(is_archived=False).count(),
+                }
+            )
+
+        return Response({"resultats": resultats})
+
 
 
 
@@ -4403,6 +4439,86 @@ class StudentViewSet(BaseModelViewSet):
                 "student": StudentSerializer(student, context={"request": request}).data,
                 "sections": sections,
             }
+        )
+
+    @action(detail=False, methods=["post"], url_path="inscription")
+    def inscription(self, request):
+        """Inscrire un eleve et sa famille en une seule operation.
+
+        L'ecran faisait deux appels et rattrapait l'echec du second en
+        supprimant le premier; un rattrapage qui echoue laisse un compte
+        orphelin. Avec la famille on serait passe a quatre appels. Ici, ou
+        tout est cree, ou rien ne l'est.
+        """
+        from apps.school.admission import inscrire
+
+        serializer = InscriptionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        donnees = serializer.validated_data
+
+        classroom = donnees["classroom"]
+        etablissement_id = self._requested_etablissement_id()
+        etablissement = classroom.etablissement
+
+        # Une classe d'une autre ecole ferait entrer l'eleve dans un
+        # etablissement que l'operateur ne regarde meme pas.
+        if etablissement_id and classroom.etablissement_id != int(etablissement_id):
+            raise PermissionDenied("Cette classe appartient à un autre établissement.")
+
+        parent = donnees.get("parent_id")
+        if parent is not None and etablissement is not None:
+            if parent.etablissement_id not in (None, etablissement.id):
+                raise PermissionDenied("Ce parent appartient à un autre établissement.")
+
+        resultat = inscrire(
+            classroom=classroom,
+            etablissement=etablissement,
+            prenom=donnees["first_name"].strip(),
+            nom=donnees["last_name"].strip(),
+            genre=donnees["gender"],
+            date_naissance=donnees.get("birth_date"),
+            date_inscription=donnees.get("enrollment_date"),
+            email=donnees.get("email", ""),
+            telephone=donnees.get("phone", ""),
+            photo=donnees.get("photo"),
+            parent_existant=parent,
+            parent_nouveau={
+                "first_name": donnees.get("parent_first_name", ""),
+                "last_name": donnees.get("parent_last_name", ""),
+                "phone": donnees.get("parent_phone", ""),
+                "whatsapp_phone": donnees.get("parent_whatsapp_phone", ""),
+                "whatsapp_consent": donnees.get("parent_whatsapp_consent", False),
+                "email": donnees.get("parent_email", ""),
+            },
+            lien_parente=donnees["lien_parente"],
+        )
+
+        # Les identifiants ne repasseront jamais: le mot de passe est hache
+        # des qu'il est pose. C'est ici, et nulle part ailleurs, que l'ecran
+        # peut les afficher pour qu'on les remette a la famille.
+        return Response(
+            {
+                "eleve": StudentSerializer(resultat.eleve).data,
+                "identifiants_eleve": {
+                    "username": resultat.identifiants_eleve.username,
+                    "mot_de_passe": resultat.identifiants_eleve.mot_de_passe,
+                },
+                "parent": {
+                    "id": resultat.parent.id,
+                    "nom": resultat.parent.user.get_full_name().strip()
+                    or resultat.parent.user.username,
+                    "cree": resultat.parent_cree,
+                },
+                "identifiants_parent": (
+                    {
+                        "username": resultat.identifiants_parent.username,
+                        "mot_de_passe": resultat.identifiants_parent.mot_de_passe,
+                    }
+                    if resultat.identifiants_parent
+                    else None
+                ),
+            },
+            status=status.HTTP_201_CREATED,
         )
 
     @action(detail=True, methods=["post"], url_path="dispense-inscription")
