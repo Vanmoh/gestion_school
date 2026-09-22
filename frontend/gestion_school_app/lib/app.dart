@@ -21,6 +21,7 @@ import 'features/academics/presentation/academics_page.dart';
 import 'features/activity_logs/presentation/activity_logs_page.dart';
 import 'features/auth/presentation/auth_controller.dart';
 import 'features/auth/domain/auth_user.dart';
+import 'features/auth/presentation/changer_mot_de_passe_page.dart';
 import 'features/auth/presentation/login_page.dart';
 import 'features/canteen/presentation/canteen_page.dart';
 import 'features/chat/data/canal_temps_reel.dart';
@@ -234,6 +235,9 @@ class _GestionSchoolAppState extends ConsumerState<GestionSchoolApp> {
       routes: {
         '/': (_) => const PublicEtablissementEntryPage(),
         '/login': (_) => const LoginPage(),
+        // La seule porte ouverte tant que le mot de passe remis à
+        // l'inscription n'a pas été remplacé.
+        '/mot-de-passe': (_) => const ChangerMotDePassePage(),
         '/dashboard': (_) =>
             const RequireEtablissementSelection(child: _AdminShell()),
         '/home/admin': (_) =>

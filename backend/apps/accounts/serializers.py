@@ -129,7 +129,14 @@ class UserSerializer(serializers.ModelSerializer):
             "whatsapp_consent",
             "whatsapp_phone_suggestion",
             "password",
+            "doit_changer_mot_de_passe",
         ]
+        extra_kwargs = {
+            # Lecture seule, et la route /me/ reste joignable pendant le
+            # blocage: sans cela, un compte tenu de changer son mot de passe
+            # se libererait en s'ecrivant `false`.
+            "doit_changer_mot_de_passe": {"read_only": True},
+        }
 
     @staticmethod
     def _profil_parent(obj):

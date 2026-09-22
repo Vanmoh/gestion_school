@@ -172,6 +172,34 @@ class PersonnalisationPlateforme(TimeStampedModel):
     email = models.EmailField(blank=True)
     adresse = models.CharField(max_length=200, blank=True)
 
+    # --- Inscription des eleves -------------------------------------------
+    #
+    # Le compte d'un eleve s'ouvre avec son matricule et un mot de passe que
+    # l'ecole remet a la famille sur un papier. Ce mot de passe suit une
+    # regle connue de tous -- il ne protege donc rien par lui-meme, et c'est
+    # le changement impose a la premiere connexion qui le rend sans danger:
+    # les matricules sont imprimes sur les cartes, les listes d'appel et les
+    # bulletins.
+    MOT_DE_PASSE_ELEVE_DEFAUT = "{matricule}"
+
+    mot_de_passe_eleve_modele = models.CharField(
+        max_length=60,
+        default=MOT_DE_PASSE_ELEVE_DEFAUT,
+        help_text=(
+            "Modèle du mot de passe remis aux familles. Jetons disponibles : "
+            "{matricule}, {annee}, {sigle}, {nom}, {prenom}. "
+            "Une école peut avoir le sien, sur sa propre fiche."
+        ),
+    )
+    imposer_changement_mot_de_passe = models.BooleanField(
+        default=True,
+        help_text=(
+            "L'élève doit choisir son propre mot de passe à sa première "
+            "connexion. Décocher laisse le mot de passe remis valable "
+            "indéfiniment, et il se devine à partir d'un seul exemple."
+        ),
+    )
+
     # --- Textes des ecrans publics ---------------------------------------
     # Vides, les ecrans gardent leurs formulations d'origine: une ecole qui
     # ne personnalise rien ne doit pas se retrouver avec des libelles blancs.

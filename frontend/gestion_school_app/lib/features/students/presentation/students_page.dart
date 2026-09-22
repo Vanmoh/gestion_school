@@ -16,6 +16,7 @@ import '../../../features/auth/presentation/auth_controller.dart';
 import '../../payments/presentation/payment_entry_dialog.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../../../models/etablissement.dart';
+import '../domain/resultat_inscription.dart';
 import '../domain/student.dart';
 import '../domain/students_stats.dart';
 import '../domain/students_sort.dart';
@@ -27,6 +28,7 @@ import 'widgets/student_roster_dialog.dart';
 
 part 'students_registration_form.dart';
 part 'students_profile_form.dart';
+part 'students_identifiants_remis.dart';
 
 class StudentsPage extends ConsumerStatefulWidget {
   const StudentsPage({super.key});
@@ -52,12 +54,24 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     showAcademicImportsFloatingWindow(context);
   }
 
-  final _usernameController = TextEditingController();
   final _firstNameController = TextEditingController();
   final _lastNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
-  final _passwordController = TextEditingController();
+  // La famille. Le parent n'est plus facultatif: un eleve sans famille
+  // joignable est un dossier qu'on ne peut ni relancer ni prevenir.
+  final _parentFirstNameController = TextEditingController();
+  final _parentLastNameController = TextEditingController();
+  final _parentPhoneController = TextEditingController();
+  final _parentWhatsappController = TextEditingController();
+  final _parentEmailController = TextEditingController();
+  bool _parentWhatsappConsent = false;
+  String? _lienParente;
+
+  /// Parents deja enregistres qui portent ce numero. Cherches avant toute
+  /// creation: trois freres inscrits separement donnaient trois comptes.
+  List<Map<String, dynamic>> _parentsTrouves = const [];
+  bool _rechercheParentEnCours = false;
   final _updateFirstNameController = TextEditingController();
   final _updateLastNameController = TextEditingController();
   final _updateEmailController = TextEditingController();
@@ -163,12 +177,15 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   void dispose() {
     _searchDebounce?.cancel();
     _searchController.dispose();
-    _usernameController.dispose();
     _firstNameController.dispose();
     _lastNameController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
-    _passwordController.dispose();
+    _parentFirstNameController.dispose();
+    _parentLastNameController.dispose();
+    _parentPhoneController.dispose();
+    _parentWhatsappController.dispose();
+    _parentEmailController.dispose();
     _updateFirstNameController.dispose();
     _updateLastNameController.dispose();
     _updateEmailController.dispose();
@@ -478,62 +495,92 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       return false;
     }
 
-    final username = _usernameController.text.trim();
     final firstName = _firstNameController.text.trim();
     final lastName = _lastNameController.text.trim();
-    final password = _passwordController.text;
     final classroomId = _registrationClassroomId;
     final gender = _registrationGender;
+    final lien = _lienParente;
 
-    if (username.isEmpty ||
-        firstName.isEmpty ||
+    if (firstName.isEmpty ||
         lastName.isEmpty ||
-        password.length < 8 ||
         classroomId == null ||
-        gender == null) {
+        gender == null ||
+        lien == null) {
       await _showRegistrationFailure(
-        'Complète username, prénom, nom, mot de passe (8+), classe et genre.',
+        'Complétez prénom, nom, genre, classe et lien avec le parent.',
+      );
+      return false;
+    }
+
+    // La famille: soit un parent déjà enregistré, soit assez d'informations
+    // pour lui créer un compte. L'élève sans parent n'est plus admis.
+    final parentId = _registrationParentId;
+    final parentNom = _parentLastNameController.text.trim();
+    final parentTel = _parentPhoneController.text.trim();
+    if (parentId == null && (parentNom.isEmpty || parentTel.isEmpty)) {
+      await _showRegistrationFailure(
+        'Choisissez un parent déjà enregistré, ou renseignez au minimum '
+        'son nom et son téléphone.',
       );
       return false;
     }
 
     setState(() => _saving = true);
     try {
-      final student = await ref
+      final resultat = await ref
           .read(studentsRepositoryProvider)
-          .createStudentWithUser(
-            username: username,
+          .inscrire(
             firstName: firstName,
             lastName: lastName,
-            password: password,
             gender: gender,
+            classroomId: classroomId,
+            lienParente: lien,
             email: _emailController.text.trim(),
             phone: _phoneController.text.trim(),
-            classroomId: classroomId,
-            parentId: _registrationParentId,
             birthDate: _birthDate,
             enrollmentDate: _enrollmentDate,
+            parentId: parentId,
+            parentFirstName: _parentFirstNameController.text.trim(),
+            parentLastName: parentNom,
+            parentPhone: parentTel,
+            parentWhatsapp: _parentWhatsappController.text.trim(),
+            parentWhatsappConsent: _parentWhatsappConsent,
+            parentEmail: _parentEmailController.text.trim(),
             photoPath: _registrationPhotoPath,
             photoBytes: _registrationPhotoBytes,
             photoFileName: _registrationPhotoFileName,
           );
 
       if (!mounted) return false;
-      _usernameController.clear();
+      final student = resultat.eleve;
+
       _firstNameController.clear();
       _lastNameController.clear();
       _emailController.clear();
       _phoneController.clear();
-      _passwordController.clear();
+      _parentFirstNameController.clear();
+      _parentLastNameController.clear();
+      _parentPhoneController.clear();
+      _parentWhatsappController.clear();
+      _parentEmailController.clear();
       _clearRegistrationPhotoSelection();
       _birthDate = null;
       _enrollmentDate = null;
       _registrationParentId = null;
       _registrationGender = null;
+      _lienParente = null;
+      _parentWhatsappConsent = false;
+      _parentsTrouves = const [];
       setState(() {
         _searchController.clear();
         _tablePage = 1;
       });
+
+      // Les identifiants ne repasseront jamais: le serveur hache le mot de
+      // passe dès qu'il le pose. S'ils ne sont pas notés maintenant, il
+      // faudra les réinitialiser.
+      await _montrerLesIdentifiants(resultat);
+
       await _loadBaseData(keepSelectedId: student.id);
       // L'élève vient d'etre cree: on ouvre sa palette directement. Parcourir
       // les pages pour le retrouver n'avait de sens qu'avec un tableau.

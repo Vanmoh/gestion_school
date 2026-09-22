@@ -67,6 +67,13 @@ class RoutedViewsCoverageTests(APITestCase):
         # ferme par un autre.
         # Voir apps/common/tests/test_notifications_push.py.
         "DeviceTokenView",
+        # Meme nature: elle ne travaille que sur `request.user`, pour lui
+        # faire remplacer le mot de passe provisoire recu a l'inscription.
+        # Elle ne lit ni n'ecrit aucune donnee de l'ecole, et doit rester
+        # joignable precisement quand tout le reste est ferme -- c'est la
+        # seule porte ouverte tant que le changement n'a pas eu lieu.
+        # Voir apps/accounts/tests/test_premiere_connexion.py.
+        "ChangerSonMotDePasseView",
         "HealthCheckView",  # sonde d'infrastructure, n'expose aucune donnee
         "ModulePermissionsView",  # sert la matrice elle-meme
         # Cible du QR imprime sur la carte scolaire: celui qui controle au

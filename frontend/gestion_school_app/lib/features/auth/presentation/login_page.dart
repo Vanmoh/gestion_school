@@ -156,7 +156,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               await Future<void>.delayed(const Duration(milliseconds: 220));
             }
             if (!mounted) return;
-            navigateur.pushReplacementNamed(user.homeRoute);
+            // Le mot de passe remis à l'inscription est provisoire: le
+            // serveur refuse tout le reste tant qu'il n'est pas remplacé.
+            // L'envoyer vers son tableau de bord donnerait une suite de
+            // refus que personne ne saurait expliquer.
+            navigateur.pushReplacementNamed(
+              user.doitChangerMotDePasse ? '/mot-de-passe' : user.homeRoute,
+            );
           }
         },
         error: (error, _) => _reporterErreur(error),

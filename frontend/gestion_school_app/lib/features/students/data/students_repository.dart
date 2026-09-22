@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../../../core/models/paginated_result.dart';
+import '../domain/resultat_inscription.dart';
 import '../domain/student.dart';
 import '../domain/students_stats.dart';
 
@@ -122,95 +123,111 @@ class StudentsRepository {
     return _extractRows(response.data);
   }
 
+  /// Ce parent est-il déjà enregistré ?
+  ///
+  /// Posée avant toute création: trois frères inscrits séparément donnaient
+  /// trois comptes parents, et le père recevait trois accès pour voir ses
+  /// trois enfants.
+  Future<List<Map<String, dynamic>>> chercherDesParents({
+    String telephone = '',
+    String texte = '',
+  }) async {
+    final response = await dio.get<Map<String, dynamic>>(
+      '/parents/recherche/',
+      queryParameters: {
+        if (telephone.trim().isNotEmpty) 'telephone': telephone.trim(),
+        if (texte.trim().isNotEmpty) 'q': texte.trim(),
+      },
+    );
+    final resultats = response.data?['resultats'];
+    if (resultats is! List) return const [];
+    return resultats
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+  }
+
   Future<List<Map<String, dynamic>>> fetchAcademicYears() async {
     final response = await dio.get('/academic-years/');
     return _extractRows(response.data);
   }
 
-  Future<Student> createStudentWithUser({
-    required String username,
+  /// Inscrit un élève et sa famille en une seule opération.
+  ///
+  /// Remplace les deux appels d'avant -- créer le compte, puis la fiche --
+  /// qui rattrapaient l'échec du second en supprimant le premier. Un
+  /// rattrapage qui échoue laisse un compte orphelin; avec la famille, on
+  /// serait passé à quatre appels. Le serveur fait tout, ou rien.
+  Future<ResultatInscription> inscrire({
     required String firstName,
     required String lastName,
-    required String password,
     required String gender,
+    required int classroomId,
+    required String lienParente,
     String email = '',
     String phone = '',
-    required int classroomId,
-    int? parentId,
     DateTime? birthDate,
-    // Absente, le serveur retient la date du jour. Renseignee, elle permet de
-    // saisir en novembre une rentree de septembre sans fausser les effectifs.
     DateTime? enrollmentDate,
+    int? parentId,
+    String parentFirstName = '',
+    String parentLastName = '',
+    String parentPhone = '',
+    String parentWhatsapp = '',
+    bool parentWhatsappConsent = false,
+    String parentEmail = '',
     String? photoPath,
     Uint8List? photoBytes,
     String? photoFileName,
   }) async {
-    int? createdUserId;
-    try {
-      final userResponse = await dio.post(
-        '/auth/users/',
-        data: {
-          'username': username,
-          'first_name': firstName,
-          'last_name': lastName,
-          'email': email,
-          'password': password,
-          'role': 'student',
-          'phone': phone,
-        },
+    final payload = <String, dynamic>{
+      'first_name': firstName,
+      'last_name': lastName,
+      'gender': gender,
+      'classroom': classroomId,
+      'lien_parente': lienParente,
+      'email': email,
+      'phone': phone,
+      if (birthDate != null) 'birth_date': _apiDate(birthDate),
+      if (enrollmentDate != null) 'enrollment_date': _apiDate(enrollmentDate),
+      'parent_id': ?parentId,
+      if (parentId == null) ...{
+        'parent_first_name': parentFirstName,
+        'parent_last_name': parentLastName,
+        'parent_phone': parentPhone,
+        'parent_whatsapp_phone': parentWhatsapp,
+        'parent_whatsapp_consent': parentWhatsappConsent,
+        'parent_email': parentEmail,
+      },
+    };
+
+    final bool hasPhoto =
+        (photoPath != null && photoPath.trim().isNotEmpty) ||
+        (photoBytes != null && photoBytes.isNotEmpty);
+
+    Response<dynamic> response;
+    if (hasPhoto) {
+      payload['photo'] = await _buildMultipartFile(
+        path: photoPath,
+        bytes: photoBytes,
+        fileName: photoFileName,
+        fallbackFileNamePrefix: 'photo',
+        defaultExtension: 'jpg',
+        fieldLabel: 'photo de profil',
       );
-
-      createdUserId = _asInt((userResponse.data as Map<String, dynamic>)['id']);
-      if (createdUserId <= 0) {
-        throw Exception('Création utilisateur invalide.');
+      if (payload['photo'] == null) {
+        throw Exception('Aucune photo valide fournie pour l\'inscription.');
       }
-
-      final payload = <String, dynamic>{
-        'user': createdUserId,
-        'gender': gender,
-        'classroom': classroomId,
-        'parent': ?parentId,
-        if (birthDate != null) 'birth_date': _apiDate(birthDate),
-        if (enrollmentDate != null)
-          'enrollment_date': _apiDate(enrollmentDate),
-      };
-
-      final bool hasPhoto =
-          (photoPath != null && photoPath.trim().isNotEmpty) ||
-          (photoBytes != null && photoBytes.isNotEmpty);
-
-      Response<dynamic> studentResponse;
-      if (hasPhoto) {
-        payload['photo'] = await _buildMultipartFile(
-          path: photoPath,
-          bytes: photoBytes,
-          fileName: photoFileName,
-          fallbackFileNamePrefix: 'photo',
-          defaultExtension: 'jpg',
-          fieldLabel: 'photo de profil',
-        );
-
-        if (payload['photo'] == null) {
-          throw Exception('Aucune photo valide fournie pour l\'inscription.');
-        }
-
-        studentResponse = await dio.post(
-          '/students/',
-          data: FormData.fromMap(payload),
-        );
-      } else {
-        studentResponse = await dio.post('/students/', data: payload);
-      }
-
-      return _toStudent(Map<String, dynamic>.from(studentResponse.data as Map));
-    } catch (error) {
-      if (createdUserId != null && createdUserId > 0) {
-        try {
-          await dio.delete('/auth/users/$createdUserId/');
-        } catch (_) {}
-      }
-      rethrow;
+      response = await dio.post(
+        '/students/inscription/',
+        data: FormData.fromMap(payload),
+      );
+    } else {
+      response = await dio.post('/students/inscription/', data: payload);
     }
+
+    return ResultatInscription.fromJson(
+      Map<String, dynamic>.from(response.data as Map),
+    );
   }
 
   Future<Student> updateStudent(
@@ -571,11 +588,6 @@ class StudentsRepository {
         .whereType<Map>()
         .map((row) => Map<String, dynamic>.from(row))
         .toList();
-  }
-
-  int _asInt(dynamic value) {
-    if (value is int) return value;
-    return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
   String _apiDate(DateTime value) {

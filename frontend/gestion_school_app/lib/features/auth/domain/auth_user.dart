@@ -6,6 +6,12 @@ class AuthUser {
   final int? etablissementId;
   final String etablissementName;
 
+  /// Le mot de passe remis à l'inscription est provisoire: il suit une règle
+  /// que l'école applique à tous, et l'identifiant est le matricule, imprimé
+  /// sur la carte scolaire. Tant qu'il n'est pas remplacé, le serveur ne
+  /// laisse passer que l'écran de changement.
+  final bool doitChangerMotDePasse;
+
   const AuthUser({
     required this.id,
     required this.username,
@@ -13,6 +19,7 @@ class AuthUser {
     required this.role,
     this.etablissementId,
     this.etablissementName = '',
+    this.doitChangerMotDePasse = false,
   });
 
   String get homeRoute {

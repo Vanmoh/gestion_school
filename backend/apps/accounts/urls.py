@@ -1,6 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from .views import (
+    ChangerSonMotDePasseView,
     CustomTokenObtainPairView,
     DeviceTokenView,
     LogoutView,
@@ -17,6 +18,11 @@ urlpatterns = [
     path("login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("refresh/", token_refresh_view, name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
+    path(
+        "changer-mot-de-passe/",
+        ChangerSonMotDePasseView.as_view(),
+        name="changer-mot-de-passe",
+    ),
     path("device-token/", DeviceTokenView.as_view(), name="device-token"),
     path("register/", RegisterView.as_view(), name="register"),
     path("permissions/", ModulePermissionsView.as_view(), name="module-permissions"),
