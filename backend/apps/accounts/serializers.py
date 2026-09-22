@@ -34,6 +34,13 @@ def verifier_le_role_attribue(demandeur, role_vise):
     )
 
 
+# Longueur minimale d'un mot de passe pose par l'administration.
+#
+# Elle etait ecrite trois fois: ici, dans RegisterSerializer et dans l'action
+# de reinitialisation. Trois endroits, trois occasions de diverger.
+LONGUEUR_MINIMALE_MOT_DE_PASSE = 8
+
+
 class UserSerializer(serializers.ModelSerializer):
     """Un compte, tel que l'administration le voit et le modifie.
 
@@ -80,6 +87,21 @@ class UserSerializer(serializers.ModelSerializer):
     # est absent. Propose, jamais ecrit d'office: un « 76 12 34 56 / bureau
     # 66 74 22 32 » ne se tranche pas tout seul.
     whatsapp_phone_suggestion = serializers.SerializerMethodField(read_only=True)
+    # Le mot de passe du compte qu'on cree ici.
+    #
+    # Il n'etait pas declare, et DRF ecarte ce qu'il ne connait pas: a la
+    # creation le compte partait donc sans mot de passe utilisable -- l'eleve
+    # inscrit ne pouvait jamais se connecter -- et a la modification, l'ecran
+    # offrait un champ qui ne changeait rien. Le refus pose plus bas a ferme
+    # la seconde porte et, du meme geste, la premiere: l'inscription d'un
+    # eleve passe par ici, et s'est mise a repondre « Le mot de passe ne se
+    # modifie pas ici ».
+    password = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        style={"input_type": "password"},
+    )
 
     class Meta:
         model = User
@@ -106,6 +128,7 @@ class UserSerializer(serializers.ModelSerializer):
             "whatsapp_phone_input",
             "whatsapp_consent",
             "whatsapp_phone_suggestion",
+            "password",
         ]
 
     @staticmethod
@@ -146,7 +169,31 @@ class UserSerializer(serializers.ModelSerializer):
             )
         return normalise
 
+    def create(self, validated_data):
+        """Le mot de passe est pose, pas seulement accepte.
+
+        `User.objects.create()` ecrirait la chaine claire dans la colonne, et
+        le compte serait inutilisable autant qu'expose.
+        """
+        mot_de_passe = validated_data.pop("password", "")
+        validated_data.pop("whatsapp_phone_input", None)
+
+        utilisateur = User(**validated_data)
+        if mot_de_passe:
+            utilisateur.set_password(mot_de_passe)
+        else:
+            # Sans mot de passe, le compte existe mais ne s'ouvre pas: c'est
+            # ce que faisait deja cette route, et l'administration le depanne
+            # par « Réinitialiser le mot de passe ». Le dire a Django plutot
+            # que de laisser un hachage vide, qu'une chaine vide ouvrirait.
+            utilisateur.set_unusable_password()
+        utilisateur.save()
+        return utilisateur
+
     def update(self, instance, validated_data):
+        # Ecarte par la validation ci-dessus; retire ici aussi pour qu'aucun
+        # chemin ne le transmette a `setattr`.
+        validated_data.pop("password", None)
         numero = validated_data.pop("whatsapp_phone_input", None)
         instance = super().update(instance, validated_data)
 
@@ -187,23 +234,26 @@ class UserSerializer(serializers.ModelSerializer):
         return stamp.isoformat() if stamp else None
 
     def validate(self, attrs):
-        """Un mot de passe glisse dans une modification n'est pas ignore en silence.
+        """Creer un compte demande un mot de passe; en changer un se fait ailleurs.
 
         DRF ecarte les champs qu'il ne connait pas: l'API repondait 200 a une
         demande de changement de mot de passe sans rien changer, et l'ecran
         offrait pourtant le champ. Le refus explicite vaut mieux que
         l'acquiescement muet -- il indique la porte a prendre.
+
+        Mais ce refus ne regardait pas s'il s'agissait d'une creation ou d'une
+        modification, et la creation passe par ici: inscrire un eleve, qui
+        commence par creer son compte avec son mot de passe, repondait « Le
+        mot de passe ne se modifie pas ici ». Plus personne ne pouvait
+        inscrire.
         """
         brut = self.initial_data if isinstance(self.initial_data, dict) else {}
-        if brut.get("password"):
-            raise serializers.ValidationError(
-                {
-                    "password": "Le mot de passe ne se modifie pas ici. "
-                                "Utilisez l'action « Réinitialiser le mot de passe »."
-                }
-            )
+        mot_de_passe = str(brut.get("password") or "")
+        creation = self.instance is None
 
-        # Le role vise, qu'il s'agisse d'une creation ou d'une promotion.
+        # Le role d'abord: un directeur qui tente de creer un super
+        # administrateur doit s'entendre dire qu'il n'en a pas le droit, et
+        # non qu'il lui manque un mot de passe.
         role_vise = attrs.get("role")
         request = self.context.get("request")
         if role_vise and request is not None:
@@ -211,11 +261,39 @@ class UserSerializer(serializers.ModelSerializer):
             if instance is None or instance.role != role_vise:
                 verifier_le_role_attribue(request.user, role_vise)
 
+        if mot_de_passe and not creation:
+            raise serializers.ValidationError(
+                {
+                    "password": "Le mot de passe ne se modifie pas ici. "
+                                "Utilisez l'action « Réinitialiser le mot de passe »."
+                }
+            )
+
+        if creation:
+            if mot_de_passe and len(mot_de_passe) < LONGUEUR_MINIMALE_MOT_DE_PASSE:
+                raise serializers.ValidationError(
+                    {
+                        "password": f"Le mot de passe doit faire "
+                                    f"{LONGUEUR_MINIMALE_MOT_DE_PASSE} caractères au moins."
+                    }
+                )
+            # Le numero WhatsApp vit sur la fiche parent, qui n'existe pas
+            # encore a cet instant. L'accepter ici le perdrait en silence.
+            if brut.get("whatsapp_phone_input"):
+                raise serializers.ValidationError(
+                    {
+                        "whatsapp_phone_input": "Le numéro WhatsApp se renseigne "
+                                                "une fois le compte créé, sur sa fiche."
+                    }
+                )
+
         return attrs
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=8)
+    password = serializers.CharField(
+        write_only=True, min_length=LONGUEUR_MINIMALE_MOT_DE_PASSE
+    )
     etablissement = serializers.PrimaryKeyRelatedField(
         queryset=Etablissement.objects.all(),
         required=False,
