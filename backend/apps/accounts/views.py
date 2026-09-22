@@ -13,7 +13,11 @@ from apps.school.models import Etablissement, ParentProfile
 from .access import ROLE_LABELS, can_read, peut_administrer_compte, role_payload
 from .access_routes import module_paths
 from .permissions import HasModuleAccess
-from .serializers import RegisterSerializer, UserSerializer
+from .serializers import (
+    LONGUEUR_MINIMALE_MOT_DE_PASSE,
+    RegisterSerializer,
+    UserSerializer,
+)
 from .models import UserRole
 from apps.common.pagination import StandardResultsSetPagination
 
@@ -429,9 +433,12 @@ class UserViewSet(viewsets.ModelViewSet):
         self._verifier_la_cible(cible, "Réinitialisation impossible")
         nouveau = str(request.data.get("password") or "")
 
-        if len(nouveau) < 8:
+        if len(nouveau) < LONGUEUR_MINIMALE_MOT_DE_PASSE:
             raise ValidationError(
-                {"password": "Le mot de passe provisoire doit faire 8 caractères au moins."}
+                {
+                    "password": f"Le mot de passe provisoire doit faire "
+                                f"{LONGUEUR_MINIMALE_MOT_DE_PASSE} caractères au moins."
+                }
             )
 
         cible.set_password(nouveau)
