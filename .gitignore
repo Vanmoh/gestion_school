@@ -57,3 +57,8 @@ core.*
 # discussion, pas au depot -- et `deploy_one_click.sh` fait un `git add -A`,
 # qui les embarquerait en production sans que personne le demande.
 capture_a_corriger/
+
+# Traces des rattachements de demonstration: un artefact local, qui sert a
+# defaire un tirage au sort. `deploy_one_click.sh` fait `git add -A`, et
+# les emporterait sinon jusqu'en production.
+backend/rattachements_*.json
