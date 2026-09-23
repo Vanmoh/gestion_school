@@ -126,6 +126,43 @@ class RattachementAuHasardTests(TestCase):
         corrige.refresh_from_db()
         self.assertEqual(corrige.parent_id, vrai_parent.id)
 
+    def test_des_parents_sont_crees_pour_faire_des_familles_credibles(self):
+        """Six parents pour six cents eleves donneraient cent enfants chacun."""
+        with TemporaryDirectory() as dossier:
+            trace = Path(dossier) / "liens.json"
+            call_command(
+                "rattacher_parents_au_hasard",
+                confirmer=True,
+                creer_des_parents=True,
+                trace=str(trace),
+                stdout=StringIO(),
+            )
+
+            # 3 eleves, 1 parent existant: il en faut deux de plus pour
+            # descendre a deux ou trois enfants par famille.
+            self.assertGreater(ParentProfile.objects.count(), 1)
+            self.assertEqual(Student.objects.filter(parent__isnull=True).count(), 0)
+
+    def test_l_annulation_retire_aussi_les_parents_inventes(self):
+        """Sans cela, defaire les rattachements laisserait des fantomes."""
+        comptes_avant = User.objects.count()
+
+        with TemporaryDirectory() as dossier:
+            trace = Path(dossier) / "liens.json"
+            call_command(
+                "rattacher_parents_au_hasard",
+                confirmer=True,
+                creer_des_parents=True,
+                trace=str(trace),
+                stdout=StringIO(),
+            )
+            call_command(
+                "rattacher_parents_au_hasard", annuler=str(trace), stdout=StringIO()
+            )
+
+        self.assertEqual(ParentProfile.objects.count(), 1)
+        self.assertEqual(User.objects.count(), comptes_avant)
+
     def test_sans_aucun_parent_la_commande_le_dit(self):
         ParentProfile.objects.all().delete()
 
