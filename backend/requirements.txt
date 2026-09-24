@@ -27,3 +27,9 @@ sentry-sdk[django]==2.20.0
 # Signature OAuth2 des appels a Firebase Cloud Messaging (API HTTP v1).
 # L'ancienne API a cle serveur, qui s'en passait, a ete fermee par Google.
 google-auth==2.38.0
+# Appels HTTP sortants: passerelle SMS/WhatsApp (`common/messagerie.py`) et
+# Firebase Cloud Messaging (`common/push.py`). La dependance n'etait declaree
+# nulle part: elle arrivait par hasard, dans l'environnement ou une autre
+# bibliotheque l'installait. La CI, qui part d'un environnement propre, ne
+# l'avait pas -- et l'echec restait invisible, masque par le runner parallele.
+requests==2.32.5
