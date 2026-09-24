@@ -459,6 +459,22 @@ AFFINEMENTS = {
         "module": "students",
         "roles": frozenset({SUPER_ADMIN, DIRECTOR}),
     },
+    # Ouvrir aux familles les resultats d'un examen est une decision de la
+    # direction, pas une consequence de pouvoir corriger. La matrice donne
+    # `exams` en ecriture au censeur et a l'enseignant -- ce qui suffisait a
+    # publier et a depublier, ces deux gestes n'etant que des POST. Un
+    # enseignant pouvait donc ouvrir les resultats de tout l'etablissement, et
+    # les refermer.
+    #
+    # Le module « bulletin_validation » dit deja la meme chose de la cloture:
+    # « l'enseignant a grades en ecriture sur ses classes et n'a pas a decider
+    # que le trimestre est clos ». Il n'a pas davantage a decider quand une
+    # famille lit une note.
+    "publication_des_examens": {
+        "label": "Publier les resultats d'examen",
+        "module": "exams",
+        "roles": frozenset({SUPER_ADMIN, DIRECTOR, CENSOR}),
+    },
     "saisie_conduite": {
         "label": "Noter la conduite",
         "module": "discipline",

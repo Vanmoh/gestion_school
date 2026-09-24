@@ -54,15 +54,19 @@ def merge_exam_result(existing: ExamResult, incoming: ExamResult) -> None:
 
 def dedupe_exam_planning(classroom_id: int, subject_id: int) -> int:
     deleted = 0
-    seen = set()
+    gardees = {}
     rows = ExamPlanning.objects.filter(classroom_id=classroom_id, subject_id=subject_id).order_by("id")
     for row in rows:
         key = (row.session_id, row.exam_date, row.start_time, row.end_time)
-        if key in seen:
+        if key in gardees:
+            # Les notes suivent l'epreuve conservee avant que le doublon ne
+            # parte: `ExamResult.planning` est en RESTRICT, et supprimer une
+            # epreuve qui porte des notes emporterait toute la transaction.
+            ExamResult.objects.filter(planning_id=row.id).update(planning_id=gardees[key])
             row.delete()
             deleted += 1
         else:
-            seen.add(key)
+            gardees[key] = row.id
     return deleted
 
 

@@ -612,7 +612,11 @@ class Command(BaseCommand):
             session=exam_session,
             student=student_1,
             subject=math,
-            defaults={"score": Decimal("14.0")},
+            # Rattachee a l'epreuve creee juste au-dessus. Sans ce lien, la
+            # donnee de demonstration n'exercerait que le cas herite -- la
+            # note sans epreuve -- et le modele neuf ne se verrait jamais a
+            # la main.
+            defaults={"score": Decimal("14.0"), "planning": exam_planning},
         )
 
         supplier, _ = Supplier.objects.get_or_create(

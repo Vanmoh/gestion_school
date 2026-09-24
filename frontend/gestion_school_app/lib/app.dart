@@ -35,6 +35,7 @@ import 'features/dashboard/presentation/dashboard_page.dart';
 import 'features/dashboard/presentation/role_dashboards.dart';
 import 'features/exams/presentation/exams_controller.dart';
 import 'features/exams/presentation/exams_page.dart';
+import 'features/exams/presentation/parent_exams_page.dart';
 import 'features/communication/presentation/communication_page.dart';
 import 'features/academics/presentation/annee_scolaire_controller.dart';
 import 'core/widgets/bandeau_contexte.dart';
@@ -747,6 +748,16 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (item.keyName == 'attendance' &&
         (role == 'parent' || role == 'student')) {
       return const ParentAttendancePage();
+    }
+
+    // Meme raison pour les examens, en plus large: l'ecran d'administration
+    // ne se contentait pas d'offrir des formulaires inertes, il rendait a la
+    // famille le calendrier d'examen de toutes les classes, le tableau des
+    // surveillants, et le compte des notes saisies mais non publiees -- soit
+    // l'existence des notes que l'ecole lui refuse justement de lire.
+    if (item.keyName == 'exams' &&
+        (role == 'parent' || role == 'student')) {
+      return const ParentExamsPage();
     }
 
     if (item.keyName != 'dashboard') {
