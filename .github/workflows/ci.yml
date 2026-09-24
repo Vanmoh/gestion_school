@@ -95,6 +95,17 @@ jobs:
           # ou les vraies variables existent.
           AWS_S3_REGION_NAME: eu-west-1
           CHANNEL_REDIS_URL: redis://valkey-de-controle-ci:6379/2
+          # Les deux canaux qui atteignent les familles. Les controles W006
+          # et W007 ne lisent que des reglages -- ils ne contactent ni
+          # Firebase ni un serveur SMTP -- et cette porte verifie donc ce
+          # qu'elle doit verifier: qu'une configuration de forme production
+          # passe. Les absences reelles sont signalees au demarrage du
+          # service, seul endroit ou les vraies valeurs existent.
+          EMAIL_HOST: smtp.exemple.invalid
+          EMAIL_HOST_USER: controle-ci@exemple.invalid
+          EMAIL_HOST_PASSWORD: mot-de-passe-de-controle-ci
+          FCM_PROJECT_ID: projet-de-controle-ci
+          FCM_CREDENTIALS_FILE: /chemin/de/controle-ci/compte-de-service.json
         # --fail-level WARNING echouerait sur la centaine d'avertissements de
         # documentation drf-spectacular, sans rapport avec le deploiement. La
         # porte ne retient donc que les controles de securite et ceux du projet.
