@@ -29,6 +29,11 @@ class _DialogueReinitialisationState extends State<DialogueReinitialisation> {
     super.dispose();
   }
 
+  /// Vrai pour un élève ou un parent: eux seuls ont une règle, réglée dans
+  /// « Personnalisation ».
+  bool get _suitLaRegleDeLEcole =>
+      widget.compte.role == 'student' || widget.compte.role == 'parent';
+
   void _valider() {
     final saisi = _controleur.text;
     if (saisi.length < 8) {
@@ -80,8 +85,13 @@ class _DialogueReinitialisationState extends State<DialogueReinitialisation> {
             // Le mot de passe est fixé ici puis transmis de vive voix: le
             // dire évite qu'on l'attende par courriel.
             Text(
-              'Communiquez-le à la personne concernée. Elle devrait le '
-              'changer à sa prochaine connexion.',
+              _suitLaRegleDeLEcole
+                  ? 'Communiquez-le à la famille. Elle devra le changer à sa '
+                        'prochaine connexion. « Appliquer la règle de l\'école » '
+                        'le compose à votre place — le matricule pour un élève, '
+                        'le numéro pour un parent — et vous le montre.'
+                  : 'Communiquez-le à la personne concernée. Elle devra le '
+                        'changer à sa prochaine connexion.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             if (_erreur != null) ...[
@@ -99,6 +109,16 @@ class _DialogueReinitialisationState extends State<DialogueReinitialisation> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Annuler'),
         ),
+        // Une famille inscrite avant l'application n'a jamais reçu de mot de
+        // passe composé par la règle: on demandait au secrétariat d'en
+        // inventer un, donc de le noter quelque part. Le personnel, lui, n'a
+        // pas de règle — son mot de passe se fixe à la main.
+        if (_suitLaRegleDeLEcole)
+          TextButton(
+            key: const Key('appliquer-la-regle'),
+            onPressed: () => Navigator.of(context).pop(''),
+            child: const Text('Appliquer la règle de l\'école'),
+          ),
         FilledButton(
           onPressed: _valider,
           child: const Text('Réinitialiser'),

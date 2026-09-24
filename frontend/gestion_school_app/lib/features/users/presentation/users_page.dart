@@ -907,6 +907,8 @@ class _UsersPageState extends ConsumerState<UsersPage> {
 
   /// L'administration fixe un mot de passe provisoire, qu'elle communique.
   Future<void> _resetPassword(UserAccount user) async {
+    // Une chaine vide n'est pas une annulation: c'est « appliquez la regle
+    // de l'ecole », et c'est le serveur qui compose alors le mot de passe.
     final motDePasse = await showDialog<String>(
       context: context,
       builder: (_) => DialogueReinitialisation(compte: user),

@@ -417,6 +417,49 @@ class UserViewSet(viewsets.ModelViewSet):
 
         return super().destroy(request, *args, **kwargs)
 
+    @staticmethod
+    def _mot_de_passe_de_la_regle(cible):
+        """Le mot de passe que l'ecole remettrait aujourd'hui a cette personne.
+
+        C'est la reponse au cas le plus courant du guichet: une famille
+        inscrite avant que l'application ne compose les identifiants, qui
+        n'a jamais su son mot de passe. Demander au secretariat d'en
+        inventer un le condamnait a le noter quelque part; appliquer la
+        regle deja affichee dans « Personnalisation » lui evite de choisir.
+
+        Renvoie None pour qui n'est ni eleve ni parent: le personnel n'a pas
+        de regle, son mot de passe se fixe a la main.
+        """
+        from apps.school.admission import (
+            composer_le_mot_de_passe,
+            modele_de_mot_de_passe,
+            modele_de_mot_de_passe_parent,
+        )
+
+        etablissement = getattr(cible, "etablissement", None)
+        role = getattr(cible, "role", "")
+
+        if role == UserRole.STUDENT:
+            fiche = getattr(cible, "student_profile", None)
+            return composer_le_mot_de_passe(
+                modele_de_mot_de_passe(etablissement),
+                etablissement=etablissement,
+                prenom=cible.first_name,
+                nom=cible.last_name,
+                matricule=getattr(fiche, "matricule", "") or "",
+            )
+
+        if role == UserRole.PARENT:
+            return composer_le_mot_de_passe(
+                modele_de_mot_de_passe_parent(etablissement),
+                etablissement=etablissement,
+                prenom=cible.first_name,
+                nom=cible.last_name,
+                telephone=getattr(cible, "phone", "") or "",
+            )
+
+        return None
+
     @action(detail=True, methods=["post"], url_path="reset-password")
     def reset_password(self, request, pk=None):
         """L'administration fixe un mot de passe provisoire, qu'elle communique.
@@ -425,6 +468,11 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer ne le connaissait pas: l'API repondait 200 sans rien
         changer. Personne ne pouvait donc depanner un compte dont le mot de
         passe etait perdu.
+
+        Sans `password`, c'est la regle de l'ecole qui s'applique -- celle
+        que « Personnalisation » affiche, le matricule pour un eleve et le
+        numero pour un parent -- et la reponse porte le mot de passe compose
+        pour qu'on le lise a la famille.
         """
         cible = self.get_object()
         # Reinitialiser le mot de passe de quelqu'un, c'est prendre sa place:
@@ -432,6 +480,11 @@ class UserViewSet(viewsets.ModelViewSet):
         # posee la se contournerait ici.
         self._verifier_la_cible(cible, "Réinitialisation impossible")
         nouveau = str(request.data.get("password") or "")
+        selon_la_regle = False
+
+        if not nouveau:
+            nouveau = self._mot_de_passe_de_la_regle(cible) or ""
+            selon_la_regle = bool(nouveau)
 
         if len(nouveau) < LONGUEUR_MINIMALE_MOT_DE_PASSE:
             raise ValidationError(
@@ -442,16 +495,124 @@ class UserViewSet(viewsets.ModelViewSet):
             )
 
         cible.set_password(nouveau)
-        cible.save(update_fields=["password"])
+        # Le provisoire cesse de fonctionner des que son titulaire en a
+        # choisi un autre: c'est la seule chose qui le rend sans danger, et
+        # la reinitialisation l'oubliait. Un mot de passe dicte au guichet
+        # restait donc valable indefiniment.
+        cible.doit_changer_mot_de_passe = True
+        cible.save(update_fields=["password", "doit_changer_mot_de_passe"])
 
         return Response(
             {
                 "detail": f"Mot de passe réinitialisé pour {cible.username}. "
-                          "Communiquez-le à la personne concernée : elle devrait "
+                          "Communiquez-le à la personne concernée : elle devra "
                           "le changer à sa prochaine connexion.",
                 "user": cible.id,
+                # Compose ici, donc inconnu de l'appelant: sans le rendre,
+                # personne ne saurait quoi dicter a la famille.
+                "mot_de_passe": nouveau if selon_la_regle else "",
+                "selon_la_regle": selon_la_regle,
             }
         )
+
+    @action(detail=False, methods=["post"], url_path="rouvrir-les-acces")
+    def rouvrir_les_acces(self, request):
+        """Rend leurs acces aux familles qui n'ont jamais pu entrer.
+
+        Le cas est celui des inscriptions anterieures a l'application: ces
+        comptes portent un identifiant compose a partir du nom, et un mot de
+        passe que personne n'a jamais remis a la famille. Les reprendre un
+        par un, pour une ecole de huit cents eleves, ne se fait pas.
+
+        Bornee aux comptes jamais utilises -- `last_login` vide. C'est la
+        garde qui rend le geste sur: un parent qui se connecte deja garde
+        son mot de passe, et une classe entiere ne peut pas se retrouver
+        dehors parce qu'on a voulu depanner trois familles. Pour quelqu'un
+        qui a simplement oublie le sien, la reinitialisation compte par
+        compte est la.
+
+        Rend les acces en clair: ils n'existent qu'a cet instant, le serveur
+        les hache aussitot. Ce qui n'est pas note ici devra etre
+        reinitialise.
+        """
+        from apps.school.models import Student
+
+        eleves = Student.objects.select_related(
+            "user", "parent", "parent__user", "classroom"
+        ).filter(user__isnull=False)
+
+        # La portee du compte qui demande: `get_queryset` la porte deja pour
+        # les comptes, on l'applique ici aux fiches.
+        comptes_visibles = self.get_queryset().values_list("id", flat=True)
+        eleves = eleves.filter(user_id__in=comptes_visibles)
+
+        classe = request.data.get("classroom")
+        if classe not in (None, ""):
+            eleves = eleves.filter(classroom_id=classe)
+
+        choisis = request.data.get("students") or []
+        if choisis:
+            eleves = eleves.filter(id__in=choisis)
+
+        if classe in (None, "") and not choisis:
+            raise ValidationError(
+                {"detail": "Indiquez une classe ou une liste d'élèves."}
+            )
+
+        rendus = []
+        deja_utilises = 0
+        parents_traites = {}
+
+        for eleve in eleves.order_by("user__last_name", "user__first_name", "id"):
+            ligne = {
+                "eleve": eleve.user.get_full_name().strip() or eleve.user.username,
+                "matricule": eleve.matricule,
+                "classe": getattr(eleve.classroom, "name", ""),
+            }
+
+            if eleve.user.last_login is None:
+                self._verifier_la_cible(eleve.user, "Réouverture impossible")
+                ligne["identifiant"] = eleve.user.username
+                ligne["mot_de_passe"] = self._reposer_le_mot_de_passe(eleve.user)
+            else:
+                deja_utilises += 1
+
+            parent = getattr(eleve.parent, "user", None)
+            if parent is not None and parent.last_login is None:
+                # Trois freres, un seul pere: son mot de passe se compose une
+                # fois, et se lit sur chacune des trois lignes. Le recomposer
+                # par enfant en aurait pose trois differents, dont seul le
+                # dernier aurait fonctionne.
+                if parent.pk not in parents_traites:
+                    self._verifier_la_cible(parent, "Réouverture impossible")
+                    parents_traites[parent.pk] = self._reposer_le_mot_de_passe(
+                        parent
+                    )
+                ligne["parent"] = parent.get_full_name().strip() or parent.username
+                ligne["parent_identifiant"] = parent.username
+                ligne["parent_mot_de_passe"] = parents_traites[parent.pk]
+
+            if "mot_de_passe" in ligne or "parent_mot_de_passe" in ligne:
+                rendus.append(ligne)
+
+        return Response(
+            {
+                "comptes": rendus,
+                # Ce qui n'a pas bouge, et pourquoi: sans ce compte, une
+                # liste plus courte que la classe passerait pour un oubli.
+                "deja_utilises": deja_utilises,
+            }
+        )
+
+    def _reposer_le_mot_de_passe(self, compte):
+        """Applique la regle de l'ecole a ce compte, et rend le mot de passe."""
+        nouveau = self._mot_de_passe_de_la_regle(compte)
+        if not nouveau:
+            return ""
+        compte.set_password(nouveau)
+        compte.doit_changer_mot_de_passe = True
+        compte.save(update_fields=["password", "doit_changer_mot_de_passe"])
+        return nouveau
 
     def _sync_parent_profile(self, user):
         if not user:

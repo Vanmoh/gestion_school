@@ -19,7 +19,13 @@ from apps.school.models import AcademicYear, ClassRoom, Etablissement, ParentPro
 User = get_user_model()
 
 
-class InscriptionFamilleTests(APITestCase):
+class SocleInscription(APITestCase):
+    """L'ecole, la classe, le directeur et le formulaire: rien d'autre.
+
+    Sans ce socle, le second groupe de tests heritait du premier et rejouait
+    ses douze cas pour rien.
+    """
+
     @classmethod
     def setUpTestData(cls):
         cls.etab = Etablissement.objects.create(name="Ecole de la famille", code="EFAM")
@@ -68,6 +74,8 @@ class InscriptionFamilleTests(APITestCase):
             **self.entetes,
         )
 
+
+class InscriptionFamilleTests(SocleInscription):
     def test_l_eleve_et_sa_famille_naissent_ensemble(self):
         reponse = self._inscrire()
 
@@ -214,3 +222,106 @@ class InscriptionFamilleTests(APITestCase):
         self.assertGreaterEqual(
             len(reponse.data["identifiants_eleve"]["mot_de_passe"]), 8
         )
+
+
+class MotDePasseDuParentTests(SocleInscription):
+    """La regle du parent: la sienne, et reglable comme celle de l'eleve.
+
+    Elle vivait en dur dans le module d'admission -- « les chiffres de son
+    numero » -- et l'ecran de personnalisation ne montrait que celle de
+    l'eleve. Une ecole qui voulait autre chose pour les familles n'avait
+    aucun endroit ou le dire, et rien ne lui apprenait meme quelle regle
+    etait appliquee.
+    """
+
+    def test_par_defaut_c_est_son_numero(self):
+        """Ce qu'il connait par coeur, et deja son identifiant."""
+        reponse = self._inscrire()
+
+        self.assertEqual(
+            reponse.data["identifiants_parent"]["mot_de_passe"], "76123456"
+        )
+
+    def test_la_plateforme_porte_la_regle_commune(self):
+        PersonnalisationPlateforme.objects.update_or_create(
+            pk=PersonnalisationPlateforme.SINGLETON_PK,
+            defaults={"mot_de_passe_parent_modele": "{nom}{annee}"},
+        )
+
+        reponse = self._inscrire()
+
+        self.assertEqual(
+            reponse.data["identifiants_parent"]["mot_de_passe"], "Sissoko2026"
+        )
+
+    def test_une_ecole_peut_avoir_la_sienne(self):
+        PersonnalisationPlateforme.objects.update_or_create(
+            pk=PersonnalisationPlateforme.SINGLETON_PK,
+            defaults={"mot_de_passe_parent_modele": "{telephone}"},
+        )
+        Etablissement.objects.filter(pk=self.etab.pk).update(
+            mot_de_passe_parent_modele="{sigle}{telephone}"
+        )
+
+        reponse = self._inscrire()
+
+        self.assertEqual(
+            reponse.data["identifiants_parent"]["mot_de_passe"], "EFAM76123456"
+        )
+
+    def test_elle_est_distincte_de_celle_de_l_eleve(self):
+        """Deux regles, deux champs: en regler une ne touche pas l'autre."""
+        Etablissement.objects.filter(pk=self.etab.pk).update(
+            mot_de_passe_eleve_modele="{sigle}{annee}",
+            mot_de_passe_parent_modele="{prenom}{annee}",
+        )
+
+        reponse = self._inscrire()
+
+        self.assertEqual(
+            reponse.data["identifiants_eleve"]["mot_de_passe"], "EFAM2026"
+        )
+        self.assertEqual(
+            reponse.data["identifiants_parent"]["mot_de_passe"], "Ouali2026"
+        )
+
+    def test_un_modele_trop_court_est_complete_aussi(self):
+        Etablissement.objects.filter(pk=self.etab.pk).update(
+            mot_de_passe_parent_modele="{sigle}"
+        )
+
+        reponse = self._inscrire()
+
+        self.assertGreaterEqual(
+            len(reponse.data["identifiants_parent"]["mot_de_passe"]), 8
+        )
+
+    def test_un_modele_mal_ecrit_ne_ferme_pas_le_guichet(self):
+        """« {telefone} » ne doit pas faire echouer une inscription."""
+        Etablissement.objects.filter(pk=self.etab.pk).update(
+            mot_de_passe_parent_modele="{telefone}"
+        )
+
+        reponse = self._inscrire()
+
+        self.assertEqual(reponse.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            reponse.data["identifiants_parent"]["mot_de_passe"], "76123456"
+        )
+
+    def test_le_parent_ouvre_bien_sa_session_avec_la_regle_de_l_ecole(self):
+        """Le mot de passe rendu a l'ecran est celui qui ouvre reellement."""
+        Etablissement.objects.filter(pk=self.etab.pk).update(
+            mot_de_passe_parent_modele="{sigle}{telephone}"
+        )
+        reponse = self._inscrire()
+        remis = reponse.data["identifiants_parent"]
+        self.client.force_authenticate(None)
+
+        connexion = self.client.post(
+            "/api/auth/login/",
+            {"username": remis["username"], "password": remis["mot_de_passe"]},
+            format="json",
+        )
+
+        self.assertEqual(connexion.status_code, status.HTTP_200_OK, connexion.data)

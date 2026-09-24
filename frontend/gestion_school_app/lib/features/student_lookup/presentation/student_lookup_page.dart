@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/media_url.dart';
+import '../../students/domain/recherche_eleve.dart';
 import '../../students/domain/student.dart';
 import '../data/student_lookup_repository.dart';
 import '../domain/student_dossier.dart';
@@ -96,7 +97,14 @@ class _StudentLookupPageState extends ConsumerState<StudentLookupPage> {
         _searching = false;
       });
       // Une correspondance unique: inutile de faire cliquer pour rien.
-      if (found.length == 1) _openDossier(found.first.id);
+      if (found.length == 1) {
+        _openDossier(found.first.id);
+        return;
+      }
+      // Un matricule ou un numero entier nomme quelqu'un, meme quand le
+      // serveur a ramene ses voisins par fragment: on ouvre celui-la.
+      final designe = eleveDesigneExactement(found, query);
+      if (designe != null) _openDossier(designe.id);
     } catch (error) {
       if (!mounted || ticket != _requestId) return;
       setState(() {
@@ -107,23 +115,29 @@ class _StudentLookupPageState extends ConsumerState<StudentLookupPage> {
     }
   }
 
+  /// Meme role que [_requestId], pour l'ouverture d'un dossier: cliquer deux
+  /// noms de suite affichait celui dont la reponse arrivait en dernier, qui
+  /// n'est pas celui qu'on a demande en dernier.
+  int _dossierDemande = 0;
+
   Future<void> _openDossier(int studentId) async {
     setState(() {
       _loadingDossier = true;
       _error = '';
     });
 
+    final ticket = ++_dossierDemande;
     try {
       final dossier = await ref
           .read(studentLookupRepositoryProvider)
           .fetchDossier(studentId);
-      if (!mounted) return;
+      if (!mounted || ticket != _dossierDemande) return;
       setState(() {
         _dossier = dossier;
         _loadingDossier = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || ticket != _dossierDemande) return;
       setState(() {
         _loadingDossier = false;
         _error = "Ce dossier n'a pas pu être ouvert.";

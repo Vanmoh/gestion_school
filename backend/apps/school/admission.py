@@ -75,6 +75,26 @@ def modele_de_mot_de_passe(etablissement: Etablissement | None) -> str:
     return modele or PersonnalisationPlateforme.MOT_DE_PASSE_ELEVE_DEFAUT
 
 
+def modele_de_mot_de_passe_parent(etablissement: Etablissement | None) -> str:
+    """Le modele du parent: celui de cette ecole, ou celui de la maison.
+
+    Meme mecanique que pour l'eleve, et pour la meme raison: un groupe ne
+    remplit sur la fiche de chaque ecole que ce qui differe de la regle
+    commune.
+    """
+    propre = str(getattr(etablissement, "mot_de_passe_parent_modele", "") or "").strip()
+    if propre:
+        return propre
+
+    from apps.common.models import PersonnalisationPlateforme
+
+    reglages = PersonnalisationPlateforme.objects.filter(
+        pk=PersonnalisationPlateforme.SINGLETON_PK
+    ).first()
+    modele = str(getattr(reglages, "mot_de_passe_parent_modele", "") or "").strip()
+    return modele or PersonnalisationPlateforme.MOT_DE_PASSE_PARENT_DEFAUT
+
+
 def changement_impose() -> bool:
     from apps.common.models import PersonnalisationPlateforme
 
@@ -89,33 +109,48 @@ def changement_impose() -> bool:
 def composer_le_mot_de_passe(
     modele: str,
     *,
-    matricule: str,
     etablissement: Etablissement | None,
     prenom: str,
     nom: str,
+    matricule: str = "",
+    telephone: str = "",
 ) -> str:
     """Applique le modele, puis garantit la longueur minimale.
 
     Un modele qui ne produirait que « ba » -- un nom court, rien d'autre --
     donnerait un mot de passe refuse par la regle des huit caracteres, et
     l'inscription echouerait au guichet sans que personne comprenne pourquoi.
+
+    Les deux jetons d'identite cohabitent: l'eleve a un matricule, le parent
+    un numero, et une ecole peut vouloir la meme phrase pour les deux --
+    « {sigle}{annee} ». Celui qui ne s'applique pas reste vide plutot
+    qu'absent: un modele qui le nomme produit alors un mot de passe court,
+    que le remplissage rattrape, au lieu de faire echouer l'inscription.
     """
     annee = timezone.now().year
+    # Le numero sans ses separateurs: il est dicte au guichet puis retape,
+    # et « 76 12 34 56 » ne se retape jamais deux fois pareil.
+    chiffres = re.sub(r"\D", "", str(telephone or ""))
     valeurs = {
         "matricule": matricule,
+        "telephone": chiffres,
         "annee": str(annee),
         "sigle": _sans_accent(getattr(etablissement, "code", "") or "").upper(),
         "nom": _sans_accent(nom).replace(" ", ""),
         "prenom": _sans_accent(prenom).replace(" ", ""),
     }
+    # Ce qui identifie cette personne, et sur quoi on retombe si le modele
+    # est mal ecrit ou ne produit rien.
+    repli = matricule or chiffres or _sans_accent(f"{prenom}{nom}").replace(" ", "")
+
     try:
         compose = modele.format(**valeurs)
     except (KeyError, IndexError, ValueError):
-        # Un modele mal ecrit ne doit pas fermer le guichet: on retombe sur le
-        # matricule, et le changement impose fait le reste.
-        compose = matricule
+        # Un modele mal ecrit ne doit pas fermer le guichet: on retombe sur
+        # l'identite, et le changement impose fait le reste.
+        compose = repli
 
-    compose = compose.strip() or matricule
+    compose = compose.strip() or repli or "motdepasse"
     while len(compose) < LONGUEUR_MINIMALE:
         compose = f"{compose}{_REMPLISSAGE}"
     return compose
@@ -229,11 +264,17 @@ def inscrire(
         parent_tel = str(donnees.get("phone") or "").strip()
 
         identifiant = identifiant_du_parent(parent_tel, parent_nom, parent_prenom)
-        # Le parent retient son numero, pas une suite inventee. Le changement
-        # impose a la premiere connexion le rend sans danger.
-        mot_de_passe = re.sub(r"\D", "", parent_tel) or identifiant
-        while len(mot_de_passe) < LONGUEUR_MINIMALE:
-            mot_de_passe = f"{mot_de_passe}{_REMPLISSAGE}"
+        # La regle de l'ecole, et non plus « les chiffres du numero » ecrit
+        # en dur ici. Par defaut elle vaut exactement cela -- le parent
+        # retient son numero, pas une suite inventee -- et le changement
+        # impose a la premiere connexion la rend sans danger.
+        mot_de_passe = composer_le_mot_de_passe(
+            modele_de_mot_de_passe_parent(etablissement),
+            etablissement=etablissement,
+            prenom=parent_prenom,
+            nom=parent_nom,
+            telephone=parent_tel,
+        )
 
         compte_parent = User(
             username=identifiant,

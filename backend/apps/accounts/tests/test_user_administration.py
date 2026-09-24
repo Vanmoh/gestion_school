@@ -11,6 +11,7 @@ gardait le sien.
 from datetime import date
 from decimal import Decimal
 
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -19,6 +20,7 @@ from apps.school.models import (
     AcademicYear,
     ClassRoom,
     Etablissement,
+    ParentProfile,
     Student,
     Subject,
     Teacher,
@@ -193,6 +195,306 @@ class ReinitialisationTests(_ComptesMixin, APITestCase):
         reponse = self._reinitialiser(self.employe, "Provisoire123")
 
         self.assertEqual(reponse.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_le_provisoire_ne_sert_qu_une_fois(self):
+        """Il est dicte au guichet: il doit cesser des qu'il a servi.
+
+        C'est la seule chose qui le rende sans danger, et la
+        reinitialisation l'oubliait -- un mot de passe donne de vive voix
+        restait valable indefiniment.
+        """
+        self._reinitialiser(self.employe, "Provisoire123")
+
+        self.employe.refresh_from_db()
+        self.assertTrue(self.employe.doit_changer_mot_de_passe)
+
+
+class ReinitialisationSelonLaRegleTests(_ComptesMixin, APITestCase):
+    """Rendre son acces a une famille inscrite avant l'application.
+
+    Ces comptes n'ont jamais recu de mot de passe compose par la regle: on
+    demandait au secretariat d'en inventer un, donc de le noter quelque
+    part. Sans `password`, la reinitialisation applique la regle que
+    « Personnalisation » affiche, et rend le mot de passe pour qu'on le
+    lise a la famille.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls._decor(nom="Etab Regle")
+        cls.compte_eleve = cls._compte("ousmane.bagayoko", UserRole.STUDENT)
+        cls.compte_eleve.first_name = "Ousmane"
+        cls.compte_eleve.last_name = "Bagayoko"
+        cls.compte_eleve.save(update_fields=["first_name", "last_name"])
+        cls.eleve = Student.objects.create(
+            user=cls.compte_eleve,
+            matricule="ER1EM125E0028M",
+            classroom=cls.classe,
+            etablissement=cls.etablissement,
+        )
+        cls.compte_parent = cls._compte("bakary.sangare", UserRole.PARENT)
+        cls.compte_parent.phone = "73 65 83 34"
+        cls.compte_parent.save(update_fields=["phone"])
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.super_admin)
+
+    def _selon_la_regle(self, cible):
+        return self.client.post(
+            f"/api/auth/users/{cible.id}/reset-password/",
+            {},
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
+        )
+
+    def test_l_eleve_retrouve_son_matricule_pour_mot_de_passe(self):
+        reponse = self._selon_la_regle(self.compte_eleve)
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
+        self.assertTrue(reponse.data["selon_la_regle"])
+        self.assertEqual(reponse.data["mot_de_passe"], "ER1EM125E0028M")
+        self.compte_eleve.refresh_from_db()
+        self.assertTrue(self.compte_eleve.check_password("ER1EM125E0028M"))
+
+    def test_le_parent_retrouve_son_numero(self):
+        reponse = self._selon_la_regle(self.compte_parent)
+
+        self.assertEqual(reponse.data["mot_de_passe"], "73658334")
+        self.compte_parent.refresh_from_db()
+        self.assertTrue(self.compte_parent.check_password("73658334"))
+
+    def test_la_regle_de_l_ecole_prime(self):
+        Etablissement.objects.filter(pk=self.etablissement.pk).update(
+            mot_de_passe_eleve_modele="{nom}{annee}"
+        )
+
+        reponse = self._selon_la_regle(self.compte_eleve)
+
+        self.assertEqual(reponse.data["mot_de_passe"], "Bagayoko2026")
+
+    def test_une_regle_trop_courte_est_completee_ici_aussi(self):
+        """Huit caracteres au moins: le meme remplissage qu'a l'inscription."""
+        Etablissement.objects.filter(pk=self.etablissement.pk).update(
+            mot_de_passe_eleve_modele="{sigle}"
+        )
+
+        reponse = self._selon_la_regle(self.compte_eleve)
+
+        rendu = reponse.data["mot_de_passe"]
+        self.assertGreaterEqual(len(rendu), 8)
+        self.compte_eleve.refresh_from_db()
+        self.assertTrue(self.compte_eleve.check_password(rendu))
+
+    def test_la_famille_se_reconnecte_avec_ce_qu_on_lui_dicte(self):
+        """Le mot de passe rendu, et le matricule pour identifiant."""
+        reponse = self._selon_la_regle(self.compte_eleve)
+        self.client.force_authenticate(None)
+
+        connexion = self.client.post(
+            "/api/auth/login/",
+            {
+                "username": self.eleve.matricule,
+                "password": reponse.data["mot_de_passe"],
+            },
+            format="json",
+        )
+
+        self.assertEqual(connexion.status_code, status.HTTP_200_OK, connexion.data)
+
+    def test_le_personnel_n_a_pas_de_regle_et_le_dit(self):
+        """Inventer un mot de passe pour un comptable n'aurait aucun sens."""
+        comptable = self._compte("comptable_sans_regle", UserRole.ACCOUNTANT)
+
+        reponse = self._selon_la_regle(comptable)
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        comptable.refresh_from_db()
+        self.assertTrue(comptable.check_password("Pass1234!"))
+
+    def test_un_mot_de_passe_fourni_reste_prioritaire(self):
+        reponse = self.client.post(
+            f"/api/auth/users/{self.compte_eleve.id}/reset-password/",
+            {"password": "ChoisiALaMain1"},
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
+        )
+
+        self.assertFalse(reponse.data["selon_la_regle"])
+        # Le mot de passe n'est pas renvoye: l'appelant l'a ecrit lui-meme,
+        # et le rendre le ferait traverser les journaux pour rien.
+        self.assertEqual(reponse.data["mot_de_passe"], "")
+        self.compte_eleve.refresh_from_db()
+        self.assertTrue(self.compte_eleve.check_password("ChoisiALaMain1"))
+
+
+class ReouvertureDesAccesTests(_ComptesMixin, APITestCase):
+    """Rendre ses acces a une classe entiere, sans toucher a ceux qui entrent.
+
+    Les familles inscrites avant l'application portent un identifiant
+    compose a partir du nom et un mot de passe que personne ne leur a jamais
+    remis. Les reprendre une par une, pour huit cents eleves, ne se fait
+    pas.
+    """
+
+    URL = "/api/auth/users/rouvrir-les-acces/"
+
+    @classmethod
+    def setUpTestData(cls):
+        cls._decor(nom="Etab Reouverture")
+        cls.autre_classe = ClassRoom.objects.create(
+            name="5ème B", academic_year=cls.annee, etablissement=cls.etablissement
+        )
+
+        cls.compte_parent = cls._compte("bakary.sangare", UserRole.PARENT)
+        cls.compte_parent.phone = "73 65 83 34"
+        cls.compte_parent.save(update_fields=["phone"])
+        cls.parent = ParentProfile.objects.create(
+            user=cls.compte_parent, etablissement=cls.etablissement
+        )
+
+        cls.eleve = cls._eleve_de_la_classe("ousmane.bagayoko", "RO1EM125E0028M")
+        cls.cadet = cls._eleve_de_la_classe("awa.bagayoko", "RO1EM125E0029F")
+        cls.voisin = cls._eleve_de_la_classe(
+            "modibo.keita", "RO1DB125E0011M", classe=cls.autre_classe
+        )
+
+    @classmethod
+    def _eleve_de_la_classe(cls, username, matricule, classe=None):
+        compte = cls._compte(username, UserRole.STUDENT)
+        prenom, nom = username.split(".")
+        compte.first_name = prenom.capitalize()
+        compte.last_name = nom.capitalize()
+        compte.save(update_fields=["first_name", "last_name"])
+        return Student.objects.create(
+            user=compte,
+            matricule=matricule,
+            classroom=classe or cls.classe,
+            parent=cls.parent,
+            etablissement=cls.etablissement,
+        )
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.super_admin)
+
+    def _rouvrir(self, **charge):
+        return self.client.post(
+            self.URL,
+            charge,
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
+        )
+
+    def test_une_classe_entiere_retrouve_ses_acces(self):
+        reponse = self._rouvrir(classroom=self.classe.id)
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
+        matricules = {ligne["matricule"] for ligne in reponse.data["comptes"]}
+        self.assertEqual(matricules, {"RO1EM125E0028M", "RO1EM125E0029F"})
+
+    def test_les_acces_sont_rendus_en_clair(self):
+        """Ils n'existent qu'a cet instant: le serveur les hache aussitot."""
+        reponse = self._rouvrir(classroom=self.classe.id)
+
+        ligne = next(
+            l for l in reponse.data["comptes"] if l["matricule"] == "RO1EM125E0028M"
+        )
+        self.assertEqual(ligne["mot_de_passe"], "RO1EM125E0028M")
+        self.eleve.user.refresh_from_db()
+        self.assertTrue(self.eleve.user.check_password("RO1EM125E0028M"))
+
+    def test_une_autre_classe_n_est_pas_touchee(self):
+        self._rouvrir(classroom=self.classe.id)
+
+        self.voisin.user.refresh_from_db()
+        self.assertTrue(self.voisin.user.check_password("Pass1234!"))
+
+    def test_un_compte_deja_utilise_garde_son_mot_de_passe(self):
+        """La garde qui rend le geste sur: on ne met personne dehors."""
+        self.eleve.user.last_login = timezone.now()
+        self.eleve.user.save(update_fields=["last_login"])
+
+        reponse = self._rouvrir(classroom=self.classe.id)
+
+        self.eleve.user.refresh_from_db()
+        self.assertTrue(self.eleve.user.check_password("Pass1234!"))
+        self.assertEqual(reponse.data["deja_utilises"], 1)
+
+    def test_le_parent_de_la_fratrie_n_a_qu_un_mot_de_passe(self):
+        """Trois freres, un seul pere: le recomposer par enfant en poserait
+        trois, dont seul le dernier fonctionnerait."""
+        reponse = self._rouvrir(classroom=self.classe.id)
+
+        rendus = {
+            ligne["parent_mot_de_passe"] for ligne in reponse.data["comptes"]
+        }
+        self.assertEqual(rendus, {"73658334"})
+        self.compte_parent.refresh_from_db()
+        self.assertTrue(self.compte_parent.check_password("73658334"))
+
+    def test_le_provisoire_ne_sert_qu_une_fois(self):
+        self._rouvrir(classroom=self.classe.id)
+
+        self.eleve.user.refresh_from_db()
+        self.compte_parent.refresh_from_db()
+        self.assertTrue(self.eleve.user.doit_changer_mot_de_passe)
+        self.assertTrue(self.compte_parent.doit_changer_mot_de_passe)
+
+    def test_la_famille_entre_avec_ce_qu_on_lui_dicte(self):
+        reponse = self._rouvrir(classroom=self.classe.id)
+        ligne = next(
+            l for l in reponse.data["comptes"] if l["matricule"] == "RO1EM125E0028M"
+        )
+        self.client.force_authenticate(None)
+
+        connexion = self.client.post(
+            "/api/auth/login/",
+            {"username": ligne["matricule"], "password": ligne["mot_de_passe"]},
+            format="json",
+        )
+
+        self.assertEqual(connexion.status_code, status.HTTP_200_OK, connexion.data)
+
+    def test_une_liste_d_eleves_fait_aussi_l_affaire(self):
+        reponse = self._rouvrir(students=[self.voisin.id])
+
+        matricules = {ligne["matricule"] for ligne in reponse.data["comptes"]}
+        self.assertEqual(matricules, {"RO1DB125E0011M"})
+
+    def test_sans_perimetre_le_geste_est_refuse(self):
+        """Rouvrir « tout » d'un seul appel n'est demande par aucun ecran."""
+        reponse = self._rouvrir()
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_l_enseignant_ne_rouvre_pas_les_acces(self):
+        self.client.force_authenticate(self._compte("prof_reouverture", UserRole.TEACHER))
+
+        reponse = self._rouvrir(classroom=self.classe.id)
+
+        self.assertEqual(reponse.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_une_autre_ecole_reste_hors_de_portee(self):
+        ailleurs = Etablissement.objects.create(name="Etab Voisin", code="EV")
+        direction_voisine = User.objects.create_user(
+            username="dir_voisin",
+            password="Pass1234!",
+            role=UserRole.DIRECTOR,
+            etablissement=ailleurs,
+        )
+        self.client.force_authenticate(direction_voisine)
+
+        reponse = self.client.post(
+            self.URL,
+            {"classroom": self.classe.id},
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(ailleurs.id),
+        )
+
+        self.assertEqual(reponse.data["comptes"], [])
+        self.eleve.user.refresh_from_db()
+        self.assertTrue(self.eleve.user.check_password("Pass1234!"))
 
 
 class SuppressionTests(_ComptesMixin, APITestCase):

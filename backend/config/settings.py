@@ -173,6 +173,12 @@ else:
 
 AUTH_USER_MODEL = "accounts.User"
 
+# Un seul backend, et non le notre ajoute derriere celui de Django: le notre
+# EST celui de Django, avec une facon de plus de retrouver le compte. Les
+# empiler ferait hacher le mot de passe deux fois a chaque echec, et
+# doublerait le cout de la seule route qu'un anonyme peut marteler.
+AUTHENTICATION_BACKENDS = ["apps.accounts.backends.IdentifiantsDeLEcole"]
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},

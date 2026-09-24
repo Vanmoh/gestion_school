@@ -112,6 +112,7 @@ class PersonnalisationSerializer(serializers.ModelSerializer):
             "image_fond",
             "image_fond_url",
             "mot_de_passe_eleve_modele",
+            "mot_de_passe_parent_modele",
             "imposer_changement_mot_de_passe",
         ]
         extra_kwargs = {
@@ -126,6 +127,7 @@ class PersonnalisationSerializer(serializers.ModelSerializer):
             "email": {"allow_blank": True},
             "adresse": {"allow_blank": True},
             "mot_de_passe_eleve_modele": {"allow_blank": True},
+            "mot_de_passe_parent_modele": {"allow_blank": True},
             "titre_connexion": {"allow_blank": True},
             "sous_titre_connexion": {"allow_blank": True},
             "titre_portail": {"allow_blank": True},

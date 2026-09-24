@@ -976,10 +976,43 @@ class GradePagination(PageNumberPagination):
     max_page_size = 500
 
 
-class GradePagination(PageNumberPagination):
-    page_size = 100
-    page_size_query_param = "page_size"
-    max_page_size = 500
+def classes_du_perimetre_familial(user):
+    """Les classes qu'un parent ou un eleve a le droit de voir, ou None.
+
+    Le parent voit celles de ses enfants, l'eleve la sienne. `None` signifie
+    « ce compte n'est ni l'un ni l'autre »: l'appelant garde alors sa portee
+    habituelle, par etablissement. Un parent sans enfant rattache recoit un
+    ensemble vide, ce qui n'est pas la meme chose.
+
+    Ces deux profils lisent le module academique depuis peu (matrice
+    `academics`, colonnes PAR et ELV): leurs ecrans -- notes, examens,
+    emploi du temps, frais -- commencent par charger les classes et les
+    matieres. Leur rendre celles de toute l'ecole aurait ouvert bien plus
+    que ce que la matrice annonce.
+
+    Les classes d'hier comptent autant que celle d'aujourd'hui: la fiche ne
+    porte que l'inscription en cours, et s'arreter la aurait vide le
+    selecteur des que la famille remonte a une annee precedente pour
+    rouvrir un ancien bulletin. L'historique scolaire garde, lui, la classe
+    de chaque annee close.
+    """
+    role = getattr(user, "role", "")
+    if role == UserRole.STUDENT:
+        eleves = Student.objects.filter(user_id=user.id)
+    elif role == UserRole.PARENT:
+        eleves = Student.objects.filter(parent__user_id=user.id)
+    else:
+        return None
+
+    return set(
+        eleves.exclude(classroom__isnull=True)
+        .values_list("classroom_id", flat=True)
+        .distinct()
+    ) | set(
+        StudentAcademicHistory.objects.filter(student__in=eleves)
+        .values_list("classroom_id", flat=True)
+        .distinct()
+    )
 
 
 class AcademicYearViewSet(BaseModelViewSet):
@@ -1383,6 +1416,14 @@ class ClassRoomViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         qs = ClassRoom.objects.select_related("academic_year").order_by("name", "id")
         requested_etablissement = self._requested_etablissement()
 
+        # Le parent et l'eleve d'abord: leur portee ne depend pas de
+        # l'etablissement demande par l'en-tete, elle depend de qui est
+        # inscrit sous leur nom. La poser ici evite qu'un `?etablissement=`
+        # lu dans l'URL leur rende les classes d'une ecole entiere.
+        classes_familiales = classes_du_perimetre_familial(user)
+        if classes_familiales is not None:
+            return qs.filter(id__in=classes_familiales)
+
         if requested_etablissement is not None:
             qs = qs.filter(etablissement=requested_etablissement)
         elif self._has_requested_scope():
@@ -1476,6 +1517,24 @@ class SubjectViewSet(BaseModelViewSet):
         qs = Subject.objects.select_related("classroom", "classroom__etablissement").all().order_by("name")
         requested_etablissement = self._requested_etablissement()
         requested_classroom_id = self._requested_classroom_id()
+
+        # Meme regle que pour les classes: le parent lit les matieres de ses
+        # enfants, l'eleve les siennes. Une matiere peut etre rattachee a la
+        # classe autrement que par sa colonne `classroom` -- par une
+        # affectation d'enseignant ou par des notes deja saisies -- et le
+        # bulletin la nomme dans les trois cas.
+        classes_familiales = classes_du_perimetre_familial(user)
+        if classes_familiales is not None:
+            if not classes_familiales:
+                return qs.none()
+            scoped_qs = qs.filter(
+                Q(classroom_id__in=classes_familiales)
+                | Q(teacher_assignments__classroom_id__in=classes_familiales)
+                | Q(grades__classroom_id__in=classes_familiales)
+            ).distinct()
+            if requested_classroom_id:
+                scoped_qs = scoped_qs.filter(classroom_id=requested_classroom_id)
+            return scoped_qs
 
         if requested_etablissement is not None:
             scoped_qs = (
