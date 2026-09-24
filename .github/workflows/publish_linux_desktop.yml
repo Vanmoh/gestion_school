@@ -74,4 +74,16 @@ jobs:
             exit 0
           fi
           git commit -m "Publish Linux desktop artifact"
-          git push
+          # Trois workflows lances ensemble commitent chacun son artefact
+          # sur main: le second arrive trouve la place prise et son push est
+          # rejete -- un build reussi perdu sur sa derniere ligne. Chacun
+          # touche un fichier different, le rebase passe donc sans conflit.
+          for tentative in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejete (tentative $tentative): un autre workflow a publie entre-temps."
+            git pull --rebase origin "$GITHUB_REF_NAME"
+          done
+          echo "Push impossible apres trois tentatives."
+          exit 1
