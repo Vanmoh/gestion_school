@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from datetime import time
 from decimal import Decimal
 
 from django.core.management.base import BaseCommand, CommandError
@@ -9,6 +10,7 @@ from django.utils import timezone
 
 from apps.school.models import (
     ClassRoom,
+    ExamPlanning,
     ExamResult,
     ExamSession,
     Grade,
@@ -113,6 +115,35 @@ class Command(BaseCommand):
         cache[year.id] = session
         return session
 
+    @staticmethod
+    def _epreuve_pour(session, classroom, subject, cache):
+        """L'epreuve de cette classe pour cette matiere, creee au besoin.
+
+        La commande posait des notes sans epreuve. Elles restaient lisibles
+        -- une note sans epreuve suit le drapeau de sa session -- mais le
+        jeu de demonstration n'exercait alors que le cas herite, et la
+        publication par epreuve ne se voyait jamais a la main.
+
+        L'horaire est conventionnel: ces donnees sont fabriquees, et rien ne
+        pretend qu'une epreuve a eu lieu ce jour-la a cette heure.
+        """
+        cle = (session.id, classroom.id, subject.id)
+        if cle in cache:
+            return cache[cle]
+
+        epreuve, _ = ExamPlanning.objects.get_or_create(
+            session=session,
+            classroom=classroom,
+            subject=subject,
+            defaults={
+                "exam_date": session.start_date,
+                "start_time": time(8, 0),
+                "end_time": time(10, 0),
+            },
+        )
+        cache[cle] = epreuve
+        return epreuve
+
     def handle(self, *args, **options):
         etab_id = int(options["etab_id"])
         term = normalize_term(options["term"])
@@ -128,6 +159,7 @@ class Command(BaseCommand):
 
         rng = random.Random(seed)
         session_by_year: dict[int, ExamSession] = {}
+        epreuve_par_cle: dict[tuple[int, int, int], ExamPlanning] = {}
         created_grades = 0
         updated_grades = 0
         created_exam_results = 0
@@ -172,17 +204,24 @@ class Command(BaseCommand):
                         .order_by("-session__end_date", "-session__start_date", "-created_at", "-id")
                         .first()
                     )
+                    epreuve = self._epreuve_pour(
+                        session, classroom, subject, epreuve_par_cle
+                    )
                     if exam_result is None:
                         ExamResult.objects.create(
                             session=session,
                             student=student,
                             subject=subject,
                             score=exam_score,
+                            planning=epreuve,
                         )
                         created_exam_results += 1
                     else:
                         exam_result.score = exam_score
-                        exam_result.save(update_fields=["score", "updated_at"])
+                        exam_result.planning = epreuve
+                        exam_result.save(
+                            update_fields=["score", "planning", "updated_at"]
+                        )
                         updated_exam_results += 1
 
             for classroom in classrooms:

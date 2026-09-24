@@ -3,6 +3,7 @@ import unicodedata
 from decimal import Decimal
 from datetime import date, timedelta
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models
 from django.utils import timezone
 from rest_framework import serializers
@@ -2469,6 +2470,22 @@ class ExamSessionSerializer(serializers.ModelSerializer):
         """
         return obj.results.count()
 
+    epreuves_total = serializers.SerializerMethodField(read_only=True)
+    epreuves_publiees = serializers.SerializerMethodField(read_only=True)
+
+    def get_epreuves_total(self, obj):
+        return obj.plannings.count()
+
+    def get_epreuves_publiees(self, obj):
+        """Combien d'epreuves de la campagne sont ouvertes aux familles.
+
+        Le booleen de la session mentirait a l'ecran: « publiee » devant
+        trois epreuves ouvertes sur sept. Un compte ne ment pas, et c'est
+        desormais la seule lecture juste -- la publication se decide epreuve
+        par epreuve.
+        """
+        return obj.plannings.filter(results_published=True).count()
+
     def validate_term(self, value):
         normalized = normalize_term(value)
         if not normalized:
@@ -2489,9 +2506,52 @@ class ExamSessionSerializer(serializers.ModelSerializer):
 
 
 class ExamPlanningSerializer(serializers.ModelSerializer):
+    # Les libelles que l'ecran affichait en resolvant ses propres caches: un
+    # planning d'une classe absente du cache s'intitulait « Matiere ».
+    classroom_name = serializers.CharField(source="classroom.name", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    session_title = serializers.CharField(source="session.title", read_only=True)
+    resultats_saisis = serializers.SerializerMethodField(read_only=True)
+
+    def get_resultats_saisis(self, obj):
+        """Ce qui distingue une epreuve corrigee d'une epreuve en attente.
+
+        Rien ne les distinguait: le planning ne portait pas ses notes, et
+        l'ecran ne pouvait donc pas dire ou en etait la correction.
+        """
+        return obj.results.count()
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        # Les regles vivent dans `ExamPlanning.clean()`: les rejouer ici
+        # serait les ecrire deux fois. `full_clean` sur une instance non
+        # enregistree suffit, les trois controles ne lisent que des
+        # relations deja resolues.
+        instance = ExamPlanning(
+            **{
+                champ: attrs.get(
+                    champ, getattr(self.instance, champ, None) if self.instance else None
+                )
+                for champ in ("session", "classroom", "subject", "exam_date", "start_time", "end_time")
+            }
+        )
+        try:
+            instance.clean()
+        except DjangoValidationError as erreur:
+            raise serializers.ValidationError(erreur.message_dict)
+        return attrs
+
     class Meta:
         model = ExamPlanning
         fields = "__all__"
+        # Meme raison que sur la session: la publication passe par ses deux
+        # actions, qui journalisent et verifient qu'il y a des notes.
+        read_only_fields = (
+            "results_published",
+            "results_published_at",
+            "results_published_by",
+        )
 
 
 class ExamInvigilationSerializer(serializers.ModelSerializer):
@@ -2514,11 +2574,83 @@ class ExamInvigilationSerializer(serializers.ModelSerializer):
 
 
 class ExamResultSerializer(serializers.ModelSerializer):
+    # Les cles etrangeres brutes suffisent a l'ecran d'administration, qui
+    # tient deja ses referentiels en cache. Elles ne suffisent pas a la
+    # famille: sans ces trois libelles, son ecran resout trois relations en
+    # trois requetes pour afficher « Mathematiques » au lieu de « 7 ». Le
+    # dossier eleve avait deja ce besoin et le reglait dans son coin, par un
+    # `labeller` local -- la meme chose, ecrite deux fois.
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    session_title = serializers.CharField(source="session.title", read_only=True)
+    session_term = serializers.CharField(source="session.term", read_only=True)
+    # Un parent a plusieurs enfants: sans le nom, son ecran ne sait pas de
+    # qui est la note qu'il affiche.
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.SerializerMethodField(read_only=True)
+
+    # Declare a la main: la contrainte d'unicite (epreuve, eleve) fait sinon
+    # generer a DRF un validateur qui exige le champ, alors que `validate()`
+    # le derive precisement quand on ne le donne pas -- ce dont dependent
+    # l'import de fichier, les donnees de demonstration et l'ecran
+    # d'administration.
+    planning = serializers.PrimaryKeyRelatedField(
+        queryset=ExamPlanning.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+    def get_student_full_name(self, obj):
+        student = obj.student
+        user = student.user if student else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_student_matricule(self, obj):
+        return obj.student.matricule if obj.student else ""
+
     def validate_score(self, value):
         numeric_value = Decimal(str(value))
         if numeric_value < Decimal("0") or numeric_value > Decimal("20"):
             raise serializers.ValidationError("La note d'examen doit être comprise entre 0 et 20.")
         return value
+
+    def _deriver_l_epreuve(self, session, student, subject):
+        """L'epreuve que cette note designe, sans qu'on l'ait nommee.
+
+        L'obligation de rattacher une note a son epreuve est portee ici et
+        non par la colonne, qui reste nullable. Deux raisons: un eleve sans
+        classe n'a aucune epreuve derivable, et trois producteurs de notes
+        ecrivent sans la connaitre -- l'import de fichier, les donnees de
+        demonstration, et l'ecran d'administration.
+
+        L'ambiguite n'est jamais tranchee en silence: deux epreuves pour la
+        meme classe et la meme matiere dans la meme session -- une
+        composition et son rattrapage, par exemple -- se distinguent par une
+        date, et c'est a celui qui saisit de dire laquelle.
+        """
+        classroom = getattr(student, "classroom", None)
+        if classroom is None:
+            return None
+
+        candidates = list(
+            ExamPlanning.objects.filter(
+                session=session, classroom=classroom, subject=subject
+            )[:2]
+        )
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise serializers.ValidationError(
+                {
+                    "planning": (
+                        "Plusieurs épreuves correspondent à cet élève et cette "
+                        "matière dans cette session. Précisez laquelle."
+                    )
+                }
+            )
+        return None
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
@@ -2530,30 +2662,58 @@ class ExamResultSerializer(serializers.ModelSerializer):
         if not session or not student or not subject:
             return attrs
 
-        conflict_qs = ExamResult.objects.filter(
-            student=student,
-            subject=subject,
-            session__academic_year=session.academic_year,
-            session__term=session.term,
-        )
+        planning = attrs.get("planning") or getattr(self.instance, "planning", None)
+        if planning is None:
+            planning = self._deriver_l_epreuve(session, student, subject)
+            if planning is not None:
+                attrs["planning"] = planning
+
+        # Une note par epreuve et par eleve.
+        #
+        # La regle portait auparavant sur (eleve, matiere, annee, periode),
+        # toutes sessions confondues: elle interdisait donc le rattrapage,
+        # qui est par definition une seconde epreuve de la meme matiere dans
+        # le meme trimestre. Le modele epreuve le rend naturel, et
+        # `moyenne_de_la_periode` retient deja la session la plus recente --
+        # donc le rattrapage prime, ce qui est bien ce qu'on veut.
+        #
+        # Les notes sans epreuve gardent l'ancienne regle: rien ne les
+        # distingue les unes des autres, et deux notes de la meme matiere
+        # pour le meme trimestre y resteraient indiscernables.
+        if planning is not None:
+            conflict_qs = ExamResult.objects.filter(planning=planning, student=student)
+            message = (
+                "Une note existe déjà pour cet élève sur cette épreuve."
+            )
+        else:
+            conflict_qs = ExamResult.objects.filter(
+                student=student,
+                subject=subject,
+                planning__isnull=True,
+                session__academic_year=session.academic_year,
+                session__term=session.term,
+            )
+            message = (
+                "Une note d'examen existe déjà pour cet élève, cette matière, "
+                "cette année et cette période."
+            )
+
         if self.instance:
             conflict_qs = conflict_qs.exclude(pk=self.instance.pk)
 
         if conflict_qs.exists():
-            raise serializers.ValidationError(
-                {
-                    "student": (
-                        "Une note d'examen existe déjà pour cet élève, cette matière, "
-                        "cette année et cette période."
-                    )
-                }
-            )
+            raise serializers.ValidationError({"student": message})
 
         return attrs
 
     class Meta:
         model = ExamResult
         fields = "__all__"
+        # `validate()` porte les deux regles d'unicite et les nomme: « une
+        # note existe deja pour cet eleve sur cette epreuve » se comprend,
+        # « les champs planning, student doivent former un ensemble unique »
+        # non. Les validateurs generes diraient la meme chose deux fois.
+        validators = []
 
 
 class SupplierSerializer(serializers.ModelSerializer):

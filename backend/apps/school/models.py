@@ -2371,7 +2371,18 @@ class ExamSession(TimeStampedModel):
     retrouvee -- avait deja circule dans la cour.
 
     La publication est le geste qui manquait: la saisie se fait a couvert,
-    puis la direction ouvre les resultats aux familles d'un seul coup.
+    puis la direction ouvre les resultats aux familles.
+
+    `results_published` ne veut plus dire « les familles voient cette
+    session ». Depuis que la note se rattache a son epreuve, chaque
+    `ExamPlanning` porte sa propre publication -- les copies reviennent
+    classe par classe, et la direction n'a plus a choisir entre tout ouvrir
+    et ne rien ouvrir. Ce drapeau-ci gouverne le reste: **les notes qu'aucune
+    epreuve ne porte**, celles que la reprise n'a pu rattacher et celles que
+    l'ecran Notes a produites sans jamais planifier d'epreuve.
+
+    Publier la session publie donc toutes ses epreuves, et ce drapeau avec.
+    Ne filtrez pas dessus seul: `examens.EMBARGO_LEVE` dit la regle entiere.
     """
 
     title = models.CharField(max_length=100)
@@ -2390,6 +2401,13 @@ class ExamSession(TimeStampedModel):
     )
 
     def publier_les_resultats(self, *, user=None):
+        """Ouvre la campagne entiere: ses epreuves, et ce qu'aucune ne porte."""
+        self.plannings.update(
+            results_published=True,
+            results_published_at=timezone.now(),
+            results_published_by=user,
+            updated_at=timezone.now(),
+        )
         self.results_published = True
         self.results_published_at = timezone.now()
         self.results_published_by = user
@@ -2410,18 +2428,120 @@ class ExamSession(TimeStampedModel):
         premiere publication reste, c'est elle qui explique pourquoi une
         famille a vu passer un chiffre.
         """
+        self.plannings.update(results_published=False, updated_at=timezone.now())
         self.results_published = False
         self.save(update_fields=["results_published", "updated_at"])
         return self
 
 
 class ExamPlanning(TimeStampedModel):
+    """Une epreuve: une classe, une matiere, un jour.
+
+    C'est l'unite de travail du module, et elle ne l'etait pas. La session
+    est la campagne -- « Composition du premier trimestre » ; l'epreuve est
+    ce qui a lieu, ce qu'on surveille, ce qu'on corrige. Les notes ne s'y
+    rattachaient pas: une note pouvait exister pour une epreuve jamais
+    planifiee, et une epreuve corrigee ne se distinguait pas d'une epreuve
+    en attente.
+
+    La publication vit donc ici, et non plus seulement sur la session: les
+    copies reviennent classe par classe, et la direction devait choisir
+    entre ouvrir toute la campagne -- y compris ce qui n'est pas corrige --
+    et ne rien ouvrir.
+    """
+
     session = models.ForeignKey(ExamSession, on_delete=models.CASCADE, related_name="plannings")
     classroom = models.ForeignKey(ClassRoom, on_delete=models.PROTECT)
     subject = models.ForeignKey(Subject, on_delete=models.PROTECT)
     exam_date = models.DateField()
     start_time = models.TimeField()
     end_time = models.TimeField()
+
+    results_published = models.BooleanField(default=False)
+    results_published_at = models.DateTimeField(null=True, blank=True)
+    results_published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="published_exam_plannings",
+    )
+
+    class Meta:
+        constraints = [
+            # Le modele n'en portait aucune: une epreuve pouvait finir avant
+            # de commencer, et le planning imprime le montrait tel quel.
+            models.CheckConstraint(
+                condition=models.Q(end_time__gt=models.F("start_time")),
+                name="epreuve_finit_apres_avoir_commence",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.classroom} - {self.subject} ({self.exam_date})"
+
+    def clean(self):
+        """Ce qu'une epreuve ne peut pas dire.
+
+        Les trois regles tenaient de l'evidence et n'etaient ecrites nulle
+        part: une epreuve hors de sa campagne, une matiere qui n'est pas
+        enseignee dans la classe, une classe d'une autre annee que la
+        session. Chacune produit un bulletin ou un planning faux, plusieurs
+        semaines apres la saisie.
+        """
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        erreurs = {}
+        # La contrainte de base dit la meme chose, et le dirait par un 500:
+        # une erreur d'integrite remonte apres la vue, quand plus personne ne
+        # peut la formuler.
+        if self.start_time and self.end_time and self.end_time <= self.start_time:
+            erreurs["end_time"] = "L'épreuve doit finir après avoir commencé."
+
+        session = getattr(self, "session", None)
+        if session is not None and self.exam_date:
+            if self.exam_date < session.start_date or self.exam_date > session.end_date:
+                erreurs["exam_date"] = (
+                    f"L'épreuve doit tomber dans la session « {session.title} », "
+                    f"du {session.start_date} au {session.end_date}."
+                )
+
+        classroom = getattr(self, "classroom", None)
+        subject = getattr(self, "subject", None)
+        if classroom is not None and subject is not None:
+            # `Subject.classroom` est nullable: une matiere partagee par
+            # plusieurs classes n'est rattachee a aucune, et c'est licite.
+            if subject.classroom_id and subject.classroom_id != classroom.id:
+                erreurs["subject"] = (
+                    f"« {subject.name} » n'est pas enseignée en {classroom.name}."
+                )
+
+        if erreurs:
+            raise DjangoValidationError(erreurs)
+
+    def publier_les_resultats(self, *, user=None):
+        self.results_published = True
+        self.results_published_at = timezone.now()
+        self.results_published_by = user
+        self.save(
+            update_fields=[
+                "results_published",
+                "results_published_at",
+                "results_published_by",
+                "updated_at",
+            ]
+        )
+        return self
+
+    def depublier_les_resultats(self):
+        """Referme cette epreuve, sans effacer qui l'avait ouverte ni quand.
+
+        Meme raison que sur la session: la trace de la premiere publication
+        explique pourquoi une famille a vu passer un chiffre.
+        """
+        self.results_published = False
+        self.save(update_fields=["results_published", "updated_at"])
+        return self
 
 
 class ExamInvigilation(TimeStampedModel):
@@ -2438,12 +2558,54 @@ class ExamResult(TimeStampedModel):
     subject = models.ForeignKey(Subject, on_delete=models.PROTECT)
     score = models.DecimalField(max_digits=5, decimal_places=2)
 
+    # L'epreuve qui a produit cette note.
+    #
+    # Nullable, et qui le restera: `Student.classroom` l'est aussi, donc un
+    # eleve sans classe a des notes dont aucune epreuve ne se deduit. Une
+    # colonne obligatoire serait insatisfaisable, pas seulement penible a
+    # reprendre. `null` dit ici une chose precise -- « note anterieure a la
+    # reprise, ou saisie sans epreuve planifiee » -- et ces notes suivent
+    # alors le drapeau de leur session. L'obligation, pour le neuf, est
+    # portee par le serializer, qui derive l'epreuve quand on ne la donne
+    # pas.
+    #
+    # RESTRICT et non PROTECT: `ExamResult.session` et `ExamPlanning.session`
+    # sont tous deux CASCADE. Avec PROTECT, supprimer une session leverait
+    # `ProtectedError` alors meme que les notes partent dans la meme cascade.
+    # RESTRICT refuse la suppression d'une epreuve seule -- ce qu'on veut,
+    # elle emporterait des notes -- et laisse passer celle de la session.
+    planning = models.ForeignKey(
+        ExamPlanning,
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        related_name="results",
+    )
+
     class Meta:
         constraints = [
+            # Une note par epreuve et par eleve.
+            #
+            # La contrainte portait sur (session, eleve, matiere) et
+            # interdisait donc le rattrapage: une seconde epreuve de la meme
+            # matiere dans la meme session ne pouvait pas etre notee. Le
+            # modele epreuve la rend naturelle -- deux epreuves, deux notes.
+            models.UniqueConstraint(
+                fields=["planning", "student"],
+                condition=models.Q(planning__isnull=False),
+                name="uniq_exam_result_planning_student",
+            ),
+            # Les notes qu'aucune epreuve ne porte gardent l'ancienne regle:
+            # rien ne les distingue les unes des autres, et deux notes de la
+            # meme matiere pour le meme trimestre y resteraient
+            # indiscernables. Conditionnelle, parce que les NULL ne
+            # collisionnent pas et que la contrainte ci-dessus ne les
+            # protegerait donc pas.
             models.UniqueConstraint(
                 fields=["session", "student", "subject"],
-                name="uniq_exam_result_session_student_subject",
-            )
+                condition=models.Q(planning__isnull=True),
+                name="uniq_exam_result_sans_epreuve",
+            ),
         ]
 
 

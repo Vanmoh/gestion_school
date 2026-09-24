@@ -32,10 +32,6 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
   int? _selectedInvigilationPlanning;
   int? _selectedInvigilationSupervisor;
 
-  final _resultScoreController = TextEditingController();
-  int? _selectedResultSession;
-  int? _selectedResultStudent;
-  int? _selectedResultSubject;
 
   void _openAcademicImports() {
     showAcademicImportsFloatingWindow(context);
@@ -44,7 +40,6 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
   @override
   void dispose() {
     _sessionTitleController.dispose();
-    _resultScoreController.dispose();
     super.dispose();
   }
 
@@ -86,28 +81,17 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
     final supervisorsAsync = ref.watch(examSupervisorsProvider);
     final mutationState = ref.watch(examMutationProvider);
     final students = studentsAsync.valueOrNull ?? const <OptionItem>[];
-    final selectedResultStudent = _selectedResultStudent == null
-        ? null
-        : students.where((item) => item.id == _selectedResultStudent).firstOrNull;
     final planningSubjectsAsync = ref.watch(
       examSubjectsProvider(_selectedPlanningClassroom),
-    );
-    final resultSubjectsAsync = ref.watch(
-      examSubjectsProvider(selectedResultStudent?.classroomId),
     );
     final planningsSnapshot = planningsAsync.valueOrNull ?? const [];
     final sessionLabelById = {
       for (final s in sessionsAsync.valueOrNull ?? const <ExamSessionItem>[])
         s.id: '[${s.term}] ${s.title}',
     };
-    final classroomLabelById = {
-      for (final c in classroomsAsync.valueOrNull ?? const <OptionItem>[])
-        c.id: c.label,
-    };
     final subjectLabelById = {
       for (final s in {
         ...planningSubjectsAsync.valueOrNull ?? const <OptionItem>[],
-        ...resultSubjectsAsync.valueOrNull ?? const <OptionItem>[],
       })
         s.id: s.label,
     };
@@ -317,8 +301,9 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   const Text('Publication des résultats'),
                   const SizedBox(height: 6),
                   Text(
-                    "Tant qu'une session n'est pas publiée, ses notes restent "
-                    "invisibles aux élèves et aux parents.",
+                    "Les notes restent invisibles aux familles tant que "
+                    "l'épreuve n'est pas publiée. Ouvrez-les épreuve par "
+                    "épreuve ci-dessous, ou toute la campagne d'un geste.",
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 10),
@@ -335,10 +320,15 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                             ListTile(
                               contentPadding: EdgeInsets.zero,
                               title: Text('${session.title} • ${session.term}'),
+                              // Le compte des epreuves, et non un booleen:
+                              // « publiee » devant trois epreuves ouvertes
+                              // sur sept serait un mensonge, et c'est
+                              // exactement l'etat ou la campagne passe le
+                              // plus clair de son temps.
                               subtitle: Text(
-                                session.resultatsPublies
-                                    ? 'Publiés • ${session.resultatsSaisis} note(s)'
-                                    : '${session.resultatsSaisis} note(s) saisie(s), non publiées',
+                                '${session.epreuvesPubliees}/'
+                                '${session.epreuvesTotal} épreuve(s) publiée(s)'
+                                ' • ${session.resultatsSaisis} note(s)',
                               ),
                               trailing: session.resultatsPublies
                                   ? OutlinedButton.icon(
@@ -354,7 +344,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                                         Icons.visibility_off_outlined,
                                         size: 18,
                                       ),
-                                      label: const Text('Retirer'),
+                                      label: const Text('Tout retirer'),
                                     )
                                   : FilledButton.tonalIcon(
                                       // Une session sans note ne se publie
@@ -373,7 +363,7 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                                         Icons.campaign_outlined,
                                         size: 18,
                                       ),
-                                      label: const Text('Publier'),
+                                      label: const Text('Tout publier'),
                                     ),
                             ),
                         ],
@@ -401,7 +391,6 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                         return const Text('Créez d\'abord une session');
                       }
                       _selectedPlanningSession ??= sessions.first.id;
-                      _selectedResultSession ??= sessions.first.id;
                       return DropdownButtonFormField<int>(
                         isExpanded: true,
                         initialValue: _selectedPlanningSession,
@@ -519,129 +508,17 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
             ),
           ),
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text('Publier un résultat'),
-                  const SizedBox(height: 10),
-                  sessionsAsync.when(
-                    loading: () => const SizedBox.shrink(),
-                    error: (e, _) => Text('Erreur sessions: $e'),
-                    data: (sessions) {
-                      if (sessions.isEmpty) return const Text('Aucune session');
-                      _selectedResultSession ??= sessions.first.id;
-                      return DropdownButtonFormField<int>(
-                        isExpanded: true,
-                        initialValue: _selectedResultSession,
-                        items: sessions
-                            .map(
-                              (s) => DropdownMenuItem<int>(
-                                value: s.id,
-                                child: Text('#${s.id} [${s.term}] ${s.title}'),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (v) =>
-                            setState(() => _selectedResultSession = v),
-                        decoration: const InputDecoration(labelText: 'Session'),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  studentsAsync.when(
-                    loading: () => const SizedBox.shrink(),
-                    error: (e, _) => Text('Erreur élèves: $e'),
-                    data: (students) {
-                      if (students.isEmpty) return const Text('Aucun élève');
-                      _selectedResultStudent ??= students.first.id;
-                      return DropdownButtonFormField<int>(
-                        isExpanded: true,
-                        initialValue: _selectedResultStudent,
-                        items: students
-                            .map(
-                              (s) => DropdownMenuItem<int>(
-                                value: s.id,
-                                child: Text(s.label),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (v) =>
-                            setState(() => _selectedResultStudent = v),
-                        decoration: const InputDecoration(labelText: 'Élève'),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  resultSubjectsAsync.when(
-                    loading: () => const SizedBox.shrink(),
-                    error: (e, _) => Text('Erreur matières: $e'),
-                    data: (subjects) {
-                      if (subjects.isEmpty) return const Text('Aucune matière');
-                      if (_selectedResultSubject == null ||
-                          !subjects.any((s) => s.id == _selectedResultSubject)) {
-                        _selectedResultSubject = subjects.first.id;
-                      }
-                      return DropdownButtonFormField<int>(
-                        isExpanded: true,
-                        initialValue: _selectedResultSubject,
-                        items: subjects
-                            .map(
-                              (s) => DropdownMenuItem<int>(
-                                value: s.id,
-                                child: Text(s.label),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (v) =>
-                            setState(() => _selectedResultSubject = v),
-                        decoration: const InputDecoration(labelText: 'Matière'),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _resultScoreController,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(labelText: 'Score'),
-                  ),
-                  const SizedBox(height: 10),
-                  FilledButton.tonal(
-                    onPressed: (mutationState.isLoading || isReadOnlyMode)
-                        ? null
-                        : () async {
-                            final session = _selectedResultSession;
-                            final student = _selectedResultStudent;
-                            final subject = _selectedResultSubject;
-                            final score = double.tryParse(
-                              _resultScoreController.text.trim(),
-                            );
-                            if (session == null ||
-                                student == null ||
-                                subject == null ||
-                                score == null) {
-                              return;
-                            }
-                            await ref
-                                .read(examMutationProvider.notifier)
-                                .createResult(
-                                  session: session,
-                                  student: student,
-                                  subject: subject,
-                                  score: score,
-                                );
-                          },
-                    child: const Text('Publier résultat'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
+          // La carte « Publier un résultat » vivait ici. Elle saisissait
+          // une note par élève, sans charger la valeur existante, sans
+          // validation du score, et surtout sans regarder le verrou de
+          // trimestre — ce que le dialogue de « Notes & Bulletins » fait,
+          // par classe entière et avec correction.
+          //
+          // Deux chemins pour le même geste, dont un seul respectait les
+          // règles : c'est leur coexistence qui a produit des notes sans
+          // épreuve, que la reprise n'a pas pu rattacher. La saisie se
+          // fait désormais depuis l'écran Notes, et la publication se
+          // décide ici, épreuve par épreuve.
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -751,7 +628,13 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
             ),
           ),
           const SizedBox(height: 12),
-          _sectionTitle('Plannings existants'),
+          // Les épreuves, et la publication de chacune.
+          //
+          // La liste était inerte et la publication vivait tout en haut, par
+          // session entière : la direction devait ouvrir toute la campagne —
+          // classes non corrigées comprises — ou ne rien ouvrir. Les copies
+          // reviennent classe par classe, le bouton aussi.
+          _sectionTitle('Épreuves et publication'),
           planningsAsync.when(
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => Text('Erreur planning: $e'),
@@ -760,14 +643,36 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
                   .map(
                     (p) => Card(
                       child: ListTile(
-                        title: Text(
-                          '${sessionLabelById[p.sessionId] ?? 'Session'} / '
-                          '${classroomLabelById[p.classroomId] ?? 'Classe'} / '
-                          '${subjectLabelById[p.subjectId] ?? 'Matière'}',
-                        ),
+                        key: ValueKey('epreuve-${p.id}'),
+                        title: Text(p.intitule),
                         subtitle: Text(
-                          '${p.examDate} • ${p.startTime} - ${p.endTime}',
+                          '${p.examDate} • ${p.startTime} - ${p.endTime}\n'
+                          '${_etatDeLEpreuve(p)}',
                         ),
+                        isThreeLine: true,
+                        trailing: isReadOnlyMode
+                            ? null
+                            : p.resultatsPublies
+                            ? TextButton(
+                                key: ValueKey('retirer-epreuve-${p.id}'),
+                                onPressed: mutationState.isLoading
+                                    ? null
+                                    : () => ref
+                                          .read(examMutationProvider.notifier)
+                                          .retirerLEpreuve(p.id),
+                                child: const Text('Retirer'),
+                              )
+                            : FilledButton(
+                                key: ValueKey('publier-epreuve-${p.id}'),
+                                onPressed:
+                                    (mutationState.isLoading ||
+                                        !p.peutEtrePubliee)
+                                    ? null
+                                    : () => ref
+                                          .read(examMutationProvider.notifier)
+                                          .publierLEpreuve(p.id),
+                                child: const Text('Publier'),
+                              ),
                       ),
                     ),
                   )
@@ -829,6 +734,21 @@ class _ExamsPageState extends ConsumerState<ExamsPage> {
         ],
       ),
     );
+  }
+
+  /// Où en est cette épreuve, dit en une phrase.
+  ///
+  /// « 0 note » et « publiée » sont deux états qu'un booléen seul ne
+  /// distinguait pas : rien ne séparait une épreuve corrigée d'une épreuve
+  /// en attente avant que la note ne se rattache à son épreuve.
+  String _etatDeLEpreuve(ExamPlanningItem epreuve) {
+    if (epreuve.resultatsPublies) {
+      return 'Publiée • ${epreuve.resultatsSaisis} note(s)';
+    }
+    if (epreuve.resultatsSaisis == 0) {
+      return 'Aucune note saisie';
+    }
+    return '${epreuve.resultatsSaisis} note(s) saisie(s), non publiées';
   }
 
   Widget _sectionTitle(String value) {

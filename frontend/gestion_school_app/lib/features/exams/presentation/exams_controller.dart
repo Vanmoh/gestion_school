@@ -168,6 +168,42 @@ class ExamMutationController extends StateNotifier<AsyncValue<void>> {
     return message;
   }
 
+  /// Ouvre une épreuve, et elle seule.
+  ///
+  /// Invalide aussi les plannings: c'est eux qui portent désormais l'état de
+  /// publication, et la liste doit le refléter sans rechargement manuel.
+  Future<String?> publierLEpreuve(int planningId) async {
+    state = const AsyncValue.loading();
+    String? message;
+    state = await AsyncValue.guard(() async {
+      message = await ref
+          .read(examsRepositoryProvider)
+          .publierLEpreuve(planningId);
+    });
+    if (!state.hasError) {
+      ref.invalidate(examPlanningsProvider);
+      ref.invalidate(examSessionsProvider);
+      ref.invalidate(examResultsProvider);
+    }
+    return message;
+  }
+
+  Future<String?> retirerLEpreuve(int planningId) async {
+    state = const AsyncValue.loading();
+    String? message;
+    state = await AsyncValue.guard(() async {
+      message = await ref
+          .read(examsRepositoryProvider)
+          .retirerLEpreuve(planningId);
+    });
+    if (!state.hasError) {
+      ref.invalidate(examPlanningsProvider);
+      ref.invalidate(examSessionsProvider);
+      ref.invalidate(examResultsProvider);
+    }
+    return message;
+  }
+
   Future<void> createInvigilation({
     required int planning,
     required int supervisor,
