@@ -62,7 +62,21 @@ jobs:
 
       - name: Tests
         working-directory: backend
-        run: python manage.py test --parallel 4
+        # Le runner parallele ne sait pas transporter une erreur entre ses
+        # processus: des qu'un test echoue, il remplace le rapport par
+        # "TypeError: cannot pickle 'traceback' object". Le nom du test, sa
+        # ligne et son assertion disparaissent, et la CI ne dit plus que
+        # "quelque chose ne va pas" -- elle l'a dit pendant trois jours.
+        #
+        # On garde le parallele, c'est lui qui tient la suite sous les trois
+        # minutes, et on rejoue en serie quand il tombe: pour la seule chose
+        # qui manquait, savoir quoi corriger.
+        run: |
+          if python manage.py test --parallel 4; then
+            exit 0
+          fi
+          echo "::warning::Echec en parallele: relecture en serie pour nommer le test."
+          python manage.py test
 
       - name: Controles de deploiement
         working-directory: backend
