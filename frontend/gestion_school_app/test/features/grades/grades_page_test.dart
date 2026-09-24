@@ -164,6 +164,54 @@ void main() {
     );
   });
 
+  testWidgets('en lecture seule, l_ecran n_offre plus de geste d_ecriture', (
+    tester,
+  ) async {
+    // Le profil de la capture: un parent sur « Notes de mes enfants ». Le
+    // bandeau annoncait « consultation seule » et l'ecran proposait juste
+    // en dessous de saisir des notes, de recalculer les rangs et de
+    // commenter une validation -- trois gestes refuses au clic.
+    await _monter(tester, AccessLevel.read);
+
+    expect(
+      find.widgetWithText(FloatingActionButton, 'Saisir notes'),
+      findsNothing,
+    );
+    expect(find.text('Recalculer classement'), findsNothing);
+    expect(find.text('Note de validation (optionnel)'), findsNothing);
+    expect(find.textContaining('La saisie se fait en lot'), findsNothing);
+  });
+
+  testWidgets('en lecture seule, le bulletin et les filtres restent', (
+    tester,
+  ) async {
+    // Consulter le bulletin de son enfant et choisir la periode est
+    // exactement ce que la famille vient faire: retirer l'ecriture ne doit
+    // pas emporter cela.
+    await _monter(tester, AccessLevel.read);
+
+    expect(
+      find.widgetWithText(FloatingActionButton, 'Imprimer bulletins'),
+      findsOneWidget,
+    );
+    expect(find.text('Classe'), findsWidgets);
+    expect(find.text('Année scolaire'), findsWidgets);
+    expect(find.text('Période consultée'), findsOneWidget);
+  });
+
+  testWidgets('en ecriture, la saisie et le recalcul restent offerts', (
+    tester,
+  ) async {
+    await _monter(tester, AccessLevel.write);
+
+    expect(
+      find.widgetWithText(FloatingActionButton, 'Saisir notes'),
+      findsOneWidget,
+    );
+    expect(find.text('Recalculer classement'), findsOneWidget);
+    expect(find.text('Saisie des notes'), findsOneWidget);
+  });
+
   testWidgets('en lecture seule, aucune ecriture ne part vers l_API', (
     tester,
   ) async {

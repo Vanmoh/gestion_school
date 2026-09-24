@@ -27,11 +27,16 @@ import 'package:gestion_school_app/features/students/presentation/widgets/studen
 class _FakeRepository extends StudentsRepository {
   final List<Student> annuaire;
 
+  /// Temps de reponse du serveur, par recherche. Sert a faire revenir une
+  /// requete ancienne apres une plus recente -- l'ordre dans lequel le
+  /// reseau rend ne suit pas celui dans lequel on demande.
+  final Duration Function(String recherche)? latence;
+
   String derniereRecherche = '';
   bool? dernierArchive = false;
   int chargements = 0;
 
-  _FakeRepository(this.annuaire) : super(Dio());
+  _FakeRepository(this.annuaire, {this.latence}) : super(Dio());
 
   @override
   Future<PaginatedResult<Student>> fetchStudentsPage({
@@ -45,6 +50,9 @@ class _FakeRepository extends StudentsRepository {
     chargements++;
     derniereRecherche = search;
     dernierArchive = isArchived;
+
+    final attente = latence?.call(search) ?? Duration.zero;
+    if (attente > Duration.zero) await Future<void>.delayed(attente);
 
     final besoin = search.trim().toLowerCase();
     final trouves = besoin.isEmpty
@@ -145,9 +153,10 @@ Future<_FakeRepository> _pumpPage(
   WidgetTester tester, {
   AccessLevel niveau = AccessLevel.write,
   List<Student>? annuaire,
+  Duration Function(String recherche)? latence,
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
-  final repository = _FakeRepository(annuaire ?? _annuaire);
+  final repository = _FakeRepository(annuaire ?? _annuaire, latence: latence);
 
   tester.view.physicalSize = const Size(1400, 1000);
   tester.view.devicePixelRatio = 1.0;
@@ -305,6 +314,82 @@ void main() {
     expect(find.text('Réinitialiser'), findsNothing);
     expect(find.text('Copier CSV'), findsNothing);
     expect(find.text('Liste des élèves'), findsOneWidget);
+  });
+
+  // Le defaut signale: une recherche par matricule ouvrait quelqu'un
+  // d'autre. Les deux tests qui suivent tiennent les deux bouts -- ce que le
+  // reseau rend dans le desordre, et ce que le serveur rend par fragment.
+
+  testWidgets('une reponse en retard n_ecrase pas la recherche en cours', (
+    tester,
+  ) async {
+    // Reproduit la capture: le prefixe ramene toute l'ecole et met une
+    // seconde; le matricule entier ramene son porteur et revient aussitot.
+    // Sans jeton de requete, c'est le prefixe -- parti le premier, rendu le
+    // dernier -- qui s'affichait, sous le matricule tape.
+    final annuaire = [
+      _eleve(1, 'Ousmane Bagayoko', 'IO1EM125E0028M'),
+      _eleve(2, 'Aissata Traore', 'IO1DB125E0011M'),
+      _eleve(3, 'Modibo Keita', 'IO1EM125E0042M'),
+    ];
+    await _pumpPage(
+      tester,
+      annuaire: annuaire,
+      // Le chargement initial (recherche vide) doit rester instantane: la
+      // page montre sinon son voile de premier chargement, sans champ.
+      latence: (recherche) => recherche.isNotEmpty && recherche.length <= 3
+          ? const Duration(seconds: 1)
+          : const Duration(milliseconds: 50),
+    );
+
+    final champ = find.byType(TextField).first;
+    await tester.enterText(champ, 'IO1');
+    // La requete lente part.
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.enterText(champ, 'IO1DB125E0011M');
+    // La requete rapide part, puis revient.
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 200));
+    // La lente revient enfin: elle repond a une question qu'on ne pose plus.
+    await tester.pump(const Duration(seconds: 2));
+
+    expect(find.byType(StudentPaletteCard), findsOneWidget);
+    expect(find.text('Aissata Traore'), findsWidgets);
+    expect(find.text('Ousmane Bagayoko'), findsNothing);
+  });
+
+  testWidgets('un matricule entier ouvre son porteur, pas ses voisins', (
+    tester,
+  ) async {
+    // Le serveur cherche par fragment: rien ne garantit qu'un matricule
+    // entier ne ramene que lui. Il designe pourtant quelqu'un.
+    final annuaire = [
+      _eleve(1, 'Ousmane Bagayoko', 'IO1EM125E0028M'),
+      _eleve(2, 'Aissata Traore', 'IO1EM125E0028'),
+    ];
+    await _pumpPage(tester, annuaire: annuaire);
+
+    await _chercher(tester, 'IO1EM125E0028M');
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.byType(StudentPaletteCard), findsOneWidget);
+    expect(find.text('Ousmane Bagayoko'), findsWidgets);
+  });
+
+  testWidgets('reprendre la frappe referme l_eleve de la recherche d_avant', (
+    tester,
+  ) async {
+    await _pumpPage(tester);
+    await _chercher(tester, 'coulibaly');
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(StudentPaletteCard), findsOneWidget);
+
+    // Des la premiere lettre de la recherche suivante: la palette ouverte
+    // repondait a la precedente, et rien ne le disait.
+    await tester.enterText(find.byType(TextField).first, 'd');
+    await tester.pump();
+
+    expect(find.byType(StudentPaletteCard), findsNothing);
   });
 
   testWidgets('effacer la recherche referme la palette', (tester) async {

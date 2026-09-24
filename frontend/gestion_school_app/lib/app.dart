@@ -305,6 +305,64 @@ List<String> entreesDeMenuSansGroupe() {
   ];
 }
 
+/// Le nom sous lequel on reconnait la personne connectee.
+///
+/// Son nom complet, et son identifiant seulement a defaut: « superadmin » ou
+/// « test_parent » ne disent pas qui est devant l'ecran, et c'est pourtant ce
+/// que la barre laterale affichait sous le nom du role. Le repli garde une
+/// ligne non vide pour un compte ouvert sans etat civil -- un compte de
+/// service, une reprise de donnees.
+@visibleForTesting
+String nomAAfficher(AuthUser? user) {
+  final complet = user?.fullName.trim() ?? '';
+  if (complet.isNotEmpty) return complet;
+
+  final identifiant = user?.username.trim() ?? '';
+  return identifiant.isNotEmpty ? identifiant : 'Utilisateur';
+}
+
+/// L'initiale que porte la pastille de la personne connectee.
+///
+/// Celle de son nom, et non celle de son role ni celle de son identifiant:
+/// les deux pastilles de l'ecran affichaient « A » pour Admin et « S » pour
+/// superadmin, c'est-a-dire deux lettres differentes pour une meme personne,
+/// dont aucune n'etait la sienne.
+@visibleForTesting
+String initialeDe(AuthUser? user) => nomAAfficher(user)[0].toUpperCase();
+
+/// Ce que ce profil atteint dans la barre laterale, dans l'ordre des entrees.
+///
+/// Expose pour les tests: la regle tient a trois choses qui ne se lisaient
+/// qu'a l'ecran monte, avec sa session et son reseau -- les cles que la
+/// matrice ouvre, celles dont l'ecran a besoin en plus des siennes, et les
+/// profils auxquels une entree ne s'adresse pas.
+@visibleForTesting
+List<String> entreesDeMenuVisiblesPour(ModulePermissions droits) => [
+  for (final entree in _AdminShellState._items)
+    if (_entreeVisiblePour(entree, droits)) entree.keyName,
+];
+
+/// Ce que la matrice et le profil disent de cette entree, sans la regle
+/// croisee entre « Gestion des eleves » et « Dossier eleve »: celle-ci
+/// interroge l'autre entree et bouclerait.
+bool _entreeOuvertePour(_AdminMenuItem item, ModulePermissions droits) {
+  if (item.rolesExclus.contains(droits.role)) return false;
+  return item.allKeys.any(droits.canRead) &&
+      item.clesRequises.every(droits.canRead);
+}
+
+bool _entreeVisiblePour(_AdminMenuItem item, ModulePermissions droits) {
+  // Le dossier eleve se prend par un bouton dans « Gestion des eleves ».
+  // L'entree de menu ne sert donc qu'a ceux qui n'ouvrent pas cet ecran.
+  if (item.keyName == 'student_lookup') {
+    final gestion = _AdminShellState._items.firstWhere(
+      (autre) => autre.keyName == 'students',
+    );
+    if (_entreeOuvertePour(gestion, droits)) return false;
+  }
+  return _entreeOuvertePour(item, droits);
+}
+
 class _AdminShell extends ConsumerStatefulWidget {
   const _AdminShell();
 
@@ -359,10 +417,13 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       // L'ecran charge les classes et les annees scolaires avant d'afficher
       // quoi que ce soit: sans le droit de les lire, il ne rend que son
       // message d'erreur. C'etait deja le cas pour le comptable et le
-      // surveillant; ouvrir le dossier eleve aux familles l'aurait etendu a
-      // elles, alors que « Recherche eleve » leur donne exactement ce qu'il
-      // leur faut.
+      // surveillant.
       clesRequises: ['academics'],
+      // La famille lit desormais ce meme referentiel -- ses propres ecrans
+      // en dependent -- et cette entree serait donc apparue chez elle. Elle
+      // n'est pas pour elle: « Mes enfants » ci-dessous lui montre le
+      // dossier de ses enfants, en consultation.
+      rolesExclus: ['parent', 'student'],
       label: 'Gestion des élèves',
       icon: Icons.school_outlined,
       view: StudentsPage(),
@@ -374,9 +435,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     //
     // L'entree ne s'affiche que pour qui n'atteint pas « Gestion des
     // eleves », ou le dossier se prend desormais par un bouton a cote de la
-    // liste. Parents et eleves n'y entrent pas: la matrice leur ferme le
-    // module academique, dont cet ecran a besoin pour charger les classes.
-    // Personne n'a donc les deux chemins, et personne n'en a zero.
+    // liste. Parents et eleves n'y entrent pas -- `rolesExclus` le dit
+    // au-dessus. Personne n'a donc les deux chemins, et personne n'en a
+    // zero.
     _AdminMenuItem(
       keyName: 'student_lookup',
       label: 'Dossier élève',
@@ -391,6 +452,10 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     ),
     _AdminMenuItem(
       keyName: 'academics',
+      // Lire le referentiel scolaire et l'administrer sont deux choses. La
+      // famille a besoin du premier pour que ses ecrans se remplissent; cet
+      // ecran-ci cree les classes, les matieres et les annees de l'ecole.
+      rolesExclus: ['parent', 'student'],
       label: 'Académique',
       icon: Icons.account_tree_outlined,
       view: AcademicsPage(),
@@ -582,20 +647,19 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   /// Une entree est visible des qu'une seule de ses cles l'est -- et a
   /// condition que ce dont son ecran depend le soit aussi.
-  bool _isEntryVisible(_AdminMenuItem item) {
-    // Le dossier eleve se prend par un bouton dans « Gestion des eleves ».
-    // L'entree de menu ne sert donc qu'a ceux qui n'ouvrent pas cet ecran.
-    if (item.keyName == 'student_lookup' && _atteintLaGestionDesEleves()) {
-      return false;
-    }
-    return item.allKeys.any(_isItemVisible) &&
-        item.clesRequises.every(_isItemVisible);
-  }
+  bool _isEntryVisible(_AdminMenuItem item) =>
+      _entreeVisiblePour(item, _permissions);
 
-  bool _atteintLaGestionDesEleves() {
-    final entree = _items.firstWhere((item) => item.keyName == 'students');
-    return entree.allKeys.any(_isItemVisible) &&
-        entree.clesRequises.every(_isItemVisible);
+  /// La meme regle, prise par la cle: la barre laterale et la navigation
+  /// raisonnent en cles, pas en entrees.
+  ///
+  /// Une cle sans entree correspondante n'est pas atteignable: mieux vaut
+  /// ne rien dessiner que planter sur un `firstWhere` sans resultat.
+  bool _entreeDeMenuVisible(String key) {
+    for (final item in _items) {
+      if (item.keyName == key) return _isEntryVisible(item);
+    }
+    return false;
   }
 
   bool _isItemReadOnly(String key) => _permissions.isReadOnly(key);
@@ -630,7 +694,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   _AdminMenuItem _selectedItem() {
     final currentKey = _resolveMenuKey(_selectedKey);
-    final isVisible = _isItemVisible(currentKey);
+    // La regle d'entree, et non le seul droit de lecture sur le module: une
+    // cle que la barre ne dessine plus ne doit pas rester affichee a droite.
+    final isVisible = _entreeDeMenuVisible(currentKey);
     final targetKey = isVisible ? currentKey : _firstVisibleKey();
     return _items.firstWhere(
       (item) => item.keyName == targetKey,
@@ -1108,7 +1174,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (!mounted) {
       return;
     }
-    if (_isItemVisible(key)) {
+    if (_entreeDeMenuVisible(key)) {
       _selectItem(key);
       ref.read(adminShellNavigationKeyProvider.notifier).state = key;
     }
@@ -1252,8 +1318,14 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     final compact = !closeDrawerOnItemTap && _sidebarCollapsed;
 
     for (final group in _groups) {
+      // Sur l'entree et non sur la seule cle de module: c'est ici que la
+      // barre se dessine, et elle sautait les deux autres conditions --
+      // celles dont l'ecran a besoin en plus des siennes, et les profils
+      // auxquels l'entree ne s'adresse pas. « Gestion des eleves » et
+      // « Dossier eleve » paraissaient donc ensemble chez un parent, alors
+      // que chacune est censee fermer l'autre.
       final visibleKeys = group.itemKeys
-          .where((key) => _isItemVisible(key))
+          .where((key) => _entreeDeMenuVisible(key))
           .toList();
       if (visibleKeys.isEmpty) {
         continue;
@@ -1388,14 +1460,14 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
           return;
         }
         final resolvedKey = _resolveMenuKey(pendingShellNavigationKey);
-        if (_isItemVisible(resolvedKey)) {
+        if (_entreeDeMenuVisible(resolvedKey)) {
           _selectItem(resolvedKey);
         }
         ref.read(adminShellNavigationKeyProvider.notifier).state = null;
       });
     }
 
-    if (!_isItemVisible(_selectedKey)) {
+    if (!_entreeDeMenuVisible(_selectedKey)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) {
           return;
@@ -1656,7 +1728,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                                 0xFF8B5CF6,
                               ).withValues(alpha: 0.35),
                               child: Text(
-                                _connectedRoleLabel(user.role).substring(0, 1),
+                                initialeDe(user),
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.w700,
@@ -1681,7 +1753,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                                         ),
                                   ),
                                   Text(
-                                    user.username,
+                                    nomAAfficher(user),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: Theme.of(context)
@@ -1875,10 +1947,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                                                 0xFF8B5CF6,
                                               ).withValues(alpha: 0.42),
                                               child: Text(
-                                                user.username.isNotEmpty
-                                                    ? user.username[0]
-                                                          .toUpperCase()
-                                                    : 'U',
+                                                initialeDe(user),
                                                 style: const TextStyle(
                                                   color: Colors.white,
                                                   fontWeight: FontWeight.w700,
@@ -1927,13 +1996,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
 
   String _welcomeConnectedUser(AuthUser? user) {
     final roleLabel = _connectedRoleLabel(user?.role);
-    final identifier = (user?.fullName.trim().isNotEmpty ?? false)
-        ? user!.fullName.trim()
-        : ((user?.username.trim().isNotEmpty ?? false)
-              ? user!.username.trim()
-              : 'Utilisateur');
-
-    return 'Utilisateur connecté: $roleLabel ($identifier)';
+    return 'Utilisateur connecté: $roleLabel (${nomAAfficher(user)})';
   }
 
   String _activeEtablissementLabel(String? etablissementName) {
@@ -2086,6 +2149,20 @@ class _AdminMenuItem {
   /// pire qu'une entree absente.
   final List<String> clesRequises;
 
+  /// Les profils pour lesquels cette entree n'a pas lieu d'etre, quels que
+  /// soient leurs droits.
+  ///
+  /// Partout ailleurs la visibilite se deduit de la matrice, et c'est la
+  /// regle. Deux ecrans font exception: « Gestion des eleves » et
+  /// « Academique » administrent l'ecole, ils ne s'adressent pas a la
+  /// famille. Ils lui restaient fermes par ricochet -- le module academique
+  /// lui etait interdit -- jusqu'au jour ou il a fallu le lui ouvrir pour
+  /// que ses propres ecrans (notes, examens, emploi du temps, frais)
+  /// cessent d'afficher des listes vides et « annee scolaire non
+  /// disponible ». Le ricochet tenait lieu de regle sans en etre une: on
+  /// l'ecrit ici, ou il se lit.
+  final List<String> rolesExclus;
+
   const _AdminMenuItem({
     required this.keyName,
     required this.label,
@@ -2093,6 +2170,7 @@ class _AdminMenuItem {
     required this.view,
     this.extraKeys = const [],
     this.clesRequises = const [],
+    this.rolesExclus = const [],
   });
 
   /// Le nom de l'ecran tel que ce profil doit le lire.

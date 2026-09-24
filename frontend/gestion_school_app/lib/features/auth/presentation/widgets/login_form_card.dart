@@ -160,12 +160,18 @@ class LoginFormCard extends StatelessWidget {
                   // erreur pour l'afficher sur-le-champ.
                   validator: (valeur) {
                     if ((valeur ?? '').trim().isEmpty) {
-                      return 'Saisissez votre nom d\'utilisateur.';
+                      return 'Saisissez votre identifiant.';
                     }
                     return erreurIdentifiant();
                   },
+                  // « Identifiant » et non « Nom utilisateur »: une famille
+                  // n'a jamais recu de « nom d'utilisateur », elle a recu un
+                  // matricule ou donne son numero. L'un et l'autre ouvrent
+                  // desormais le compte, et l'aide le dit -- sans quoi la
+                  // moitie des familles cherchait quoi taper.
                   decoration: const InputDecoration(
-                    labelText: 'Nom utilisateur',
+                    labelText: 'Identifiant',
+                    helperText: 'Élève : son matricule. Parent : son numéro.',
                     prefixIcon: Icon(Icons.person_outline),
                   ),
                 ),

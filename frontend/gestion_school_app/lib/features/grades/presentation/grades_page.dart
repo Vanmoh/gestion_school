@@ -1460,19 +1460,23 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                 : 'Statut: $validationLabel',
           ),
           const SizedBox(height: 10),
-          TextField(
-            controller: _validationNotesController,
-            decoration: const InputDecoration(
-              labelText: 'Note de validation (optionnel)',
-            ),
-          ),
-          const SizedBox(height: 10),
+          // Le champ n'accompagne que la validation: le laisser a un profil
+          // qui ne valide pas offrait a saisir un commentaire que rien ne
+          // pouvait enregistrer. Le statut, lui, reste affiche -- il dit a
+          // la famille si le bulletin est arrete.
           if (lectureSeule)
             Text(
               'Mode lecture seule: consultation uniquement pour ce profil.',
               style: Theme.of(context).textTheme.bodySmall,
             )
-          else
+          else ...[
+            TextField(
+              controller: _validationNotesController,
+              decoration: const InputDecoration(
+                labelText: 'Note de validation (optionnel)',
+              ),
+            ),
+            const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -1493,27 +1497,38 @@ class _GradesPageState extends ConsumerState<GradesPage> {
                 ),
               ],
             ),
+          ],
         ],
       ),
     );
 
+    // Les trois selecteurs servent aux deux profils: ils choisissent ce
+    // qu'on saisit, ou ce qu'on consulte. Seul leur mode d'emploi change --
+    // annoncer « la saisie se fait en lot » a une famille qui ne saisit rien
+    // decrivait un geste qu'elle ne peut pas faire.
     final entryPanel = _sectionCard(
-      title: 'Saisie des notes',
+      title: lectureSeule ? 'Période consultée' : 'Saisie des notes',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            'La saisie se fait en lot: ajoutez des notes de devoir (D1, D2, D3...) puis la note de classe est calculée automatiquement.',
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            'Utilisez le bouton flottant "Saisir notes" pour ouvrir la saisie note classe ou examen.',
-          ),
-          const SizedBox(height: 8),
-          if (_isValidated)
+          if (lectureSeule)
             const Text(
-              'Période validée: la fenêtre de saisie reste verrouillée.',
+              'Choisissez la classe, l\'année et la période: le tableau et le bulletin suivent cette sélection.',
+            )
+          else ...[
+            const Text(
+              'La saisie se fait en lot: ajoutez des notes de devoir (D1, D2, D3...) puis la note de classe est calculée automatiquement.',
             ),
+            const SizedBox(height: 12),
+            const Text(
+              'Utilisez le bouton flottant "Saisir notes" pour ouvrir la saisie note classe ou examen.',
+            ),
+            const SizedBox(height: 8),
+            if (_isValidated)
+              const Text(
+                'Période validée: la fenêtre de saisie reste verrouillée.',
+              ),
+          ],
           const SizedBox(height: 12),
           DropdownButtonFormField<int>(
             isExpanded: true,
@@ -1581,11 +1596,13 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               _reloadGradesForCurrentFilters();
             },
           ),
-          const SizedBox(height: 8),
-          FilledButton.tonal(
-            onPressed: (_saving || _isValidated) ? null : _recalculateRanking,
-            child: const Text('Recalculer classement'),
-          ),
+          if (!lectureSeule) ...[
+            const SizedBox(height: 8),
+            FilledButton.tonal(
+              onPressed: (_saving || _isValidated) ? null : _recalculateRanking,
+              child: const Text('Recalculer classement'),
+            ),
+          ],
         ],
       ),
     );
@@ -1986,13 +2003,19 @@ class _GradesPageState extends ConsumerState<GradesPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              FloatingActionButton.extended(
-                heroTag: 'fab_saisir_notes',
-                onPressed: _saving ? null : _openNotesFloatingWindow,
-                icon: const Icon(Icons.edit_note_outlined),
-                label: const Text('Saisir notes'),
-              ),
-              const SizedBox(height: 10),
+              // « Saisir notes » ouvrait, pour un parent ou un eleve, une
+              // fenetre de saisie qui refusait au moment d'enregistrer. Le
+              // bulletin, lui, reste: le consulter et l'imprimer est
+              // precisement ce que la famille vient faire ici.
+              if (!lectureSeule) ...[
+                FloatingActionButton.extended(
+                  heroTag: 'fab_saisir_notes',
+                  onPressed: _saving ? null : _openNotesFloatingWindow,
+                  icon: const Icon(Icons.edit_note_outlined),
+                  label: const Text('Saisir notes'),
+                ),
+                const SizedBox(height: 10),
+              ],
               FloatingActionButton.extended(
                 heroTag: 'fab_imprimer_bulletins',
                 onPressed: _saving ? null : _openBulletinFloatingWindow,

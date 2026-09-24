@@ -110,6 +110,39 @@ void main() {
     });
   });
 
+  group('les mots de passe remis aux familles', () {
+    // Deux règles, et non une. Celle du parent vivait en dur côté serveur :
+    // l'écran ne montrait que celle de l'élève, et une école n'avait aucun
+    // moyen de savoir quel mot de passe ses familles recevaient.
+
+    test('chacune a son defaut, et ce n_est pas le meme', () {
+      final p = Personnalisation.fromJson(<String, dynamic>{});
+
+      expect(p.motDePasseEleveModele, '{matricule}');
+      expect(p.motDePasseParentModele, '{telephone}');
+    });
+
+    test('un serveur d_avant ce reglage ne laisse pas le champ vide', () {
+      // Une réponse antérieure à la migration ne porte pas la clé: l'écran
+      // afficherait un champ vide, et l'enregistrer effacerait la règle.
+      final p = Personnalisation.fromJson(<String, dynamic>{
+        'mot_de_passe_eleve_modele': '{sigle}{annee}',
+      });
+
+      expect(p.motDePasseParentModele, '{telephone}');
+    });
+
+    test('regler l_une ne touche pas l_autre', () {
+      final p = Personnalisation.fromJson(<String, dynamic>{
+        'mot_de_passe_eleve_modele': '{sigle}{annee}',
+        'mot_de_passe_parent_modele': '{nom}{annee}',
+      });
+
+      expect(p.motDePasseEleveModele, '{sigle}{annee}');
+      expect(p.motDePasseParentModele, '{nom}{annee}');
+    });
+  });
+
   test('l_aller-retour par json ne perd rien', () {
     const depart = Personnalisation(
       nomApplication: 'GESTION CSOB',
@@ -119,6 +152,7 @@ void main() {
       titreConnexion: 'Bienvenue',
       messageAccueil: 'Choisissez votre site',
       couleurPrincipale: '#112233',
+      motDePasseParentModele: '{sigle}{telephone}',
     );
 
     final retour = Personnalisation.fromJson(depart.toJson());
@@ -127,5 +161,6 @@ void main() {
     expect(retour.titreConnexion, depart.titreConnexion);
     expect(retour.messageAccueil, depart.messageAccueil);
     expect(retour.couleur, depart.couleur);
+    expect(retour.motDePasseParentModele, depart.motDePasseParentModele);
   });
 }

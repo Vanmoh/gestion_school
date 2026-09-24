@@ -37,11 +37,17 @@ class Personnalisation {
 
   final String couleurPrincipale;
 
-  /// Le mot de passe remis aux familles à l'inscription, et l'obligation
-  /// de le remplacer. Ce mot de passe suit une règle connue de tous et
-  /// l'identifiant est le matricule, imprimé sur la carte scolaire: c'est
-  /// le changement imposé qui le rend sans danger, pas le modèle.
+  /// Les mots de passe remis aux familles à l'inscription, et l'obligation
+  /// de les remplacer. Ils suivent une règle connue de tous, et les deux
+  /// identifiants sont publics — le matricule est imprimé sur la carte
+  /// scolaire, le numéro est celui que le parent donne à tout le monde:
+  /// c'est le changement imposé qui les rend sans danger, pas le modèle.
+  ///
+  /// Deux modèles et non un seul: un parent ne porte pas de matricule, et
+  /// la règle du parent vivait en dur dans le code du serveur — aucun écran
+  /// ne la montrait, aucun réglage ne la changeait.
   final String motDePasseEleveModele;
+  final String motDePasseParentModele;
   final bool imposerChangementMotDePasse;
 
   const Personnalisation({
@@ -61,6 +67,7 @@ class Personnalisation {
     this.piedDePage = '',
     this.couleurPrincipale = '#6D5BFF',
     this.motDePasseEleveModele = '{matricule}',
+    this.motDePasseParentModele = '{telephone}',
     this.imposerChangementMotDePasse = true,
   });
 
@@ -89,6 +96,9 @@ class Personnalisation {
       motDePasseEleveModele: texte('mot_de_passe_eleve_modele').isEmpty
           ? '{matricule}'
           : texte('mot_de_passe_eleve_modele'),
+      motDePasseParentModele: texte('mot_de_passe_parent_modele').isEmpty
+          ? '{telephone}'
+          : texte('mot_de_passe_parent_modele'),
       imposerChangementMotDePasse:
           json['imposer_changement_mot_de_passe'] != false,
     );
@@ -111,6 +121,7 @@ class Personnalisation {
     'pied_de_page': piedDePage,
     'couleur_principale': couleurPrincipale,
     'mot_de_passe_eleve_modele': motDePasseEleveModele,
+    'mot_de_passe_parent_modele': motDePasseParentModele,
     'imposer_changement_mot_de_passe': imposerChangementMotDePasse,
   };
 

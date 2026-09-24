@@ -138,7 +138,7 @@ void main() {
     await _avancer(tester);
 
     expect(transport.appelsLogin, 0);
-    expect(find.text('Saisissez votre nom d\'utilisateur.'), findsOneWidget);
+    expect(find.text('Saisissez votre identifiant.'), findsOneWidget);
     expect(find.text('Saisissez votre mot de passe.'), findsOneWidget);
   });
 
@@ -151,15 +151,18 @@ void main() {
 
     // Le message vit dans le champ, pas dans un bandeau fugace en bas
     // d'ecran: c'est la que l'utilisateur regarde en corrigeant.
+    //
+    // Il nomme les deux identifiants que l'ecole remet reellement: « nom
+    // utilisateur » ne renvoyait a rien de ce que la famille a entre les
+    // mains, et elle recommencait la meme saisie.
     expect(
       find.descendant(
         of: find.byKey(kChampMotDePasse),
-        matching: find.text(
-          'Identifiants invalides. Vérifiez le nom utilisateur et le mot de passe.',
-        ),
+        matching: find.textContaining('Identifiants invalides'),
       ),
       findsOneWidget,
     );
+    expect(find.textContaining('son matricule'), findsWidgets);
   });
 
   testWidgets('retaper efface le message du serveur', (tester) async {

@@ -21,6 +21,45 @@ const _compte = UserAccount(
   phone: '',
 );
 
+/// Une famille: elle a une règle, réglée dans « Personnalisation ».
+const _eleve = UserAccount(
+  id: 8,
+  username: 'ousmane.bagayoko',
+  firstName: 'Ousmane',
+  lastName: 'Bagayoko',
+  email: '',
+  role: 'student',
+  phone: '',
+);
+
+/// Ouvre le dialogue, appuie sur « Appliquer la règle » et rend le résultat.
+Future<Object?> _ouvrirEtChoisirLaRegle(WidgetTester tester) async {
+  Object? rendu;
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              rendu = await showDialog<String>(
+                context: context,
+                builder: (_) => const DialogueReinitialisation(compte: _eleve),
+              );
+            },
+            child: const Text('ouvrir'),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('ouvrir'));
+  await tester.pumpAndSettle();
+
+  await tester.tap(find.byKey(const Key('appliquer-la-regle')));
+  await tester.pumpAndSettle();
+  return rendu;
+}
+
 /// Monte un dialogue et rend ce qu'il a renvoyé à sa fermeture.
 Future<Object?> _ouvrir(WidgetTester tester, Widget dialogue) async {
   Object? rendu;
@@ -121,6 +160,34 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(rendu, 'Provisoire123');
+    });
+
+    testWidgets('pour une famille, la regle de l_ecole est proposee', (
+      tester,
+    ) async {
+      // Une famille inscrite avant l'application n'a jamais reçu de mot de
+      // passe composé par la règle: on demandait au secrétariat d'en
+      // inventer un, donc de le noter quelque part.
+      await _ouvrir(tester, const DialogueReinitialisation(compte: _eleve));
+
+      expect(find.byKey(const Key('appliquer-la-regle')), findsOneWidget);
+      expect(find.textContaining('le matricule pour un élève'), findsOneWidget);
+    });
+
+    testWidgets('le personnel n_a pas de regle, et rien ne la propose', (
+      tester,
+    ) async {
+      await _ouvrir(tester, const DialogueReinitialisation(compte: _compte));
+
+      expect(find.byKey(const Key('appliquer-la-regle')), findsNothing);
+    });
+
+    testWidgets('appliquer la regle remonte une saisie vide', (tester) async {
+      // Vide et non `null`: l'appelant distingue ainsi « appliquez la règle »
+      // d'une annulation, et c'est le serveur qui compose alors le mot de
+      // passe — l'écran ne peut pas le deviner, il ne connaît ni le modèle
+      // de l'école ni le matricule de l'élève.
+      expect(await _ouvrirEtChoisirLaRegle(tester), '');
     });
 
     testWidgets('le mot de passe est masque, et se devoile sur demande', (

@@ -169,9 +169,11 @@ class EtablissementSerializer(serializers.ModelSerializer):
             # l'admin Django -- donc jamais, pour une ecole.
             'inscription_exige_paiement',
             'inscription_montant_minimum',
-            # Le mot de passe remis aux familles de CETTE ecole. Vide, elle
-            # suit la regle de la maison (Personnalisation).
+            # Les mots de passe remis aux familles de CETTE ecole -- celui
+            # de l'eleve et celui du parent. Vides, elle suit la regle de la
+            # maison (Personnalisation).
             'mot_de_passe_eleve_modele',
+            'mot_de_passe_parent_modele',
         ]
 
     def validate_code(self, value):
