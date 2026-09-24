@@ -17,6 +17,14 @@ class ExamSessionItem {
   /// chercher aux familles des résultats qui n'existent pas.
   final int resultatsSaisis;
 
+  /// Combien de ses épreuves sont ouvertes aux familles.
+  ///
+  /// Le booléen `resultatsPublies` ne gouverne plus que les notes qu'aucune
+  /// épreuve ne porte : l'afficher tel quel dirait « publiée » devant trois
+  /// épreuves ouvertes sur sept.
+  final int epreuvesTotal;
+  final int epreuvesPubliees;
+
   const ExamSessionItem({
     required this.id,
     required this.title,
@@ -27,6 +35,8 @@ class ExamSessionItem {
     this.resultatsPublies = false,
     this.resultatsPubliesLe = '',
     this.resultatsSaisis = 0,
+    this.epreuvesTotal = 0,
+    this.epreuvesPubliees = 0,
   });
 
   bool get peutEtrePubliee => !resultatsPublies && resultatsSaisis > 0;
@@ -41,6 +51,25 @@ class ExamPlanningItem {
   final String startTime;
   final String endTime;
 
+  /// Les libellés servis par le serveur. L'écran les résolvait sur ses
+  /// propres caches, et une épreuve d'une classe absente du cache
+  /// s'intitulait « Matière ».
+  final String classroomName;
+  final String subjectName;
+  final String sessionTitle;
+
+  /// Combien de copies sont corrigées. Rien ne distinguait une épreuve
+  /// corrigée d'une épreuve en attente : la note ne se rattachait à aucune
+  /// épreuve.
+  final int resultatsSaisis;
+
+  /// Vrai quand les familles lisent les notes de cette épreuve.
+  ///
+  /// La publication se décidait pour la campagne entière, alors que les
+  /// copies reviennent classe par classe.
+  final bool resultatsPublies;
+  final String resultatsPubliesLe;
+
   const ExamPlanningItem({
     required this.id,
     required this.sessionId,
@@ -49,7 +78,24 @@ class ExamPlanningItem {
     required this.examDate,
     required this.startTime,
     required this.endTime,
+    this.classroomName = '',
+    this.subjectName = '',
+    this.sessionTitle = '',
+    this.resultatsSaisis = 0,
+    this.resultatsPublies = false,
+    this.resultatsPubliesLe = '',
   });
+
+  /// Publier le vide ferait chercher aux familles des notes qui n'existent
+  /// pas encore.
+  bool get peutEtrePubliee => !resultatsPublies && resultatsSaisis > 0;
+
+  /// L'épreuve telle qu'on la nomme au secrétariat.
+  String get intitule {
+    final classe = classroomName.trim().isEmpty ? 'Classe' : classroomName;
+    final matiere = subjectName.trim().isEmpty ? 'Matière' : subjectName;
+    return '$classe • $matiere';
+  }
 }
 
 class ExamResultItem {

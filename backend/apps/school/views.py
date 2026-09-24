@@ -9793,6 +9793,14 @@ class ExamSessionViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         Refuse une session sans aucune note: publier le vide ferait chercher
         aux familles des resultats qui n'existent pas encore.
         """
+        if not affinement_autorise(
+            getattr(request.user, "role", ""), "publication_des_examens"
+        ):
+            raise PermissionDenied(
+                "Ouvrir ou refermer des résultats d'examen est réservé à la "
+                "direction."
+            )
+
         session = self.get_object()
         if not ExamResult.objects.filter(session=session).exists():
             raise ValidationError(
@@ -9821,6 +9829,14 @@ class ExamSessionViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     @action(detail=True, methods=["post"])
     def depublier(self, request, pk=None):
         """Referme l'acces, le temps d'une correction."""
+        if not affinement_autorise(
+            getattr(request.user, "role", ""), "publication_des_examens"
+        ):
+            raise PermissionDenied(
+                "Ouvrir ou refermer des résultats d'examen est réservé à la "
+                "direction."
+            )
+
         session = self.get_object()
         session.depublier_les_resultats()
         self._journaliser(
@@ -9836,7 +9852,11 @@ class ExamSessionViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         )
 
 
-class ExamPlanningViewSet(BaseModelViewSet):
+class ExamPlanningViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
+    # L'annee close protegeait la session et pas ses trois voisines:
+    # on saisissait donc des notes sur un exercice cloturé, sans le
+    # refus ni la trace que les notes de classe recoivent.
+    academic_year_field = "session__academic_year"
     access_module = "exams"
     queryset = ExamPlanning.objects.select_related("session", "classroom", "subject").all().order_by("-id")
     serializer_class = ExamPlanningSerializer
@@ -9857,6 +9877,74 @@ class ExamPlanningViewSet(BaseModelViewSet):
             return requested_etablissement
 
         return getattr(user, "etablissement", None)
+
+    def _journaliser(self, epreuve, action, details):
+        ActivityLog.objects.create(
+            user=self.request.user,
+            etablissement=getattr(epreuve.classroom, "etablissement", None),
+            role=getattr(self.request.user, "role", "") or "",
+            action=action,
+            method=self.request.method,
+            path=str(self.request.path)[:255],
+            module="exams",
+            target=f"ExamPlanning #{epreuve.pk} ({epreuve})"[:120],
+            details=details,
+        )
+
+    @action(detail=True, methods=["post"])
+    def publier(self, request, pk=None):
+        """Ouvre aux familles les resultats de cette epreuve, et d'elle seule.
+
+        C'est le geste que la session ne savait pas faire: les copies
+        reviennent classe par classe, et la direction devait choisir entre
+        ouvrir toute la campagne -- corrigee ou non -- et ne rien ouvrir.
+        """
+        if not affinement_autorise(
+            getattr(request.user, "role", ""), "publication_des_examens"
+        ):
+            raise PermissionDenied(
+                "Ouvrir ou refermer des résultats d'examen est réservé à la "
+                "direction."
+            )
+
+        epreuve = self.get_object()
+        notes = ExamResult.objects.filter(planning=epreuve).count()
+        if not notes:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Aucune note saisie pour cette épreuve. "
+                        "Corrigez-la avant de la publier."
+                    )
+                }
+            )
+
+        epreuve.publier_les_resultats(user=request.user)
+        self._journaliser(
+            epreuve, "exam_planning_publish", f"{notes} resultat(s) ouverts"
+        )
+        return Response(
+            {
+                "detail": f"Résultats publiés pour {epreuve}.",
+                "resultats_publies": notes,
+            }
+        )
+
+    @action(detail=True, methods=["post"])
+    def depublier(self, request, pk=None):
+        """Referme cette epreuve, le temps d'une correction."""
+        if not affinement_autorise(
+            getattr(request.user, "role", ""), "publication_des_examens"
+        ):
+            raise PermissionDenied(
+                "Ouvrir ou refermer des résultats d'examen est réservé à la "
+                "direction."
+            )
+
+        epreuve = self.get_object()
+        epreuve.depublier_les_resultats()
+        self._journaliser(epreuve, "exam_planning_unpublish", "resultats refermes")
+        return Response({"detail": f"Résultats retirés pour {epreuve}."})
 
     def get_queryset(self):
         user = self.request.user
@@ -9904,7 +9992,11 @@ class ExamPlanningViewSet(BaseModelViewSet):
         serializer.save()
 
 
-class ExamInvigilationViewSet(BaseModelViewSet):
+class ExamInvigilationViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
+    # L'annee close protegeait la session et pas ses trois voisines:
+    # on saisissait donc des notes sur un exercice cloturé, sans le
+    # refus ni la trace que les notes de classe recoivent.
+    academic_year_field = "planning__session__academic_year"
     access_module = "exams"
     queryset = ExamInvigilation.objects.select_related("planning", "planning__session", "planning__classroom", "planning__subject", "supervisor").all().order_by("-created_at")
     serializer_class = ExamInvigilationSerializer
@@ -9964,7 +10056,11 @@ class ExamInvigilationViewSet(BaseModelViewSet):
         serializer.save()
 
 
-class ExamResultViewSet(BaseModelViewSet):
+class ExamResultViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
+    # L'annee close protegeait la session et pas ses trois voisines:
+    # on saisissait donc des notes sur un exercice cloturé, sans le
+    # refus ni la trace que les notes de classe recoivent.
+    academic_year_field = "session__academic_year"
     access_module = "exams"
     queryset = ExamResult.objects.select_related("session", "student", "subject").all().order_by("-id")
     serializer_class = ExamResultSerializer
@@ -10027,12 +10123,117 @@ class ExamResultViewSet(BaseModelViewSet):
         if target_id and student_etablissement_id != target_id and classroom_etablissement_id != target_id:
             raise ValidationError({"student": "L'eleve n'appartient pas a l'etablissement actif."})
 
+    @staticmethod
+    def _classe_de_la_note(planning, student):
+        """La classe ou cette note a ete obtenue.
+
+        Celle de l'epreuve quand elle existe -- c'est elle qui fait foi, la
+        fiche de l'eleve ayant pu changer de classe depuis. Sinon celle de
+        l'eleve, faute de mieux.
+        """
+        if planning is not None:
+            return getattr(planning, "classroom", None)
+        return getattr(student, "classroom", None)
+
+    def _refuser_si_periode_validee(self, serializer, instance=None):
+        """Un trimestre cloture ne recoit plus de note, fut-elle d'examen.
+
+        `GradeValidation` verrouille la saisie des notes de classe depuis
+        qu'il existe, et n'a jamais regarde les examens. Apres la cloture --
+        donc apres le calcul du rang et l'impression des bulletins -- une
+        note de composition pouvait encore etre saisie: la moyenne
+        recalculee changeait, le rang fige dans `StudentAcademicHistory` ne
+        bougeait pas, et les deux se contredisaient sur le meme document.
+        """
+        donnees = serializer.validated_data
+        session = donnees.get("session") or getattr(instance, "session", None)
+        student = donnees.get("student") or getattr(instance, "student", None)
+        planning = donnees.get("planning") or getattr(instance, "planning", None)
+        if session is None or student is None:
+            return
+
+        classroom = self._classe_de_la_note(planning, student)
+        if classroom is None:
+            return
+
+        verrouille = GradeValidation.objects.filter(
+            classroom=classroom,
+            academic_year=session.academic_year,
+            term=session.term,
+            is_validated=True,
+        ).exists()
+        if verrouille:
+            raise ValidationError(
+                {
+                    "detail": (
+                        f"La période {session.term} est validée pour "
+                        f"{classroom.name}. Rouvrez-la avant de corriger une note."
+                    )
+                }
+            )
+
+    def _refuser_hors_du_perimetre_enseignant(self, serializer, instance=None):
+        """L'enseignant note ses classes, et elles seules.
+
+        La matrice l'annonce en `E*` depuis toujours -- une portee
+        restreinte. Elle n'etait appliquee nulle part: il lisait et ecrivait
+        toutes les notes d'examen de l'etablissement. C'est le rattachement
+        a l'epreuve qui rend le controle possible, en donnant enfin a une
+        note la classe ou elle a ete obtenue.
+        """
+        if getattr(self.request.user, "role", "") != UserRole.TEACHER:
+            return
+
+        donnees = serializer.validated_data
+        student = donnees.get("student") or getattr(instance, "student", None)
+        subject = donnees.get("subject") or getattr(instance, "subject", None)
+        planning = donnees.get("planning") or getattr(instance, "planning", None)
+        classroom = self._classe_de_la_note(planning, student)
+        if classroom is None or subject is None:
+            return
+
+        if (classroom.id, subject.id) not in self._paires_du_professeur():
+            raise ValidationError(
+                {
+                    "subject": (
+                        "Vous n'enseignez pas cette matière dans cette classe."
+                    )
+                }
+            )
+
+    def _paires_du_professeur(self):
+        """Les couples (classe, matiere) que ce compte enseigne.
+
+        `EtablissementScopedModelViewSet` porte le meme helper, dont cette
+        vue n'herite pas. Le recopier ici plutot que d'elargir l'heritage:
+        trois lignes contre une vue qui gagnerait au passage un cloisonnement
+        qu'elle fait deja autrement.
+        """
+        profil = self._teacher_profile()
+        if not profil:
+            return set()
+        return set(
+            TeacherAssignment.objects.filter(teacher=profil).values_list(
+                "classroom_id", "subject_id"
+            )
+        )
+
     def perform_create(self, serializer):
         self._validate_scope(serializer)
+        self._refuser_hors_du_perimetre_enseignant(serializer)
+        self._refuser_si_periode_validee(serializer)
+        self._refuser_si_annee_close(
+            getattr(serializer.validated_data.get("session"), "academic_year", None)
+        )
         serializer.save()
 
     def perform_update(self, serializer):
         self._validate_scope(serializer)
+        self._refuser_hors_du_perimetre_enseignant(
+            serializer, instance=serializer.instance
+        )
+        self._refuser_si_periode_validee(serializer, instance=serializer.instance)
+        self._refuser_si_annee_close(self._annee_de_l_objet(serializer.instance))
         serializer.save()
 
     @action(detail=False, methods=["post"], url_path="import-exams")

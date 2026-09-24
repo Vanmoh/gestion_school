@@ -106,7 +106,7 @@ class Command(BaseCommand):
     @staticmethod
     def _dedupe_exam_planning_on_subject(subject_id: int) -> int:
         deleted = 0
-        seen = set()
+        gardees = {}
         rows = ExamPlanning.objects.filter(subject_id=subject_id).order_by("id")
         for row in rows:
             key = (
@@ -116,11 +116,19 @@ class Command(BaseCommand):
                 row.start_time,
                 row.end_time,
             )
-            if key in seen:
+            if key in gardees:
+                # Les notes suivent l'epreuve conservee avant que le doublon
+                # ne parte. Depuis que `ExamResult.planning` est en RESTRICT,
+                # supprimer une epreuve qui porte des notes leve une erreur
+                # et emporte toute la transaction de dedoublonnage -- donc
+                # l'ecole entiere, sur la premiere matiere dupliquee.
+                ExamResult.objects.filter(planning_id=row.id).update(
+                    planning_id=gardees[key]
+                )
                 row.delete()
                 deleted += 1
             else:
-                seen.add(key)
+                gardees[key] = row.id
         return deleted
 
     def _remap_subject(self, old_subject: Subject, new_subject: Subject, summary: dict[str, int]) -> None:

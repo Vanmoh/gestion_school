@@ -42,12 +42,19 @@ from django.db.models import Q
 # lit tout: c'est lui qui corrige, et c'est lui qui decide d'ouvrir.
 ROLES_SOUS_EMBARGO = frozenset({"parent", "student"})
 
-# La note est ouverte quand sa session l'est.
+# La note est ouverte quand son epreuve l'est -- et, si aucune epreuve ne la
+# porte, quand sa session l'est.
+#
+# Le repli n'est pas une commodite de transition: une note peut naitre sans
+# epreuve planifiee, et beaucoup l'ont fait. `ExamSession.results_published`
+# gouverne exactement celles-la.
 #
 # L'expression est isolee ici pour que le filtre et sa negation ne divergent
 # jamais: les vues qui listent ont besoin du premier, celles qui refusent un
 # document ont besoin de la seconde.
-EMBARGO_LEVE = Q(session__results_published=True)
+EMBARGO_LEVE = Q(planning__results_published=True) | Q(
+    planning__isnull=True, session__results_published=True
+)
 
 
 def sous_embargo(role: str) -> bool:

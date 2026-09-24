@@ -40,6 +40,9 @@ class ExamsRepository {
             resultatsPubliesLe:
                 row['results_published_at']?.toString() ?? '',
             resultatsSaisis: (row['resultats_saisis'] as num?)?.toInt() ?? 0,
+            epreuvesTotal: (row['epreuves_total'] as num?)?.toInt() ?? 0,
+            epreuvesPubliees:
+                (row['epreuves_publiees'] as num?)?.toInt() ?? 0,
           ),
         )
         .toList();
@@ -76,9 +79,37 @@ class ExamsRepository {
             examDate: row['exam_date']?.toString() ?? '',
             startTime: row['start_time']?.toString() ?? '',
             endTime: row['end_time']?.toString() ?? '',
+            classroomName: row['classroom_name']?.toString() ?? '',
+            subjectName: row['subject_name']?.toString() ?? '',
+            sessionTitle: row['session_title']?.toString() ?? '',
+            resultatsSaisis: (row['resultats_saisis'] as num?)?.toInt() ?? 0,
+            resultatsPublies: row['results_published'] == true,
+            resultatsPubliesLe:
+                row['results_published_at']?.toString() ?? '',
           ),
         )
         .toList();
+  }
+
+  /// Ouvre aux familles les résultats d'une épreuve, et d'elle seule.
+  ///
+  /// Les copies reviennent classe par classe : publier la campagne entière
+  /// obligeait à ouvrir aussi ce qui n'était pas corrigé.
+  Future<String> publierLEpreuve(int planningId) async {
+    final response = await dio.post('/exam-plannings/$planningId/publier/');
+    final data = response.data;
+    return data is Map<String, dynamic>
+        ? (data['detail']?.toString() ?? 'Résultats publiés.')
+        : 'Résultats publiés.';
+  }
+
+  /// Referme une épreuve, le temps d'une correction.
+  Future<String> retirerLEpreuve(int planningId) async {
+    final response = await dio.post('/exam-plannings/$planningId/depublier/');
+    final data = response.data;
+    return data is Map<String, dynamic>
+        ? (data['detail']?.toString() ?? 'Résultats retirés.')
+        : 'Résultats retirés.';
   }
 
   Future<List<ExamResultItem>> fetchResults() async {
