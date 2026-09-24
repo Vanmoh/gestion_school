@@ -3,6 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
+import '../../../../core/permissions/module_permissions.dart';
+import '../../../users/presentation/users_controller.dart';
+import '../../../users/presentation/widgets/dialogue_acces_rouverts.dart';
 import '../../domain/student.dart';
 import '../students_controller.dart';
 import '../../../../core/widgets/roster_pdf_preview_dialog.dart';
@@ -63,11 +66,16 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
     super.dispose();
   }
 
+  /// Identifie le chargement en cours: enchainer deux classes laissait la
+  /// reponse la plus lente s'afficher sous l'en-tete de l'autre.
+  int _chargementEnCours = 0;
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = '';
     });
+    final ticket = ++_chargementEnCours;
     try {
       final students = await ref
           .read(studentsRepositoryProvider)
@@ -78,13 +86,13 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
             // document se remarquent des la premiere comparaison.
             ordering: 'user__last_name',
           );
-      if (!mounted) return;
+      if (!mounted || ticket != _chargementEnCours) return;
       setState(() {
         _students = students;
         _loading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || ticket != _chargementEnCours) return;
       setState(() {
         _error = '$error';
         _loading = false;
@@ -127,6 +135,13 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
     return (garcons, filles);
   }
 
+  /// Rouvrir un acces, c'est poser un mot de passe sur le compte de
+  /// quelqu'un: cela releve de l'administration des comptes, pas de la
+  /// consultation d'une liste de classe. Le serveur le verifie de toute
+  /// facon; le bouton ne s'affiche pas pour rien.
+  bool get _peutRouvrirLesAcces =>
+      ref.read(currentPermissionsProvider).canWrite('users');
+
   String get _classeLabel {
     if (_classroomId == null) return 'Toutes les classes';
     for (final row in widget.classrooms) {
@@ -146,6 +161,38 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Rend leurs acces aux familles de cette classe qui n'ont jamais pu entrer.
+  ///
+  /// Le geste vit ici parce que c'est le seul ecran qui raisonne par classe
+  /// entiere. Le serveur ne touche qu'aux comptes jamais utilises: une
+  /// famille qui se connecte deja garde son mot de passe, et une classe ne
+  /// peut donc pas se retrouver dehors parce qu'on a voulu en depanner
+  /// trois.
+  Future<void> _rouvrirLesAcces() {
+    final classe = _classroomId;
+    if (classe == null) {
+      // Rouvrir « toutes les classes » d'un geste n'a pas ete demande, et
+      // se ferait sans que personne puisse relire ce qui a bouge.
+      _toast('Choisissez une classe avant de rouvrir des accès.');
+      return Future<void>.value();
+    }
+
+    return _withBusy(() async {
+      final acces = await ref
+          .read(usersRepositoryProvider)
+          .rouvrirLesAcces(classroomId: classe);
+      if (!mounted) return;
+
+      await showDialog<void>(
+        context: context,
+        // Les mots de passe n'existent en clair qu'ici: fermer par megarde
+        // obligerait a tout reinitialiser.
+        barrierDismissible: false,
+        builder: (_) => DialogueAccesRouverts(acces: acces, classe: _classeLabel),
+      );
+    });
   }
 
   Future<void> _print() => _withBusy(() async {
@@ -636,6 +683,13 @@ class _StudentRosterDialogState extends ConsumerState<StudentRosterDialog> {
           icon: const Icon(Icons.description_outlined, size: 18),
           label: const Text('Afficher la liste'),
         ),
+        if (_peutRouvrirLesAcces)
+          OutlinedButton.icon(
+            key: const Key('rouvrir-les-acces'),
+            onPressed: actif ? _rouvrirLesAcces : null,
+            icon: const Icon(Icons.key_outlined, size: 18),
+            label: const Text('Rouvrir les accès'),
+          ),
         FilledButton.icon(
           onPressed: actif ? _print : null,
           icon: _busy

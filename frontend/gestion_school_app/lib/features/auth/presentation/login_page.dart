@@ -818,7 +818,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       final status = error.response?.statusCode;
 
       if (status == 400 || status == 401) {
-        return 'Identifiants invalides. Vérifiez le nom utilisateur et le mot de passe.';
+        return 'Identifiants invalides. L\'élève entre son matricule, le '
+            'parent son numéro de téléphone — ou l\'identifiant remis par '
+            'l\'école.';
       }
       if (status == 403) {
         return 'Accès refusé. Votre compte n\'est pas autorisé à se connecter.';

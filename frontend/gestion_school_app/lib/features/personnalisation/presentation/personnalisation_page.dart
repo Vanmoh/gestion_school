@@ -41,6 +41,7 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
   final _couleur = TextEditingController();
   // Le mot de passe remis aux familles a l'inscription.
   final _motDePasseEleve = TextEditingController();
+  final _motDePasseParent = TextEditingController();
   bool _imposerChangement = true;
 
   /// Le logo choisi, pas encore envoyé. Nul tant qu'on n'en change pas :
@@ -84,6 +85,7 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
     _piedDePage.text = p.piedDePage;
     _couleur.text = p.couleurPrincipale;
     _motDePasseEleve.text = p.motDePasseEleveModele;
+    _motDePasseParent.text = p.motDePasseParentModele;
     _imposerChangement = p.imposerChangementMotDePasse;
     if (mounted) setState(() {});
   }
@@ -105,6 +107,7 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
       _piedDePage,
       _couleur,
       _motDePasseEleve,
+      _motDePasseParent,
     ]) {
       c.dispose();
     }
@@ -190,6 +193,7 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
               'pied_de_page': _piedDePage.text.trim(),
               'couleur_principale': _couleur.text.trim(),
               'mot_de_passe_eleve_modele': _motDePasseEleve.text.trim(),
+              'mot_de_passe_parent_modele': _motDePasseParent.text.trim(),
               'imposer_changement_mot_de_passe': _imposerChangement,
             },
             logo: _logoChoisi,
@@ -385,9 +389,15 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
   /// Ce qui est remis à la famille le jour de l'inscription.
   ///
   /// L'identifiant de l'élève est son matricule — imprimé sur sa carte
-  /// scolaire, ses bulletins et les listes d'appel. Le mot de passe, lui,
-  /// suit une règle appliquée à tous: il ne protège rien par lui-même. C'est
-  /// le changement imposé à la première connexion qui le rend sans danger.
+  /// scolaire, ses bulletins et les listes d'appel. Celui du parent est son
+  /// numéro de téléphone, qu'il connaît par cœur. Les mots de passe, eux,
+  /// suivent une règle appliquée à tous: ils ne protègent rien par
+  /// eux-mêmes. C'est le changement imposé à la première connexion qui les
+  /// rend sans danger.
+  ///
+  /// Deux champs et non un: la règle du parent existait déjà côté serveur,
+  /// écrite en dur, et cet écran ne la montrait pas. Une école ne pouvait
+  /// ni la changer ni même savoir laquelle était appliquée.
   Widget _reglagesDInscription(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
@@ -397,8 +407,17 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
       children: [
         _champ(
           _motDePasseEleve,
-          'Mot de passe remis à la famille',
-          aide: 'Jetons : {matricule}, {annee}, {sigle}, {nom}, {prenom}. '
+          'Mot de passe remis à l\'élève',
+          aide: 'Identifiant : son matricule. '
+              'Jetons : {matricule}, {annee}, {sigle}, {nom}, {prenom}. '
+              'Une école peut avoir le sien, sur sa propre fiche.',
+        ),
+        const SizedBox(height: 10),
+        _champ(
+          _motDePasseParent,
+          'Mot de passe remis au parent',
+          aide: 'Identifiant : son numéro de téléphone. '
+              'Jetons : {telephone}, {annee}, {sigle}, {nom}, {prenom}. '
               'Une école peut avoir le sien, sur sa propre fiche.',
         ),
         const SizedBox(height: 6),
@@ -413,10 +432,10 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
           ),
           subtitle: Text(
             _imposerChangement
-                ? 'Le mot de passe remis ne sert qu\'une fois.'
-                : 'Attention : le mot de passe remis reste valable '
-                      'indéfiniment, et il se devine à partir d\'un seul '
-                      'exemple et d\'un matricule.',
+                ? 'Les mots de passe remis ne servent qu\'une fois.'
+                : 'Attention : les mots de passe remis restent valables '
+                      'indéfiniment, et ils se devinent à partir d\'un seul '
+                      'exemple, d\'un matricule ou d\'un numéro.',
             style: textTheme.bodySmall?.copyWith(
               color: _imposerChangement ? null : scheme.error,
             ),

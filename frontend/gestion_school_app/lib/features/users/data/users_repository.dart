@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../core/models/paginated_result.dart';
+import '../domain/acces_rouverts.dart';
 import '../domain/user_account.dart';
 
 class UsersRepository {
@@ -206,16 +207,45 @@ class UsersRepository {
   }
 
   /// L'administration fixe un mot de passe provisoire, qu'elle communique.
+  ///
+  /// [motDePasse] vide: c'est la règle de l'école qui s'applique — celle que
+  /// « Personnalisation » affiche, le matricule pour un élève et le numéro
+  /// pour un parent. Le serveur rend alors le mot de passe composé, pour
+  /// qu'on puisse le lire à la famille: personne d'autre ne le connaît.
   Future<String> resetPassword(int userId, String motDePasse) async {
     try {
       final reponse = await dio.post(
         '/auth/users/$userId/reset-password/',
-        data: {'password': motDePasse},
+        data: motDePasse.isEmpty
+            ? const <String, dynamic>{}
+            : {'password': motDePasse},
       );
       final data = reponse.data;
-      return data is Map && data['detail'] != null
-          ? data['detail'].toString()
-          : 'Mot de passe réinitialisé.';
+      if (data is! Map) return 'Mot de passe réinitialisé.';
+
+      final message = data['detail']?.toString() ?? 'Mot de passe réinitialisé.';
+      final compose = data['mot_de_passe']?.toString() ?? '';
+      // Composé par le serveur: sans le dire ici, le secrétariat n'aurait
+      // rien à dicter.
+      return compose.isEmpty ? message : 'Mot de passe : $compose. $message';
+    } on DioException catch (error) {
+      throw Exception(_extractApiErrorMessage(error));
+    }
+  }
+
+  /// Rend leurs accès aux familles d'une classe qui n'ont jamais pu entrer.
+  ///
+  /// Le serveur ne touche qu'aux comptes jamais utilisés: un parent qui se
+  /// connecte déjà garde son mot de passe. Il rend les accès en clair — ils
+  /// n'existent qu'à cet instant, et ce qui n'est pas noté devra être
+  /// réinitialisé.
+  Future<AccesRouverts> rouvrirLesAcces({required int classroomId}) async {
+    try {
+      final reponse = await dio.post(
+        '/auth/users/rouvrir-les-acces/',
+        data: {'classroom': classroomId},
+      );
+      return AccesRouverts.fromJson(reponse.data);
     } on DioException catch (error) {
       throw Exception(_extractApiErrorMessage(error));
     }

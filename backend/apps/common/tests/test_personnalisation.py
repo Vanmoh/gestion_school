@@ -123,6 +123,47 @@ class PersonnalisationTests(TestCase):
         self.assertEqual(reponse.data["titre_connexion"], "")
         self.assertEqual(reponse.data["titre_portail"], "")
 
+    def test_les_deux_regles_de_mot_de_passe_sont_servies(self):
+        """Celle de l'eleve et celle du parent.
+
+        La seconde vivait en dur dans le module d'admission: l'ecran ne
+        montrait que la premiere, et une ecole n'avait aucun moyen de savoir
+        quel mot de passe ses familles recevaient.
+        """
+        reponse = self.anonyme.get(URL)
+
+        self.assertEqual(reponse.data["mot_de_passe_eleve_modele"], "{matricule}")
+        self.assertEqual(reponse.data["mot_de_passe_parent_modele"], "{telephone}")
+
+    def test_la_regle_du_parent_se_regle_depuis_l_ecran(self):
+        reponse = self._client(self.super_admin).patch(
+            URL,
+            {"mot_de_passe_parent_modele": "{sigle}{telephone}"},
+            format="json",
+        )
+
+        self.assertEqual(reponse.status_code, 200)
+        self.assertEqual(
+            PersonnalisationPlateforme.actuelle().mot_de_passe_parent_modele,
+            "{sigle}{telephone}",
+        )
+
+    def test_regler_l_une_ne_touche_pas_l_autre(self):
+        self._client(self.super_admin).patch(
+            URL, {"mot_de_passe_parent_modele": "{nom}{annee}"}, format="json"
+        )
+
+        actuelle = PersonnalisationPlateforme.actuelle()
+        self.assertEqual(actuelle.mot_de_passe_eleve_modele, "{matricule}")
+        self.assertEqual(actuelle.mot_de_passe_parent_modele, "{nom}{annee}")
+
+    def test_un_directeur_ne_regle_pas_les_mots_de_passe_des_familles(self):
+        reponse = self._client(self.directeur).patch(
+            URL, {"mot_de_passe_parent_modele": "{prenom}"}, format="json"
+        )
+
+        self.assertEqual(reponse.status_code, 403)
+
     def test_le_logo_absent_ne_rend_pas_une_url_cassee(self):
         reponse = self.anonyme.get(URL)
 

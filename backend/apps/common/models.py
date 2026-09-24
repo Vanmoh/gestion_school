@@ -191,12 +191,32 @@ class PersonnalisationPlateforme(TimeStampedModel):
             "Une école peut avoir le sien, sur sa propre fiche."
         ),
     )
+    # Le parent a sa propre regle. Elle etait ecrite en dur dans le module
+    # d'admission -- « les chiffres de son numero » -- et l'ecran de
+    # personnalisation ne montrait que celle de l'eleve: une ecole qui
+    # voulait autre chose pour les familles n'avait aucun endroit ou le
+    # dire, et rien a l'ecran ne lui apprenait meme quelle etait la regle.
+    #
+    # Le numero par defaut, et non le nom: c'est ce que le parent connait
+    # par coeur, et c'est deja son identifiant.
+    MOT_DE_PASSE_PARENT_DEFAUT = "{telephone}"
+
+    mot_de_passe_parent_modele = models.CharField(
+        max_length=60,
+        default=MOT_DE_PASSE_PARENT_DEFAUT,
+        help_text=(
+            "Modèle du mot de passe remis au parent. Jetons disponibles : "
+            "{telephone}, {annee}, {sigle}, {nom}, {prenom}. "
+            "Une école peut avoir le sien, sur sa propre fiche."
+        ),
+    )
     imposer_changement_mot_de_passe = models.BooleanField(
         default=True,
         help_text=(
-            "L'élève doit choisir son propre mot de passe à sa première "
-            "connexion. Décocher laisse le mot de passe remis valable "
-            "indéfiniment, et il se devine à partir d'un seul exemple."
+            "L'élève et le parent doivent choisir leur propre mot de passe "
+            "à leur première connexion. Décocher laisse le mot de passe "
+            "remis valable indéfiniment, et il se devine à partir d'un seul "
+            "exemple."
         ),
     )
 

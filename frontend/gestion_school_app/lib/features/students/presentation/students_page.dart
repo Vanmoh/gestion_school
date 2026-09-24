@@ -16,6 +16,7 @@ import '../../../features/auth/presentation/auth_controller.dart';
 import '../../payments/presentation/payment_entry_dialog.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import '../../../models/etablissement.dart';
+import '../domain/recherche_eleve.dart';
 import '../domain/resultat_inscription.dart';
 import '../domain/student.dart';
 import '../domain/students_stats.dart';
@@ -41,6 +42,23 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
   final _searchController = TextEditingController();
   final _pageScrollController = ScrollController();
   Timer? _searchDebounce;
+
+  /// Identifie le chargement en cours: une reponse lente ne doit pas ecraser
+  /// le resultat d'une frappe plus recente.
+  ///
+  /// Sans ce jeton, taper un matricule entier lancait une requete par palier
+  /// de frappe et c'est la derniere *arrivee* qui gagnait, pas la derniere
+  /// *demandee*. L'ecran gardait alors les correspondances d'un prefixe --
+  /// « IO1... » en ramene des centaines -- et l'eleve deja selectionne y
+  /// figurait toujours: la barre affichait un matricule et la palette un
+  /// autre eleve. C'est le meme jeton que `student_lookup_page.dart`.
+  int _requeteEnCours = 0;
+
+  /// La recherche a laquelle repond ce qui est affiche.
+  ///
+  /// Distincte du texte tape: entre la frappe et la reponse, les deux
+  /// different, et c'est precisement l'intervalle ou l'ecran mentait.
+  String _rechercheAffichee = '';
 
   final int _tableRowsPerPage = 15;
   int _tablePage = 1;
@@ -216,13 +234,16 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       setState(() => _loading = true);
     }
 
+    final ticket = ++_requeteEnCours;
+    final rechercheDemandee = _searchController.text.trim();
+
     try {
       final repository = ref.read(studentsRepositoryProvider);
       final results = await Future.wait([
         repository.fetchStudentsPage(
           page: _tablePage,
           pageSize: _tableRowsPerPage,
-          search: _searchController.text.trim(),
+          search: rechercheDemandee,
           // La barre unique doit trouver n'importe quel eleve, archive
           // compris: il n'y a plus de filtre pour l'inclure, et sa palette
           // porte la mention « Archivé ». Le restreindre aux actifs le
@@ -238,8 +259,11 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
       final studentsPage = results[0] as PaginatedResult<Student>;
 
-      if (!mounted) return;
+      // Une recherche plus recente est partie depuis: ce qui revient ici
+      // decrit une question qu'on ne pose plus.
+      if (!mounted || ticket != _requeteEnCours) return;
       setState(() {
+        _rechercheAffichee = rechercheDemandee;
         _students = studentsPage.results;
         _filteredStudents = studentsPage.results;
         _classrooms = results[1] as List<Map<String, dynamic>>;
@@ -263,9 +287,12 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
       _applyFilters(preferredStudentId: keepSelectedId ?? _selectedStudent?.id);
     } catch (error) {
+      if (ticket != _requeteEnCours) return;
       _showMessage('Erreur chargement élèves: $error');
     } finally {
-      if (mounted) {
+      // Eteindre l'indicateur sur une reponse perimee laisserait croire que
+      // la recherche en cours a fini alors qu'elle court encore.
+      if (mounted && ticket == _requeteEnCours) {
         setState(() {
           if (lightweight) {
             _tableRefreshing = false;
@@ -302,13 +329,24 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       nextSelected = null;
     }
 
+    // La recherche a laquelle ces resultats repondent, et non ce qui est
+    // tape a l'instant: entre les deux il y a une requete en vol, et c'est
+    // le decalage qui faisait afficher un matricule et un autre eleve.
+    final recherche = _rechercheAffichee;
+
+    // Un matricule entier, un numero entier: la recherche nomme quelqu'un.
+    // On l'ouvre, meme si le serveur a ramene ses voisins par fragment --
+    // et on lache la selection precedente, qui repondait a autre chose.
+    final designe = eleveDesigneExactement(filtered, recherche);
+    if (designe != null) {
+      nextSelected = designe;
+    }
+
     // Une recherche qui ne laisse qu'un eleve a deja repondu: demander de
     // « choisir » dans une liste d'un seul element serait une ceremonie, et
     // sans cela l'ecran tombait sur l'etat vide et annoncait « aucun eleve ne
     // correspond » alors qu'il en avait trouve un.
-    if (nextSelected == null &&
-        _searchController.text.trim().isNotEmpty &&
-        filtered.length == 1) {
+    if (nextSelected == null && recherche.isNotEmpty && filtered.length == 1) {
       nextSelected = filtered.first;
     }
     final selectedClassroomId = nextSelected?.classroomId;
@@ -338,6 +376,15 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
 
   void _onSearchChanged(String _) {
     _searchDebounce?.cancel();
+
+    // Changer la question lache la reponse. La palette montrait l'eleve
+    // d'une recherche precedente pendant toute la frappe de la suivante, et
+    // continuait de le montrer si celle-ci ramenait plusieurs noms: le
+    // matricule tape et l'eleve ouvert ne se correspondaient plus.
+    if (_searchController.text.trim() != _rechercheAffichee) {
+      setState(() => _selectedStudent = null);
+    }
+
     _searchDebounce = Timer(const Duration(milliseconds: 250), () {
       if (!mounted) return;
       _reloadStudentsTable(page: 1);
@@ -349,6 +396,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     _searchDebounce?.cancel();
     _searchController.clear();
     setState(() {
+      _rechercheAffichee = '';
       _selectedStudent = null;
       _sortBy = defaultStudentSortKey;
       _sortAscending = true;
@@ -2175,7 +2223,10 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
     required List<Student> visibleStudents,
   }) {
     final student = _selectedStudent;
-    final query = _searchController.text.trim();
+    // La recherche a laquelle repond ce qui est affiche: annoncer « aucun
+    // eleve ne correspond a X » pendant que la requete sur X est encore en
+    // vol repondait a la place du serveur, et souvent de travers.
+    final query = _rechercheAffichee;
 
     if (_tableRefreshing && student == null) {
       return const Card(

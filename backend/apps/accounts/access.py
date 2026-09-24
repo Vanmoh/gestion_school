@@ -239,10 +239,24 @@ MODULES = {
     # soit. Sans ce droit, il ne leur rendait que son message d'erreur -- une
     # entree de menu qui ne menait nulle part, et que personne n'avait
     # signalee.
+    #
+    # Parent et eleve en L* pour la meme raison, une colonne plus loin. Ils
+    # ont deja « grades », « exams », « timetable » et « finance » sur leur
+    # perimetre, mais ces quatre ecrans commencent tous par demander les
+    # classes, les matieres et les annees scolaires: sans ce droit, les
+    # listes deroulantes « Classe » et « Annee scolaire » arrivaient vides,
+    # les compteurs affichaient zero, et le parent lisait « annee scolaire
+    # non disponible » sous un bandeau qui annoncait l'annee active.
+    #
+    # L'etoile n'est pas decorative: les trois vues du module rendent au
+    # parent les classes et les matieres de ses enfants, et a l'eleve les
+    # siennes -- voir `classes_du_perimetre_familial` dans school/views.py.
+    # Les annees scolaires restent celles de l'etablissement: c'est le
+    # calendrier de l'ecole, pas une donnee d'eleve.
     "academics": {
         "label": "Academique",
         "group": "academique",
-        "access": _row("A", "L", "A", "E", "L", "L", "L", "-", "-"),
+        "access": _row("A", "L", "A", "E", "L", "L", "L", "L*", "L*"),
     },
     "academic_imports": {
         "label": "Imports academiques",

@@ -40,6 +40,10 @@ class Etablissement(TimeStampedModel):
     # pour qu'un groupe n'ait pas a choisir entre une regle unique et quatre
     # reglages a tenir a jour: il ne remplit que ce qui differe.
     mot_de_passe_eleve_modele = models.CharField(max_length=60, blank=True)
+
+    # Meme regle, meme repli, pour la famille: le parent recoit son propre
+    # mot de passe a l'inscription, et rien ne permettait de le regler.
+    mot_de_passe_parent_modele = models.CharField(max_length=60, blank=True)
     # Photo de l'ecole, affichee en fond de l'ecran de connexion.
     #
     # Distincte du logo: celui-ci est un dessin sur fond blanc, cadre serre,
