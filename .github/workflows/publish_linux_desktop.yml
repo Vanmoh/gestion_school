@@ -1,0 +1,70 @@
+name: Publish Linux Desktop to downloads_site
+
+# Meme raison que pour Windows: la machine de developpement ne porte pas la
+# chaine de compilation de cette cible -- cmake, ninja, pkg-config et les
+# en-tetes GTK. Sans ce workflow, l'archive Linux du site de telechargement
+# restait a la version du jour ou quelqu'un avait, une fois, installe ces
+# outils quelque part.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      # L'image Ubuntu des runners ne les porte pas: `flutter build linux`
+      # echoue sinon sur « CMake is required for Linux development ».
+      - name: Outils de compilation Linux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+
+      - name: Enable Linux desktop
+        run: flutter config --enable-linux-desktop
+
+      - name: Build Linux desktop release
+        working-directory: frontend/gestion_school_app
+        run: |
+          flutter pub get
+          flutter build linux --release --dart-define=API_BASE_URL=https://gestion-school-jkzf.onrender.com/api
+
+      - name: Archive Linux build
+        run: |
+          src="frontend/gestion_school_app/build/linux/x64/release/bundle"
+          dst="downloads_site/gestion_school_desktop_linux.tar.gz"
+          if [ ! -d "$src" ]; then
+            echo "Linux release folder not found: $src"
+            exit 1
+          fi
+          rm -f "$dst"
+          # -C puis « . »: l'archive porte le contenu du bundle, pas le
+          # chemin de compilation. C'est ce que fait deja
+          # publish_downloads_artifacts.sh, et ce que le site publie.
+          tar -czf "$dst" -C "$src" .
+
+      - name: Commit and push artifact
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add downloads_site/gestion_school_desktop_linux.tar.gz
+          if git diff --cached --quiet; then
+            echo "No artifact changes to commit"
+            exit 0
+          fi
+          git commit -m "Publish Linux desktop artifact"
+          git push
