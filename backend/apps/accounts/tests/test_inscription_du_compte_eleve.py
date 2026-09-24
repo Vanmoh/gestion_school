@@ -25,7 +25,12 @@ class InscriptionDuCompteEleveTests(APITestCase):
             name="Complexe scolaire de l'inscription", code="CSIN"
         )
         cls.annee = AcademicYear.objects.create(
-            name="2025-2026 inscription",
+            # Vingt caracteres au plus: SQLite laisse passer un nom plus
+            # long, Postgres le refuse. Le test passait donc en local et
+            # faisait tomber toute la suite en integration -- ou le runner
+            # parallele masque l'erreur derriere « cannot pickle
+            # 'traceback' object ».
+            name="2025-2026 inscr.",
             start_date=date(2025, 9, 1),
             end_date=date(2026, 7, 31),
             is_active=True,
