@@ -59,13 +59,39 @@ class ExamResultItem {
   final int subjectId;
   final double score;
 
+  /// Les libellés servis par le serveur, plutôt que trois relations résolues
+  /// ici. L'écran d'administration tient ses référentiels en cache et n'en a
+  /// pas besoin ; celui de la famille aurait fait trois requêtes pour
+  /// afficher « Mathématiques » à la place de « 7 ».
+  final String subjectName;
+  final String sessionTitle;
+  final String sessionTerm;
+  final String studentFullName;
+  final String studentMatricule;
+
   const ExamResultItem({
     required this.id,
     required this.sessionId,
     required this.studentId,
     required this.subjectId,
     required this.score,
+    this.subjectName = '',
+    this.sessionTitle = '',
+    this.sessionTerm = '',
+    this.studentFullName = '',
+    this.studentMatricule = '',
   });
+
+  /// Le nom de la matière, ou de quoi ne pas afficher un identifiant nu.
+  String get matiere => subjectName.trim().isEmpty ? 'Matière' : subjectName;
+
+  /// L'épreuve telle qu'elle se nomme sur le bulletin.
+  String get epreuve {
+    final titre = sessionTitle.trim();
+    final periode = sessionTerm.trim();
+    if (titre.isEmpty) return periode.isEmpty ? 'Examen' : periode;
+    return periode.isEmpty ? titre : '$titre • $periode';
+  }
 }
 
 class ExamInvigilationItem {

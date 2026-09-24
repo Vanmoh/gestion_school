@@ -26,7 +26,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from apps.accounts.access import affinement_autorise, can_read
 from apps.accounts.models import UserRole
-from apps.school import moyennes
+from apps.school import examens, moyennes
 from apps.school.models import (
     AcademicYear,
     BulletinDelivery,
@@ -1869,6 +1869,49 @@ def _ensure_student_access(request, student: Student) -> None:
         raise PermissionDenied("Selectionnez un etablissement actif.")
 
 
+def _refuser_un_bulletin_non_arrete(request, student: Student, academic_year_id: int, normalized_term: str):
+    """Retient le bulletin d'une famille tant que la direction ne l'a pas arrete.
+
+    `BulletinPublication` existe depuis l'envoi aux familles, et son modele
+    dit la regle: « L'impression reste libre. C'est la diffusion aux familles
+    qui exige la validation. » L'envoi WhatsApp la respectait; le
+    telechargement du PDF, non. Une famille tirait donc le document quand
+    elle voulait -- avec les notes de composition que la publication des
+    examens lui refusait par ailleurs, puisque le bulletin lit les resultats
+    sans regarder si la session est ouverte.
+
+    Le document n'est pas ampute de ces notes, il est refuse: la note de
+    classe compte pour la matiere entiere quand la composition manque
+    (`moyennes.note_finale_matiere`), un bulletin filtre porterait donc une
+    moyenne differente de celle du registre et un rang qui ne s'y accorde
+    plus. Deux bulletins, deux moyennes, un meme eleve.
+
+    Rend `None` quand rien ne s'y oppose, sinon la reponse a renvoyer. Le
+    secretariat, lui, continue de sortir ses brouillons pour le conseil.
+    """
+    if not examens.sous_embargo(getattr(request.user, "role", "")):
+        return None
+
+    arrete = BulletinPublication.objects.filter(
+        classroom_id=student.classroom_id,
+        academic_year_id=academic_year_id,
+        term=normalized_term,
+        is_published=True,
+    ).exists()
+    if arrete:
+        return None
+
+    return Response(
+        {
+            "detail": (
+                "Ce bulletin n'est pas encore arrêté par la direction. "
+                "Il vous sera remis une fois les résultats validés."
+            )
+        },
+        status=409,
+    )
+
+
 def _ensure_payment_access(request, payment: Payment) -> None:
     user = request.user
     role = getattr(user, "role", "")
@@ -2256,6 +2299,11 @@ class BulletinPdfView(APIView):
         )
         _ensure_student_access(request, student)
         retenu = _refuser_si_inscription_en_attente(student)
+        if retenu is not None:
+            return retenu
+        retenu = _refuser_un_bulletin_non_arrete(
+            request, student, academic_year_id, normalized_term
+        )
         if retenu is not None:
             return retenu
 
@@ -3717,6 +3765,27 @@ class BulletinShareDownloadView(APIView):
                 _page_lien_bulletin("Lien non reconnu", "Ce lien ne correspond à aucun élève."),
                 content_type="text/html; charset=utf-8",
                 status=404,
+            )
+
+        # Le document est regenere a chaque ouverture, et l'arret peut avoir
+        # ete retire entre l'envoi et la lecture -- une moyenne a reprendre,
+        # un conseil a refaire. Le lien cesse alors de rendre le bulletin
+        # plutot que d'en servir une version que l'ecole ne soutient plus.
+        arrete = BulletinPublication.objects.filter(
+            classroom_id=student.classroom_id,
+            academic_year_id=academic_year_id,
+            term=normalized_term,
+            is_published=True,
+        ).exists()
+        if not arrete:
+            return HttpResponse(
+                _page_lien_bulletin(
+                    "Bulletin momentanément retiré",
+                    "L'établissement a repris ce bulletin. Il vous sera "
+                    "envoyé de nouveau une fois arrêté.",
+                ),
+                content_type="text/html; charset=utf-8",
+                status=409,
             )
 
         pdf_bytes = generer_pdf_bulletin(

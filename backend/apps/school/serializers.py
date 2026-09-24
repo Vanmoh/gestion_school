@@ -2514,6 +2514,31 @@ class ExamInvigilationSerializer(serializers.ModelSerializer):
 
 
 class ExamResultSerializer(serializers.ModelSerializer):
+    # Les cles etrangeres brutes suffisent a l'ecran d'administration, qui
+    # tient deja ses referentiels en cache. Elles ne suffisent pas a la
+    # famille: sans ces trois libelles, son ecran resout trois relations en
+    # trois requetes pour afficher « Mathematiques » au lieu de « 7 ». Le
+    # dossier eleve avait deja ce besoin et le reglait dans son coin, par un
+    # `labeller` local -- la meme chose, ecrite deux fois.
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    session_title = serializers.CharField(source="session.title", read_only=True)
+    session_term = serializers.CharField(source="session.term", read_only=True)
+    # Un parent a plusieurs enfants: sans le nom, son ecran ne sait pas de
+    # qui est la note qu'il affiche.
+    student_full_name = serializers.SerializerMethodField(read_only=True)
+    student_matricule = serializers.SerializerMethodField(read_only=True)
+
+    def get_student_full_name(self, obj):
+        student = obj.student
+        user = student.user if student else None
+        full_name = user.get_full_name().strip() if user else ""
+        if full_name:
+            return full_name
+        return user.username if user else ""
+
+    def get_student_matricule(self, obj):
+        return obj.student.matricule if obj.student else ""
+
     def validate_score(self, value):
         numeric_value = Decimal(str(value))
         if numeric_value < Decimal("0") or numeric_value > Decimal("20"):

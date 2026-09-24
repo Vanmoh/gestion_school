@@ -48,7 +48,7 @@ from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import StandardResultsSetPagination
 from apps.common.models import ActivityLog
 from .dashboard_cache import STATS_CACHE_SECONDS, stats_cache_key
-from . import planification
+from . import examens, planification
 from .term_utils import TERMS, normalize_term
 from .models import (
     AcademicYear,
@@ -4232,6 +4232,7 @@ class StudentViewSet(BaseModelViewSet):
         aggregates=None,
         count_queryset=None,
         labeller=None,
+        summary_extra=None,
     ):
         """Une section du dossier, ou son refus motive.
 
@@ -4245,6 +4246,11 @@ class StudentViewSet(BaseModelViewSet):
         objets deja charges par select_related, donc sans requete de plus, et
         localement plutot qu'en modifiant des serializers dont dependent tous
         les autres ecrans.
+
+        `summary_extra` sert a ce qu'une section dit de ce qu'elle ne montre
+        pas. Les examens en ont besoin: une famille qui lit trois notes sur
+        huit doit savoir que cinq sont retenues, sinon elle prend la moyenne
+        affichee pour la vraie.
         """
         if not can_read(role, module):
             return {
@@ -4261,6 +4267,8 @@ class StudentViewSet(BaseModelViewSet):
             count=Count("id"), **(aggregates or {})
         )
         total = stats.pop("count", 0) or 0
+        if summary_extra:
+            stats.update(summary_extra)
         items = list(queryset[: self.DOSSIER_ITEM_LIMIT])
         rows = serializer_class(items, many=True).data
 
@@ -4433,16 +4441,32 @@ class StudentViewSet(BaseModelViewSet):
                     "total_encaisse": Sum("amount", filter=Q(is_cancelled=False)),
                 },
             ),
+            # Les examens du dossier suivent le meme embargo que
+            # `/api/exam-results/`. Ils ne le suivaient pas: la famille lisait
+            # ici les notes que l'autre porte lui refusait, et l'agregat
+            # "moyenne" les comptait toutes. Le nombre de notes retenues est
+            # dit plutot que taire: une moyenne calculee sur trois notes de
+            # huit passerait autrement pour la moyenne de l'eleve.
             self._dossier_section(
                 key="exams",
                 label="Résultats d'examens",
                 module="exams",
                 role=role,
-                queryset=ExamResult.objects.filter(student=student)
+                queryset=examens.resultats_lisibles_par(
+                    request.user,
+                    ExamResult.objects.filter(student=student),
+                )
                 .select_related("session", "subject")
                 .order_by("-session__start_date", "-id"),
                 serializer_class=ExamResultSerializer,
                 aggregates={"moyenne": Avg("score")},
+                summary_extra={
+                    "notes_en_attente": examens.resultats_sous_embargo(
+                        ExamResult.objects.filter(student=student)
+                    ).count()
+                    if examens.sous_embargo(role)
+                    else 0
+                },
                 labeller=lambda obj: {
                     "matiere": self._name_of(obj, "subject"),
                     "session": self._name_of(obj, "session", champ="title"),
@@ -9696,11 +9720,58 @@ class ExamSessionViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "exams"
     queryset = ExamSession.objects.select_related("academic_year").all().order_by("-id")
     serializer_class = ExamSessionSerializer
-    filterset_fields = ["academic_year", "term"]
     search_fields = ["title", "academic_year__name"]
     ordering_fields = ["start_date", "end_date", "title", "term"]
     filterset_fields = ["academic_year", "term", "results_published"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+
+    def get_queryset(self):
+        """Les sessions de son ecole, et pour la famille celles qui la
+        concernent.
+
+        La vue n'en avait aucune: seule des quatre du module, elle rendait le
+        registre entier. Un directeur lisait les campagnes d'examen des
+        autres etablissements, et `publier`/`depublier`/`DELETE` passaient par
+        `get_object()` sur ce meme ensemble -- donc operaient sur la session
+        d'une autre ecole.
+        """
+        user = self.request.user
+        qs = super().get_queryset()
+
+        # La famille ne suit pas l'etablissement actif de l'en-tete mais ses
+        # enfants: une session ne l'interesse que si une epreuve de leur
+        # classe s'y rattache, ou si elle y a une note.
+        if examens.sous_embargo(getattr(user, "role", "")):
+            classes_familiales = classes_du_perimetre_familial(user) or set()
+            return qs.filter(
+                Q(plannings__classroom_id__in=classes_familiales)
+                | Q(results__student__classroom_id__in=classes_familiales)
+            ).distinct()
+
+        # `AcademicYear.etablissement` est nullable, et beaucoup d'annees
+        # anciennes n'en portent pas: une ecole unique n'avait pas a le
+        # renseigner. Une session rattachee a une telle annee n'appartient a
+        # personne -- la refuser a tous rendrait le module inutilisable sur
+        # les installations existantes. La tolerance porte donc sur l'annee
+        # sans ecole, jamais sur l'annee d'une autre ecole.
+        sans_ecole = Q(academic_year__etablissement__isnull=True)
+
+        requested_etablissement = self._requested_etablissement()
+        if requested_etablissement is not None:
+            return qs.filter(
+                Q(academic_year__etablissement=requested_etablissement) | sans_ecole
+            )
+        if self._has_requested_scope():
+            return qs.none()
+        if getattr(user, "role", None) == UserRole.SUPER_ADMIN:
+            return qs
+
+        user_etablissement = getattr(user, "etablissement", None)
+        if user_etablissement is None:
+            return qs.filter(sans_ecole)
+        return qs.filter(
+            Q(academic_year__etablissement=user_etablissement) | sans_ecole
+        )
 
     def _journaliser(self, session, action, details):
         ActivityLog.objects.create(
@@ -9792,6 +9863,14 @@ class ExamPlanningViewSet(BaseModelViewSet):
         qs = super().get_queryset()
         requested_etablissement = self._requested_etablissement()
 
+        # La famille d'abord: elle lisait le calendrier d'examen de toute
+        # l'ecole, classe par classe. L'horaire d'une epreuve a venir n'est
+        # pas un secret -- on ne filtre donc pas sur la publication ici --
+        # mais celui d'une autre classe ne la regarde pas.
+        classes_familiales = classes_du_perimetre_familial(user)
+        if classes_familiales is not None:
+            return qs.filter(classroom_id__in=classes_familiales)
+
         if requested_etablissement is not None:
             return qs.filter(classroom__etablissement=requested_etablissement)
         if self._has_requested_scope():
@@ -9801,7 +9880,10 @@ class ExamPlanningViewSet(BaseModelViewSet):
 
         user_etablissement = getattr(user, "etablissement", None)
         if user_etablissement is None:
-            return qs
+            # Rien plutot que tout: un compte sans etablissement n'a aucun
+            # perimetre, et lui rendre le registre entier etait l'inverse de
+            # ce que cette methode est la pour faire.
+            return qs.none()
 
         return qs.filter(classroom__etablissement=user_etablissement)
 
@@ -9839,6 +9921,13 @@ class ExamInvigilationViewSet(BaseModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = super().get_queryset()
+
+        # Le tableau de surveillance est un document de service. La famille,
+        # qui lit le module en `L*`, y voyait le nom de chaque surveillant de
+        # l'ecole et l'epreuve qu'il tient.
+        if examens.sous_embargo(getattr(user, "role", "")):
+            return qs.none()
+
         requested_id = self.request.headers.get("X-Etablissement-Id") or self.request.query_params.get("etablissement")
         if requested_id not in (None, ""):
             try:
@@ -9896,13 +9985,17 @@ class ExamResultViewSet(BaseModelViewSet):
         # Les familles ne lisent que des resultats arretes. Sans ce filtre,
         # un eleve rafraichissait son ecran pendant la correction et voyait
         # une note avant le jury -- puis parfois une autre apres correction.
+        #
+        # La regle elle-meme vit dans `examens.py`: elle etait ecrite ici et
+        # nulle part ailleurs, si bien que le dossier eleve et le bulletin la
+        # contournaient tous les deux.
         if role == UserRole.STUDENT:
-            return qs.filter(
-                student__user_id=user.id, session__results_published=True
+            return examens.resultats_lisibles_par(
+                user, qs.filter(student__user_id=user.id)
             )
         if role == UserRole.PARENT:
-            return qs.filter(
-                student__parent__user_id=user.id, session__results_published=True
+            return examens.resultats_lisibles_par(
+                user, qs.filter(student__parent__user_id=user.id)
             )
 
         requested_id = self.request.headers.get("X-Etablissement-Id") or self.request.query_params.get("etablissement")

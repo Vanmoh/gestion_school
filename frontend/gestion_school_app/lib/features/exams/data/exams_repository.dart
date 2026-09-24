@@ -92,6 +92,11 @@ class ExamsRepository {
             studentId: row['student'] as int,
             subjectId: row['subject'] as int,
             score: _toDouble(row['score']),
+            subjectName: row['subject_name']?.toString() ?? '',
+            sessionTitle: row['session_title']?.toString() ?? '',
+            sessionTerm: row['session_term']?.toString() ?? '',
+            studentFullName: row['student_full_name']?.toString() ?? '',
+            studentMatricule: row['student_matricule']?.toString() ?? '',
           ),
         )
         .toList();
