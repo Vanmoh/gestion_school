@@ -1,0 +1,82 @@
+name: Publish Android APK to downloads_site
+
+# Troisieme cible sortie de la machine de developpement, apres Windows et
+# Linux, et pour une raison de plus: le poste portait un JDK 25 que le Gradle
+# du projet refuse, et des caches de build herites d'une autre machine dont
+# les chemins absolus faisaient echouer la compilation. Un runner neuf n'a ni
+# l'un ni les autres.
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "URL de l'API embarquee dans l'APK"
+        required: false
+        default: "https://gestion-school-jkzf.onrender.com/api"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Explicite, et non le JDK par defaut du runner: c'est la version de
+      # Java qui a fait echouer le premier build local, et un runner qui
+      # change de defaut ferait revenir la panne sans que rien n'ait bouge
+      # dans le depot.
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build APK release
+        working-directory: frontend/gestion_school_app
+        run: |
+          flutter pub get
+          flutter build apk --release \
+            --dart-define=API_BASE_URL=${{ inputs.api_url }}
+
+      - name: Publier l'APK et la version
+        run: |
+          src="frontend/gestion_school_app/build/app/outputs/flutter-apk/app-release.apk"
+          dst="downloads_site/Gestion School.apk"
+          if [ ! -f "$src" ]; then
+            echo "APK introuvable: $src"
+            exit 1
+          fi
+          cp "$src" "$dst"
+
+          # La meme version que celle qu'ecrit publish_downloads_artifacts.sh:
+          # le site la lit pour casser le cache du navigateur, sans quoi une
+          # famille retelecharge l'ancienne APK sans le savoir.
+          release="$(date -u +'%Y-%m-%d-r%H%M%S')"
+          index="downloads_site/index.html"
+          sed -i -E "s/(const releaseVersion = ')[^']+(')/\\1$release\\2/" "$index"
+          sed -i -E "s|(<code id=\"release-version\">)[^<]+(</code>)|\\1$release\\2|" "$index"
+          echo "release=$release" >> "$GITHUB_ENV"
+
+      - name: Commit and push artifact
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "downloads_site/Gestion School.apk" downloads_site/index.html
+          if git diff --cached --quiet; then
+            echo "No artifact changes to commit"
+            exit 0
+          fi
+          git commit -m "Publish Android APK artifact ${{ env.release }}"
+          git push
