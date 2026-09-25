@@ -2506,7 +2506,33 @@ class ExamPlanning(TimeStampedModel):
                     f"du {session.start_date} au {session.end_date}."
                 )
 
+        # Une classe ne compose pas deux matieres a la meme heure. Rien ne
+        # l'interdisait: deux epreuves planifiees sur le meme creneau
+        # paraissaient toutes deux au calendrier imprime, et c'est le jour
+        # meme qu'on s'en apercevait.
         classroom = getattr(self, "classroom", None)
+        if (
+            classroom is not None
+            and self.exam_date
+            and self.start_time
+            and self.end_time
+        ):
+            voisines = ExamPlanning.objects.filter(
+                classroom=classroom,
+                exam_date=self.exam_date,
+                start_time__lt=self.end_time,
+                end_time__gt=self.start_time,
+            )
+            if self.pk:
+                voisines = voisines.exclude(pk=self.pk)
+            chevauche = voisines.select_related("subject").first()
+            if chevauche is not None:
+                erreurs["start_time"] = (
+                    f"{classroom.name} compose déjà "
+                    f"« {chevauche.subject} » ce jour-là de "
+                    f"{chevauche.start_time} à {chevauche.end_time}."
+                )
+
         subject = getattr(self, "subject", None)
         if classroom is not None and subject is not None:
             # `Subject.classroom` est nullable: une matiere partagee par
@@ -2545,11 +2571,63 @@ class ExamPlanning(TimeStampedModel):
 
 
 class ExamInvigilation(TimeStampedModel):
+    """Qui tient une epreuve.
+
+    Le champ accepte n'importe quel compte: un eleve ou un parent pouvait
+    etre designe surveillant, et le meme adulte pouvait etre affecte a deux
+    salles a la meme heure. Rien ne le disait, et le tableau imprime la
+    veille des compositions ne s'en apercevait pas.
+    """
+
     planning = models.ForeignKey(ExamPlanning, on_delete=models.CASCADE, related_name="invigilations")
     supervisor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="exam_invigilations")
 
     class Meta:
         unique_together = ("planning", "supervisor")
+
+    def __str__(self) -> str:
+        return f"{self.supervisor} - {self.planning}"
+
+    def clean(self):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        surveillant = getattr(self, "supervisor", None)
+        epreuve = getattr(self, "planning", None)
+        if surveillant is None or epreuve is None:
+            return
+
+        # Une epreuve se surveille; on ne se surveille pas soi-meme, et une
+        # famille n'a rien a faire dans une salle d'examen.
+        role = getattr(surveillant, "role", "")
+        if role in {"parent", "student"}:
+            raise DjangoValidationError(
+                {
+                    "supervisor": (
+                        "Une épreuve se surveille par un membre du personnel."
+                    )
+                }
+            )
+
+        ailleurs = (
+            ExamInvigilation.objects.filter(
+                supervisor=surveillant,
+                planning__exam_date=epreuve.exam_date,
+                planning__start_time__lt=epreuve.end_time,
+                planning__end_time__gt=epreuve.start_time,
+            )
+            .exclude(planning_id=epreuve.pk)
+            .select_related("planning", "planning__classroom")
+            .first()
+        )
+        if ailleurs is not None:
+            raise DjangoValidationError(
+                {
+                    "supervisor": (
+                        f"{surveillant.get_full_name().strip() or surveillant.username} "
+                        f"tient déjà {ailleurs.planning.classroom} sur ce créneau."
+                    )
+                }
+            )
 
 
 class ExamResult(TimeStampedModel):
