@@ -9786,6 +9786,37 @@ class ExamSessionViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
             details=details,
         )
 
+    @action(detail=True, methods=["get"], url_path="delete-check")
+    def delete_check(self, request, pk=None):
+        """Ce que la suppression de cette campagne emporterait.
+
+        `ExamPlanning.session` et `ExamResult.session` sont en CASCADE:
+        supprimer une session detruit ses epreuves, ses surveillances et
+        toutes ses notes, sans rien annoncer. Les classes et les matieres
+        ont ce garde-fou depuis longtemps; la campagne d'examen, qui porte
+        des notes deja imprimees sur des bulletins, ne l'avait pas.
+
+        Il informe, il n'empeche pas: une ecole qui a cree une campagne en
+        double le jour de la rentree doit pouvoir la defaire.
+        """
+        session = self.get_object()
+        epreuves = ExamPlanning.objects.filter(session=session)
+        deps = {
+            "exam_plannings": epreuves.count(),
+            "exam_results": ExamResult.objects.filter(session=session).count(),
+            "exam_invigilations": ExamInvigilation.objects.filter(
+                planning__in=epreuves
+            ).count(),
+        }
+        return Response(
+            {
+                "id": session.id,
+                "title": session.title,
+                "dependencies": deps,
+                "can_delete": sum(deps.values()) == 0,
+            }
+        )
+
     @action(detail=True, methods=["post"])
     def publier(self, request, pk=None):
         """Ouvre les resultats de la session aux familles.
@@ -9860,7 +9891,17 @@ class ExamPlanningViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "exams"
     queryset = ExamPlanning.objects.select_related("session", "classroom", "subject").all().order_by("-id")
     serializer_class = ExamPlanningSerializer
-    filterset_fields = ["session", "classroom", "subject", "exam_date"]
+    # `results_published` n'y etait pas: l'ecran ne pouvait pas demander
+    # « les epreuves qu'il reste a ouvrir », qui est pourtant la seule
+    # question qu'on se pose devant un calendrier d'examen en fin de
+    # trimestre.
+    filterset_fields = [
+        "session",
+        "classroom",
+        "subject",
+        "exam_date",
+        "results_published",
+    ]
     search_fields = ["session__title", "classroom__name", "subject__name"]
     ordering_fields = ["exam_date", "start_time", "classroom__name"]
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
@@ -10064,7 +10105,10 @@ class ExamResultViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "exams"
     queryset = ExamResult.objects.select_related("session", "student", "subject").all().order_by("-id")
     serializer_class = ExamResultSerializer
-    filterset_fields = ["session", "student", "subject"]
+    # `planning` est le grain de la correction: on corrige une epreuve, pas
+    # une session. Sans ce filtre, l'ecran ne pouvait pas montrer ce qu'il
+    # s'apprete a publier.
+    filterset_fields = ["session", "student", "subject", "planning"]
     search_fields = [
         "student__matricule",
         "student__user__first_name",
