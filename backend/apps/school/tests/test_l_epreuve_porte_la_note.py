@@ -484,6 +484,151 @@ class InventaireAvantSuppressionTests(SocleEpreuves):
         self.assertFalse(ExamSession.objects.filter(id=self.session.id).exists())
 
 
+class UneClasseNeComposePasDeuxFoisTests(SocleEpreuves):
+    """Deux épreuves sur le même créneau paraissaient toutes deux au calendrier.
+
+    On s'en apercevait le jour même, une classe devant deux salles.
+    """
+
+    def _planifier(self, **charge):
+        self.client.force_authenticate(self.directeur)
+        donnees = {
+            "session": self.session.id,
+            "classroom": self.sixieme.id,
+            "subject": self.maths.id,
+            "exam_date": "2025-12-02",
+            "start_time": "08:00",
+            "end_time": "10:00",
+        }
+        donnees.update(charge)
+        return self.client.post(
+            "/api/exam-plannings/", donnees, format="json", **self._entetes()
+        )
+
+    def test_deux_epreuves_qui_se_chevauchent_sont_refusees(self):
+        physique = Subject.objects.create(
+            name="Physique", code="PHY", coefficient=Decimal("2")
+        )
+        self._planifier()
+
+        reponse = self._planifier(
+            subject=physique.id, start_time="09:00", end_time="11:00"
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("compose déjà", str(reponse.data))
+
+    def test_deux_epreuves_qui_se_suivent_passent(self):
+        """8h-10h puis 10h-12h: la classe enchaîne, elle ne se dédouble pas."""
+        physique = Subject.objects.create(
+            name="Physique", code="PHY", coefficient=Decimal("2")
+        )
+        self._planifier()
+
+        reponse = self._planifier(
+            subject=physique.id, start_time="10:00", end_time="12:00"
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_201_CREATED, reponse.data)
+
+    def test_une_autre_classe_compose_a_la_meme_heure(self):
+        """Toute l'école compose en même temps: c'est la règle, pas l'exception."""
+        self._planifier()
+
+        reponse = self._planifier(classroom=self.cinquieme.id)
+
+        self.assertEqual(reponse.status_code, status.HTTP_201_CREATED, reponse.data)
+
+    def test_corriger_une_epreuve_ne_la_fait_pas_se_heurter_a_elle_meme(self):
+        creee = self._planifier()
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.patch(
+            f"/api/exam-plannings/{creee.data['id']}/",
+            {"end_time": "11:00"},
+            format="json",
+            **self._entetes(),
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
+
+
+class QuiTientUneEpreuveTests(SocleEpreuves):
+    """Le champ acceptait n'importe quel compte, et le même adulte deux salles."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.epreuve_6a = cls._epreuve(cls.sixieme, jour=2)
+        cls.epreuve_5b = ExamPlanning.objects.create(
+            session=cls.session,
+            classroom=cls.cinquieme,
+            subject=cls.maths,
+            exam_date=date(2025, 12, 2),
+            start_time=time(9, 0),
+            end_time=time(11, 0),
+        )
+        cls.surveillant = User.objects.create_user(
+            username="surveillant_epreuve",
+            password="Pass1234!",
+            role=UserRole.SUPERVISOR,
+            etablissement=cls.etablissement,
+            first_name="Fatou",
+            last_name="Kone",
+        )
+
+    def _affecter(self, epreuve, personne):
+        self.client.force_authenticate(self.directeur)
+        return self.client.post(
+            "/api/exam-invigilations/",
+            {"planning": epreuve.id, "supervisor": personne.id},
+            format="json",
+            **self._entetes(),
+        )
+
+    def test_un_membre_du_personnel_tient_une_epreuve(self):
+        reponse = self._affecter(self.epreuve_6a, self.surveillant)
+
+        self.assertEqual(reponse.status_code, status.HTTP_201_CREATED, reponse.data)
+
+    def test_un_parent_ne_surveille_pas(self):
+        reponse = self._affecter(self.epreuve_6a, self.compte_parent)
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("supervisor", reponse.data)
+
+    def test_un_eleve_non_plus(self):
+        eleve = self._eleve("eleve_surveillant", "LEPR6A0020M", self.sixieme)
+
+        reponse = self._affecter(self.epreuve_6a, eleve.user)
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_personne_ne_tient_deux_salles_a_la_fois(self):
+        """8h-10h en 6e et 9h-11h en 5e: il faudrait être à deux endroits."""
+        self._affecter(self.epreuve_6a, self.surveillant)
+
+        reponse = self._affecter(self.epreuve_5b, self.surveillant)
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("tient déjà", str(reponse.data))
+
+    def test_deux_epreuves_qui_ne_se_chevauchent_pas_se_tiennent(self):
+        apres_midi = ExamPlanning.objects.create(
+            session=self.session,
+            classroom=self.cinquieme,
+            subject=self.maths,
+            exam_date=date(2025, 12, 2),
+            start_time=time(14, 0),
+            end_time=time(16, 0),
+        )
+        self._affecter(self.epreuve_6a, self.surveillant)
+
+        reponse = self._affecter(apres_midi, self.surveillant)
+
+        self.assertEqual(reponse.status_code, status.HTTP_201_CREATED, reponse.data)
+
+
 class SuppressionDUneEpreuveTests(SocleEpreuves):
     @classmethod
     def setUpTestData(cls):

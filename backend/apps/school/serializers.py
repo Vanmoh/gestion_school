@@ -2529,12 +2529,16 @@ class ExamPlanningSerializer(serializers.ModelSerializer):
         # enregistree suffit, les trois controles ne lisent que des
         # relations deja resolues.
         instance = ExamPlanning(
+            # Le `pk` voyage avec: sans lui, une correction d'horaire se
+            # heurtait a l'epreuve qu'elle corrigeait, le controle de
+            # chevauchement ne pouvant plus s'exclure elle-meme.
+            pk=self.instance.pk if self.instance else None,
             **{
                 champ: attrs.get(
                     champ, getattr(self.instance, champ, None) if self.instance else None
                 )
                 for champ in ("session", "classroom", "subject", "exam_date", "start_time", "end_time")
-            }
+            },
         )
         try:
             instance.clean()
@@ -2567,6 +2571,30 @@ class ExamInvigilationSerializer(serializers.ModelSerializer):
 
     def get_supervisor_username(self, obj):
         return obj.supervisor.username if obj.supervisor else ""
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        # Les regles vivent dans `ExamInvigilation.clean()`: les rejouer ici
+        # serait les ecrire deux fois. Sans cet appel, elles ne se
+        # declencheraient que sur un `full_clean()` que l'API ne fait pas.
+        instance = ExamInvigilation(
+            planning=attrs.get(
+                "planning",
+                getattr(self.instance, "planning", None) if self.instance else None,
+            ),
+            supervisor=attrs.get(
+                "supervisor",
+                getattr(self.instance, "supervisor", None) if self.instance else None,
+            ),
+        )
+        if self.instance:
+            instance.pk = self.instance.pk
+        try:
+            instance.clean()
+        except DjangoValidationError as erreur:
+            raise serializers.ValidationError(erreur.message_dict)
+        return attrs
 
     class Meta:
         model = ExamInvigilation
