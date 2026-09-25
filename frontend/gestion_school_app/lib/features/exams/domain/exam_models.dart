@@ -161,3 +161,51 @@ class OptionItem {
 
   const OptionItem({required this.id, required this.label, this.classroomId});
 }
+
+/// Ce que la suppression d'une campagne emporterait.
+///
+/// Ses épreuves, ses surveillances et toutes ses notes partent en cascade.
+/// L'inventaire informe, il n'empêche pas : une école qui a créé une campagne
+/// en double le jour de la rentrée doit pouvoir la défaire.
+class InventaireDeSuppression {
+  final String titre;
+  final int epreuves;
+  final int notes;
+  final int surveillances;
+
+  const InventaireDeSuppression({
+    this.titre = '',
+    this.epreuves = 0,
+    this.notes = 0,
+    this.surveillances = 0,
+  });
+
+  factory InventaireDeSuppression.fromJson(dynamic data) {
+    if (data is! Map) return const InventaireDeSuppression();
+    final deps = data['dependencies'];
+    int compte(String cle) =>
+        deps is Map ? (deps[cle] as num?)?.toInt() ?? 0 : 0;
+    return InventaireDeSuppression(
+      titre: data['title']?.toString() ?? '',
+      epreuves: compte('exam_plannings'),
+      notes: compte('exam_results'),
+      surveillances: compte('exam_invigilations'),
+    );
+  }
+
+  /// Vrai quand rien ne part avec elle : la question ne se pose pas.
+  bool get estVide => epreuves == 0 && notes == 0 && surveillances == 0;
+
+  /// Ce qui partirait, dit en clair et dans l'ordre de ce qui compte.
+  ///
+  /// Les notes d'abord : ce sont elles qui figurent sur des bulletins déjà
+  /// imprimés.
+  String get resume {
+    final morceaux = <String>[
+      if (notes > 0) '$notes note(s)',
+      if (epreuves > 0) '$epreuves épreuve(s)',
+      if (surveillances > 0) '$surveillances surveillance(s)',
+    ];
+    return morceaux.join(', ');
+  }
+}

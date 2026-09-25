@@ -66,8 +66,25 @@ class ExamsRepository {
         : 'Résultats retirés.';
   }
 
-  Future<List<ExamPlanningItem>> fetchPlannings() async {
-    final response = await dio.get('/exam-plannings/');
+  /// Les épreuves, filtrées par le serveur et non en mémoire.
+  ///
+  /// Une école de quinze classes déroulait sinon tout son calendrier dans une
+  /// seule liste. Les quatre critères sont ceux que l'API accepte déjà.
+  Future<List<ExamPlanningItem>> fetchPlannings({
+    int? sessionId,
+    int? classroomId,
+    int? subjectId,
+    bool? publiees,
+  }) async {
+    final response = await dio.get(
+      '/exam-plannings/',
+      queryParameters: {
+        'session': ?sessionId,
+        'classroom': ?classroomId,
+        'subject': ?subjectId,
+        'results_published': ?publiees,
+      },
+    );
     final rows = _extractRows(response.data);
     return rows
         .map(
@@ -112,8 +129,17 @@ class ExamsRepository {
         : 'Résultats retirés.';
   }
 
-  Future<List<ExamResultItem>> fetchResults() async {
-    final response = await dio.get('/exam-results/');
+  /// Les notes, éventuellement celles d'une seule épreuve.
+  ///
+  /// C'est le grain de la correction : on corrige une épreuve, pas une
+  /// session — et c'est ce qu'on veut relire avant de publier.
+  Future<List<ExamResultItem>> fetchResults({int? planningId}) async {
+    final response = await dio.get(
+      '/exam-results/',
+      queryParameters: {
+        'planning': ?planningId,
+      },
+    );
     final rows = _extractRows(response.data);
     return rows
         .map(
@@ -266,21 +292,72 @@ class ExamsRepository {
     );
   }
 
-  Future<void> createResult({
-    required int session,
-    required int student,
-    required int subject,
-    required double score,
+  /// Corrige une campagne déjà créée.
+  ///
+  /// Le dépôt n'avait que des `POST`, alors que l'API expose le CRUD complet
+  /// depuis toujours : une session créée en double ou mal datée restait là
+  /// pour toujours.
+  Future<void> updateSession({
+    required int id,
+    String? title,
+    String? term,
+    String? startDate,
+    String? endDate,
   }) async {
-    await dio.post(
-      '/exam-results/',
+    await dio.patch(
+      '/exam-sessions/$id/',
       data: {
-        'session': session,
-        'student': student,
-        'subject': subject,
-        'score': score,
+        'title': ?title,
+        'term': ?term,
+        'start_date': ?startDate,
+        'end_date': ?endDate,
       },
     );
+  }
+
+  /// Ce que la suppression d'une campagne emporterait.
+  ///
+  /// Ses épreuves, ses surveillances et **toutes ses notes** partent en
+  /// cascade. Le serveur en rend l'inventaire ; il informe, il n'empêche pas.
+  Future<InventaireDeSuppression> inventaireDeLaSession(int id) async {
+    final response = await dio.get('/exam-sessions/$id/delete-check/');
+    return InventaireDeSuppression.fromJson(response.data);
+  }
+
+  Future<void> deleteSession(int id) async {
+    await dio.delete('/exam-sessions/$id/');
+  }
+
+  Future<void> updatePlanning({
+    required int id,
+    int? classroom,
+    int? subject,
+    String? examDate,
+    String? startTime,
+    String? endTime,
+  }) async {
+    await dio.patch(
+      '/exam-plannings/$id/',
+      data: {
+        'classroom': ?classroom,
+        'subject': ?subject,
+        'exam_date': ?examDate,
+        'start_time': ?startTime,
+        'end_time': ?endTime,
+      },
+    );
+  }
+
+  /// Supprime une épreuve.
+  ///
+  /// Le serveur refuse en 409 si elle porte des notes — `ExamResult.planning`
+  /// est en RESTRICT, et le message dit ce qui retient.
+  Future<void> deletePlanning(int id) async {
+    await dio.delete('/exam-plannings/$id/');
+  }
+
+  Future<void> deleteInvigilation(int id) async {
+    await dio.delete('/exam-invigilations/$id/');
   }
 
   Future<void> createInvigilation({

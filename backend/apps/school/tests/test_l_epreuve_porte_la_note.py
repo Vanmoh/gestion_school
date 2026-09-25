@@ -22,6 +22,7 @@ from apps.school.models import (
     AcademicYear,
     ClassRoom,
     Etablissement,
+    ExamInvigilation,
     ExamPlanning,
     ExamResult,
     ExamSession,
@@ -367,6 +368,120 @@ class CoherenceDUneEpreuveTests(SocleEpreuves):
         reponse = self._planifier()
 
         self.assertEqual(reponse.status_code, status.HTTP_201_CREATED, reponse.data)
+
+
+class CeQueLEcranPeutDemanderTests(SocleEpreuves):
+    """Les deux questions que le calendrier pose au serveur.
+
+    Sans ces filtres, l'ecran ramenait tout et triait en memoire -- ce qui
+    marche sur une classe et ne marche plus sur quinze.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.eleve = cls._eleve("eleve_filtre", "LEPR6A0009M", cls.sixieme)
+        cls.epreuve_ouverte = cls._epreuve(cls.sixieme, jour=2)
+        cls.epreuve_fermee = cls._epreuve(cls.cinquieme, jour=3)
+        cls.note = ExamResult.objects.create(
+            session=cls.session,
+            student=cls.eleve,
+            subject=cls.maths,
+            score=Decimal("13.00"),
+            planning=cls.epreuve_ouverte,
+        )
+        cls.epreuve_ouverte.publier_les_resultats()
+
+    def _lire(self, route):
+        self.client.force_authenticate(self.directeur)
+        reponse = self.client.get(route, **self._entetes())
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
+        return reponse.data["results"]
+
+    def test_les_epreuves_qu_il_reste_a_ouvrir(self):
+        """La seule question qu'on se pose devant un calendrier en fin de
+        trimestre."""
+        restantes = self._lire("/api/exam-plannings/?results_published=false")
+
+        self.assertEqual(
+            {ligne["id"] for ligne in restantes}, {self.epreuve_fermee.id}
+        )
+
+    def test_les_notes_d_une_epreuve(self):
+        """Le grain de la correction: on corrige une epreuve, pas une session."""
+        notes = self._lire(
+            f"/api/exam-results/?planning={self.epreuve_ouverte.id}"
+        )
+
+        self.assertEqual({ligne["id"] for ligne in notes}, {self.note.id})
+
+
+class InventaireAvantSuppressionTests(SocleEpreuves):
+    """Supprimer une campagne emporte ses epreuves et toutes ses notes."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.eleve = cls._eleve("eleve_inventaire", "LEPR6A0010M", cls.sixieme)
+        cls.epreuve = cls._epreuve(cls.sixieme)
+        ExamResult.objects.create(
+            session=cls.session,
+            student=cls.eleve,
+            subject=cls.maths,
+            score=Decimal("10.00"),
+            planning=cls.epreuve,
+        )
+        ExamInvigilation.objects.create(
+            planning=cls.epreuve, supervisor=cls.directeur
+        )
+
+    def _inventaire(self):
+        self.client.force_authenticate(self.directeur)
+        reponse = self.client.get(
+            f"/api/exam-sessions/{self.session.id}/delete-check/",
+            **self._entetes(),
+        )
+        self.assertEqual(reponse.status_code, status.HTTP_200_OK, reponse.data)
+        return reponse.data
+
+    def test_il_nomme_ce_qui_partirait(self):
+        inventaire = self._inventaire()
+
+        self.assertEqual(inventaire["dependencies"]["exam_plannings"], 1)
+        self.assertEqual(inventaire["dependencies"]["exam_results"], 1)
+        self.assertEqual(inventaire["dependencies"]["exam_invigilations"], 1)
+        self.assertFalse(inventaire["can_delete"])
+
+    def test_une_campagne_vide_se_supprime_sans_ceremonie(self):
+        vide = ExamSession.objects.create(
+            title="Campagne creee en double",
+            term="T1",
+            academic_year=self.annee,
+            start_date=date(2025, 12, 1),
+            end_date=date(2025, 12, 6),
+        )
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.get(
+            f"/api/exam-sessions/{vide.id}/delete-check/", **self._entetes()
+        )
+
+        self.assertTrue(reponse.data["can_delete"])
+
+    def test_il_informe_sans_empecher(self):
+        """Une ecole qui a cree une campagne en double doit pouvoir la defaire.
+
+        L'inventaire est la pour qu'elle sache ce qu'elle fait, pas pour
+        l'immobiliser.
+        """
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.delete(
+            f"/api/exam-sessions/{self.session.id}/", **self._entetes()
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(ExamSession.objects.filter(id=self.session.id).exists())
 
 
 class SuppressionDUneEpreuveTests(SocleEpreuves):

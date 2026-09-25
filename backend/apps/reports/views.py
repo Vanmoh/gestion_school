@@ -1960,28 +1960,6 @@ def _term_variants(term: str) -> list[str]:
     return sorted(value for value in variants if value)
 
 
-def _exam_term_title_tokens(term: str) -> list[str]:
-    raw = str(term or "").strip().upper()
-    if not raw:
-        return []
-
-    tokens = {raw}
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    if digits:
-        tokens.update(
-            {
-                digits,
-                f"T{digits}",
-                f"TRIMESTRE{digits}",
-                f"TRIMESTRE {digits}",
-                f"TERM{digits}",
-                f"TERM {digits}",
-            }
-        )
-
-    return sorted(token for token in tokens if token)
-
-
 def _term_display_label(term: str) -> str:
     raw = str(term or "").strip().upper()
     if not raw:
@@ -2197,28 +2175,6 @@ def _term_variants(term: str) -> list[str]:
         )
 
     return sorted(value for value in variants if value)
-
-
-def _exam_term_title_tokens(term: str) -> list[str]:
-    raw = str(term or "").strip().upper()
-    if not raw:
-        return []
-
-    tokens = {raw}
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    if digits:
-        tokens.update(
-            {
-                digits,
-                f"T{digits}",
-                f"TRIMESTRE{digits}",
-                f"TRIMESTRE {digits}",
-                f"TERM{digits}",
-                f"TERM {digits}",
-            }
-        )
-
-    return sorted(token for token in tokens if token)
 
 
 def _term_display_label(term: str) -> str:

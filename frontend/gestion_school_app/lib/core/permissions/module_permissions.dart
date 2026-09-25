@@ -287,6 +287,11 @@ class Capacites {
   /// recette se décide à la direction, pas à la caisse.
   static const dispenseInscription = 'dispense_inscription';
 
+  /// Ouvrir aux familles les résultats d'un examen. La matrice donne
+  /// « exams » en écriture au censeur et à l'enseignant ; décider quand une
+  /// famille lit une note n'en découle pas.
+  static const publicationDesExamens = 'publication_des_examens';
+
   static const saisieConduite = 'saisie_conduite';
   static const appelAttention = 'appel_attention';
 }
