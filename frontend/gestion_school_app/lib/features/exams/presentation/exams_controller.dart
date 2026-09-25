@@ -12,11 +12,69 @@ final examSessionsProvider = FutureProvider<List<ExamSessionItem>>((ref) async {
   return ref.read(examsRepositoryProvider).fetchSessions();
 });
 
-final examPlanningsProvider = FutureProvider<List<ExamPlanningItem>>((
-  ref,
-) async {
-  return ref.read(examsRepositoryProvider).fetchPlannings();
-});
+/// Ce sur quoi le calendrier se filtre, porté au serveur.
+///
+/// Une classe à part plutôt que trois paramètres: un `family` prend une seule
+/// clé, et elle doit savoir se comparer — sans quoi chaque reconstruction
+/// relancerait la requête.
+class FiltreDesEpreuves {
+  final int? sessionId;
+  final int? classroomId;
+  final bool? publiees;
+
+  const FiltreDesEpreuves({this.sessionId, this.classroomId, this.publiees});
+
+  /// Aucun filtre: tout le calendrier.
+  static const aucun = FiltreDesEpreuves();
+
+  bool get estVide =>
+      sessionId == null && classroomId == null && publiees == null;
+
+  FiltreDesEpreuves avec({
+    int? sessionId,
+    int? classroomId,
+    bool? publiees,
+    bool viderSession = false,
+    bool viderClasse = false,
+    bool viderPublication = false,
+  }) {
+    return FiltreDesEpreuves(
+      sessionId: viderSession ? null : (sessionId ?? this.sessionId),
+      classroomId: viderClasse ? null : (classroomId ?? this.classroomId),
+      publiees: viderPublication ? null : (publiees ?? this.publiees),
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is FiltreDesEpreuves &&
+      other.sessionId == sessionId &&
+      other.classroomId == classroomId &&
+      other.publiees == publiees;
+
+  @override
+  int get hashCode => Object.hash(sessionId, classroomId, publiees);
+}
+
+final examPlanningsProvider =
+    FutureProvider.family<List<ExamPlanningItem>, FiltreDesEpreuves>((
+      ref,
+      filtre,
+    ) async {
+      return ref.read(examsRepositoryProvider).fetchPlannings(
+        sessionId: filtre.sessionId,
+        classroomId: filtre.classroomId,
+        publiees: filtre.publiees,
+      );
+    });
+
+/// Les notes d'une épreuve, pour relire ce qu'on s'apprête à publier.
+final notesDeLEpreuveProvider =
+    FutureProvider.family<List<ExamResultItem>, int>((ref, planningId) async {
+      return ref.read(examsRepositoryProvider).fetchResults(
+        planningId: planningId,
+      );
+    });
 
 final examResultsProvider = FutureProvider<List<ExamResultItem>>((ref) async {
   return ref.read(examsRepositoryProvider).fetchResults();
@@ -112,26 +170,86 @@ class ExamMutationController extends StateNotifier<AsyncValue<void>> {
     }
   }
 
-  Future<void> createResult({
-    required int session,
-    required int student,
-    required int subject,
-    required double score,
+  /// Corrige une campagne, ou la défait.
+  ///
+  /// Le contrôleur ne savait que créer. Une campagne créée en double le jour
+  /// de la rentrée restait donc au registre, et ses épreuves avec.
+  Future<void> updateSession({
+    required int id,
+    String? title,
+    String? term,
+    String? startDate,
+    String? endDate,
   }) async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(
-      () => ref
-          .read(examsRepositoryProvider)
-          .createResult(
-            session: session,
-            student: student,
-            subject: subject,
-            score: score,
-          ),
+      () => ref.read(examsRepositoryProvider).updateSession(
+        id: id,
+        title: title,
+        term: term,
+        startDate: startDate,
+        endDate: endDate,
+      ),
+    );
+    if (!state.hasError) ref.invalidate(examSessionsProvider);
+  }
+
+  Future<void> deleteSession(int id) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(
+      () => ref.read(examsRepositoryProvider).deleteSession(id),
     );
     if (!state.hasError) {
+      ref.invalidate(examSessionsProvider);
+      ref.invalidate(examPlanningsProvider);
+      ref.invalidate(examInvigilationsProvider);
       ref.invalidate(examResultsProvider);
     }
+  }
+
+  Future<void> updatePlanning({
+    required int id,
+    int? classroom,
+    int? subject,
+    String? examDate,
+    String? startTime,
+    String? endTime,
+  }) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(
+      () => ref.read(examsRepositoryProvider).updatePlanning(
+        id: id,
+        classroom: classroom,
+        subject: subject,
+        examDate: examDate,
+        startTime: startTime,
+        endTime: endTime,
+      ),
+    );
+    if (!state.hasError) {
+      ref.invalidate(examPlanningsProvider);
+      ref.invalidate(examSessionsProvider);
+    }
+  }
+
+  Future<void> deletePlanning(int id) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(
+      () => ref.read(examsRepositoryProvider).deletePlanning(id),
+    );
+    if (!state.hasError) {
+      ref.invalidate(examPlanningsProvider);
+      ref.invalidate(examSessionsProvider);
+      ref.invalidate(examInvigilationsProvider);
+    }
+  }
+
+  Future<void> deleteInvigilation(int id) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(
+      () => ref.read(examsRepositoryProvider).deleteInvigilation(id),
+    );
+    if (!state.hasError) ref.invalidate(examInvigilationsProvider);
   }
 
   /// Ouvre les résultats d'une session aux familles.

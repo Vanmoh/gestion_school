@@ -1,8 +1,10 @@
-/// L'ecran des examens: ce que chaque profil peut y faire.
+/// L'écran Examens, rangé par la question qu'on se pose.
 ///
-/// Le module est le mieux structure de la section -- depot, modeles,
-/// controleur, droits lus sur la matrice -- mais rien ne le verifiait: la
-/// regle de lecture seule tenait sur une seule expression, non couverte.
+/// Il empilait quatre formulaires et quatre listes calqués sur les quatre
+/// ViewSets du backend : un censeur y voyait la plomberie du module, pas son
+/// travail. Trois onglets le suivent désormais — préparer la campagne,
+/// planifier les épreuves, les faire surveiller — et la publication se décide
+/// là où les copies reviennent, épreuve par épreuve.
 library;
 
 import 'package:dio/dio.dart';
@@ -14,7 +16,7 @@ import 'package:gestion_school_app/core/permissions/module_permissions.dart';
 import 'package:gestion_school_app/features/exams/data/exams_repository.dart';
 import 'package:gestion_school_app/features/exams/domain/exam_models.dart';
 import 'package:gestion_school_app/features/exams/presentation/exams_controller.dart';
-import 'package:gestion_school_app/features/exams/presentation/exams_page.dart';
+import 'package:gestion_school_app/features/exams/presentation/exams_module_page.dart';
 
 const _session = ExamSessionItem(
   id: 1,
@@ -37,56 +39,115 @@ const _epreuve = ExamPlanningItem(
   endTime: '10:00',
   classroomName: '6A',
   subjectName: 'Mathematiques',
-  sessionTitle: 'Composition T1',
+  sessionTitle: 'Composition du premier trimestre',
   resultatsSaisis: 1,
 );
 
+/// L'épreuve de référence, avec ce qu'on veut lui faire dire.
+ExamPlanningItem _epreuveTelleQue({
+  int id = 5,
+  String classe = '6A',
+  int resultatsSaisis = 1,
+  bool resultatsPublies = false,
+}) {
+  return ExamPlanningItem(
+    id: id,
+    sessionId: _epreuve.sessionId,
+    classroomId: _epreuve.classroomId,
+    subjectId: _epreuve.subjectId,
+    examDate: _epreuve.examDate,
+    startTime: _epreuve.startTime,
+    endTime: _epreuve.endTime,
+    classroomName: classe,
+    subjectName: _epreuve.subjectName,
+    sessionTitle: _epreuve.sessionTitle,
+    resultatsSaisis: resultatsSaisis,
+    resultatsPublies: resultatsPublies,
+  );
+}
+
 class _FauxDepot extends ExamsRepository {
-  /// La session servie: publiée ou non, avec ou sans note saisie. C'est elle
-  /// qui décide de l'état du bouton de publication.
   final ExamSessionItem session;
+  final List<ExamPlanningItem> epreuves;
+  final List<ExamInvigilationItem> affectations;
 
-  /// L'épreuve servie: c'est elle qui porte désormais la publication.
-  final ExamPlanningItem epreuve;
-
-  /// Ce que l'écran a demandé au serveur, pour vérifier qu'il vise bien
-  /// l'épreuve et non la campagne.
+  /// Ce que l'écran a demandé au serveur : les gestes, et les filtres.
   final List<String> gestes = [];
+  final List<String> filtres = [];
 
-  _FauxDepot({this.session = _session, this.epreuve = _epreuve}) : super(Dio());
+  _FauxDepot({
+    this.session = _session,
+    List<ExamPlanningItem>? epreuves,
+    this.affectations = const [],
+  }) : epreuves = epreuves ?? const [_epreuve],
+       super(Dio());
 
   @override
   Future<List<ExamSessionItem>> fetchSessions() async => [session];
 
   @override
-  Future<List<ExamPlanningItem>> fetchPlannings() async => [epreuve];
+  Future<List<ExamPlanningItem>> fetchPlannings({
+    int? sessionId,
+    int? classroomId,
+    int? subjectId,
+    bool? publiees,
+  }) async {
+    filtres.add('session=$sessionId classe=$classroomId publiees=$publiees');
+    return epreuves;
+  }
+
+  @override
+  Future<List<ExamResultItem>> fetchResults({int? planningId}) async {
+    if (planningId != null) filtres.add('notes-de=$planningId');
+    return const [
+      ExamResultItem(
+        id: 7,
+        sessionId: 1,
+        studentId: 30,
+        subjectId: 20,
+        score: 15.5,
+        studentFullName: 'Awa Traore',
+        subjectName: 'Mathematiques',
+      ),
+    ];
+  }
+
+  @override
+  Future<List<ExamInvigilationItem>> fetchInvigilations() async => affectations;
 
   @override
   Future<String> publierLEpreuve(int planningId) async {
-    gestes.add('publier:$planningId');
+    gestes.add('publier-epreuve:$planningId');
     return 'Résultats publiés.';
   }
 
   @override
   Future<String> retirerLEpreuve(int planningId) async {
-    gestes.add('retirer:$planningId');
+    gestes.add('retirer-epreuve:$planningId');
     return 'Résultats retirés.';
   }
 
   @override
-  Future<List<ExamResultItem>> fetchResults() async => const [
-    ExamResultItem(id: 7, sessionId: 1, studentId: 30, subjectId: 20, score: 15.5),
-  ];
+  Future<String> publierLesResultats(int sessionId) async {
+    gestes.add('tout-publier:$sessionId');
+    return 'Résultats publiés.';
+  }
 
   @override
-  Future<List<ExamInvigilationItem>> fetchInvigilations() async => const [
-    ExamInvigilationItem(
-      id: 9,
-      planningId: 5,
-      supervisorId: 40,
-      supervisorName: 'Fatou Kone',
-    ),
-  ];
+  Future<InventaireDeSuppression> inventaireDeLaSession(int id) async {
+    gestes.add('inventaire:$id');
+    return const InventaireDeSuppression(
+      titre: 'Composition du premier trimestre',
+      epreuves: 1,
+      notes: 1,
+    );
+  }
+
+  @override
+  Future<void> deleteSession(int id) async => gestes.add('supprimer-session:$id');
+
+  @override
+  Future<void> deletePlanning(int id) async => gestes.add('supprimer-epreuve:$id');
 
   @override
   Future<List<OptionItem>> fetchAcademicYears() async => const [
@@ -96,6 +157,7 @@ class _FauxDepot extends ExamsRepository {
   @override
   Future<List<OptionItem>> fetchClassrooms() async => const [
     OptionItem(id: 10, label: '6A'),
+    OptionItem(id: 11, label: '5B'),
   ];
 
   @override
@@ -114,7 +176,7 @@ class _FauxDepot extends ExamsRepository {
   ];
 }
 
-ModulePermissions _droits(AccessLevel niveau) {
+ModulePermissions _droits(AccessLevel niveau, {bool peutPublier = true}) {
   return ModulePermissions(
     role: 'test',
     modules: {
@@ -126,6 +188,7 @@ ModulePermissions _droits(AccessLevel niveau) {
         scoped: false,
       ),
     },
+    capabilities: {Capacites.publicationDesExamens: peutPublier},
   );
 }
 
@@ -133,21 +196,29 @@ Future<_FauxDepot> _monter(
   WidgetTester tester,
   AccessLevel niveau, {
   ExamSessionItem session = _session,
-  ExamPlanningItem epreuve = _epreuve,
+  List<ExamPlanningItem>? epreuves,
+  List<ExamInvigilationItem> affectations = const [],
+  bool peutPublier = true,
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = const Size(1500, 2200);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
 
-  final depot = _FauxDepot(session: session, epreuve: epreuve);
+  final depot = _FauxDepot(
+    session: session,
+    epreuves: epreuves,
+    affectations: affectations,
+  );
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         examsRepositoryProvider.overrideWithValue(depot),
-        currentPermissionsProvider.overrideWithValue(_droits(niveau)),
+        currentPermissionsProvider.overrideWithValue(
+          _droits(niveau, peutPublier: peutPublier),
+        ),
       ],
-      child: const MaterialApp(home: Scaffold(body: ExamsPage())),
+      child: const MaterialApp(home: Scaffold(body: ExamsModulePage())),
     ),
   );
   await tester.pump();
@@ -155,159 +226,167 @@ Future<_FauxDepot> _monter(
   return depot;
 }
 
-/// Etat actif d'un bouton portant ce libelle, quel que soit son type.
-bool _estActif(WidgetTester tester, String libelle) {
-  final bouton = find.ancestor(
-    of: find.text(libelle),
-    matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
-  );
-  expect(bouton, findsWidgets, reason: 'bouton « $libelle » introuvable');
-  return (tester.widget(bouton.first) as ButtonStyleButton).onPressed != null;
+/// Ouvre l'onglet portant ce libellé, et attend ce qu'il charge.
+///
+/// Un onglet ne demande ses données qu'à sa première ouverture — la
+/// surveillance ne charge ses affectations que là. Sans cette seconde
+/// attente, le test lit un indicateur de chargement.
+Future<void> _onglet(WidgetTester tester, String libelle) async {
+  await tester.tap(find.widgetWithText(Tab, libelle));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+  await tester.pump(const Duration(milliseconds: 400));
+}
+
+/// Appuie sur un bouton et laisse expirer le minuteur de la notification.
+Future<void> _appuyer(WidgetTester tester, Key cle) async {
+  await tester.ensureVisible(find.byKey(cle));
+  await tester.tap(find.byKey(cle));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+  await tester.pump(const Duration(seconds: 6));
 }
 
 void main() {
-  testWidgets('un profil en lecture seule est annonce comme tel', (
-    tester,
-  ) async {
-    await _monter(tester, AccessLevel.read);
-
-    expect(
-      find.text('Mode lecture seule: consultation uniquement pour ce profil.'),
-      findsOneWidget,
-    );
-    // Actualiser reste possible: consulter n'est pas ecrire.
-    expect(_estActif(tester, 'Actualiser'), isTrue);
-    expect(_estActif(tester, 'Imports académiques'), isFalse);
-  });
-
-  testWidgets('un profil en ecriture garde ses actions', (tester) async {
-    await _monter(tester, AccessLevel.write);
-
-    expect(
-      find.text('Mode lecture seule: consultation uniquement pour ce profil.'),
-      findsNothing,
-    );
-    expect(_estActif(tester, 'Imports académiques'), isTrue);
-  });
-
-  testWidgets('les sessions chargees s_affichent', (tester) async {
-    await _monter(tester, AccessLevel.write);
-
-    expect(find.textContaining('Composition du premier trimestre'), findsWidgets);
-  });
-
-  group('la publication des résultats', () {
-    // Les notes étaient lisibles par les familles dès la saisie: un élève
-    // voyait passer un chiffre avant que le jury ne l'ait arrêté.
-
-    testWidgets('une session non publiée propose de la publier', (
-      tester,
-    ) async {
+  group('la coque', () {
+    testWidgets('trois onglets, dans l_ordre du travail', (tester) async {
+      // Préparer la campagne, planifier, faire surveiller: c'est la séquence
+      // que la procédure de rentrée décrit.
       await _monter(tester, AccessLevel.write);
 
-      expect(find.text('Publication des résultats'), findsOneWidget);
-      // La session resume ses epreuves: un booleen dirait « publiee »
-      // devant trois epreuves ouvertes sur sept.
-      expect(
-        find.textContaining('0/1 épreuve(s) publiée(s)'),
-        findsOneWidget,
-      );
-      expect(_estActif(tester, 'Tout publier'), isTrue);
+      expect(find.widgetWithText(Tab, 'Campagnes'), findsOneWidget);
+      expect(find.widgetWithText(Tab, 'Calendrier'), findsOneWidget);
+      expect(find.widgetWithText(Tab, 'Surveillance'), findsOneWidget);
     });
 
-    testWidgets('une session sans note ne se publie pas', (tester) async {
-      // Publier le vide ferait chercher aux familles ce qui n'existe pas.
-      await _monter(
-        tester,
-        AccessLevel.write,
-        session: const ExamSessionItem(
-          id: 1,
-          title: 'Session vide',
-          term: 'T1',
-          academicYearId: 1,
-          startDate: '2025-12-01',
-          endDate: '2025-12-06',
-          resultatsSaisis: 0,
-        ),
-      );
+    testWidgets('l_en-tête dit ce qui reste à publier', (tester) async {
+      // Le chiffre que la direction cherche en fin de trimestre.
+      await _monter(tester, AccessLevel.write);
 
-      expect(_estActif(tester, 'Tout publier'), isFalse);
+      expect(find.text('Prêtes à publier'), findsOneWidget);
     });
 
-    testWidgets('une session publiée propose de la retirer', (tester) async {
-      await _monter(
-        tester,
-        AccessLevel.write,
-        session: const ExamSessionItem(
-          id: 1,
-          title: 'Composition du premier trimestre',
-          term: 'T1',
-          academicYearId: 1,
-          startDate: '2025-12-01',
-          endDate: '2025-12-06',
-          resultatsPublies: true,
-          resultatsSaisis: 1,
-          epreuvesTotal: 1,
-          epreuvesPubliees: 1,
-        ),
-      );
-
-      expect(find.textContaining('1/1 épreuve(s) publiée(s)'), findsOneWidget);
-      expect(_estActif(tester, 'Tout retirer'), isTrue);
-    });
-
-    testWidgets('en lecture seule, la publication reste fermée', (
+    testWidgets('un profil en lecture seule est annoncé comme tel', (
       tester,
     ) async {
       await _monter(tester, AccessLevel.read);
 
-      expect(_estActif(tester, 'Tout publier'), isFalse);
+      expect(find.textContaining('Consultation seule'), findsOneWidget);
     });
   });
 
-  group('la publication par épreuve', () {
-    // Elle se décidait pour la campagne entière, alors que les copies
-    // reviennent classe par classe: la direction devait ouvrir aussi ce qui
-    // n'était pas corrigé, ou ne rien ouvrir.
+  group('onglet Campagnes', () {
+    testWidgets('la création est repliée par défaut', (tester) async {
+      // Elle occupait la page en permanence, y compris pour un profil qui ne
+      // crée rien.
+      await _monter(tester, AccessLevel.write);
 
-    Future<void> tapoter(WidgetTester tester, Key cle) async {
-      await tester.ensureVisible(find.byKey(cle));
-      await tester.tap(find.byKey(cle));
+      expect(find.byKey(const Key('basculer-creation-campagne')), findsOneWidget);
+      expect(find.byKey(const Key('titre-campagne')), findsNothing);
+    });
+
+    testWidgets('elle se déplie à la demande', (tester) async {
+      await _monter(tester, AccessLevel.write);
+
+      await tester.tap(find.byKey(const Key('basculer-creation-campagne')));
+      await tester.pump();
+
+      expect(find.byKey(const Key('titre-campagne')), findsOneWidget);
+    });
+
+    testWidgets('en lecture seule, rien ne se crée', (tester) async {
+      await _monter(tester, AccessLevel.read);
+
+      expect(find.byKey(const Key('basculer-creation-campagne')), findsNothing);
+    });
+
+    testWidgets('l_avancement est un compte, pas un booléen', (tester) async {
+      // « Publiée » devant trois épreuves ouvertes sur sept serait faux.
+      await _monter(tester, AccessLevel.write);
+
+      expect(
+        find.textContaining('0/1 épreuve(s) publiée(s)'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('supprimer une campagne dit d_abord ce qu_elle emporte', (
+      tester,
+    ) async {
+      // Ses épreuves, ses surveillances et toutes ses notes partent en
+      // cascade — et des notes figurent sur des bulletins déjà imprimés.
+      final depot = await _monter(tester, AccessLevel.write);
+
+      await tester.tap(find.byKey(const Key('supprimer-campagne-1')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
-      // La notification de succes pose un minuteur: sans le laisser
-      // expirer, le test echoue sur « a Timer is still pending ».
-      await tester.pump(const Duration(seconds: 6));
-    }
+
+      expect(depot.gestes, contains('inventaire:1'));
+      expect(find.textContaining('1 note(s)'), findsWidgets);
+      expect(depot.gestes, isNot(contains('supprimer-session:1')));
+    });
+
+    testWidgets('sans le droit de publier, le bouton n_apparaît pas', (
+      tester,
+    ) async {
+      // Ouvrir aux familles est une décision de la direction, pas une
+      // conséquence de pouvoir corriger.
+      await _monter(tester, AccessLevel.write, peutPublier: false);
+
+      expect(find.byKey(const Key('tout-publier-1')), findsNothing);
+    });
+  });
+
+  group('onglet Calendrier', () {
+    testWidgets('une épreuve se nomme par sa classe et sa matière', (
+      tester,
+    ) async {
+      await _monter(tester, AccessLevel.write);
+      await _onglet(tester, 'Calendrier');
+
+      expect(find.text('6A • Mathematiques'), findsOneWidget);
+    });
+
+    testWidgets('l_état de correction se lit sur chaque ligne', (tester) async {
+      // Rien ne distinguait une épreuve corrigée d'une épreuve en attente.
+      await _monter(tester, AccessLevel.write);
+      await _onglet(tester, 'Calendrier');
+
+      expect(
+        find.textContaining('1 note(s) saisie(s), non publiées'),
+        findsOneWidget,
+      );
+    });
 
     testWidgets('une épreuve corrigée se publie seule', (tester) async {
       final depot = await _monter(tester, AccessLevel.write);
+      await _onglet(tester, 'Calendrier');
 
-      await tapoter(tester, const ValueKey('publier-epreuve-5'));
+      await _appuyer(tester, const ValueKey('publier-epreuve-5'));
 
-      expect(depot.gestes, ['publier:5']);
+      expect(depot.gestes, contains('publier-epreuve:5'));
     });
 
     testWidgets('une épreuve publiée se retire', (tester) async {
       final depot = await _monter(
         tester,
         AccessLevel.write,
-        epreuve: _epreuveTelleQue(resultatsPublies: true),
+        epreuves: [_epreuveTelleQue(resultatsPublies: true)],
       );
+      await _onglet(tester, 'Calendrier');
 
-      await tapoter(tester, const ValueKey('retirer-epreuve-5'));
+      await _appuyer(tester, const ValueKey('retirer-epreuve-5'));
 
-      expect(depot.gestes, ['retirer:5']);
+      expect(depot.gestes, contains('retirer-epreuve:5'));
     });
 
     testWidgets('une épreuve sans note ne se publie pas', (tester) async {
-      // Publier le vide ferait chercher aux familles des notes qui
-      // n'existent pas encore.
       await _monter(
         tester,
         AccessLevel.write,
-        epreuve: _epreuveTelleQue(resultatsSaisis: 0),
+        epreuves: [_epreuveTelleQue(resultatsSaisis: 0)],
       );
+      await _onglet(tester, 'Calendrier');
 
       final bouton = tester.widget<ButtonStyleButton>(
         find.byKey(const ValueKey('publier-epreuve-5')),
@@ -316,64 +395,99 @@ void main() {
       expect(find.textContaining('Aucune note saisie'), findsOneWidget);
     });
 
-    testWidgets('l_état de correction se lit sur chaque épreuve', (
-      tester,
-    ) async {
-      // Rien ne distinguait une épreuve corrigée d'une épreuve en attente.
-      await _monter(tester, AccessLevel.write);
+    testWidgets('on voit ce qu_on publie avant de le publier', (tester) async {
+      // La question qu'on se pose au moment de cliquer, et à laquelle rien
+      // ne répondait.
+      final depot = await _monter(tester, AccessLevel.write);
+      await _onglet(tester, 'Calendrier');
+
+      await tester.tap(find.text('6A • Mathematiques'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(depot.filtres, contains('notes-de=5'));
+      expect(find.text('Awa Traore'), findsOneWidget);
+      expect(find.textContaining('les familles ne les voient pas'), findsOneWidget);
+    });
+
+    testWidgets('le filtre part au serveur, pas en mémoire', (tester) async {
+      // Une école de quinze classes déroulait sinon tout son calendrier.
+      final depot = await _monter(tester, AccessLevel.write);
+      await _onglet(tester, 'Calendrier');
+
+      await tester.tap(find.byKey(const Key('filtre-a-publier')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
 
       expect(
-        find.textContaining('1 note(s) saisie(s), non publiées'),
-        findsWidgets,
+        depot.filtres,
+        contains('session=null classe=null publiees=false'),
       );
     });
 
-    testWidgets('l_épreuve est nommée par sa classe et sa matière', (
-      tester,
-    ) async {
-      await _monter(tester, AccessLevel.write);
-
-      expect(find.text('6A • Mathematiques'), findsOneWidget);
-    });
-
-    testWidgets('en lecture seule, aucun bouton de publication', (
-      tester,
-    ) async {
+    testWidgets('en lecture seule, aucun geste n_est offert', (tester) async {
       await _monter(tester, AccessLevel.read);
+      await _onglet(tester, 'Calendrier');
 
       expect(find.byKey(const ValueKey('publier-epreuve-5')), findsNothing);
-      expect(find.byKey(const ValueKey('retirer-epreuve-5')), findsNothing);
-    });
-
-    testWidgets('la saisie d_un résultat a quitté cet écran', (tester) async {
-      // Deux chemins pour le même geste, dont un seul respectait le verrou
-      // de trimestre: c'est leur coexistence qui a produit des notes sans
-      // épreuve. La saisie se fait dans « Notes & Bulletins ».
-      await _monter(tester, AccessLevel.write);
-
-      expect(find.text('Publier résultat'), findsNothing);
-      expect(find.text('Publier un résultat'), findsNothing);
+      expect(find.byKey(const ValueKey('supprimer-epreuve-5')), findsNothing);
+      expect(find.byKey(const Key('basculer-creation-epreuve')), findsNothing);
     });
   });
-}
 
-/// L'épreuve de référence, avec ce qu'on veut lui faire dire.
-ExamPlanningItem _epreuveTelleQue({
-  int resultatsSaisis = 1,
-  bool resultatsPublies = false,
-}) {
-  return ExamPlanningItem(
-    id: _epreuve.id,
-    sessionId: _epreuve.sessionId,
-    classroomId: _epreuve.classroomId,
-    subjectId: _epreuve.subjectId,
-    examDate: _epreuve.examDate,
-    startTime: _epreuve.startTime,
-    endTime: _epreuve.endTime,
-    classroomName: _epreuve.classroomName,
-    subjectName: _epreuve.subjectName,
-    sessionTitle: _epreuve.sessionTitle,
-    resultatsSaisis: resultatsSaisis,
-    resultatsPublies: resultatsPublies,
-  );
+  group('onglet Surveillance', () {
+    testWidgets('une épreuve sans surveillant se voit en premier', (
+      tester,
+    ) async {
+      // La seule question qu'on se pose la veille des compositions, et elle
+      // n'était posée nulle part.
+      await _monter(tester, AccessLevel.write);
+      await _onglet(tester, 'Surveillance');
+
+      expect(find.text('Épreuves sans surveillant'), findsOneWidget);
+      expect(find.byKey(const ValueKey('sans-surveillant-5')), findsOneWidget);
+    });
+
+    testWidgets('toutes tenues, l_écran le dit', (tester) async {
+      await _monter(
+        tester,
+        AccessLevel.write,
+        affectations: const [
+          ExamInvigilationItem(
+            id: 9,
+            planningId: 5,
+            supervisorId: 40,
+            supervisorName: 'Fatou Kone',
+          ),
+        ],
+      );
+      await _onglet(tester, 'Surveillance');
+
+      expect(
+        find.textContaining('Toutes les épreuves ont un surveillant'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('une affectation nomme l_épreuve, pas son numéro', (
+      tester,
+    ) async {
+      await _monter(
+        tester,
+        AccessLevel.write,
+        affectations: const [
+          ExamInvigilationItem(
+            id: 9,
+            planningId: 5,
+            supervisorId: 40,
+            supervisorName: 'Fatou Kone',
+          ),
+        ],
+      );
+      await _onglet(tester, 'Surveillance');
+
+      expect(find.text('Fatou Kone'), findsOneWidget);
+      expect(find.text('6A • Mathematiques'), findsOneWidget);
+    });
+  });
 }

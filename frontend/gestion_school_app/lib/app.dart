@@ -34,7 +34,7 @@ import 'features/dashboard/presentation/dashboard_controller.dart';
 import 'features/dashboard/presentation/dashboard_page.dart';
 import 'features/dashboard/presentation/role_dashboards.dart';
 import 'features/exams/presentation/exams_controller.dart';
-import 'features/exams/presentation/exams_page.dart';
+import 'features/exams/presentation/exams_module_page.dart';
 import 'features/exams/presentation/parent_exams_page.dart';
 import 'features/communication/presentation/communication_page.dart';
 import 'features/academics/presentation/annee_scolaire_controller.dart';
@@ -93,7 +93,7 @@ Future<void> _invalidateRefreshProvidersForView(
     return;
   }
 
-  if (view is ExamsPage) {
+  if (view is ExamsModulePage) {
     ref.invalidate(examSessionsProvider);
     ref.invalidate(examPlanningsProvider);
     ref.invalidate(examResultsProvider);
@@ -263,7 +263,7 @@ class _GestionSchoolAppState extends ConsumerState<GestionSchoolApp> {
             const _GlobalFeatureRefreshHost(child: AttendanceModulePage()),
         '/emargements': (_) =>
             const _GlobalFeatureRefreshHost(child: AttendanceModulePage()),
-        '/exams': (_) => const _GlobalFeatureRefreshHost(child: ExamsPage()),
+        '/exams': (_) => const _GlobalFeatureRefreshHost(child: ExamsModulePage()),
         '/students': (_) =>
             const _GlobalFeatureRefreshHost(child: StudentsPage()),
         '/students/recherche': (_) =>
@@ -498,7 +498,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       keyName: 'exams',
       label: 'Examens',
       icon: Icons.quiz_outlined,
-      view: ExamsPage(),
+      view: ExamsModulePage(),
     ),
     _AdminMenuItem(
       keyName: 'timetable',
