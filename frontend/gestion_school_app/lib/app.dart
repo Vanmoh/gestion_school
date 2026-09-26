@@ -1394,6 +1394,11 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
             final item = _items.firstWhere((element) => element.keyName == key);
             final selected = _selectedKey == item.keyName;
             return _SidebarItem(
+              // La cle porte le nom du module, jamais son libelle: celui-ci
+              // change selon le role (`labelPour`), si bien qu'un test ou un
+              // pilote qui viserait le texte chercherait autre chose d'un
+              // profil a l'autre.
+              key: ValueKey('menu-${item.keyName}'),
               icon: item.icon,
               // Sans mention « (Lecture seule) »: la barre est etroite, et le
               // suffixe tronquait le nom du module lui-meme -- « Tableau de
@@ -2220,6 +2225,7 @@ class _SidebarItem extends StatelessWidget {
   final VoidCallback onTap;
 
   const _SidebarItem({
+    super.key,
     required this.icon,
     required this.label,
     required this.compact,

@@ -709,6 +709,7 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                         )
                       : const Icon(Icons.access_time_filled_outlined),
                   label: const Text('Enregistrer pointage'),
+                  key: const Key('pointage-enregistrer'),
                 ),
               ],
             ),

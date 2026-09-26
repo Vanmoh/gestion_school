@@ -975,6 +975,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                             ),
                             if (canValidateSheet)
                               OutlinedButton.icon(
+                                key: const Key(
+                                  'emargement-valider-verrouiller',
+                                ),
                                 onPressed: (_sheetSaving || _sheetLoading)
                                     ? null
                                     : () => _setClassSheetLock(!_sheetLocked),
@@ -1097,6 +1100,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                                 )
                               : const Icon(Icons.save_outlined),
                           label: const Text('Enregistrer la conduite'),
+                          key: const Key('emargement-enregistrer-conduite'),
                         ),
                       ],
                     ),
