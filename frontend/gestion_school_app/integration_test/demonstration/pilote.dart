@@ -139,27 +139,48 @@ class PiloteDeDemonstration {
 
   /// Frappe un texte caractère par caractère, pour que la saisie se voie.
   ///
-  /// Par `enterText` sur le champ, et non par `testTextInput`: ce dernier est
-  /// le clavier **factice** de `flutter_test`, qui n'est pas branché quand la
-  /// prise tourne sur une vraie plateforme. Rien n'était donc saisi, le
-  /// formulaire restait vide, et la connexion n'atteignait même pas le serveur
-  /// — l'API n'a vu passer aucune requête d'authentification.
+  /// **Par le contrôleur du champ, et par rien d'autre.** Ni
+  /// `testTextInput.enterText`, ni `tester.enterText` qui s'appuie dessus, ne
+  /// fonctionnent ici : `IntegrationTestWidgetsFlutterBinding` déclare
+  /// `registerTestTextInput => false`, donc le clavier de test n'est jamais
+  /// enregistré. Quatre tournages s'y sont arrêtés, et en silence — le
+  /// formulaire restait vide, le bouton n'envoyait rien, et le serveur n'a
+  /// jamais vu passer la moindre demande d'authentification. Le journal parlait
+  /// pendant ce temps de modules « fermés à ce profil ».
   ///
-  /// `enterText` pose la valeur d'un coup; on la repose donc lettre après
-  /// lettre, ce qui donne la même frappe visible sans dépendre du mock.
+  /// Écrire dans le contrôleur met le champ à jour et déclenche la validation
+  /// du formulaire, qui lit cette même valeur. On repose la valeur lettre après
+  /// lettre: la frappe se voit à l'image, sans dépendre d'un clavier absent.
   Future<void> taperLentement(Finder champ, String texte) async {
-    if (champ.evaluate().isEmpty) {
+    final controleur = _controleurDe(champ);
+    if (controleur == null) {
       journal.dire('(champ absent : ${champ.describeMatch(Plurality.one)})');
       return;
     }
+
     await tester.tap(champ.first, warnIfMissed: false);
     await tester.pump(const Duration(milliseconds: 250));
 
     for (var longueur = 1; longueur <= texte.length; longueur++) {
-      await tester.enterText(champ.first, texte.substring(0, longueur));
+      final morceau = texte.substring(0, longueur);
+      controleur.value = TextEditingValue(
+        text: morceau,
+        selection: TextSelection.collapsed(offset: morceau.length),
+      );
       await tester.pump(const Duration(milliseconds: 45));
     }
     await tester.pump(const Duration(milliseconds: 400));
+  }
+
+  /// Le contrôleur de texte d'un champ, ou `null` s'il n'y en a pas.
+  TextEditingController? _controleurDe(Finder champ) {
+    if (champ.evaluate().isEmpty) return null;
+    final editable = find.descendant(
+      of: champ,
+      matching: find.byType(EditableText),
+    );
+    if (editable.evaluate().isEmpty) return null;
+    return tester.widget<EditableText>(editable.first).controller;
   }
 
   /// Fait défiler doucement, pour montrer le bas d'un écran.
@@ -330,11 +351,7 @@ class PiloteDeDemonstration {
   ///
   /// Un mot de passe n'y passe jamais: le journal part en artefact public.
   String _contenuDuChamp(Key cle) {
-    final champ = find.byKey(cle);
-    if (champ.evaluate().isEmpty) return '(champ absent)';
-    final widgets = find.descendant(of: champ, matching: find.byType(EditableText));
-    if (widgets.evaluate().isEmpty) return '(non lisible)';
-    return tester.widget<EditableText>(widgets.first).controller.text;
+    return _controleurDe(find.byKey(cle))?.text ?? '(champ absent)';
   }
 
   /// Ouvre un module par sa clé de menu.
