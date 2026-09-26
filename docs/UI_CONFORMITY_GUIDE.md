@@ -18,8 +18,14 @@ Use this file for imports module visual tokens:
 - frontend/gestion_school_app/lib/features/imports/presentation/academic_imports_page.dart
 - frontend/gestion_school_app/lib/features/students/presentation/students_page.dart
 - frontend/gestion_school_app/lib/features/grades/presentation/grades_page.dart
-- frontend/gestion_school_app/lib/features/exams/presentation/exams_page.dart
+- frontend/gestion_school_app/lib/features/exams/presentation/exams_module_page.dart
 - frontend/gestion_school_app/lib/features/timetable/presentation/timetable_page.dart
+
+Cette liste ne retient que les ecrans qui portent un bouton « Imports
+academiques » ou une surface d'import: ce sont les seuls que ces regles
+concernent. L'ancienne entree `exams_page.dart` designait un fichier supprime
+quand l'ecran des examens est passe en onglets; le bouton d'import vit
+desormais dans son en-tete, `exams_module_page.dart`.
 
 ## Review Checklist
 - Import action button has same style on all pages.

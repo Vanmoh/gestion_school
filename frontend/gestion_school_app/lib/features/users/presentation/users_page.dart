@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/roles/libelles_des_roles.dart';
 import '../../../core/models/paginated_result.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/widgets/barre_recherche_module.dart';
@@ -85,16 +86,21 @@ class _UsersPageState extends ConsumerState<UsersPage> {
   /// ligne se voie dans la foulee plutot qu'au coup d'apres.
   static const Duration _cadencePresence = Duration(seconds: 30);
 
-  static const List<(String, String)> _roles = [
-    ('super_admin', 'Super Admin'),
-    ('director', 'Directeur/Proviseur'),
-    ('promoter', 'Promoteur'),
-    ('accountant', 'Comptable'),
-    ('teacher', 'Enseignant'),
-    ('censor', 'Censeur'),
-    ('supervisor', 'Surveillant'),
-    ('parent', 'Parent'),
-    ('student', 'Élève'),
+  /// L'ordre d'affichage de la liste des rôles, nommés par la table
+  /// partagée: trois écrans en avaient besoin, deux les disaient en anglais.
+  static final List<(String, String)> _roles = [
+    for (final code in const [
+      'super_admin',
+      'director',
+      'promoter',
+      'accountant',
+      'teacher',
+      'censor',
+      'supervisor',
+      'parent',
+      'student',
+    ])
+      (code, roleEnClair(code)),
   ];
 
   @override

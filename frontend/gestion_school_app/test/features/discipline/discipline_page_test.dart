@@ -150,7 +150,37 @@ Future<_FauxDepot> _monter(
   return depot;
 }
 
+/// Déplie la déclaration d'incident.
+///
+/// Elle occupait le haut de l'écran en permanence, avant la liste des
+/// incidents. On vient d'abord voir où en sont les incidents; on déclare
+/// ensuite, et on le demande.
+Future<void> _ouvrirLaDeclaration(WidgetTester tester) async {
+  await tester.tap(find.byKey(const Key('basculer-declaration')));
+  await tester.pumpAndSettle();
+}
+
+/// Laisse l'avis de confirmation s'effacer de lui-même.
+///
+/// `ForegroundNotice` se retire au bout de trois secondes, et un minuteur
+/// encore armé à la fin d'un test le fait échouer.
+Future<void> _laisserPasserLAvis(WidgetTester tester) async {
+  await tester.pump(const Duration(seconds: 4));
+}
+
 void main() {
+  testWidgets('la declaration reste pliee jusqu_a ce qu_on la demande', (
+    tester,
+  ) async {
+    await _monter(tester, niveau: AccessLevel.write, role: 'censor');
+
+    expect(find.byKey(const Key('declaration-student')), findsNothing);
+
+    await _ouvrirLaDeclaration(tester);
+
+    expect(find.byKey(const Key('declaration-student')), findsOneWidget);
+  });
+
   testWidgets('le promoteur, en lecture seule, n_obtient aucun formulaire', (
     tester,
   ) async {
@@ -176,6 +206,8 @@ void main() {
       role: 'teacher',
     );
 
+    await _ouvrirLaDeclaration(tester);
+
     expect(find.byKey(const Key('declaration-student')), findsOneWidget);
     // Le motif se choisit dans le referentiel servi par le serveur: le champ
     // etait libre, et « Retard », « retards » et « Arrivee tardive »
@@ -195,6 +227,8 @@ void main() {
       niveau: AccessLevel.write,
       role: 'censor',
     );
+
+    await _ouvrirLaDeclaration(tester);
 
     expect(find.byKey(const Key('declaration-sanction')), findsOneWidget);
     // La suppression demande le niveau administration: le censeur ne l_a pas.
@@ -216,6 +250,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Enregistrer'));
     await tester.pumpAndSettle();
+    await _laisserPasserLAvis(tester);
 
     expect(depot.updateId, 7);
     expect(depot.updateStatut, 'resolved');
@@ -234,6 +269,7 @@ void main() {
     expect(find.text('Supprimer l\'incident'), findsOneWidget);
     await tester.tap(find.text('Supprimer').last);
     await tester.pumpAndSettle();
+    await _laisserPasserLAvis(tester);
 
     expect(depot.deleteId, 7);
   });

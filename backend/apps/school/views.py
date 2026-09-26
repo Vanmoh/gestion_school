@@ -48,7 +48,7 @@ from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import StandardResultsSetPagination
 from apps.common.models import ActivityLog
 from .dashboard_cache import STATS_CACHE_SECONDS, stats_cache_key
-from . import examens, planification
+from . import annonces, examens, planification
 from .term_utils import TERMS, normalize_term
 from .models import (
     AcademicYear,
@@ -8779,9 +8779,20 @@ class AnnouncementViewSet(EtablissementScopedModelViewSet):
     queryset = Announcement.objects.select_related("author", "etablissement").all().order_by("-created_at")
     serializer_class = AnnouncementSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+    # L'ecran cherchait dans ses trois listes en memoire, sur la page qu'il
+    # avait chargee: une annonce plus ancienne que cette page etait
+    # introuvable, et le serveur ne proposait rien pour la trouver.
+    filterset_fields = ["audience"]
+    search_fields = ["title", "message"]
+    ordering_fields = ["created_at", "title", "audience"]
 
     def get_queryset(self):
-        return self._filter_by_scope(super().get_queryset(), field_name="etablissement")
+        perimetre = self._filter_by_scope(
+            super().get_queryset(), field_name="etablissement"
+        )
+        # Le public de l'annonce n'etait lu par personne: une consigne
+        # adressee aux enseignants s'affichait chez les familles.
+        return annonces.annonces_lisibles_par(self.request.user, perimetre)
 
     def perform_create(self, serializer):
         target_etablissement = self._resolve_target_etablissement()
@@ -8801,6 +8812,12 @@ class NotificationViewSet(EtablissementScopedModelViewSet):
     queryset = Notification.objects.select_related("recipient", "etablissement").all().order_by("-created_at")
     serializer_class = NotificationSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
+    # « Qu'est-ce qui n'est pas parti » est la seule question qu'on pose a une
+    # file d'envoi, et rien ne permettait de la poser: pas un filtre, pas une
+    # recherche. L'ecran triait donc en memoire ce qu'il avait sous la main.
+    filterset_fields = ["channel", "is_sent", "recipient"]
+    search_fields = ["title", "message", "recipient__username", "recipient__first_name", "recipient__last_name"]
+    ordering_fields = ["created_at", "sent_at", "channel", "is_sent"]
 
     def get_queryset(self):
         return self._filter_by_scope(super().get_queryset(), field_name="etablissement")
