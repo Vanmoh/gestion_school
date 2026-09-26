@@ -65,7 +65,16 @@ void main() {
         )) {
           await pilote.poser(duree: const Duration(seconds: 3));
         }
+
+        // Puis l'inventaire: tous les écrans ouverts à ce profil, l'un après
+        // l'autre. Ce qui se voit ici n'est pas un geste mais une étendue —
+        // et ce qu'un rôle ne voit pas en dit autant que ce qu'il voit.
+        pilote.journal.dire(
+          'Tous les écrans ouverts à ce profil.',
+          duree: const Duration(seconds: 4),
+        );
+        await pilote.parcourirTousLesModules();
       },
     );
-  }, timeout: const Timeout(Duration(minutes: 8)));
+  }, timeout: const Timeout(Duration(minutes: 12)));
 }
