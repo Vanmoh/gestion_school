@@ -29,6 +29,10 @@ import 'package:gestion_school_app/features/reports/presentation/reports_page.da
 
 class _Transport implements HttpClientAdapter {
   final List<String> chemins = [];
+
+  /// Le chemin **et** ses paramètres: c'est là qu'on lit si un filtre est
+  /// réellement parti au serveur.
+  final List<String> requetes = [];
   final Set<String> refusees;
 
   /// Simule un serveur sans la route agrégée: l'écran bascule alors sur ses
@@ -44,6 +48,7 @@ class _Transport implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     chemins.add(options.path);
+    requetes.add(options.uri.toString());
 
     if (refusees.any(options.path.contains)) {
       throw DioException(
@@ -64,12 +69,37 @@ class _Transport implements HttpClientAdapter {
           {
             'id': 30,
             'matricule': 'M-001',
-            'user_full_name': 'Awa Traoré',
+            'student_full_name': 'Awa Traoré',
             'classroom_name': '6ème A',
           },
         ],
         'academic_years': [],
-        'payments': [],
+        // La route ne serialise plus les encaissements: elle n'en rend que le
+        // compte et le total, et les recus se demandent page par page.
+        'payments_count': 1,
+        'payments_total': 5000,
+      });
+    }
+    if (options.path.contains('/reports/receipts')) {
+      return _json(const {
+        'count': 1,
+        'page': 1,
+        'pages': 1,
+        'next': null,
+        'previous': null,
+        'results': [
+          {
+            'id': 7,
+            'created_at': '2026-01-12T08:30:00Z',
+            'student_full_name': 'Awa Traoré',
+            'student_matricule': 'M-001',
+            'fee_type': 'Scolarité',
+            'amount': 5000,
+            'method': 'cash',
+            'reference': 'REF-7',
+            'received_by': 'Fatou Kone',
+          },
+        ],
       });
     }
     if (options.path.contains('/students')) {
@@ -78,7 +108,7 @@ class _Transport implements HttpClientAdapter {
           {
             'id': 30,
             'matricule': 'M-001',
-            'user_full_name': 'Awa Traoré',
+            'student_full_name': 'Awa Traoré',
             'classroom_name': '6ème A',
           },
         ],
@@ -154,12 +184,48 @@ void main() {
   testWidgets('la route unique suffit et sert tout le monde', (tester) async {
     final transport = await _monter(tester);
 
-    expect(find.textContaining('Erreur chargement'), findsNothing);
+    expect(find.textContaining('Erreur'), findsNothing);
     expect(find.textContaining('Awa Traoré'), findsWidgets);
     // Elle porte le seul droit « rapports »: aucun appel séparé n'est requis.
     expect(
-      transport.chemins.where((chemin) => chemin.contains('/payments')),
+      transport.chemins.where((chemin) => chemin.contains('/payments/')),
       isEmpty,
+    );
+  });
+
+  testWidgets('les reçus sont demandés page par page', (tester) async {
+    // Le contexte les servait tous, et l'écran les paginait en mémoire.
+    final transport = await _monter(tester);
+
+    final demandes = transport.chemins
+        .where((chemin) => chemin.contains('/reports/receipts'))
+        .toList();
+    expect(demandes, isNotEmpty);
+    expect(find.textContaining('REF-7'), findsWidgets);
+  });
+
+  testWidgets('la recherche des reçus part au serveur', (tester) async {
+    final transport = await _monter(tester);
+
+    await tester.enterText(
+      find.descendant(
+        of: find.byKey(const Key('recherche-recus')),
+        matching: find.byType(TextField),
+      ),
+      'Diallo',
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(
+      transport.requetes.any(
+        (requete) =>
+            requete.contains('/reports/receipts') && requete.contains('Diallo'),
+      ),
+      isTrue,
+      reason:
+          'la recherche devait partir au serveur, non filtrer en mémoire; '
+          'requêtes vues: ${transport.requetes}',
     );
   });
 
@@ -167,15 +233,20 @@ void main() {
     tester,
   ) async {
     // Sur le chemin de repli, le censeur, le surveillant et l'enseignant
-    // butaient sur les encaissements — fermés pour eux.
-    await _monter(
+    // butaient sur les encaissements — fermés pour eux. Le repli ne les
+    // demande plus du tout: le référentiel suffit à ouvrir l'écran.
+    final transport = await _monter(
       tester,
       refusees: {'/payments'},
       contextAbsente: true,
     );
 
-    expect(find.textContaining('Erreur chargement'), findsNothing);
+    expect(find.textContaining('Erreur'), findsNothing);
     expect(find.textContaining('Awa Traoré'), findsWidgets);
+    expect(
+      transport.chemins.where((chemin) => chemin.contains('/payments/')),
+      isEmpty,
+    );
   });
 
   testWidgets('sans le référentiel scolaire non plus', (tester) async {
@@ -186,7 +257,7 @@ void main() {
       contextAbsente: true,
     );
 
-    expect(find.textContaining('Erreur chargement'), findsNothing);
+    expect(find.textContaining('Erreur'), findsNothing);
   });
 
   testWidgets('sans droit d_export, le bouton ne s_affiche pas', (

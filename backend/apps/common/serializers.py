@@ -5,12 +5,19 @@ from .models import ActivityLog, BackupArchive, PersonnalisationPlateforme
 
 class ActivityLogSerializer(serializers.ModelSerializer):
     user_display = serializers.SerializerMethodField(read_only=True)
+    # Le super-administrateur lit le journal de plusieurs etablissements: sans
+    # ce nom, deux lignes identiques venues de deux ecoles ne se distinguaient
+    # que par un numero d'etablissement.
+    etablissement_name = serializers.SerializerMethodField(read_only=True)
 
     def get_user_display(self, obj):
         if not obj.user:
             return "Anonyme"
         full_name = obj.user.get_full_name().strip()
         return full_name or obj.user.username
+
+    def get_etablissement_name(self, obj):
+        return obj.etablissement.name if obj.etablissement else ""
 
     class Meta:
         model = ActivityLog

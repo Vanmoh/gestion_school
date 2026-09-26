@@ -21,7 +21,7 @@ import 'package:gestion_school_app/core/network/api_client.dart';
 import 'package:gestion_school_app/core/permissions/module_permissions.dart';
 import 'package:gestion_school_app/features/activity_logs/presentation/activity_logs_page.dart';
 import 'package:gestion_school_app/features/backup/presentation/backup_restore_page.dart';
-import 'package:gestion_school_app/features/communication/presentation/communication_page.dart';
+import 'package:gestion_school_app/features/communication/presentation/communication_module_page.dart';
 import 'package:gestion_school_app/features/stock/presentation/stock_page.dart';
 
 class _Transport implements HttpClientAdapter {
@@ -117,28 +117,49 @@ Future<_Transport> _monter(
 
 void main() {
   group('Communication', () {
-    testWidgets('la passerelle SMS n_est demandée qu_à qui y a droit', (
+    /// Les onglets ne chargent qu'à leur ouverture.
+    ///
+    /// C'est voulu: la coque n'appelle pas les trois registres au montage,
+    /// seulement celui qu'on regarde. Les tests doivent donc ouvrir l'onglet
+    /// dont ils parlent, comme l'utilisateur le fait.
+    /// On vise le `Tab` et non le texte: « Notifications » nomme aussi un
+    /// indicateur de l'en-tête, et `find.text` en trouverait deux.
+    Future<void> ouvrir(WidgetTester tester, String onglet) async {
+      await tester.tap(find.widgetWithText(Tab, onglet));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('la passerelle SMS n_est ni offerte ni demandée sans droit', (
       tester,
     ) async {
-      // Sept profils sur neuf n'ont pas ce module: l'appeler pour eux ferait
-      // tomber l'écran entier sur un 403.
-      final transport = await _monter(tester, const CommunicationPage(), {
-        'communication': AccessLevel.read,
-        'sms_config': AccessLevel.none,
-      });
+      // Sept profils sur neuf n'ont pas cette clé: l'appeler pour eux ferait
+      // tomber l'écran sur un 403. L'onglet lui-même n'apparaît pas — un
+      // onglet visible mais vide se lit comme une panne.
+      final transport = await _monter(
+        tester,
+        const CommunicationModulePage(),
+        {'communication': AccessLevel.read, 'sms_config': AccessLevel.none},
+      );
 
+      expect(find.widgetWithText(Tab, 'Passerelle SMS'), findsNothing);
       expect(
         transport.chemins.where((chemin) => chemin.contains('/sms-providers')),
         isEmpty,
       );
-      expect(find.textContaining('Erreur chargement'), findsNothing);
+      expect(find.textContaining('Erreur'), findsNothing);
     });
 
-    testWidgets('elle est demandée à qui la configure', (tester) async {
-      final transport = await _monter(tester, const CommunicationPage(), {
-        'communication': AccessLevel.admin,
-        'sms_config': AccessLevel.admin,
-      });
+    testWidgets('elle est offerte et demandée à qui la configure', (
+      tester,
+    ) async {
+      final transport = await _monter(
+        tester,
+        const CommunicationModulePage(),
+        {'communication': AccessLevel.admin, 'sms_config': AccessLevel.admin},
+      );
+
+      expect(find.widgetWithText(Tab, 'Passerelle SMS'), findsOneWidget);
+      await ouvrir(tester, 'Passerelle SMS');
 
       expect(
         transport.chemins.where((chemin) => chemin.contains('/sms-providers')),
@@ -151,15 +172,31 @@ void main() {
     ) async {
       // Il est ouvert à tout compte connecté, sans quoi aucun profil ne
       // pourrait désigner qui il veut joindre.
-      final transport = await _monter(tester, const CommunicationPage(), {
-        'communication': AccessLevel.read,
-        'sms_config': AccessLevel.none,
-      });
+      final transport = await _monter(
+        tester,
+        const CommunicationModulePage(),
+        {'communication': AccessLevel.admin, 'sms_config': AccessLevel.none},
+      );
+
+      await ouvrir(tester, 'Notifications');
 
       expect(
         transport.chemins.where(
           (chemin) => chemin.contains('/auth/users/directory'),
         ),
+        isNotEmpty,
+      );
+    });
+
+    testWidgets('les annonces sont demandées dès l_ouverture', (tester) async {
+      final transport = await _monter(
+        tester,
+        const CommunicationModulePage(),
+        {'communication': AccessLevel.read, 'sms_config': AccessLevel.none},
+      );
+
+      expect(
+        transport.chemins.where((chemin) => chemin.contains('/announcements')),
         isNotEmpty,
       );
     });

@@ -44,12 +44,21 @@ class ReportsPermissionsApiTests(APITestCase):
         Cet enseignant n'a aucune affectation, donc aucun eleve; et les
         finances lui sont fermees, donc aucun paiement -- meme si le meme
         ecran les sert au comptable.
+
+        Le contexte ne serialisait pas seulement zero paiement pour lui: il
+        les serialisait **tous** pour le comptable, a chaque ouverture de
+        l'ecran. Il n'en rend plus que le compte, et les recus se demandent
+        page par page -- d'ou les deux verifications ici plutot qu'une.
         """
         self.client.force_authenticate(self.teacher)
         response = self.client.get("/api/reports/context/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["students"], [])
-        self.assertEqual(response.data["payments"], [])
+        self.assertEqual(response.data["payments_count"], 0)
+
+        recus = self.client.get("/api/reports/receipts/")
+        self.assertEqual(recus.status_code, status.HTTP_200_OK)
+        self.assertEqual(recus.data["results"], [])
 
     def test_teacher_cannot_export_payments_excel(self):
         self.client.force_authenticate(self.teacher)

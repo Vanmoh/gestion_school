@@ -168,6 +168,53 @@ class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset
 
+    @action(detail=False, methods=["get"], url_path="repertoire")
+    def repertoire(self, request):
+        """De quoi peupler les filtres, avec les valeurs du journal reel.
+
+        Le backend offrait deja `user`, `role` et `module` en filtres, et
+        l'ecran n'en proposait aucun: il n'avait que la methode HTTP, le
+        succes et les dates. « Qui a fait ca » et « qu'est-ce qui s'est passe
+        dans les paiements » sont pourtant les deux seules questions qu'on
+        pose a un journal d'audit.
+
+        Les modules sont lus dans le journal plutot que devines: ils viennent
+        du chemin d'URL (`_extract_module`), et une liste ecrite a la main
+        cote client aurait vieilli des la premiere route ajoutee.
+        """
+        perimetre = self.get_queryset()
+
+        # `order_by("module")` avant le `distinct()`: sans lui, l'ordre par
+        # defaut du modele (`-created_at, -id`) entre dans la requete et rend
+        # chaque ligne unique -- « payments » ressortait autant de fois qu'il
+        # y avait d'ecritures.
+        modules = sorted(
+            valeur
+            for valeur in perimetre.exclude(module="")
+            .order_by("module")
+            .values_list("module", flat=True)
+            .distinct()
+            if valeur
+        )
+        # Les auteurs presents dans le journal, et eux seuls: l'annuaire des
+        # comptes actifs manquerait ceux qui ont depuis quitte l'ecole, dont
+        # les actes restent pourtant journalises.
+        auteurs = [
+            {
+                "id": ligne["user"],
+                "label": ligne["user__first_name"] and ligne["user__last_name"]
+                and f"{ligne['user__first_name']} {ligne['user__last_name']}".strip()
+                or ligne["user__username"],
+                "role": ligne["role"],
+            }
+            for ligne in perimetre.filter(user__isnull=False)
+            .values("user", "user__username", "user__first_name", "user__last_name", "role")
+            .distinct()
+            .order_by("user__username")
+        ]
+
+        return Response({"modules": modules, "auteurs": auteurs})
+
     @action(detail=False, methods=["get"], url_path="export-excel")
     def export_excel(self, request):
         from openpyxl import Workbook
