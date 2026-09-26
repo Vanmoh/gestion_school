@@ -1,0 +1,219 @@
+name: Publier la video de demonstration
+
+# La machine de developpement ne peut pas fabriquer cette video: ffmpeg y est
+# absent, la chaine CMake aussi, et il y reste un peu plus d'un gigaoctet de
+# memoire libre -- le build web l'avait deja saturee une fois. Un runner Ubuntu a
+# les trois. C'est la meme raison qui a fait naitre les workflows de publication
+# de l'APK et des paquets de bureau.
+#
+# Ce qu'il produit: une video des neuf roles, chapitree, sous-titree, publiee en
+# Release. Le lien stable a donner est
+# https://github.com/Vanmoh/gestion_school/releases/latest/download/demo_gestion_school.mp4
+#
+# CE JOB NE PEUT PAS ATTEINDRE LA PRODUCTION, ET C'EST VOULU.
+#
+# Une video se publie: filmer une base reelle diffuserait les noms, matricules,
+# notes, incidents et dettes d'eleves mineurs, sans retour possible. Trois
+# proprietes structurelles l'interdisent, avant meme le garde-fou applicatif:
+#   - il declare son propre service Postgres et pose DATABASE_URL sur localhost;
+#   - il ne lit aucun `secrets.*`, contrairement au workflow de sauvegarde;
+#   - il n'accepte aucune entree d'URL, d'hote ou d'identifiant.
+# Il n'existe donc aucun chemin, meme errone, vers la base de l'ecole. La
+# commande `verifier_le_decor_de_demonstration` ajoute une quatrieme barriere,
+# celle-la verifiable, et le filigrane « DONNEES FICTIVES » est le dernier filet.
+
+on:
+  workflow_dispatch:
+    inputs:
+      duree_de_pose_ms:
+        description: "Temps de pose par ecran, en millisecondes (defaut 2500)"
+        required: false
+        default: "2500"
+      chapitres:
+        description: "Rangs a tourner, separes par des virgules. Vide = les neuf."
+        required: false
+        default: ""
+      publier:
+        description: "Creer la Release. Decoche pour ne garder que les rushes."
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: video-demonstration
+  cancel-in-progress: false
+
+jobs:
+  tourner-et-publier:
+    runs-on: ubuntu-latest
+    # Une video de neuf minutes coute 35 a 45 minutes de runner: le premier
+    # build CMake, neuf prises, puis le montage.
+    timeout-minutes: 90
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gestion_user
+          POSTGRES_PASSWORD: gestion_password
+          POSTGRES_DB: gestion_school
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gestion_user"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      # Sans lui, le module de messagerie affiche son bandeau « temps reel
+      # indisponible » -- ce qui serait filme tel quel.
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-retries 10
+
+    env:
+      DEBUG: "True"
+      SECRET_KEY: cle-de-demonstration-sans-valeur
+      ALLOWED_HOSTS: "localhost,127.0.0.1,testserver"
+      DATABASE_URL: postgresql://gestion_user:gestion_password@localhost:5432/gestion_school
+      CHANNEL_REDIS_URL: redis://localhost:6379/2
+      ENABLE_FILE_LOGGING: "False"
+      DUREE_DE_POSE_MS: ${{ inputs.duree_de_pose_ms }}
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Dependances systeme du backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config default-libmysqlclient-dev
+
+      - name: Dependances Python
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Version epinglee, contrairement aux trois workflows de publication qui
+      # disent « channel: stable ». Pour un binaire, une bascule de stable se
+      # voit au pire dans un numero de version; pour une prise filmee, elle
+      # casse le tournage sans qu'un seul fichier du depot ait bouge.
+      - name: Flutter 3.47.1
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.1"
+          channel: stable
+          cache: true
+
+      - name: Chaine de compilation Linux, serveur X virtuel et ffmpeg
+        run: |
+          sudo apt-get install -y \
+            cmake ninja-build libgtk-3-dev liblzma-dev \
+            libsecret-1-dev libjsoncpp-dev \
+            xvfb libgl1-mesa-dri libglu1-mesa mesa-utils \
+            x11-utils xdotool openbox ffmpeg
+
+      # Le point qui decide de toute la voie. L'embedder GTK de Flutter cree un
+      # contexte OpenGL, que Xvfb n'offre que par llvmpipe. Cette etape coute
+      # cinq secondes et dit franchement si la suite est possible.
+      - name: Contexte OpenGL disponible
+        run: |
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a \
+            -s "-screen 0 1280x720x24 +extension GLX +extension RENDER -nolisten tcp" \
+            glxinfo -B | tee /tmp/glxinfo.txt
+          grep -qi renderer /tmp/glxinfo.txt
+
+      - name: Preparer la base et la peupler
+        working-directory: backend
+        run: |
+          set -e
+          python manage.py migrate --noinput
+          python manage.py seed_demo_data
+          python manage.py seed_ltob_data \
+            --etablissement "Établissement Démo" \
+            --academic-year 2025-2026 --traceback
+          python manage.py seed_empty_classes --cible 30
+          python manage.py completer_le_decor_de_demonstration
+          # L'identifiant se lit, il ne se code pas en dur: le script maison du
+          # depot fixe ETAB_ID=11, ce qui ne vaut que pour sa propre base.
+          ETAB_ID=$(python manage.py shell -c \
+            "from apps.school.models import Etablissement; \
+             print(Etablissement.objects.get(name='Établissement Démo').id)")
+          python manage.py seed_term_scores --etab-id "$ETAB_ID" --term T1 --seed 20260423
+          python manage.py seed_term_scores --etab-id "$ETAB_ID" --term T2 --seed 20260424
+          python manage.py recalculer_rangs || true
+
+      # La barriere. Elle sort en 1 des qu'un nom d'eleve n'appartient a aucune
+      # liste fictive connue, qu'un compte etranger au decor existe, ou que la
+      # base est trop maigre pour valoir trente-cinq minutes de runner.
+      - name: Refuser de filmer des donnees reelles
+        working-directory: backend
+        run: python manage.py verifier_le_decor_de_demonstration
+
+      - name: Lancer l'API
+        working-directory: backend
+        run: |
+          nohup python manage.py runserver 0.0.0.0:8000 --noreload \
+            > /tmp/api.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -sf -o /dev/null http://localhost:8000/api/healthz/; then
+              echo "API prete."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "L'API n'a pas repondu." >&2
+          tail -40 /tmp/api.log >&2
+          exit 1
+
+      - name: Tourner les chapitres
+        run: |
+          tools/demo_video/enregistrer_les_chapitres.sh \
+            ${{ inputs.chapitres != '' && format('--seulement {0}', inputs.chapitres) || '' }}
+
+      - name: Monter la video
+        run: python3 tools/demo_video/monter_la_video.py --sortie tools/demo_video/sortie
+
+      # Les rushes et les journaux, cinq jours: sans eux, un chapitre rate est un
+      # mystere qu'on ne peut pas instruire.
+      - name: Conserver les rushes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rushes-demonstration
+          path: |
+            tools/demo_video/sortie/brut_*.mkv
+            tools/demo_video/sortie/journal_*.jsonl
+            tools/demo_video/sortie/geometrie_*.txt
+            tools/demo_video/sortie/*.log
+            /tmp/glxinfo.txt
+            /tmp/api.log
+          retention-days: 5
+          if-no-files-found: warn
+
+      - name: Horodater la release
+        id: horodatage
+        run: echo "jour=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Publier en Release
+        if: inputs.publier
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: demo-${{ github.run_number }}-${{ steps.horodatage.outputs.jour }}
+          name: "Demonstration des 9 roles — ${{ steps.horodatage.outputs.jour }}"
+          body_path: tools/demo_video/sortie/corps_de_release.md
+          files: tools/demo_video/sortie/demo_gestion_school.mp4
+          make_latest: true

@@ -216,11 +216,21 @@ class Command(BaseCommand):
 
         Un compte de direction reel en base signifie qu'on tient une copie de
         production, meme si les eleves ont ete remplaces.
+
+        Le controle porte d'abord sur le **nom de famille**, et seulement
+        ensuite sur la forme de l'identifiant: `seed_empty_classes` nomme ses
+        comptes « prenom.nom », une forme qu'aucun prefixe ne distingue d'un
+        compte reel. Se fier aux prefixes refusait donc cent vingt-huit eleves
+        parfaitement fictifs.
         """
         attendus = set(NOMS_DES_COMPTES_DE_DEMONSTRATION)
+        fictifs = noms_fictifs_connus()
         etrangers = []
-        for identifiant in User.objects.values_list("username", flat=True):
+
+        for identifiant, nom in User.objects.values_list("username", "last_name"):
             if identifiant in attendus:
+                continue
+            if (nom or "").strip().lower() in fictifs:
                 continue
             if identifiant.lower().startswith(PREFIXES_DE_DECOR):
                 continue
