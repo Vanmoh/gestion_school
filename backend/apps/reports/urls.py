@@ -16,6 +16,7 @@ from .views import (
     PaymentJournalExportView,
     PaymentJournalPageView,
     PaymentReceiptPdfView,
+    ReceiptsPageView,
     ReportsContextView,
     StaffRosterPdfView,
     BulletinDePaiePdfView,
@@ -58,6 +59,8 @@ urlpatterns = [
         BulletinShareDownloadView.as_view(),
         name="bulletin-partage",
     ),
+    # Les recus page par page: le contexte de l'ecran les servait tous.
+    path("receipts/", ReceiptsPageView.as_view(), name="reports-receipts"),
     path("receipt/<int:payment_id>/", PaymentReceiptPdfView.as_view(), name="payment-receipt-pdf"),
     path("receipts/batch/", BatchPaymentReceiptsPdfView.as_view(), name="payment-receipts-batch-pdf"),
     path("payments/export-excel/", PaymentExcelExportView.as_view(), name="payments-export-excel"),

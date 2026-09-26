@@ -22,6 +22,7 @@ import '../../imports/presentation/academic_imports_window.dart';
 import 'timetable_workload.dart';
 import '../../../core/widgets/indicateur.dart';
 
+part 'timetable_page_panneaux.dart';
 part 'timetable_batch_window.dart';
 part 'timetable_slot_dialog.dart';
 part 'timetable_duplicate_dialog.dart';
@@ -1106,24 +1107,24 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return RefreshIndicator(
-        onRefresh: _refreshTimetable,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(18),
-          children: const [
-            SizedBox(
-              height: 460,
-              child: Center(child: CircularProgressIndicator()),
-            ),
-          ],
-        ),
-      );
-    }
+  /// Redessine l'ecran depuis les panneaux, qui vivent dans une `part`.
+  ///
+  /// `setState` est protege: une extension ne peut pas l'appeler, meme dans la
+  /// meme bibliotheque. Les panneaux modifient l'etat puis passent par ici --
+  /// un seul point de passage, nomme, plutot qu'une derogation repetee a
+  /// chaque appel.
+  void redessiner(VoidCallback changement) => setState(changement);
 
+  /// Tout ce que la grille derive de son etat, calcule une fois par image.
+  ///
+  /// Ces vingt valeurs vivaient en tete d'un `build` de neuf cents lignes, qui
+  /// enchainait ensuite quatre panneaux entiers -- filtres, classe choisie,
+  /// charge des enseignants, recapitulatif par classe -- avant de les
+  /// assembler. Les panneaux sont devenus quatre methodes, dans
+  /// `timetable_page_panneaux.dart`, et cet objet est ce qu'elles se partagent:
+  /// sans lui, chacune reprendrait la vingtaine de parametres, ou les
+  /// recalculerait pour son compte.
+  _VueDuPlanning _calculerLaVue(BuildContext context) {
     // Droits lus sur la matrice, comme le font deja les sept gardes
     // d'action de cet ecran. La condition `role == 'teacher'` qui tenait
     // ici en divergeait: la matrice met aussi le promoteur, le comptable
@@ -1183,464 +1184,54 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
           return row.teacherId == _loggedTeacherId;
         }).toList();
 
-    final controlsPanel = _sectionCard(
-      title: 'Filtres et actions',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (!_scheduleApiSupported) ...[
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.orange.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.orange.shade200),
-              ),
-              child: Text(
-                'Backend planning non compatible: les routes horaires ne sont pas disponibles sur\n'
-                '$_activeApiBaseUrl\n'
-                'Configurez une API mise à jour via Connexion > Configuration API.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _saving ? null : _loadData,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Retester compatibilité API'),
-                ),
-                if (_usingCustomApiBaseUrl)
-                  OutlinedButton.icon(
-                    onPressed: _saving ? null : _resetCustomApiUrlAndReload,
-                    icon: const Icon(Icons.settings_backup_restore_outlined),
-                    label: const Text('Réinitialiser URL API'),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-          ],
-          if (!_isTeacherUser)
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment<String>(
-                  value: 'classroom',
-                  label: Text('Par classe'),
-                  icon: Icon(Icons.grid_view_outlined),
-                ),
-                ButtonSegment<String>(
-                  value: 'teacher',
-                  label: Text('Par enseignant'),
-                  icon: Icon(Icons.badge_outlined),
-                ),
-              ],
-              selected: {_viewMode},
-              onSelectionChanged: (values) {
-                final next = values.first;
-                setState(() => _viewMode = next);
-              },
-            ),
-          const SizedBox(height: 10),
-          DropdownButtonFormField<int>(
-            isExpanded: true,
-            initialValue: _selectedClassroom,
-            decoration: const InputDecoration(labelText: 'Classe'),
-            items: visibleClassrooms
-                .map(
-                  (row) => DropdownMenuItem<int>(
-                    value: _asInt(row['id']),
-                    child: Text('${row['name']}'),
-                  ),
-                )
-                .toList(),
-            onChanged: (value) {
-              setState(() => _selectedClassroom = value);
-            },
-          ),
-          if (selectedClassId != null) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                Indicateur(libelle: 'Statut planning', valeur: selectedPublicationLabel),
-                Indicateur(libelle: 'Horaires', valeur: '${selectedSlots.length}'),
-              ],
+
+
+
+
+
+    return _VueDuPlanning(
+      isReadOnlyMode: isReadOnlyMode,
+      assignmentById: assignmentById,
+      assignmentsByClass: assignmentsByClass,
+      slotsByClass: slotsByClass,
+      publicationByClass: publicationByClass,
+      visibleClassrooms: visibleClassrooms,
+      colorScheme: colorScheme,
+      classesWithSlots: classesWithSlots,
+      classesPublished: classesPublished,
+      classesLocked: classesLocked,
+      selectedClassId: selectedClassId,
+      selectedClassName: selectedClassName,
+      selectedAssignments: selectedAssignments,
+      selectedSlots: selectedSlots,
+      selectedPublication: selectedPublication,
+      selectedIsPublished: selectedIsPublished,
+      selectedIsLocked: selectedIsLocked,
+      selectedPublicationLabel: selectedPublicationLabel,
+      isNarrow: isNarrow,
+      teacherWorkloads: teacherWorkloads,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return RefreshIndicator(
+        onRefresh: _refreshTimetable,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(18),
+          children: const [
+            SizedBox(
+              height: 460,
+              child: Center(child: CircularProgressIndicator()),
             ),
           ],
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (!_isTeacherUser)
-                FilledButton.tonalIcon(
-                  onPressed:
-                      (_saving ||
-                          !_scheduleApiSupported ||
-                          selectedClassId == null)
-                      ? null
-                      : _exportSelectedClassXlsx,
-                  icon: const Icon(Icons.table_view_outlined),
-                  label: const Text('Exporter XLSX classe'),
-                ),
-              FilledButton.tonalIcon(
-                onPressed: (_saving || selectedClassId == null)
-                    ? null
-                    : _exportCurrentClassCsv,
-                icon: const Icon(Icons.grid_on_outlined),
-                label: const Text('Exporter Excel (CSV)'),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: _saving ? null : _loadData,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Actualiser'),
-              ),
-              if (!_isTeacherUser)
-                FilledButton.tonalIcon(
-                  onPressed: (_saving || !_scheduleApiSupported)
-                      || isReadOnlyMode
-                      ? null
-                      : _openDuplicateScheduleDialog,
-                  icon: const Icon(Icons.copy_all_outlined),
-                  label: const Text('Dupliquer planning'),
-                ),
-              // La génération remplace la saisie créneau par créneau, où il
-              // fallait vérifier de tête qu'aucun enseignant n'était attendu
-              // dans deux classes à la fois.
-              if (!_isTeacherUser)
-                FilledButton.icon(
-                  onPressed: (_saving || !_scheduleApiSupported)
-                      || isReadOnlyMode
-                      ? null
-                      : () => _ouvrirLaGeneration(selectedClassId),
-                  icon: const Icon(Icons.auto_awesome_motion_outlined),
-                  label: const Text('Générer automatiquement'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Actions rapides disponibles via les boutons flottants: ajout d\'horaire et impression PDF.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          if (!_isTeacherUser) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: (_saving || !_scheduleApiSupported)
-                      ? null
-                      : _exportGlobalXlsx,
-                  icon: const Icon(Icons.dataset_outlined),
-                  label: const Text('Export global XLSX'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: (_saving || !_scheduleApiSupported)
-                      ? null
-                      : _exportGlobalPdf,
-                  icon: const Icon(Icons.picture_as_pdf_outlined),
-                  label: const Text('Export global PDF'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton.tonalIcon(
-                  onPressed:
-                      (_saving ||
-                          !_scheduleApiSupported ||
-                          selectedClassId == null ||
-                      selectedAssignments.isEmpty ||
-                      isReadOnlyMode)
-                      ? null
-                      : () => _publishSelectedClass(lockAfterPublish: true),
-                  icon: const Icon(Icons.publish),
-                  label: const Text('Publier + verrouiller'),
-                ),
-                OutlinedButton.icon(
-                  onPressed:
-                      (_saving ||
-                          !_scheduleApiSupported ||
-                          selectedClassId == null ||
-                      selectedAssignments.isEmpty ||
-                      isReadOnlyMode)
-                      ? null
-                      : () => _publishSelectedClass(lockAfterPublish: false),
-                  icon: const Icon(Icons.cloud_upload_outlined),
-                  label: const Text('Publier sans verrou'),
-                ),
-                OutlinedButton.icon(
-                  onPressed:
-                      (_saving ||
-                          !_scheduleApiSupported ||
-                          selectedClassId == null ||
-                      !selectedIsPublished ||
-                      isReadOnlyMode)
-                      ? null
-                      : () => _setSelectedClassLock(lock: !selectedIsLocked),
-                  icon: Icon(
-                    selectedIsLocked
-                        ? Icons.lock_open_outlined
-                        : Icons.lock_outline,
-                  ),
-                  label: Text(
-                    selectedIsLocked ? 'Déverrouiller' : 'Verrouiller',
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed:
-                      (_saving ||
-                          !_scheduleApiSupported ||
-                          selectedClassId == null ||
-                      !selectedIsPublished ||
-                      isReadOnlyMode)
-                      ? null
-                      : _unpublishSelectedClass,
-                  icon: const Icon(Icons.unpublished_outlined),
-                  label: const Text('Repasser brouillon'),
-                ),
-              ],
-            ),
-          ],
-          if (_viewMode == 'teacher') ...[
-            const SizedBox(height: 10),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment<String>(
-                  value: 'selected',
-                  label: Text('Classe sélectionnée'),
-                  icon: Icon(Icons.filter_1_outlined),
-                ),
-                ButtonSegment<String>(
-                  value: 'all',
-                  label: Text('Toutes classes'),
-                  icon: Icon(Icons.filter_none_outlined),
-                ),
-              ],
-              selected: {_teacherScope},
-              onSelectionChanged: _isTeacherUser
-                  ? null
-                  : (values) {
-                      setState(() => _teacherScope = values.first);
-                    },
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Charge calculée sur ${teacherWorkloads.length} enseignant(s).',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ],
-      ),
-    );
+        ),
+      );
+    }
 
-    final selectedClassPanel = _sectionCard(
-      title: 'Tableau horaire - $selectedClassName',
-      child: selectedClassId == null
-          ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 18),
-              child: Text('Sélectionnez une classe.'),
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    Indicateur(libelle: 
-                      'Affectations classe', valeur:
-                      '${selectedAssignments.length}',
-                    ),
-                    Indicateur(libelle: 'Horaires classe', valeur: '${selectedSlots.length}'),
-                    Indicateur(libelle: 'Statut', valeur: selectedPublicationLabel),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                if (selectedIsLocked)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      'Planning verrouillé: les modifications d\'horaires sont temporairement bloquées.',
-                    ),
-                  ),
-                if (selectedAssignments.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10),
-                    child: Text(
-                      'Aucune affectation pour cette classe. Créez des affectations puis des horaires.',
-                    ),
-                  )
-                else ...[
-                  TextField(
-                    controller: _slotsSearchController,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      labelText: 'Filtre rapide (matière, enseignant, salle)',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _slotsSearchController.text.trim().isEmpty
-                          ? null
-                          : IconButton(
-                              onPressed: () {
-                                _slotsSearchController.clear();
-                                setState(() {});
-                              },
-                              icon: const Icon(Icons.clear),
-                            ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      ChoiceChip(
-                        label: const Text('Tous jours'),
-                        selected: _mobileDayFilter == 'ALL',
-                        onSelected: (_) {
-                          setState(() => _mobileDayFilter = 'ALL');
-                        },
-                      ),
-                      ..._dayOrder.map(
-                        (dayCode) => ChoiceChip(
-                          label: Text(_dayLabel(dayCode)),
-                          selected: _mobileDayFilter == dayCode,
-                          onSelected: (_) {
-                            setState(() => _mobileDayFilter = dayCode);
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  _buildClassWeeklyGrid(
-                    classId: selectedClassId,
-                    classSlots: selectedSlots,
-                    dayFilter: _mobileDayFilter,
-                    searchTerm: _slotsSearchController.text,
-                    compact: isNarrow,
-                  ),
-                ],
-              ],
-            ),
-    );
-
-    final teacherWorkloadPanel = _sectionCard(
-      title: _teacherScope == 'selected'
-          ? 'Charge horaire - classe sélectionnée'
-          : 'Charge horaire - toutes classes',
-      child: teacherWorkloads.isEmpty
-          ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 18),
-              child: Text('Aucune charge disponible pour le filtre courant.'),
-            )
-          : FrozenColumnTable(
-              frozenColumnWidth: 180,
-              columnWidth: 104,
-              frozenHeader: const Text('Enseignant'),
-              headers: const [
-                Text('Horaires'),
-                Text('Classes'),
-                Text('Lundi'),
-                Text('Mardi'),
-                Text('Mercredi'),
-                Text('Jeudi'),
-                Text('Vendredi'),
-                Text('Samedi'),
-                Text('Total h/sem.'),
-                Text('Niveau'),
-              ],
-              frozenCells: [
-                for (final row in teacherWorkloads)
-                  Text(
-                    _teacherDisplayLabel(row.teacherName, row.teacherCode),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-              ],
-              rows: [
-                for (final row in teacherWorkloads)
-                  _teacherWorkloadCells(row),
-              ],
-            ),
-    );
-
-    final perClassPanel = _sectionCard(
-      title: 'Chaque classe a son emploi du temps',
-      child: _classrooms.isEmpty
-          ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 18),
-              child: Text('Aucune classe disponible.'),
-            )
-          : Column(
-              children: _classrooms.map((classroom) {
-                final classId = _asInt(classroom['id']);
-                final className = (classroom['name'] ?? 'Classe $classId')
-                    .toString();
-                final classAssignments =
-                    assignmentsByClass[classId] ?? <Map<String, dynamic>>[];
-                final classSlots =
-                    slotsByClass[classId] ?? <Map<String, dynamic>>[];
-                final publication = publicationByClass[classId];
-                final classIsLocked = _asBool(publication?['is_locked']);
-                final publicationLabel = _publicationLabel(publication);
-
-                return Card(
-                  child: ExpansionTile(
-                    initiallyExpanded: classId == _selectedClassroom,
-                    onExpansionChanged: (expanded) {
-                      if (expanded) {
-                        setState(() => _selectedClassroom = classId);
-                      }
-                    },
-                    title: Text(className),
-                    subtitle: Text(
-                      '$publicationLabel • ${classSlots.length} horaire(s) • ${classAssignments.length} affectation(s)',
-                    ),
-                    childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                    children: [
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: OutlinedButton.icon(
-                          onPressed:
-                              (_saving ||
-                                  !_scheduleApiSupported ||
-                              classIsLocked ||
-                              isReadOnlyMode)
-                              ? null
-                              : () =>
-                                    _openSlotDialog(forceClassroomId: classId),
-                          icon: const Icon(Icons.add),
-                          label: const Text('Ajouter horaire'),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      if (classAssignments.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 8),
-                          child: Text('Aucune affectation pour cette classe.'),
-                        )
-                      else
-                        _buildClassWeeklyGrid(
-                          classId: classId,
-                          classSlots: classSlots,
-                        ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-    );
+    final vue = _calculerLaVue(context);
 
     return Stack(
       children: [
@@ -1665,7 +1256,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                           'Vue pedagogique basee sur les affectations enseignants/matieres/classes.',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
-                        if (isReadOnlyMode) ...[
+                        if (vue.isReadOnlyMode) ...[
                           const SizedBox(height: 6),
                           Text(
                             'Mode lecture seule: consultation uniquement pour ce profil.',
@@ -1685,7 +1276,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                         label: const Text('Actualiser'),
                       ),
                       OutlinedButton.icon(
-                        onPressed: (_saving || isReadOnlyMode)
+                        onPressed: (_saving || vue.isReadOnlyMode)
                             ? null
                             : _openAcademicImports,
                         icon: const Icon(Icons.upload_file_outlined),
@@ -1706,10 +1297,10 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               Container(
                 padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
                 decoration: BoxDecoration(
-                  color: colorScheme.surfaceContainerLowest,
+                  color: vue.colorScheme.surfaceContainerLowest,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+                    color: vue.colorScheme.outlineVariant.withValues(alpha: 0.55),
                   ),
                 ),
                 child: Wrap(
@@ -1721,22 +1312,22 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                     Indicateur(libelle: 'Classes', valeur: '${_classrooms.length}'),
                     Indicateur(libelle: 'Affectations', valeur: '${_assignments.length}'),
                     Indicateur(libelle: 'Horaires', valeur: '${_scheduleSlots.length}'),
-                    Indicateur(libelle: 'Classes planifiées', valeur: '$classesWithSlots'),
-                    Indicateur(libelle: 'Classes publiées', valeur: '$classesPublished'),
-                    Indicateur(libelle: 'Classes verrouillées', valeur: '$classesLocked'),
+                    Indicateur(libelle: 'Classes planifiées', valeur: '${vue.classesWithSlots}'),
+                    Indicateur(libelle: 'Classes publiées', valeur: '${vue.classesPublished}'),
+                    Indicateur(libelle: 'Classes verrouillées', valeur: '${vue.classesLocked}'),
                   ],
                 ),
               ),
               const SizedBox(height: 12),
-              controlsPanel,
+              _panneauDesFiltresEtActions(vue),
               if (_viewMode == 'classroom') ...[
                 const SizedBox(height: 12),
-                selectedClassPanel,
+                _panneauDeLaClasseChoisie(vue),
                 const SizedBox(height: 12),
-                perClassPanel,
+                _panneauParClasse(vue),
               ] else ...[
                 const SizedBox(height: 12),
-                teacherWorkloadPanel,
+                _panneauDeLaChargeDesEnseignants(vue),
               ],
             ],
           ),
@@ -1753,12 +1344,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   onPressed:
                       (_saving ||
                           !_scheduleApiSupported ||
-                          selectedClassId == null ||
-                          selectedIsLocked ||
-                          isReadOnlyMode)
+                          vue.selectedClassId == null ||
+                          vue.selectedIsLocked ||
+                          vue.isReadOnlyMode)
                       ? null
                       : () => _openSlotBatchFloatingWindow(
-                          forceClassroomId: selectedClassId,
+                          forceClassroomId: vue.selectedClassId,
                         ),
                   icon: const Icon(Icons.add_circle_outline),
                   label: const Text('Ajouter horaire'),
@@ -1767,7 +1358,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
               FloatingActionButton.extended(
                 heroTag: 'fab_timetable_print_pdf',
                 onPressed:
-                    (_saving || !_scheduleApiSupported || selectedClassId == null)
+                    (_saving || !_scheduleApiSupported || vue.selectedClassId == null)
                     ? null
                     : _openTimetablePrintFloatingWindow,
                 icon: const Icon(Icons.picture_as_pdf_outlined),
@@ -2646,6 +2237,57 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 /// La simulation est obligatoire avant d'appliquer, et c'est délibéré: un
 /// emploi du temps engage l'année entière, et ce qui ne rentre pas doit être
 /// vu avant que les centaines de créneaux ne soient écrits.
+/// Ce que les quatre panneaux de la grille se partagent.
+///
+/// Ni un modele de domaine ni un etat: rien que les valeurs derivees d'une
+/// image, calculees par `_calculerLaVue` et lues par les panneaux. Les passer
+/// une a une aurait donne quatre signatures de vingt parametres.
+class _VueDuPlanning {
+  final bool isReadOnlyMode;
+  final Map<int, Map<String, dynamic>> assignmentById;
+  final Map<int, List<Map<String, dynamic>>> assignmentsByClass;
+  final Map<int, List<Map<String, dynamic>>> slotsByClass;
+  final Map<int, Map<String, dynamic>> publicationByClass;
+  final List<Map<String, dynamic>> visibleClassrooms;
+  final ColorScheme colorScheme;
+  final int classesWithSlots;
+  final int classesPublished;
+  final int classesLocked;
+  final int? selectedClassId;
+  final String selectedClassName;
+  final List<Map<String, dynamic>> selectedAssignments;
+  final List<Map<String, dynamic>> selectedSlots;
+  final Map<String, dynamic>? selectedPublication;
+  final bool selectedIsPublished;
+  final bool selectedIsLocked;
+  final String selectedPublicationLabel;
+  final bool isNarrow;
+  final List<TeacherWorkloadRow> teacherWorkloads;
+
+  const _VueDuPlanning({
+    required this.isReadOnlyMode,
+    required this.assignmentById,
+    required this.assignmentsByClass,
+    required this.slotsByClass,
+    required this.publicationByClass,
+    required this.visibleClassrooms,
+    required this.colorScheme,
+    required this.classesWithSlots,
+    required this.classesPublished,
+    required this.classesLocked,
+    required this.selectedClassId,
+    required this.selectedClassName,
+    required this.selectedAssignments,
+    required this.selectedSlots,
+    required this.selectedPublication,
+    required this.selectedIsPublished,
+    required this.selectedIsLocked,
+    required this.selectedPublicationLabel,
+    required this.isNarrow,
+    required this.teacherWorkloads,
+  });
+}
+
 class _DialogueDeGeneration extends StatefulWidget {
   final int? classroomId;
   final Dio dio;

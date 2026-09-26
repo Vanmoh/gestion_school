@@ -1910,11 +1910,30 @@ class TeacherTimeEntryCoverage(TimeStampedModel):
         return self.planned_minutes > 0 and self.covered_minutes >= self.planned_minutes
 
 
+class AnnouncementAudience(models.TextChoices):
+    """Les publics auxquels une annonce peut s'adresser.
+
+    Le champ etait libre: le censeur tapait « parents », « Parents » ou
+    « teachers » a la main, et une faute de frappe ne se voyait nulle part
+    puisque personne ne lisait la valeur. Quatre publics fermes remplacent la
+    saisie libre; qui lit quoi se decide dans `apps/school/annonces.py`.
+    """
+
+    TOUS = "all", "Tout l'etablissement"
+    FAMILLES = "families", "Familles (parents et eleves)"
+    ENSEIGNANTS = "teachers", "Enseignants"
+    ADMINISTRATION = "staff", "Administration"
+
+
 class Announcement(TimeStampedModel):
     etablissement = models.ForeignKey('Etablissement', on_delete=models.PROTECT, related_name="announcements", null=True, blank=True)
     title = models.CharField(max_length=150)
     message = models.TextField()
-    audience = models.CharField(max_length=50, default="all")
+    audience = models.CharField(
+        max_length=50,
+        choices=AnnouncementAudience.choices,
+        default=AnnouncementAudience.TOUS,
+    )
     author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
 
 

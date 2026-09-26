@@ -8,8 +8,10 @@ from datetime import date, datetime, timezone as fuseau_utc
 from pathlib import Path
 
 from django.conf import settings
+from decimal import Decimal, InvalidOperation
+
 from django.core.paginator import Paginator
-from django.db.models import Avg, Q
+from django.db.models import Avg, Count, Q, Sum
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -2211,6 +2213,18 @@ def _format_coef_value(value: float | None) -> str:
 
 
 class ReportsContextView(APIView):
+    """Le referentiel de l'ecran Rapports -- et non son contenu.
+
+    Cette vue serialisait **tous** les encaissements de l'ecole a chaque
+    ouverture de l'ecran, qui les cherchait et les paginait ensuite en
+    memoire. Sur une ecole a quinze mille recus, la page attendait une reponse
+    de plusieurs megaoctets pour afficher dix lignes.
+
+    Elle ne rend plus que ce qui peuple les listes de choix, et le total des
+    encaissements calcule en base. Les recus se demandent a `receipts/`, page
+    par page.
+    """
+
     access_module = "reports"
     permission_classes = [IsAuthenticated, HasModuleAccess]
 
@@ -2220,14 +2234,106 @@ class ReportsContextView(APIView):
             "user__first_name",
             "matricule",
         )
-        payments = _allowed_payments_queryset(request).order_by("-created_at")
         years = AcademicYear.objects.all().order_by("-start_date", "-id")
+
+        # Agrege en base: l'ecran sommait les montants ligne par ligne apres
+        # avoir tout recu, ce qui etait la raison meme de tout recevoir.
+        encaissements = _allowed_payments_queryset(request).aggregate(
+            nombre=Count("id"), total=Sum("amount")
+        )
 
         return Response(
             {
                 "students": StudentSerializer(students, many=True).data,
                 "academic_years": AcademicYearSerializer(years, many=True).data,
-                "payments": PaymentSerializer(payments, many=True).data,
+                "payments_count": encaissements["nombre"] or 0,
+                "payments_total": float(encaissements["total"] or 0),
+            }
+        )
+
+
+def _filtrer_les_recus(queryset, request):
+    """La recherche des recus, appliquee par la base.
+
+    L'ecran la faisait en memoire sur la liste entiere: un recu introuvable
+    faute d'avoir ete charge n'existait pas, et la barre de recherche ne
+    pouvait rien y faire.
+    """
+    recherche = (request.query_params.get("search") or "").strip()
+    if not recherche:
+        return queryset
+
+    filtre = (
+        Q(fee__student__user__first_name__icontains=recherche)
+        | Q(fee__student__user__last_name__icontains=recherche)
+        | Q(fee__student__user__username__icontains=recherche)
+        | Q(fee__student__matricule__icontains=recherche)
+        | Q(reference__icontains=recherche)
+    )
+
+    # Un montant se cherche aussi: c'est ce qu'on a sous les yeux quand une
+    # famille rapporte un recu sans son numero.
+    nombre = recherche.replace(" ", "").replace(",", ".")
+    try:
+        filtre = filtre | Q(amount=Decimal(nombre))
+    except (InvalidOperation, ValueError):
+        pass
+
+    return queryset.filter(filtre)
+
+
+class ReceiptsPageView(APIView):
+    """Les encaissements imprimables, page par page.
+
+    Meme forme de reponse que les journaux de caisse (`count`, `next`,
+    `previous`, `results`): l'intercepteur de pagination du client la suit
+    deja, et l'ecran n'a plus a decouper une liste entiere lui-meme.
+    """
+
+    access_module = "reports"
+    permission_classes = [IsAuthenticated, HasModuleAccess]
+
+    def get(self, request):
+        queryset = _filtrer_les_recus(
+            _allowed_payments_queryset(request).order_by("-created_at", "-id"),
+            request,
+        )
+
+        page_size = _parse_page_size(request, default=20, max_size=200)
+        paginator = Paginator(queryset, page_size)
+        try:
+            page_number = int(request.query_params.get("page", 1))
+        except (TypeError, ValueError):
+            page_number = 1
+        page_obj = paginator.get_page(max(1, page_number))
+
+        base_url = request.build_absolute_uri(request.path)
+        query_dict = request.query_params.copy()
+
+        def _lien(page_no):
+            if page_no is None:
+                return None
+            copie = query_dict.copy()
+            copie["page"] = str(page_no)
+            return f"{base_url}?{copie.urlencode()}"
+
+        return Response(
+            {
+                "count": paginator.count,
+                "page": page_obj.number,
+                "pages": paginator.num_pages,
+                "next": _lien(
+                    page_obj.next_page_number() if page_obj.has_next() else None
+                ),
+                "previous": _lien(
+                    page_obj.previous_page_number()
+                    if page_obj.has_previous()
+                    else None
+                ),
+                "results": [
+                    _payment_journal_row(paiement)
+                    for paiement in page_obj.object_list
+                ],
             }
         )
 

@@ -36,7 +36,7 @@ import 'features/dashboard/presentation/role_dashboards.dart';
 import 'features/exams/presentation/exams_controller.dart';
 import 'features/exams/presentation/exams_module_page.dart';
 import 'features/exams/presentation/parent_exams_page.dart';
-import 'features/communication/presentation/communication_page.dart';
+import 'features/communication/presentation/communication_module_page.dart';
 import 'features/academics/presentation/annee_scolaire_controller.dart';
 import 'core/widgets/bandeau_contexte.dart';
 import 'features/academics/presentation/widgets/selecteur_annee_scolaire.dart';
@@ -564,7 +564,7 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
       keyName: 'communication',
       label: 'Communication',
       icon: Icons.campaign_outlined,
-      view: CommunicationPage(),
+      view: CommunicationModulePage(),
     ),
     _AdminMenuItem(
       keyName: 'library',

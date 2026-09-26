@@ -2001,8 +2001,29 @@ class TeacherPayrollSerializer(serializers.ModelSerializer):
         )
 
 
+def _nom_affichable(user):
+    """Le nom d'une personne, ou son identifiant a defaut.
+
+    Trois ecrans resolvaient ce nom sur un annuaire tenu en memoire, et
+    affichaient « Global » ou un numero des que la personne en etait absente.
+    """
+    if user is None:
+        return ""
+    complet = user.get_full_name().strip()
+    return complet or user.username
+
+
 class AnnouncementSerializer(serializers.ModelSerializer):
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    author_name = serializers.SerializerMethodField(read_only=True)
+    # Le libelle du public: l'ecran le reecrivait de son cote, et les deux
+    # listes de publics avaient deja divergees une fois.
+    audience_label = serializers.CharField(
+        source="get_audience_display", read_only=True
+    )
+
+    def get_author_name(self, obj):
+        return _nom_affichable(obj.author)
 
     class Meta:
         model = Announcement
@@ -2011,6 +2032,10 @@ class AnnouncementSerializer(serializers.ModelSerializer):
 
 class NotificationSerializer(serializers.ModelSerializer):
     etablissement = serializers.PrimaryKeyRelatedField(read_only=True)
+    recipient_name = serializers.SerializerMethodField(read_only=True)
+
+    def get_recipient_name(self, obj):
+        return _nom_affichable(obj.recipient)
 
     class Meta:
         model = Notification

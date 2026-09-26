@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/permissions/module_permissions.dart';
+import '../../../core/widgets/barre_recherche_module.dart';
+import '../../../core/widgets/foreground_notice.dart';
+import '../../../core/widgets/indicateur.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/discipline_incident.dart';
 import 'discipline_controller.dart';
@@ -36,6 +39,13 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
 
   String _filtreStatut = '';
   String _filtreGravite = '';
+
+  /// La declaration reste pliee jusqu'a ce qu'on en ait besoin.
+  ///
+  /// Elle occupait le haut de l'ecran en permanence, avant la liste des
+  /// incidents -- alors qu'on vient d'abord voir ou en sont les incidents, et
+  /// qu'on declare ensuite.
+  bool _declarationOuverte = false;
 
   /// Droits lus sur la matrice servie par le backend, et nulle part ailleurs.
   ///
@@ -244,22 +254,20 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
     }
   }
 
+  /// Un seul canal d'avis dans le module.
+  ///
+  /// `ScaffoldMessenger` glisse son bandeau **sous** les fenetres, et cet
+  /// ecran en ouvre deux -- l'arbitrage d'un incident et sa suppression. Le
+  /// refus d'une suppression passait donc inapercu derriere sa propre
+  /// boite de dialogue.
   void _showMessage(String message, {bool isSuccess = false}) {
     if (!mounted) return;
-
-    final messenger = ScaffoldMessenger.of(context);
-    const successColor = Color(0xFF197A43);
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          backgroundColor: isSuccess ? successColor : null,
-          content: Text(
-            message,
-            style: isSuccess ? const TextStyle(color: Colors.white) : null,
-          ),
-        ),
-      );
+    ForegroundNotice.show(
+      context,
+      message,
+      isSuccess: isSuccess,
+      isError: !isSuccess,
+    );
   }
 
   @override
@@ -315,15 +323,66 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
               ),
             ),
           ],
+          const SizedBox(height: 12),
+          _buildIndicateurs(),
           const SizedBox(height: 14),
-          if (peutDeclarer) _buildDeclarationCard(estEnseignant),
-          if (peutDeclarer) const SizedBox(height: 14),
+          if (peutDeclarer) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.icon(
+                key: const Key('basculer-declaration'),
+                onPressed: () => setState(
+                  () => _declarationOuverte = !_declarationOuverte,
+                ),
+                icon: Icon(
+                  _declarationOuverte ? Icons.close : Icons.report_outlined,
+                ),
+                label: Text(
+                  _declarationOuverte ? 'Fermer' : 'Declarer un incident',
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            if (_declarationOuverte) _buildDeclarationCard(estEnseignant),
+            if (_declarationOuverte) const SizedBox(height: 14),
+          ],
           _buildIncidentsCard(
             peutArbitrer: peutArbitrer,
             peutSupprimer: peutSupprimer,
           ),
         ],
       ),
+    );
+  }
+
+  /// L'etat des lieux, avec la brique que le reste du projet emploie.
+  ///
+  /// Il se lisait « 12 au total • 3 ouvert(s) » en petites lettres dans le
+  /// coin de la carte des incidents -- au meme niveau typographique que les
+  /// filtres, alors que c'est le chiffre qu'on vient chercher.
+  Widget _buildIndicateurs() {
+    final ouverts = _incidents.where((row) => row.estOuvert).length;
+    final graves = _incidents
+        .where((row) => row.estOuvert && row.severity == 'high')
+        .length;
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        Indicateur(libelle: 'Incidents', valeur: '${_incidents.length}'),
+        Indicateur(
+          libelle: 'Ouverts',
+          valeur: '$ouverts',
+          couleur: ouverts > 0 ? Theme.of(context).colorScheme.primary : null,
+        ),
+        // Ce qui ne peut pas attendre: un incident grave encore sans suite.
+        Indicateur(
+          libelle: 'Graves en attente',
+          valeur: '$graves',
+          couleur: graves > 0 ? Theme.of(context).colorScheme.error : null,
+        ),
+      ],
     );
   }
 
@@ -467,7 +526,6 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
     required bool peutSupprimer,
   }) {
     final textTheme = Theme.of(context).textTheme;
-    final ouverts = _incidents.where((row) => row.estOuvert).length;
 
     return Card(
       child: Padding(
@@ -475,66 +533,40 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text('Incidents', style: textTheme.titleMedium),
-                ),
-                Text(
-                  '${_incidents.length} au total • $ouverts ouvert(s)',
-                  style: textTheme.bodySmall,
-                ),
-              ],
-            ),
+            Text('Incidents', style: textTheme.titleMedium),
             const SizedBox(height: 10),
-            // Filtres cote serveur: la liste etait tronquee a trente lignes
-            // sans aucun moyen d'atteindre les suivantes.
-            TextField(
-              key: const Key('incidents-search'),
+            // La brique de recherche du projet, plutot qu'un champ refait ici:
+            // celui-ci gardait sa propre fleche de validation, son propre
+            // bouton d'effacement et sa propre facon de dire l'attente, la ou
+            // sept autres modules partagent les memes. Les filtres partent au
+            // serveur -- la liste etait tronquee a trente lignes sans aucun
+            // moyen d'atteindre les suivantes.
+            BarreRechercheModule(
+              key: const Key('recherche-incidents'),
               controller: _searchController,
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _loadData(),
-              // La recherche part au serveur: la fleche reste, c'est elle
-              // qui la declenche. L'effacement s'ajoute a cote plutot qu'a
-              // sa place -- le champ ne se vidait que caractere par
-              // caractere, et revenir a la liste entiere demandait de tout
-              // supprimer a la main.
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                labelText: 'Rechercher (élève, matricule, motif, sanction)',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_searchController.text.isNotEmpty)
-                      IconButton(
-                        key: const Key('incidents-search-effacer'),
-                        tooltip: 'Effacer',
-                        icon: const Icon(Icons.close),
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() {});
-                          _loadData();
-                        },
-                      ),
-                    IconButton(
-                      tooltip: 'Rechercher',
-                      icon: const Icon(Icons.arrow_forward),
-                      onPressed: _loadData,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
+              indication: 'Rechercher (élève, matricule, motif, sanction)',
+              onChanged: (_) {
+                setState(() {});
+                _loadData();
+              },
+              onEffacer: () {
+                _searchController.clear();
+                setState(() {});
+                _loadData();
+              },
+              rechercheEnCours: _loading,
+              actions: [
+                SizedBox(
+                  width: 190,
                   child: DropdownButtonFormField<String>(
                     isExpanded: true,
+                    isDense: true,
                     key: const Key('filter-status'),
                     initialValue: _filtreStatut,
-                    decoration: const InputDecoration(labelText: 'Statut'),
+                    decoration: const InputDecoration(
+                      labelText: 'Statut',
+                      border: OutlineInputBorder(),
+                    ),
                     items: const [
                       DropdownMenuItem(value: '', child: Text('Tous')),
                       DropdownMenuItem(value: 'open', child: Text('Ouvert')),
@@ -549,13 +581,17 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
                     },
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
+                SizedBox(
+                  width: 190,
                   child: DropdownButtonFormField<String>(
                     isExpanded: true,
+                    isDense: true,
                     key: const Key('filter-severity'),
                     initialValue: _filtreGravite,
-                    decoration: const InputDecoration(labelText: 'Gravité'),
+                    decoration: const InputDecoration(
+                      labelText: 'Gravité',
+                      border: OutlineInputBorder(),
+                    ),
                     items: const [
                       DropdownMenuItem(value: '', child: Text('Toutes')),
                       DropdownMenuItem(value: 'low', child: Text('Faible')),
@@ -572,7 +608,12 @@ class _DisciplinePageState extends ConsumerState<DisciplinePage> {
             ),
             const SizedBox(height: 12),
             if (_incidents.isEmpty)
-              const Text('Aucun incident enregistré.')
+              EtatVideRecherche(
+                recherche: _searchController.text,
+                invitation: 'Aucun incident enregistré.',
+                precision: 'Aucun incident ne correspond',
+                motAucun: 'incident',
+              )
             else
               ..._incidents.map(
                 (incident) => _buildIncidentTile(
