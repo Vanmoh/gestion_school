@@ -138,21 +138,28 @@ class PiloteDeDemonstration {
   }
 
   /// Frappe un texte caractère par caractère, pour que la saisie se voie.
+  ///
+  /// Par `enterText` sur le champ, et non par `testTextInput`: ce dernier est
+  /// le clavier **factice** de `flutter_test`, qui n'est pas branché quand la
+  /// prise tourne sur une vraie plateforme. Rien n'était donc saisi, le
+  /// formulaire restait vide, et la connexion n'atteignait même pas le serveur
+  /// — l'API n'a vu passer aucune requête d'authentification.
+  ///
+  /// `enterText` pose la valeur d'un coup; on la repose donc lettre après
+  /// lettre, ce qui donne la même frappe visible sans dépendre du mock.
   Future<void> taperLentement(Finder champ, String texte) async {
     if (champ.evaluate().isEmpty) {
       journal.dire('(champ absent : ${champ.describeMatch(Plurality.one)})');
       return;
     }
     await tester.tap(champ.first, warnIfMissed: false);
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 250));
 
-    final tampon = StringBuffer();
-    for (final lettre in texte.split('')) {
-      tampon.write(lettre);
-      tester.testTextInput.enterText(tampon.toString());
+    for (var longueur = 1; longueur <= texte.length; longueur++) {
+      await tester.enterText(champ.first, texte.substring(0, longueur));
       await tester.pump(const Duration(milliseconds: 45));
     }
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 400));
   }
 
   /// Fait défiler doucement, pour montrer le bas d'un écran.

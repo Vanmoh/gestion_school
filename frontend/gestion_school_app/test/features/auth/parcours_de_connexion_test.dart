@@ -173,6 +173,49 @@ void main() {
     }
   });
 
+  testWidgets('saisir puis appuyer envoie vraiment la demande au serveur', (
+    tester,
+  ) async {
+    // Le deuxième tournage s'est arrêté ici sans rien dire : le pilote frappait
+    // par `testTextInput`, le clavier factice de `flutter_test`, qui n'est pas
+    // branché sur une vraie plateforme. Le formulaire restait vide et l'API n'a
+    // vu passer aucune requête d'authentification.
+    final transport = await _monter(tester);
+    if (_tuiles().evaluate().isNotEmpty) {
+      await tester.tap(_tuiles().first, warnIfMissed: false);
+      for (var i = 0; i < 30; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    // La frappe du pilote, lettre après lettre, par `enterText`.
+    for (final (champ, texte) in [
+      (kChampIdentifiant, 'directeur'),
+      (kChampMotDePasse, 'Password@123'),
+    ]) {
+      for (var n = 1; n <= texte.length; n++) {
+        await tester.enterText(find.byKey(champ), texte.substring(0, n));
+        await tester.pump(const Duration(milliseconds: 5));
+      }
+    }
+
+    await tester.tap(
+      find.widgetWithText(FilledButton, 'Se connecter'),
+      warnIfMissed: false,
+    );
+    for (var i = 0; i < 25; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    expect(
+      transport.chemins.where((chemin) => chemin.contains('login')),
+      isNotEmpty,
+      reason:
+          'sans requête de connexion, la prise filme un écran de login figé; '
+          'chemins vus : ${transport.chemins}',
+    );
+  });
+
   testWidgets('le bouton de connexion porte le libelle que le pilote vise', (
     tester,
   ) async {
