@@ -150,6 +150,9 @@ jobs:
 
       - name: Preparer la base et la peupler
         working-directory: backend
+        env:
+          ENSEIGNE: ${{ inputs.enseigne }}
+          STRUCTURE: ${{ inputs.structure }}
         run: |
           set -e
           python manage.py migrate --noinput
@@ -159,13 +162,20 @@ jobs:
             --academic-year 2025-2026 --traceback
           python manage.py seed_empty_classes --cible 30
           python manage.py completer_le_decor_de_demonstration \
-            --enseigne "${{ inputs.enseigne }}" \
-            --structure "${{ inputs.structure }}"
+            --enseigne "$ENSEIGNE" \
+            --structure "$STRUCTURE"
           # L'identifiant se lit, il ne se code pas en dur: le script maison du
           # depot fixe ETAB_ID=11, ce qui ne vaut que pour sa propre base.
+          #
+          # Et il se lit **apres** le decor, donc sous l'enseigne que celui-ci
+          # vient de poser: chercher « Etablissement Demo » ici echouait des que
+          # la demonstration prenait le nom de l'ecole. Le nom passe par
+          # l'environnement plutot que par une interpolation dans du Python --
+          # il porte des accents et des parentheses.
+          export ENSEIGNE_ATTENDUE="${ENSEIGNE:-Établissement Démo}"
           ETAB_ID=$(python manage.py shell -c \
-            "from apps.school.models import Etablissement; \
-             print(Etablissement.objects.get(name='Établissement Démo').id)")
+            "import os; from apps.school.models import Etablissement; \
+             print(Etablissement.objects.get(name=os.environ['ENSEIGNE_ATTENDUE']).id)")
           python manage.py seed_term_scores --etab-id "$ETAB_ID" --term T1 --seed 20260423
           python manage.py seed_term_scores --etab-id "$ETAB_ID" --term T2 --seed 20260424
           python manage.py recalculer_rangs || true
@@ -175,9 +185,11 @@ jobs:
       # base est trop maigre pour valoir trente-cinq minutes de runner.
       - name: Refuser de filmer des donnees reelles
         working-directory: backend
+        env:
+          ENSEIGNE: ${{ inputs.enseigne }}
         run: |
           python manage.py verifier_le_decor_de_demonstration \
-            --etablissement "${{ inputs.enseigne }}"
+            --etablissement "${ENSEIGNE:-Établissement Démo}"
 
       - name: Lancer l'API
         working-directory: backend
