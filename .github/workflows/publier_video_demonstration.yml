@@ -33,6 +33,18 @@ on:
         description: "Rangs a tourner, separes par des virgules. Vide = les neuf."
         required: false
         default: ""
+      enseigne:
+        description: >-
+          Nom que portera l'ecole filmee. Une demonstration parle mieux quand
+          elle porte le nom de l'ecole a qui on la montre.
+        required: false
+        default: "IFP-OBK (démonstration)"
+      structure:
+        description: >-
+          Etablissement dont on reprend les classes reelles (IFP-OBK, LTOB…).
+          Vide pour garder les classes generiques.
+        required: false
+        default: "IFP-OBK"
       publier:
         description: "Creer la Release. Decoche pour ne garder que les rushes."
         type: boolean
@@ -146,7 +158,9 @@ jobs:
             --etablissement "Établissement Démo" \
             --academic-year 2025-2026 --traceback
           python manage.py seed_empty_classes --cible 30
-          python manage.py completer_le_decor_de_demonstration
+          python manage.py completer_le_decor_de_demonstration \
+            --enseigne "${{ inputs.enseigne }}" \
+            --structure "${{ inputs.structure }}"
           # L'identifiant se lit, il ne se code pas en dur: le script maison du
           # depot fixe ETAB_ID=11, ce qui ne vaut que pour sa propre base.
           ETAB_ID=$(python manage.py shell -c \
@@ -161,7 +175,9 @@ jobs:
       # base est trop maigre pour valoir trente-cinq minutes de runner.
       - name: Refuser de filmer des donnees reelles
         working-directory: backend
-        run: python manage.py verifier_le_decor_de_demonstration
+        run: |
+          python manage.py verifier_le_decor_de_demonstration \
+            --etablissement "${{ inputs.enseigne }}"
 
       - name: Lancer l'API
         working-directory: backend
@@ -180,6 +196,10 @@ jobs:
           exit 1
 
       - name: Tourner les chapitres
+        env:
+          # Le portail liste toutes les ecoles: sans ce nom, le pilote entrerait
+          # dans la premiere de la liste, qui n'est pas forcement la bonne.
+          ETABLISSEMENT_DEMO: ${{ inputs.enseigne }}
         run: |
           tools/demo_video/enregistrer_les_chapitres.sh \
             ${{ inputs.chapitres != '' && format('--seulement {0}', inputs.chapitres) || '' }}
