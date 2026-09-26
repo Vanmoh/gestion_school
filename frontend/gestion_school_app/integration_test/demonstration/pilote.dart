@@ -24,6 +24,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gestion_school_app/core/demonstration/journal_de_demonstration.dart';
+import 'package:gestion_school_app/features/auth/presentation/widgets/login_form_card.dart';
 import 'package:gestion_school_app/main.dart' as application;
 import 'package:integration_test/integration_test.dart';
 
@@ -170,35 +171,118 @@ class PiloteDeDemonstration {
 
   // ------------------------------------------------------ la vie du logiciel
 
-  /// Franchit le portail public s'il est là, puis se connecte.
+  /// Les tuiles d'établissement du portail.
   ///
-  /// Le portail n'apparaît pas toujours : le choix d'établissement peut être
-  /// retenu d'une prise à l'autre quand le trousseau du système fonctionne. Le
-  /// pilote regarde donc quel écran est monté au lieu de supposer l'un des deux.
-  Future<void> seConnecter(String identifiant, String motDePasse) async {
-    await attendre(find.byType(TextField), poser: false);
+  /// Elles portent `tile-<id>`; « Demander un accès » en porte une aussi,
+  /// `tile-request-access`, qu'il faut écarter — la viser ouvrirait un
+  /// formulaire de demande au lieu d'entrer dans l'école.
+  Finder _tuilesDEtablissement() {
+    return find.byWidgetPredicate(_estUneTuileDEtablissement);
+  }
 
-    // Le portail liste les établissements: on prend la première tuile.
-    final tuiles = find.byType(Card);
-    if (find.textContaining('Choisir').evaluate().isNotEmpty &&
-        tuiles.evaluate().isNotEmpty) {
-      await appuyer(tuiles.first);
+  /// Filtre le portail sur un nom d'établissement, par sa barre de recherche.
+  ///
+  /// Par la recherche et non en remontant l'arbre des widgets: les tuiles sont
+  /// posées dans une grille animée, et retrouver celle qui porte un nom donné
+  /// dépendait de la structure interne de cette grille. Chercher est en plus ce
+  /// qu'un utilisateur fait, donc ce qu'il est juste de filmer.
+  Future<void> _chercherLEtablissement(String nom) async {
+    final recherche = find.byType(TextField);
+    if (recherche.evaluate().isEmpty) return;
+    await taperLentement(recherche.first, nom);
+    await _pomperUnPeu(const Duration(milliseconds: 900));
+  }
+
+  static bool _estUneTuileDEtablissement(Widget widget) {
+    final cle = widget.key;
+    if (cle is! ValueKey<String>) return false;
+    return cle.value.startsWith('tile-') && cle.value != 'tile-request-access';
+  }
+
+  /// La carte « Reprendre », quand une école a déjà été ouverte ici.
+  ///
+  /// Le portail sort alors cet établissement de la grille et le met à part:
+  /// chercher une tuile à son nom ne rendrait rien, alors qu'il est bien là.
+  /// Le script d'enregistrement donne un dossier personnel neuf à chaque prise,
+  /// mais une prise relancée à la main tombe sur ce cas.
+  Finder _carteDeReprise() {
+    return find.byWidgetPredicate((widget) {
+      final cle = widget.key;
+      return cle is ValueKey<String> && cle.value.startsWith('resume-');
+    });
+  }
+
+  /// Franchit le portail public, puis se connecte.
+  ///
+  /// Le premier tournage s'est arrêté ici, et tous les chapitres en ont pâti:
+  /// le pilote comptait les `TextField` pour reconnaître l'écran de connexion,
+  /// or l'application démarre sur le **portail** — qui n'en a qu'un, sa barre de
+  /// recherche. Le compte n'arrivait donc jamais à deux, la connexion était
+  /// abandonnée, et chaque module semblait « fermé à ce profil » puisque
+  /// personne n'était connecté. Neuf prises de trois minutes sur un écran de
+  /// choix d'établissement.
+  ///
+  /// On vise donc des clés: la tuile de l'établissement, puis les deux champs
+  /// que `login_form_card.dart` expose.
+  Future<void> seConnecter(
+    String identifiant,
+    String motDePasse, {
+    String? etablissement,
+  }) async {
+    // Le portail peut ne pas paraître: le choix se retient d'une prise à
+    // l'autre quand le trousseau du système fonctionne.
+    final tuiles = _tuilesDEtablissement();
+    if (await attendre(tuiles, limite: const Duration(seconds: 25),
+        poser: false)) {
+      journal.dire('On entre par le portail de l\'établissement.');
+
+      if (etablissement != null && etablissement.trim().isNotEmpty) {
+        await _chercherLEtablissement(etablissement.trim());
+      }
+
+      final restantes = _tuilesDEtablissement();
+      if (restantes.evaluate().isNotEmpty) {
+        await appuyer(restantes.first, apres: const Duration(seconds: 2));
+      } else if (_carteDeReprise().evaluate().isNotEmpty) {
+        // L'école cherchée est celle qu'on a déjà ouverte: elle n'est plus
+        // dans la grille, elle est en tête sous « Reprendre ».
+        await appuyer(_carteDeReprise().first, apres: const Duration(seconds: 2));
+      }
     }
 
-    final champs = find.byType(TextField);
-    if (champs.evaluate().length < 2) {
+    if (!await attendre(
+      find.byKey(kChampIdentifiant),
+      limite: const Duration(seconds: 25),
+      poser: false,
+    )) {
       journal.dire('(écran de connexion introuvable)');
       return;
     }
 
-    await taperLentement(champs.at(0), identifiant);
-    await taperLentement(champs.at(1), motDePasse);
+    await taperLentement(find.byKey(kChampIdentifiant), identifiant);
+    await taperLentement(find.byKey(kChampMotDePasse), motDePasse);
 
-    final bouton = find.byType(FilledButton);
+    final bouton = find.widgetWithText(FilledButton, 'Se connecter');
     if (bouton.evaluate().isNotEmpty) {
-      await appuyer(bouton.first, apres: const Duration(seconds: 3));
+      await appuyer(bouton.first, apres: const Duration(seconds: 4));
+    } else {
+      // Repli: le libellé change pendant la connexion, la forme reste.
+      final secours = find.byType(FilledButton);
+      if (secours.evaluate().isNotEmpty) {
+        await appuyer(secours.last, apres: const Duration(seconds: 4));
+      }
     }
-    await _pomperUnPeu(const Duration(seconds: 2));
+
+    // On attend la barre latérale, preuve que la session est ouverte: sans
+    // elle, la prise filmerait un écran de connexion en boucle.
+    final entree = find.byWidgetPredicate(
+      (widget) =>
+          widget.key is ValueKey<String> &&
+          (widget.key as ValueKey<String>).value.startsWith('menu-'),
+    );
+    if (!await attendre(entree, limite: const Duration(seconds: 30))) {
+      journal.dire('(la session ne s\'est pas ouverte)');
+    }
   }
 
   /// Ouvre un module par sa clé de menu.
@@ -285,6 +369,7 @@ Future<void> jouerLaPrise({
   required String identifiant,
   required String motDePasse,
   required Future<void> Function(PiloteDeDemonstration pilote) gestes,
+  String? etablissement,
 }) async {
   final pilote = PiloteDeDemonstration(tester);
   final chapitre = chapitresDeLaDemonstration.firstWhere(
@@ -295,7 +380,15 @@ Future<void> jouerLaPrise({
   pilote.journal.dire(chapitre.mission);
 
   await pilote.demarrer();
-  await pilote.seConnecter(identifiant, motDePasse);
+  await pilote.seConnecter(
+    identifiant,
+    motDePasse,
+    // `Platform.environment` et non `String.fromEnvironment`: la seconde lit
+    // les `--dart-define`, qui sont figes a la compilation -- changer d'ecole
+    // aurait impose de recompiler entre deux prises.
+    etablissement:
+        etablissement ?? Platform.environment['ETABLISSEMENT_DEMO'] ?? '',
+  );
 
   try {
     await gestes(pilote);
