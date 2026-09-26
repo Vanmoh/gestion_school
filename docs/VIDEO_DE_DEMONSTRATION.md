@@ -19,7 +19,23 @@ réglages, tous facultatifs :
 |---|---|
 | `duree_de_pose_ms` | Combien de temps chaque écran reste à l'image (2500 par défaut). Monter à 4000 donne une vidéo plus lente et plus longue. |
 | `chapitres` | Les rangs à tourner, séparés par des virgules. `3` ne tourne que le directeur — c'est ce qu'on utilise pour éprouver une modification sans payer quarante minutes de runner. |
+| `enseigne` | Le nom que portera l'école filmée. Par défaut « IFP-OBK (démonstration) » : une démonstration parle mieux quand elle porte le nom de l'école à qui on la montre. |
+| `structure` | L'établissement dont on reprend les **classes réelles** (`IFP-OBK`, `LTOB`…), lues dans `insert_classes`. Vide pour garder des classes génériques. |
 | `publier` | Décoché, le job garde les rushes en artefact sans créer de Release. |
+
+## Ce qui vient de l'école réelle, et ce qui reste fictif
+
+La démonstration peut porter **l'enseigne et l'organisation** de votre école :
+son nom, ses quinze classes (« 1ère Année EM1 », « 3ème Année BD2 »…), ses
+matières et leurs coefficients. C'est ce qui la rend reconnaissable par ceux qui
+y travaillent.
+
+**Ce qui reste fictif, et ne changera pas** : les élèves, les familles, les
+notes, les incidents disciplinaires et les sommes dues. Une Release est
+publique et définitive ; filmer de vrais élèves mineurs diffuserait leurs noms,
+leurs résultats et les dettes de leurs familles à qui veut les télécharger. Le
+garde-fou refuse le tournage si un nom d'élève n'appartient pas aux listes
+fictives connues — c'est une barrière, pas un réglage.
 
 Comptez **35 à 45 minutes** : deux minutes d'apt, deux de Flutter, trois de
 peuplement, quatre pour le premier build CMake, dix-huit à vingt-cinq pour les

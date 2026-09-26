@@ -125,6 +125,24 @@ class Command(BaseCommand):
             help="Graine d'alea, pour que deux executions se ressemblent.",
         )
         parser.add_argument(
+            "--enseigne",
+            default="",
+            help=(
+                "Renomme l'etablissement de demonstration. Une ecole se "
+                "reconnait a son nom: « IFP-OBK (demonstration) » parle a qui "
+                "y travaille, « Etablissement Demo » ne parle a personne."
+            ),
+        )
+        parser.add_argument(
+            "--structure",
+            default="",
+            help=(
+                "Installe les classes reelles d'un etablissement connu "
+                "d'`insert_classes` (par exemple « IFP-OBK »). Les classes "
+                "viennent de l'ecole; les personnes restent fictives."
+            ),
+        )
+        parser.add_argument(
             "--forcer",
             action="store_true",
             help="Passe outre le refus hors developpement. Base jetable seulement.",
@@ -170,7 +188,17 @@ class Command(BaseCommand):
         graine = options["graine"]
         compteurs = {}
 
+        # L'enseigne d'abord: tout ce qui suit s'accroche a cet etablissement.
+        if options["enseigne"].strip():
+            ancienne = etablissement.name
+            etablissement.name = options["enseigne"].strip()
+            etablissement.save(update_fields=["name"])
+            compteurs["Enseigne"] = f"{ancienne} -> {etablissement.name}"
+
         with transaction.atomic():
+            self._installer_les_classes_reelles(
+                etablissement, annee, options["structure"], compteurs
+            )
             enseignants = self._garnir_les_enseignants(
                 etablissement, graine, options["cible_enseignants"], compteurs
             )
@@ -200,6 +228,47 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("Decor de demonstration complete."))
         for libelle, valeur in compteurs.items():
             self.stdout.write(f"  {libelle:<34} {valeur}")
+
+    # ------------------------------------------- la structure de l'ecole
+
+    def _installer_les_classes_reelles(
+        self, etablissement, annee, structure, compteurs
+    ):
+        """Donne au decor les classes d'une ecole reelle.
+
+        Une demonstration parle d'autant mieux qu'elle ressemble a l'ecole de
+        celui qui la regarde: « 1ere Annee EM1 » lui dit quelque chose, « 6A »
+        non. `insert_classes` porte deja ces listes, etablissement par
+        etablissement -- on les relit plutot que d'en ecrire une copie qui
+        vieillirait a part.
+
+        Ce qui vient de l'ecole reelle: les noms de ses classes. Ce qui reste
+        fictif: les eleves, les familles, les notes, les incidents, les sommes.
+        """
+        if not structure.strip():
+            return
+
+        from apps.school.management.commands.insert_classes import (
+            ESTABLISSEMENT_CLASSES,
+        )
+
+        listes = ESTABLISSEMENT_CLASSES.get(structure.strip())
+        if not listes:
+            connus = ", ".join(sorted(ESTABLISSEMENT_CLASSES))
+            raise CommandError(
+                f"Structure « {structure} » inconnue. Connues: {connus}"
+            )
+
+        creees = 0
+        for nom in listes.get("classes", []):
+            _, cree = ClassRoom.objects.get_or_create(
+                name=nom,
+                academic_year=annee,
+                etablissement=etablissement,
+            )
+            creees += 1 if cree else 0
+
+        compteurs["Classes de la structure reelle"] = creees
 
     # ------------------------------------------------------------------ garde
 
