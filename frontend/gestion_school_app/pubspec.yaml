@@ -51,6 +51,12 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # Le pilote de demonstration tourne sur la cible Linux et parle au vrai
+  # serveur: `integration_test` laisse passer les requetes HTTP, la ou
+  # `flutter_test` installe un client factice. Il vient du SDK, donc rien n'est
+  # telecharge.
+  integration_test:
+    sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
 

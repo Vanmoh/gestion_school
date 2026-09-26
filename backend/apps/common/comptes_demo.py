@@ -17,6 +17,11 @@ qui signale leur presence en production.
 NOMS_DES_COMPTES_DE_DEMONSTRATION = (
     "superadmin",
     "directeur",
+    # Le promoteur et le censeur manquaient, alors que la matrice leur ouvre
+    # respectivement vingt-deux et dix-neuf ecrans: deux roles sur neuf etaient
+    # impossibles a essayer, et donc a montrer.
+    "promoteur",
+    "censeur",
     "comptable",
     "enseignant1",
     "parent1",
