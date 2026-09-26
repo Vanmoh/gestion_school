@@ -147,6 +147,7 @@ extension _PanneauxDuPlanning on _TimetablePageState {
               // dans deux classes à la fois.
               if (!_isTeacherUser)
                 FilledButton.icon(
+                  key: const Key('edt-generer'),
                   onPressed: (_saving || !_scheduleApiSupported)
                       || vue.isReadOnlyMode
                       ? null
@@ -199,6 +200,7 @@ extension _PanneauxDuPlanning on _TimetablePageState {
                       : () => _publishSelectedClass(lockAfterPublish: true),
                   icon: const Icon(Icons.publish),
                   label: const Text('Publier + verrouiller'),
+                  key: const Key('edt-publier-verrouille'),
                 ),
                 OutlinedButton.icon(
                   onPressed:

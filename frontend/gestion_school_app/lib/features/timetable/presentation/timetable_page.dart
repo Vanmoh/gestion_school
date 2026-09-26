@@ -2525,6 +2525,7 @@ class _DialogueDeGenerationState extends State<_DialogueDeGeneration> {
           child: const Text('Annuler'),
         ),
         OutlinedButton(
+          key: const Key('edt-simuler'),
           onPressed: _occupe || _joursRetenus.isEmpty
               ? null
               : () => _appeler(
@@ -2534,6 +2535,7 @@ class _DialogueDeGenerationState extends State<_DialogueDeGeneration> {
           child: const Text('Simuler'),
         ),
         FilledButton(
+          key: const Key('edt-appliquer'),
           // Simuler d'abord: on n'écrit pas des centaines de créneaux sans
           // avoir vu ce qu'ils donnent.
           onPressed: _occupe || _apercu == null

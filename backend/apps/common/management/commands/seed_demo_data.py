@@ -6,6 +6,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 from apps.accounts.models import User, UserRole
+from apps.common.comptes_demo import NOMS_DES_COMPTES_DE_DEMONSTRATION
 from apps.school.models import (
     AcademicYear,
     Announcement,
@@ -206,6 +207,36 @@ class Command(BaseCommand):
         director_user.is_active = True
         director_user.save(update_fields=["password", "is_active"])
 
+        # Le proprietaire de l'ecole: il voit tout et n'ecrit nulle part, ce
+        # que la matrice traduit par « L » sur presque tous les modules.
+        promoter_user, _ = User.objects.get_or_create(
+            username="promoteur",
+            defaults={
+                "first_name": "Ibrahim",
+                "last_name": "Promoteur",
+                "email": "promoteur@gestionschool.local",
+                "role": UserRole.PROMOTER,
+            },
+        )
+        promoter_user.set_password(MOT_DE_PASSE_DEMO)
+        promoter_user.is_active = True
+        promoter_user.save(update_fields=["password", "is_active"])
+
+        # Le censeur arbitre la pedagogie: discipline, bulletins, examens, et
+        # le premier des deux visas de la paie.
+        censor_user, _ = User.objects.get_or_create(
+            username="censeur",
+            defaults={
+                "first_name": "Aminata",
+                "last_name": "Censeur",
+                "email": "censeur@gestionschool.local",
+                "role": UserRole.CENSOR,
+            },
+        )
+        censor_user.set_password(MOT_DE_PASSE_DEMO)
+        censor_user.is_active = True
+        censor_user.save(update_fields=["password", "is_active"])
+
         accountant_user, _ = User.objects.get_or_create(
             username="comptable",
             defaults={
@@ -286,6 +317,8 @@ class Command(BaseCommand):
 
         for demo_user in [
             director_user,
+            promoter_user,
+            censor_user,
             accountant_user,
             teacher_user,
             parent_user,
@@ -647,7 +680,12 @@ class Command(BaseCommand):
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS("Comptes de démonstration créés:"))
         self.stdout.write(f"  superadmin   / {MOT_DE_PASSE_ADMIN}   (super-utilisateur)")
-        for nom in ("directeur", "comptable", "enseignant1", "parent1", "surveillant1", "eleve1", "eleve2"):
+        # La liste canonique, et non une copie ecrite ici: celle-ci avait deja
+        # cesse de suivre le seed, et un compte cree sans etre affiche est un
+        # compte que personne n'essaie.
+        for nom in NOMS_DES_COMPTES_DE_DEMONSTRATION:
+            if nom == "superadmin":
+                continue
             self.stdout.write(f"  {nom:<12} / {MOT_DE_PASSE_DEMO}")
         self.stdout.write("")
         self.stdout.write(

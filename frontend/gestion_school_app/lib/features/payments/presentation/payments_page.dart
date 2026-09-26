@@ -1465,6 +1465,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                 child: const Text('Annuler'),
               ),
               FilledButton(
+                key: const Key('caisse-encaisser'),
                 onPressed: () => Navigator.of(dialogContext).pop(true),
                 child: const Text('Encaisser'),
               ),
@@ -3080,6 +3081,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                           children: [
                             if (canL1)
                               OutlinedButton(
+                                key: ValueKey('paie-valider-n1-$payrollId'),
                                 onPressed: _financeBusy
                                     ? null
                                     : () => _validatePayrollLevelOne(payrollId),
@@ -3087,6 +3089,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                               ),
                             if (canL2)
                               FilledButton.tonal(
+                                key: ValueKey('paie-valider-n2-$payrollId'),
                                 onPressed: _financeBusy
                                     ? null
                                     : () => _validatePayrollLevelTwo(payrollId),
