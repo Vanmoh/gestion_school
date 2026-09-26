@@ -247,14 +247,38 @@ class PiloteDeDemonstration {
         await _chercherLEtablissement(etablissement.trim());
       }
 
-      final restantes = _tuilesDEtablissement();
+      // Une recherche qui ne laisse rien ne doit pas laisser le pilote sur le
+      // portail: on efface et on reprend la liste entière. Entrer dans une
+      // autre école vaut mieux que ne pas entrer du tout — et le journal le
+      // dira, ce qu'un abandon silencieux ne faisait pas.
+      var restantes = _tuilesDEtablissement();
+      if (restantes.evaluate().isEmpty &&
+          _carteDeReprise().evaluate().isEmpty) {
+        journal.dire('(la recherche n\'a laissé aucune école : on l\'efface)');
+        final champ = find.byType(TextField);
+        if (champ.evaluate().isNotEmpty) {
+          await tester.enterText(champ.first, '');
+          await _pomperUnPeu(const Duration(milliseconds: 900));
+        }
+        restantes = _tuilesDEtablissement();
+      }
+
       if (restantes.evaluate().isNotEmpty) {
-        await appuyer(restantes.first, apres: const Duration(seconds: 2));
+        await appuyer(restantes.first, apres: const Duration(seconds: 3));
+        journal.dire('École choisie.');
       } else if (_carteDeReprise().evaluate().isNotEmpty) {
         // L'école cherchée est celle qu'on a déjà ouverte: elle n'est plus
         // dans la grille, elle est en tête sous « Reprendre ».
-        await appuyer(_carteDeReprise().first, apres: const Duration(seconds: 2));
+        await appuyer(
+          _carteDeReprise().first,
+          apres: const Duration(seconds: 3),
+        );
+        journal.dire('École reprise.');
+      } else {
+        journal.dire('(aucune école à choisir sur le portail)');
       }
+    } else {
+      journal.dire('(pas de portail : le choix était déjà fait)');
     }
 
     if (!await attendre(
@@ -269,14 +293,24 @@ class PiloteDeDemonstration {
     await taperLentement(find.byKey(kChampIdentifiant), identifiant);
     await taperLentement(find.byKey(kChampMotDePasse), motDePasse);
 
+    // On relit ce qui est réellement dans le champ. Deux tournages se sont
+    // arrêtés sur un formulaire vide sans que rien ne le dise: le serveur n'a
+    // jamais vu passer de demande d'authentification, et le journal parlait
+    // pourtant de modules « fermés à ce profil ».
+    journal.dire('Identifiant saisi : « ${_contenuDuChamp(kChampIdentifiant)} ».');
+
     final bouton = find.widgetWithText(FilledButton, 'Se connecter');
     if (bouton.evaluate().isNotEmpty) {
-      await appuyer(bouton.first, apres: const Duration(seconds: 4));
+      await appuyer(bouton.first, apres: const Duration(seconds: 5));
+      journal.dire('Connexion demandée.');
     } else {
       // Repli: le libellé change pendant la connexion, la forme reste.
       final secours = find.byType(FilledButton);
       if (secours.evaluate().isNotEmpty) {
-        await appuyer(secours.last, apres: const Duration(seconds: 4));
+        await appuyer(secours.last, apres: const Duration(seconds: 5));
+        journal.dire('Connexion demandée (bouton de repli).');
+      } else {
+        journal.dire('(aucun bouton de connexion trouvé)');
       }
     }
 
@@ -290,6 +324,17 @@ class PiloteDeDemonstration {
     if (!await attendre(entree, limite: const Duration(seconds: 30))) {
       journal.dire('(la session ne s\'est pas ouverte)');
     }
+  }
+
+  /// Ce qu'un champ contient réellement, pour le dire au journal.
+  ///
+  /// Un mot de passe n'y passe jamais: le journal part en artefact public.
+  String _contenuDuChamp(Key cle) {
+    final champ = find.byKey(cle);
+    if (champ.evaluate().isEmpty) return '(champ absent)';
+    final widgets = find.descendant(of: champ, matching: find.byType(EditableText));
+    if (widgets.evaluate().isEmpty) return '(non lisible)';
+    return tester.widget<EditableText>(widgets.first).controller.text;
   }
 
   /// Ouvre un module par sa clé de menu.
