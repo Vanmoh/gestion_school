@@ -41,29 +41,45 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import User, UserRole
+from apps.chat.models import ChatMessage, Conversation, ConversationParticipant
 from apps.school.models import (
     AcademicYear,
+    Announcement,
     Attendance,
     AttendanceSheetValidation,
+    AvailabilityCampaign,
+    Book,
+    Borrow,
     BulletinPublication,
+    CanteenMenu,
+    CanteenService,
     ClassRoom,
     Etablissement,
+    ExamInvigilation,
     ExamPlanning,
     ExamResult,
     ExamSession,
     DisciplineIncident,
+    Expense,
     FeeSchedule,
     FeeType,
     GradeValidation,
     Grade,
+    Notification,
     ParentProfile,
     Payment,
+    StockItem,
+    StockMovement,
+    StockMovementType,
     Student,
     StudentFee,
+    Supplier,
     Subject,
     Teacher,
     TeacherAssignment,
     TeacherAttendance,
+    TeacherAvailabilitySlot,
+    TeacherPayroll,
     TeacherScheduleSlot,
     TimetablePublication,
 )
@@ -379,10 +395,17 @@ class Command(BaseCommand):
         creneaux = self._composer_l_emploi_du_temps(classes, matieres, graine)
         self._publier_les_emplois_du_temps(classes)
 
+        calendrier = self._dresser_le_calendrier_des_compositions(
+            annee, classes, matieres
+        )
+
         notes = 0
         if not options["sans_notes"]:
-            notes = self._saisir_les_notes(annee, classes, matieres, eleves, graine)
+            notes = self._saisir_les_notes(
+                annee, classes, matieres, eleves, graine, calendrier
+            )
 
+        encadrement = self._nommer_l_encadrement(etablissement, graine)
         familles = self._rattacher_les_familles(etablissement, eleves, graine)
         baremes = self._poser_les_baremes(etablissement, annee, classes, options)
         frais = self._facturer_la_scolarite(
@@ -392,6 +415,14 @@ class Command(BaseCommand):
         pointages = self._pointer_les_enseignants(annee, enseignants, graine)
         incidents = self._consigner_la_discipline(annee, eleves, graine)
         bulletins = self._arreter_les_bulletins(annee, classes)
+        surveillances = self._affecter_les_surveillants(classes, enseignants, graine)
+        dispos = self._ouvrir_les_disponibilites(
+            etablissement, annee, enseignants, graine
+        )
+        paies = self._preparer_la_paie(etablissement, annee, enseignants)
+        depenses = self._engager_des_depenses(etablissement, annee)
+        vie = self._animer_la_vie_scolaire(etablissement, eleves, graine)
+        mots = self._ouvrir_la_communication(etablissement, enseignants, eleves)
 
         self.stdout.write(f"  classes              {len(classes)}")
         self.stdout.write(f"  matieres             {len(matieres)}")
@@ -399,6 +430,7 @@ class Command(BaseCommand):
         self.stdout.write(f"  enseignants          {len(enseignants)}")
         self.stdout.write(f"  creneaux d'horaire   {creneaux}")
         self.stdout.write(f"  notes saisies        {notes}")
+        self.stdout.write(f"  encadrement          {encadrement}")
         self.stdout.write(f"  familles             {familles}")
         self.stdout.write(f"  baremes de frais     {baremes}")
         self.stdout.write(f"  frais emis           {frais}")
@@ -406,6 +438,12 @@ class Command(BaseCommand):
         self.stdout.write(f"  pointages enseignants {pointages}")
         self.stdout.write(f"  incidents            {incidents}")
         self.stdout.write(f"  bulletins arretes    {bulletins}")
+        self.stdout.write(f"  surveillances        {surveillances}")
+        self.stdout.write(f"  creneaux de dispo    {dispos}")
+        self.stdout.write(f"  fiches de paie       {paies}")
+        self.stdout.write(f"  depenses             {depenses}")
+        self.stdout.write(f"  vie scolaire         {vie}")
+        self.stdout.write(f"  communication        {mots}")
 
     # ------------------------------------------------------------- structure
 
@@ -647,6 +685,11 @@ class Command(BaseCommand):
         poses = 0
         occupation_classe = set()
         occupation_prof = set()
+        # Ce que chaque affectation tient deja. Sans ce compte, un second
+        # passage voyait ses propres seances comme « occupees », les sautait, et
+        # replacait son volume entier ailleurs: la grille gonflait de vingt-huit
+        # heures a chaque relance, et l'idempotence promise etait fausse.
+        deja_posees = {}
 
         for slot in TeacherScheduleSlot.objects.select_related(
             "assignment"
@@ -657,6 +700,7 @@ class Command(BaseCommand):
             occupation_prof.add(
                 (slot.assignment.teacher_id, slot.day_of_week, slot.start_time)
             )
+            deja_posees[slot.assignment_id] = deja_posees.get(slot.assignment_id, 0) + 1
 
         affectations = list(
             TeacherAssignment.objects.filter(classroom__in=classes)
@@ -672,7 +716,7 @@ class Command(BaseCommand):
             ]
             tirage.shuffle(creneaux)
 
-            places = 0
+            places = deja_posees.get(affectation.id, 0)
             for jour, debut, fin in creneaux:
                 if places >= volume:
                     break
@@ -752,13 +796,44 @@ class Command(BaseCommand):
 
     # ---------------------------------------------------------------- notes
 
-    def _saisir_les_notes(self, annee, classes, matieres, eleves, graine):
+    def _dresser_le_calendrier_des_compositions(self, annee, classes, matieres):
+        """Les trois campagnes et leurs epreuves, notes ou non.
+
+        Le calendrier ne depend pas des copies: une ecole arrete ses dates de
+        composition avant d'avoir corrige quoi que ce soit. Il etait pourtant
+        dresse dans `_saisir_les_notes`, si bien que `--sans-notes` laissait le
+        module des examens entierement vide -- pas de campagne, pas d'epreuve,
+        et donc rien a surveiller.
+
+        Rendu ici, il tient seul, et `--sans-notes` ne saute plus que ce que son
+        nom annonce.
+        """
+        par_classe = {}
+        for matiere in matieres:
+            par_classe.setdefault(matiere.classroom_id, []).append(matiere)
+
+        calendrier = {}
+        for classe in classes:
+            ses_matieres = par_classe.get(classe.id, [])
+            if not ses_matieres:
+                continue
+            for trimestre in TRIMESTRES:
+                session = self._campagne(annee, trimestre)
+                calendrier[(classe.id, trimestre)] = (
+                    session,
+                    {
+                        matiere.id: self._epreuve(session, classe, matiere)
+                        for matiere in ses_matieres
+                    },
+                )
+        return calendrier
+
+    def _saisir_les_notes(self, annee, classes, matieres, eleves, graine, calendrier):
         """Trois devoirs et une composition, par matiere et par trimestre.
 
         `Grade.value` se calcule de la moyenne des devoirs: on pose les
         devoirs, le modele fait le reste. La composition vit ailleurs, dans
-        `ExamResult`, rattachee a une epreuve -- c'est ce que le module des
-        examens attend depuis qu'une note porte son epreuve.
+        `ExamResult`, rattachee a une epreuve du calendrier deja dresse.
         """
         par_classe = {}
         for matiere in matieres:
@@ -776,11 +851,11 @@ class Command(BaseCommand):
                 continue
 
             for trimestre in TRIMESTRES:
-                session = self._campagne(annee, trimestre)
-                epreuves = {
-                    matiere.id: self._epreuve(session, classe, matiere)
-                    for matiere in ses_matieres
-                }
+                session, epreuves = calendrier.get(
+                    (classe.id, trimestre), (None, {})
+                )
+                if session is None:
+                    continue
 
                 for eleve in ses_eleves:
                     for matiere in ses_matieres:
@@ -863,6 +938,46 @@ class Command(BaseCommand):
         )
 
     # ---------------------------------------------------------------- frais
+
+    def _nommer_l_encadrement(self, etablissement, graine):
+        """Le directeur, le censeur, le comptable et le surveillant.
+
+        Sans eux, l'ecole n'a que des eleves, des enseignants et des familles:
+        personne ne peut l'ouvrir. Quatre roles sur neuf n'avaient aucun compte
+        -- et la double validation de la paie, l'arbitrage d'un incident ou la
+        publication d'un bulletin n'avaient personne pour les accomplir.
+
+        Un compte par role et par ecole: c'est ainsi qu'une ecole est dirigee,
+        et cela suffit a ce que chaque ecran trouve son titulaire.
+        """
+        code = self._code_de(etablissement).lower()
+        postes = (
+            ("dir", UserRole.DIRECTOR, "Directeur"),
+            ("cen", UserRole.CENSOR, "Censeur"),
+            ("cpt", UserRole.ACCOUNTANT, "Comptable"),
+            ("sur", UserRole.SUPERVISOR, "Surveillant"),
+            ("pro", UserRole.PROMOTER, "Promoteur"),
+        )
+
+        nommes = 0
+        for suffixe, role, fonction in postes:
+            tirage = self._alea(graine, "encadrement", etablissement.id, suffixe)
+            compte, cree = User.objects.get_or_create(
+                username=f"{code}.{suffixe}",
+                defaults={
+                    "first_name": tirage.choice(PRENOMS_GARCONS + PRENOMS_FILLES),
+                    "last_name": tirage.choice(NOMS).upper(),
+                    "role": role,
+                    "etablissement": etablissement,
+                    "email": f"{suffixe}@{code}.local",
+                },
+            )
+            compte.set_password("Ecole@2026")
+            compte.is_active = True
+            compte.etablissement = etablissement
+            compte.save(update_fields=["password", "is_active", "etablissement"])
+            nommes += 1 if cree else 0
+        return nommes
 
     def _rattacher_les_familles(self, etablissement, eleves, graine):
         """Un parent par fratrie, et des fratries qui existent.
@@ -1058,6 +1173,332 @@ class Command(BaseCommand):
                     defaults={"is_published": True},
                 )
         return arretes
+
+    def _affecter_les_surveillants(self, classes, enseignants, graine):
+        """Un surveillant par epreuve, sauf quelques-unes laissees vacantes.
+
+        L'onglet « Surveillance » met en tete les epreuves **sans** surveillant:
+        c'est la seule question qu'on se pose la veille des compositions. Les
+        couvrir toutes rendrait cet ecran muet.
+        """
+        if not enseignants:
+            return 0
+
+        posees = 0
+        epreuves = list(
+            ExamPlanning.objects.filter(classroom__in=classes).order_by("id")
+        )
+        occupes = set()
+        for rang, epreuve in enumerate(epreuves):
+            if rang % 7 == 3:
+                continue  # une epreuve sur sept reste a pourvoir
+            tirage = self._alea(graine, "surveillance", epreuve.id)
+            for enseignant in tirage.sample(enseignants, len(enseignants)):
+                cle = (enseignant.user_id, epreuve.exam_date, epreuve.start_time)
+                if cle in occupes:
+                    continue
+                _, cree = ExamInvigilation.objects.get_or_create(
+                    planning=epreuve, supervisor=enseignant.user
+                )
+                occupes.add(cle)
+                posees += 1 if cree else 0
+                break
+        return posees
+
+    def _ouvrir_les_disponibilites(self, etablissement, annee, enseignants, graine):
+        """Une collecte ouverte, avec des reponses partielles.
+
+        Partielles a dessein: l'ecran affiche un taux de reponse et la liste de
+        ceux qui n'ont pas repondu. Une campagne ou tout le monde a repondu ne
+        montre pas ce qu'il sait faire.
+        """
+        aujourdhui = timezone.localdate()
+        campagne, _ = AvailabilityCampaign.objects.get_or_create(
+            etablissement=etablissement,
+            academic_year=annee,
+            status="open",
+            defaults={
+                "label": "Collecte des disponibilités — rentrée",
+                "opens_on": aujourdhui - timedelta(days=5),
+                "closes_on": aujourdhui + timedelta(days=10),
+                "instructions": (
+                    "Déclarez vos créneaux préférés et ceux que vous ne pouvez "
+                    "pas assurer. La direction arbitre ensuite."
+                ),
+            },
+        )
+
+        poses = 0
+        for rang, enseignant in enumerate(enseignants):
+            if rang % 3 == 2:
+                continue  # un enseignant sur trois n'a pas encore repondu
+            tirage = self._alea(graine, "dispo", enseignant.id)
+            for jour in sorted(tirage.sample(JOURS, 3)):
+                debut, fin = tirage.choice(CRENEAUX)
+                genre = tirage.choice(["preferred", "possible", "unavailable"])
+                _, cree = TeacherAvailabilitySlot.objects.get_or_create(
+                    teacher=enseignant,
+                    campaign=campagne,
+                    day_of_week=jour,
+                    start_time=debut,
+                    defaults={
+                        "etablissement": etablissement,
+                        "end_time": fin,
+                        "kind": genre,
+                        "note": "Cours dans un autre établissement"
+                        if genre == "unavailable"
+                        else "",
+                    },
+                )
+                poses += 1 if cree else 0
+        return poses
+
+    def _preparer_la_paie(self, etablissement, annee, enseignants):
+        """Des fiches du mois, non validees.
+
+        Le censeur vise au niveau un, le comptable au niveau deux. C'est la
+        regle la plus difficile a expliquer et la plus convaincante a montrer --
+        encore faut-il qu'il y ait quelque chose a viser.
+        """
+        premier = timezone.localdate().replace(day=1)
+        crees = 0
+        for enseignant in enseignants:
+            heures = TeacherScheduleSlot.objects.filter(
+                assignment__teacher=enseignant
+            ).count()
+            _, cree = TeacherPayroll.objects.get_or_create(
+                teacher=enseignant,
+                month=premier,
+                defaults={
+                    "academic_year": annee,
+                    "hours_attributed": Decimal(heures * 4),
+                    "hours_worked": Decimal(max(0, heures * 4 - 2)),
+                    "hours_missed": Decimal(2),
+                    "hourly_rate": enseignant.hourly_rate,
+                    "amount": enseignant.salary_base,
+                },
+            )
+            crees += 1 if cree else 0
+        return crees
+
+    def _engager_des_depenses(self, etablissement, annee):
+        """Trois mois de depenses, dont une qui attend encore son visa."""
+        aujourdhui = timezone.localdate()
+        lignes = (
+            ("Craie et fournitures de classe", 45000, "Fournitures", True),
+            ("Réparation du groupe électrogène", 180000, "Entretien", True),
+            ("Carburant du mois", 95000, "Transport", False),
+            ("Papeterie et registres", 62000, "Fournitures", True),
+        )
+        crees = 0
+        for rang, (libelle, montant, categorie, payee) in enumerate(lignes):
+            _, cree = Expense.objects.get_or_create(
+                label=libelle,
+                date=aujourdhui - timedelta(days=30 * rang + 3),
+                etablissement=etablissement,
+                defaults={
+                    "amount": Decimal(montant),
+                    "academic_year": annee,
+                    "category": categorie,
+                    "notes": "" if payee else "En attente de validation.",
+                    "paid_on": aujourdhui - timedelta(days=30 * rang)
+                    if payee
+                    else None,
+                },
+            )
+            crees += 1 if cree else 0
+        return crees
+
+    def _animer_la_vie_scolaire(self, etablissement, eleves, graine):
+        """Bibliotheque, cantine et stock: les trois registres du quotidien.
+
+        Des emprunts en retard, des repas impayes et un article sous son seuil:
+        chacun de ces ecrans a une alerte a montrer, et elle n'a de sens que
+        s'il existe un cas qui la declenche.
+        """
+        aujourdhui = timezone.localdate()
+        total = 0
+
+        catalogue = (
+            ("Le Devoir de violence", "Yambo Ouologuem", "Roman", 6),
+            ("Mathématiques 3e — Collection Afrique", "Collectif", "Mathématiques", 15),
+            ("Histoire du Mali médiéval", "Madina Ly-Tall", "Histoire", 8),
+            ("Physique-Chimie 2nde", "Collectif", "Sciences", 10),
+            ("L'Étrange Destin de Wangrin", "Amadou Hampâté Bâ", "Roman", 7),
+        )
+        ouvrages = []
+        for titre, auteur, matiere, quantite in catalogue:
+            # L'ISBN passe par `_alea` et non par `hash()`: Python randomise le
+            # `hash()` d'une chaine a chaque processus, et la commande promet le
+            # contraire -- meme graine, meme ecole, jusqu'au numero d'ouvrage.
+            tirage = self._alea(graine, "isbn", titre)
+            ouvrage, cree = Book.objects.get_or_create(
+                title=titre,
+                etablissement=etablissement,
+                defaults={
+                    "author": auteur,
+                    "isbn": f"978-{tirage.randrange(1000000):06d}",
+                    "subject": matiere,
+                    "shelf_location": f"R{len(titre) % 5 + 1}",
+                    "quantity_total": quantite,
+                    "quantity_available": quantite,
+                },
+            )
+            ouvrages.append(ouvrage)
+            total += 1 if cree else 0
+
+        emprunteurs = eleves[:12]
+        for rang, eleve in enumerate(emprunteurs):
+            ouvrage = ouvrages[rang % len(ouvrages)]
+            en_retard = rang % 3 == 1
+            _, cree = Borrow.objects.get_or_create(
+                student=eleve,
+                book=ouvrage,
+                borrowed_at=aujourdhui - timedelta(days=25 if en_retard else 6),
+                defaults={
+                    "due_date": aujourdhui - timedelta(days=8)
+                    if en_retard
+                    else aujourdhui + timedelta(days=8),
+                },
+            )
+            total += 1 if cree else 0
+        # `quantity_available` est derive, jamais saisi: sans ce recalcul, les
+        # douze emprunts n'entament pas le stock affiche.
+        for ouvrage in ouvrages:
+            ouvrage.recalculer_disponibilite()
+
+        menus = []
+        for rang, (nom, prix) in enumerate(
+            (("Riz au gras", 500), ("Tô sauce arachide", 400), ("Riz sauce feuille", 450))
+        ):
+            menu, cree = CanteenMenu.objects.get_or_create(
+                menu_date=aujourdhui - timedelta(days=rang),
+                etablissement=etablissement,
+                name=nom,
+                defaults={"unit_price": Decimal(prix), "is_active": True},
+            )
+            menus.append(menu)
+            total += 1 if cree else 0
+
+        for eleve in eleves[:40]:
+            menu = menus[eleve.id % len(menus)]
+            _, cree = CanteenService.objects.get_or_create(
+                student=eleve,
+                menu=menu,
+                served_on=menu.menu_date,
+                defaults={"is_paid": eleve.id % 4 != 0},
+            )
+            total += 1 if cree else 0
+
+        fournisseur, cree = Supplier.objects.get_or_create(
+            name="Librairie du Fleuve",
+            etablissement=etablissement,
+            defaults={"phone": "76 00 00 00", "email": "contact@fleuve.ml"},
+        )
+        total += 1 if cree else 0
+
+        articles = (
+            ("Craie blanche (boîte)", 40, 10, "boîte"),
+            ("Ramette A4", 6, 8, "ramette"),  # sous le seuil: l'alerte se voit
+            ("Registre d'appel", 25, 5, "unité"),
+            ("Marqueur tableau", 18, 6, "unité"),
+        )
+        for nom, quantite, seuil, unite in articles:
+            article, cree = StockItem.objects.get_or_create(
+                name=nom,
+                etablissement=etablissement,
+                defaults={
+                    "quantity": quantite,
+                    "minimum_threshold": seuil,
+                    "unit": unite,
+                    "supplier": fournisseur,
+                },
+            )
+            total += 1 if cree else 0
+            # `StockMovementType.IN` vaut « in » en minuscules: un « IN » ecrit
+            # a la main n'est ni une entree ni une sortie, et le recalcul de
+            # `StockItem.quantite` ramenait alors tous les articles a zero --
+            # quatre alertes de seuil au lieu d'une.
+            StockMovement.objects.get_or_create(
+                item=article,
+                movement_type=StockMovementType.IN,
+                quantity=quantite,
+                defaults={"reason": "Approvisionnement de rentrée"},
+            )
+        return total
+
+    def _ouvrir_la_communication(self, etablissement, enseignants, eleves):
+        """Une annonce par public, et un fil ou l'on se parle.
+
+        Les quatre publics existent depuis que le champ a cesse d'etre libre;
+        une demonstration qui n'en montre qu'un ne montre pas la regle.
+        """
+        directeur = (
+            User.objects.filter(
+                etablissement=etablissement, role=UserRole.DIRECTOR
+            ).first()
+            or User.objects.filter(role=UserRole.SUPER_ADMIN).first()
+        )
+
+        total = 0
+        for public, titre, message in (
+            ("all", "Rentrée des classes le 1er octobre", "Les cours reprennent lundi à 8h."),
+            ("families", "Réunion de parents samedi", "Rendez-vous à 9h dans la cour."),
+            ("teachers", "Remise des copies avant vendredi", "Dépôt au secrétariat."),
+            ("staff", "Inventaire de la caisse lundi", "Présence de la comptabilité requise."),
+        ):
+            _, cree = Announcement.objects.get_or_create(
+                etablissement=etablissement,
+                title=titre,
+                defaults={"message": message, "audience": public, "author": directeur},
+            )
+            total += 1 if cree else 0
+
+        # Une notification qui attend encore de partir: l'onglet « En attente
+        # d'envoi » a besoin d'une ligne pour dire ce qu'il sait dire.
+        famille = User.objects.filter(
+            etablissement=etablissement, role=UserRole.PARENT
+        ).first()
+        if famille is not None:
+            _, cree = Notification.objects.get_or_create(
+                etablissement=etablissement,
+                recipient=famille,
+                title="Bulletin du premier trimestre disponible",
+                defaults={
+                    "channel": "sms",
+                    "message": "Le bulletin est consultable dans votre espace.",
+                    "is_sent": False,
+                },
+            )
+            total += 1 if cree else 0
+
+        if directeur is not None and enseignants:
+            groupe, _ = Conversation.objects.get_or_create(
+                etablissement=etablissement,
+                title="Équipe pédagogique",
+                defaults={"is_group": True},
+            )
+            ConversationParticipant.objects.get_or_create(
+                conversation=groupe, user=directeur, defaults={"is_admin": True}
+            )
+            for enseignant in enseignants[:5]:
+                ConversationParticipant.objects.get_or_create(
+                    conversation=groupe, user=enseignant.user
+                )
+            premier, cree = ChatMessage.objects.get_or_create(
+                conversation=groupe,
+                sender=directeur,
+                content="Conseil de classe jeudi à 16h, salle des professeurs.",
+            )
+            total += 1 if cree else 0
+            _, cree = ChatMessage.objects.get_or_create(
+                conversation=groupe,
+                sender=enseignants[0].user,
+                content="Bien noté, j'apporte les relevés.",
+                defaults={"reply_to": premier},
+            )
+            total += 1 if cree else 0
+        return total
 
     @staticmethod
     def _jours_ouvres(combien):
