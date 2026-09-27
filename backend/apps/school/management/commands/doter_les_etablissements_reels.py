@@ -32,7 +32,7 @@ Trois proprietes qu'il ne faut pas lui retirer:
 
 import random
 import re
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.conf import settings
@@ -50,9 +50,11 @@ from apps.school.models import (
     AvailabilityCampaign,
     Book,
     Borrow,
+    BulletinDelivery,
     BulletinPublication,
     CanteenMenu,
     CanteenService,
+    CanteenSubscription,
     ClassRoom,
     Etablissement,
     ExamInvigilation,
@@ -65,13 +67,22 @@ from apps.school.models import (
     FeeType,
     GradeValidation,
     Grade,
+    LibraryCategory,
+    LibraryCollection,
+    LibraryDocument,
     Notification,
+    PromotionDecision,
+    PromotionDecisionType,
+    PromotionRun,
+    PromotionRunStatus,
     ParentProfile,
     Payment,
     StockItem,
     StockMovement,
     StockMovementType,
+    SmsProviderConfig,
     Student,
+    StudentAcademicHistory,
     StudentFee,
     Supplier,
     Subject,
@@ -81,7 +92,9 @@ from apps.school.models import (
     TeacherAvailabilitySlot,
     TeacherPayroll,
     TeacherScheduleSlot,
+    TeacherTimeEntry,
     TimetablePublication,
+    recalculate_term_ranking,
 )
 
 # --------------------------------------------------------------------- noms
@@ -423,6 +436,14 @@ class Command(BaseCommand):
         depenses = self._engager_des_depenses(etablissement, annee)
         vie = self._animer_la_vie_scolaire(etablissement, eleves, graine)
         mots = self._ouvrir_la_communication(etablissement, enseignants, eleves)
+        bilans = self._archiver_les_bilans(annee, classes)
+        emargements = self._emarger_les_arrivees(
+            etablissement, enseignants, graine
+        )
+        remises = self._remettre_les_bulletins(etablissement, annee, eleves, graine)
+        abonnes = self._abonner_a_la_cantine(annee, eleves)
+        numerique = self._ouvrir_la_bibliotheque_numerique(etablissement)
+        passage = self._simuler_le_passage(etablissement, annee, classes)
 
         self.stdout.write(f"  classes              {len(classes)}")
         self.stdout.write(f"  matieres             {len(matieres)}")
@@ -444,6 +465,12 @@ class Command(BaseCommand):
         self.stdout.write(f"  depenses             {depenses}")
         self.stdout.write(f"  vie scolaire         {vie}")
         self.stdout.write(f"  communication        {mots}")
+        self.stdout.write(f"  bilans archives      {bilans}")
+        self.stdout.write(f"  emargements          {emargements}")
+        self.stdout.write(f"  bulletins remis      {remises}")
+        self.stdout.write(f"  abonnes cantine      {abonnes}")
+        self.stdout.write(f"  fonds numerique      {numerique}")
+        self.stdout.write(f"  passage simule       {passage}")
 
     # ------------------------------------------------------------- structure
 
@@ -546,6 +573,42 @@ class Command(BaseCommand):
         """
         return random.Random(f"{graine}|" + "|".join(str(c) for c in cles))
 
+    @staticmethod
+    def _un_echantillon(eleves, combien):
+        """Des eleves pris a pas regulier, et non les premiers de la liste.
+
+        `eleves` arrive classe par classe: une tranche `[:60]` ne prend donc que
+        les deux premieres classes. Un ecran filtre par classe -- remise des
+        bulletins, cantine, bibliotheque -- s'ouvrait alors sur rien pour les
+        onze autres, alors que le compteur global disait soixante.
+        """
+        if combien <= 0 or not eleves:
+            return []
+        if combien >= len(eleves):
+            return list(eleves)
+        pas = len(eleves) / combien
+        return [eleves[int(rang * pas)] for rang in range(combien)]
+
+    @staticmethod
+    def _numero_malien(tirage):
+        """Un mobile malien plausible, au format que les fiches ecoles portent.
+
+        Les familles n'en avaient aucun, et cela vidait tout un pan de
+        l'application: `ParentProfile.whatsapp_phone` se remplit depuis
+        `User.phone` par signal, et sans numero la remise d'un bulletin par
+        WhatsApp n'a nulle part ou aller -- l'ecran affichait soixante remises
+        sans destinataire.
+
+        La forme est celle de la saisie (« 76 12 34 56 »), pas E.164:
+        `phone_utils` normalise, et c'est precisement ce qu'il faut lui donner a
+        normaliser.
+        """
+        tete = tirage.choice([60, 62, 65, 66, 70, 74, 76, 78, 79, 83])
+        return (
+            f"{tete} {tirage.randint(10, 99)} "
+            f"{tirage.randint(10, 99)} {tirage.randint(10, 99)}"
+        )
+
     def _inscrire_les_eleves(self, etablissement, classes, effectif, graine):
         eleves = []
         code = self._code_de(etablissement)
@@ -643,7 +706,11 @@ class Command(BaseCommand):
                 compte.set_password("Prof@2026")
                 compte.is_active = True
                 compte.etablissement = etablissement
-                compte.save(update_fields=["password", "is_active", "etablissement"])
+                if not compte.phone:
+                    compte.phone = self._numero_malien(tirage)
+                compte.save(
+                    update_fields=["password", "is_active", "etablissement", "phone"]
+                )
 
                 enseignant, _ = Teacher.objects.get_or_create(
                     user=compte,
@@ -975,7 +1042,11 @@ class Command(BaseCommand):
             compte.set_password("Ecole@2026")
             compte.is_active = True
             compte.etablissement = etablissement
-            compte.save(update_fields=["password", "is_active", "etablissement"])
+            if not compte.phone:
+                compte.phone = self._numero_malien(tirage)
+            compte.save(
+                update_fields=["password", "is_active", "etablissement", "phone"]
+            )
             nommes += 1 if cree else 0
         return nommes
 
@@ -1021,7 +1092,11 @@ class Command(BaseCommand):
                 compte.set_password("Parent@2026")
                 compte.is_active = True
                 compte.etablissement = etablissement
-                compte.save(update_fields=["password", "is_active", "etablissement"])
+                if not compte.phone:
+                    compte.phone = self._numero_malien(tirage)
+                compte.save(
+                    update_fields=["password", "is_active", "etablissement", "phone"]
+                )
 
                 famille, cree = ParentProfile.objects.get_or_create(
                     user=compte,
@@ -1113,12 +1188,22 @@ class Command(BaseCommand):
         return poses
 
     def _consigner_la_discipline(self, annee, eleves, graine):
-        """Des incidents, de gravites et d'etats varies.
+        """Des incidents, de gravites et d'etats varies -- et leur consequence.
 
         Dont certains non encore traites, et un dont la famille n'a pas ete
         prevenue: c'est ce que l'ecran met en avant, et il faut donc que cela
         existe.
+
+        La note de conduite suit la gravite. Elle restait a 18 pour tout le
+        monde, y compris pour un eleve pris a tricher: l'incident etait consigne
+        et sans consequence, le bulletin l'ignorait, et le conseil de fin
+        d'annee promouvait toute l'ecole sans un redoublant.
         """
+        # Ce qu'un incident coute sur vingt. Un eleve exclu pour conduite passe
+        # sous le seuil du conseil de classe, ce qui est le but: une sanction
+        # qui ne se lit nulle part n'est pas une sanction.
+        retrait = {"low": Decimal("1"), "medium": Decimal("3"), "high": Decimal("9")}
+
         crees = 0
         for eleve in eleves:
             tirage = self._alea(graine, "discipline", eleve.id)
@@ -1143,6 +1228,13 @@ class Command(BaseCommand):
                 },
             )
             crees += 1 if cree else 0
+
+            # `update_or_create` plutot qu'un decrement: relancee, la commande
+            # ne doit pas creuser la note un peu plus a chaque passage.
+            voulue = max(Decimal("0"), Decimal("18") - retrait[gravite])
+            if eleve.conduite != voulue:
+                eleve.conduite = voulue
+                eleve.save(update_fields=["conduite"])
         return crees
 
     def _arreter_les_bulletins(self, annee, classes):
@@ -1347,7 +1439,7 @@ class Command(BaseCommand):
             ouvrages.append(ouvrage)
             total += 1 if cree else 0
 
-        emprunteurs = eleves[:12]
+        emprunteurs = self._un_echantillon(eleves, 12)
         for rang, eleve in enumerate(emprunteurs):
             ouvrage = ouvrages[rang % len(ouvrages)]
             en_retard = rang % 3 == 1
@@ -1380,7 +1472,7 @@ class Command(BaseCommand):
             menus.append(menu)
             total += 1 if cree else 0
 
-        for eleve in eleves[:40]:
+        for eleve in self._un_echantillon(eleves, 40):
             menu = menus[eleve.id % len(menus)]
             _, cree = CanteenService.objects.get_or_create(
                 student=eleve,
@@ -1500,6 +1592,341 @@ class Command(BaseCommand):
             total += 1 if cree else 0
         return total
 
+    def _archiver_les_bilans(self, annee, classes):
+        """Le rang et la moyenne de chaque trimestre, figes.
+
+        `StudentAcademicHistory` est ce qui fait qu'un bulletin du premier
+        trimestre reimprime en juin porte toujours le rang de decembre. Sans ces
+        lignes, l'historique d'un eleve est vide et le rang s'affiche « - ».
+
+        Le calcul n'est pas refait ici: `recalculate_term_ranking` est la regle
+        du depot, conduite et composition comprises. En dupliquer une variante
+        donnerait des rangs qui divergent de ceux des bulletins.
+        """
+        archives = 0
+        for classe in classes:
+            for trimestre in TRIMESTRES:
+                recalculate_term_ranking(classe, annee, trimestre)
+                archives += StudentAcademicHistory.objects.filter(
+                    classroom=classe, academic_year=annee, term=trimestre
+                ).count()
+        return archives
+
+    def _emarger_les_arrivees(self, etablissement, enseignants, graine):
+        """L'heure d'arrivee et de depart, quinze jours durant.
+
+        `TeacherAttendance` dit si une seance a ete assuree; `TeacherTimeEntry`
+        dit a quelle heure l'enseignant est arrive. Ce sont deux ecrans
+        differents, et seul le premier etait peuple: la feuille d'emargement
+        restait vide, retards compris.
+
+        Des retards, il en faut: la tolerance de l'etablissement ne se voit que
+        sur quelqu'un qui arrive en retard sans etre compte en retard.
+        """
+        tolerance = getattr(etablissement, "timesheet_late_tolerance_minutes", 0) or 0
+        poses = 0
+        for jour in self._jours_ouvres(15):
+            for enseignant in enseignants:
+                tirage = self._alea(graine, "emargement", enseignant.id, jour)
+                if tirage.random() < 0.15:
+                    continue  # absent ce jour-la: la feuille porte le manque
+
+                retard = tirage.choice([0, 0, 0, 4, 9, 17, 25])
+                arrivee = (
+                    datetime.combine(jour, time(8, 0)) + timedelta(minutes=retard)
+                ).time()
+                depart = time(17, 0) if tirage.random() < 0.8 else None
+                heures = Decimal("8.00") if depart else Decimal("0.00")
+                _, cree = TeacherTimeEntry.objects.get_or_create(
+                    teacher=enseignant,
+                    entry_date=jour,
+                    defaults={
+                        "etablissement": etablissement,
+                        "check_in_time": arrivee,
+                        "check_out_time": depart,
+                        # Le retard retenu est celui qui depasse la tolerance:
+                        # c'est la regle de l'etablissement, pas l'ecart brut.
+                        "late_minutes": max(0, retard - tolerance),
+                        "tolerated_late_minutes": min(retard, tolerance),
+                        "worked_hours": heures,
+                        "planned_minutes": 480,
+                        "covered_minutes": 480 if depart else 0,
+                        "is_auto_closed": depart is None,
+                        "auto_closed_reason": ""
+                        if depart
+                        else "Sortie non pointée, journée clôturée automatiquement.",
+                        "notes": "",
+                    },
+                )
+                poses += 1 if cree else 0
+        return poses
+
+    def _remettre_les_bulletins(self, etablissement, annee, eleves, graine):
+        """Les bulletins du premier trimestre, envoyes aux familles.
+
+        Les quatre etats existent a dessein: prepare, envoye, consulte, echoue.
+        L'ecran de remise est fait pour les distinguer -- et le motif d'echec ne
+        s'affiche que s'il y a un echec. Un numero invalide est le cas reel le
+        plus frequent.
+        """
+        directeur = User.objects.filter(
+            etablissement=etablissement, role=UserRole.DIRECTOR
+        ).first()
+
+        remises = 0
+        for eleve in self._un_echantillon(eleves, 60):
+            # `BulletinDelivery.parent` pointe la fiche de famille, pas le
+            # compte: c'est la famille qui recoit le bulletin, et elle porte son
+            # propre numero WhatsApp.
+            parent = eleve.parent
+            if parent is None:
+                continue
+            tirage = self._alea(graine, "remise", eleve.id)
+            etat = tirage.choice(["sent", "read", "read", "prepared", "failed"])
+            envoye = timezone.now() - timedelta(days=tirage.randint(1, 20))
+            _, cree = BulletinDelivery.objects.get_or_create(
+                student=eleve,
+                academic_year=annee,
+                term="T1",
+                defaults={
+                    "etablissement": etablissement,
+                    "parent": parent,
+                    "channel": "manual_link",
+                    "status": etat,
+                    "phone": parent.whatsapp_phone or parent.user.phone or "",
+                    "sent_at": None if etat == "prepared" else envoye,
+                    "read_at": envoye + timedelta(hours=3)
+                    if etat == "read"
+                    else None,
+                    "failure_reason": "Numéro injoignable"
+                    if etat == "failed"
+                    else "",
+                    "prepared_by": directeur,
+                },
+            )
+            remises += 1 if cree else 0
+        return remises
+
+    def _abonner_a_la_cantine(self, annee, eleves):
+        """Des abonnements a l'annee, dont un suspendu et un termine.
+
+        Le service quotidien etait peuple, l'abonnement non: l'ecran listait des
+        repas servis sans jamais dire qui est abonne, ni qui ne l'est plus.
+        """
+        poses = 0
+        for rang, eleve in enumerate(self._un_echantillon(eleves, 45)):
+            etat = "active"
+            if rang % 15 == 7:
+                etat = "suspended"
+            elif rang % 15 == 11:
+                etat = "ended"
+            _, cree = CanteenSubscription.objects.get_or_create(
+                student=eleve,
+                academic_year=annee,
+                defaults={
+                    "start_date": annee.start_date,
+                    "end_date": annee.start_date + timedelta(days=120)
+                    if etat == "ended"
+                    else None,
+                    "daily_limit": 1,
+                    "status": etat,
+                },
+            )
+            poses += 1 if cree else 0
+        return poses
+
+    def _ouvrir_la_bibliotheque_numerique(self, etablissement):
+        """Un fonds classe en collections et categories, avec des documents.
+
+        Trois niveaux, et il faut les trois: sans collection pas de categorie,
+        sans categorie pas de document. L'ecran s'ouvrait donc sur un arbre vide.
+
+        Un document en erreur d'import est prevu: c'est le seul cas ou la
+        colonne « motif » a quelque chose a dire.
+        """
+        code = self._code_de(etablissement).lower()
+        total = 0
+
+        arbre = (
+            ("manuels", "Manuels scolaires", (
+                ("Mathématiques", ("Algèbre 10ème", "Géométrie 11ème")),
+                ("Sciences", ("Physique-Chimie 2nde", "Biologie 1ère")),
+            )),
+            ("annales", "Annales du baccalauréat", (
+                ("Séries techniques", ("Annales CT 2024", "Annales GM 2024")),
+            )),
+        )
+
+        for rang, (cle, libelle, categories) in enumerate(arbre):
+            # Le code est unique par etablissement: il porte donc le sigle de
+            # l'ecole, sans quoi la deuxieme ecole montee echouerait.
+            collection, cree = LibraryCollection.objects.get_or_create(
+                etablissement=etablissement,
+                code=f"{code}-{cle}",
+                defaults={"label": libelle, "position": rang},
+            )
+            total += 1 if cree else 0
+
+            for position, (nom, titres) in enumerate(categories):
+                categorie, cree = LibraryCategory.objects.get_or_create(
+                    collection=collection,
+                    name=nom,
+                    defaults={"position": position},
+                )
+                total += 1 if cree else 0
+
+                for index, titre in enumerate(titres):
+                    rate = index == 0 and cle == "annales"
+                    _, cree = LibraryDocument.objects.get_or_create(
+                        category=categorie,
+                        title=titre,
+                        defaults={
+                            "etablissement": etablissement,
+                            "origin": "import",
+                            # `source_url` est unique des qu'il n'est pas vide:
+                            # il porte donc le sigle de l'ecole.
+                            "source_url": (
+                                f"https://fonds.example.org/{code}/{cle}/"
+                                f"{position}-{index}.pdf"
+                            ),
+                            "size_bytes": 1_200_000 + index * 40_000,
+                            "is_downloaded": not rate,
+                            "import_error": "Fichier introuvable à la source"
+                            if rate
+                            else "",
+                            "description": "",
+                        },
+                    )
+                    total += 1 if cree else 0
+
+        # Le fournisseur de SMS: sans lui, l'ecran des envois dit seulement
+        # qu'aucun fournisseur n'est configure, et rien d'autre.
+        _, cree = SmsProviderConfig.objects.get_or_create(
+            etablissement=etablissement,
+            defaults={
+                "provider_name": "Passerelle de démonstration",
+                "api_url": "https://sms.example.org/api/v1/send",
+                # Jeton manifestement faux: cette commande ne doit jamais
+                # deposer en base quelque chose qui ressemble a un secret.
+                "api_token": "jeton-de-demonstration-a-remplacer",
+                "sender_id": self._code_de(etablissement),
+                "is_active": False,
+            },
+        )
+        total += 1 if cree else 0
+        return total
+
+    def _simuler_le_passage(self, etablissement, annee, classes):
+        """Le conseil de fin d'annee, simule et non execute.
+
+        La nuance est tout: une execution deplacerait les mille deux cents
+        eleves dans les classes de l'annee suivante et defirait tout ce qui
+        precede. Une simulation montre le meme ecran -- effectifs, promus,
+        redoublants -- et ne touche a rien.
+
+        La classe cible se deduit du nom quand elle existe (« 10eme CT » vers
+        « 11eme CT »), et reste vide sinon: mieux vaut une cible absente qu'une
+        cible fausse.
+        """
+        directeur = User.objects.filter(
+            etablissement=etablissement, role=UserRole.DIRECTOR
+        ).first()
+        seuil = Decimal("10")
+        seuil_conduite = Decimal("10")
+
+        par_nom = {classe.name: classe for classe in classes}
+        cibles = {}
+        for classe in classes:
+            correspondance = re.match(r"^(\d+)(.*)$", classe.name.strip())
+            if correspondance is None:
+                continue
+            suivant = (
+                f"{int(correspondance.group(1)) + 1}{correspondance.group(2)}"
+            )
+            cibles[classe.id] = par_nom.get(suivant)
+
+        lignes = []
+        for classe in classes:
+            bilans = StudentAcademicHistory.objects.filter(
+                classroom=classe, academic_year=annee, term="T3"
+            ).select_related("student")
+            for bilan in bilans:
+                conduite = bilan.student.conduite
+                # Les deux seuils du conseil de classe, et non le seul premier:
+                # avec des notes entre 9 et 19, la moyenne seule promeut toute
+                # l'ecole. C'est la conduite qui fait un redoublant, et c'est
+                # aussi ce qui donne un sens a un incident consigne.
+                if conduite < seuil_conduite:
+                    motif = f"Conduite inférieure à {seuil_conduite}"
+                elif bilan.average < seuil:
+                    motif = f"Moyenne annuelle inférieure à {seuil}"
+                else:
+                    motif = ""
+                promu = motif == ""
+                lignes.append(
+                    {
+                        "eleve": bilan.student,
+                        "source": classe,
+                        "cible": cibles.get(classe.id) if promu else classe,
+                        "decision": PromotionDecisionType.PROMOTED
+                        if promu
+                        else PromotionDecisionType.REPEATED,
+                        "moyenne": bilan.average,
+                        "conduite": conduite,
+                        "rang": bilan.rank,
+                        "motif": motif,
+                    }
+                )
+
+        if not lignes:
+            return 0
+
+        promus = sum(
+            1 for l in lignes if l["decision"] == PromotionDecisionType.PROMOTED
+        )
+        simulation, _ = PromotionRun.objects.get_or_create(
+            etablissement=etablissement,
+            source_academic_year=annee,
+            status=PromotionRunStatus.SIMULATED,
+            defaults={
+                # Pas d'annee cible: l'ecole simule en juin, avant de l'ouvrir.
+                "target_academic_year": None,
+                "min_average": seuil,
+                "min_conduite": Decimal("10"),
+                "executed_by": directeur,
+                "total_students": len(lignes),
+                "promoted_count": promus,
+                "repeated_count": len(lignes) - promus,
+                "archived_count": 0,
+                "payload": {
+                    "source_classrooms": [classe.id for classe in classes],
+                    "classroom_mapping": {
+                        str(source): (cible.id if cible else None)
+                        for source, cible in cibles.items()
+                    },
+                },
+            },
+        )
+
+        posees = 0
+        for ligne in lignes:
+            _, cree = PromotionDecision.objects.get_or_create(
+                run=simulation,
+                student=ligne["eleve"],
+                defaults={
+                    "source_classroom": ligne["source"],
+                    "target_classroom": ligne["cible"],
+                    "decision": ligne["decision"],
+                    "average": ligne["moyenne"],
+                    "average_matieres": ligne["moyenne"],
+                    "conduite": ligne["conduite"],
+                    "rank": ligne["rang"],
+                    "reason": ligne["motif"],
+                },
+            )
+            posees += 1 if cree else 0
+        return posees
+
     @staticmethod
     def _jours_ouvres(combien):
         jours, jour = [], timezone.localdate()
@@ -1582,7 +2009,12 @@ class Command(BaseCommand):
             eleves,
             key=lambda e: self._alea(graine, "ordre", e.id).random(),
         )
-        combien = round(len(ordonnes) * part_due / 100)
+        # Division entiere, et non `round()`: celui de Python arrondit au pair
+        # le plus proche, si bien que 37,5 montait a 38 quand 112,5 descendait a
+        # 112. Deux ecoles obtenaient des regles differentes sans que rien ne le
+        # dise. La part demandee est desormais un plafond: jamais plus d'un
+        # quart d'impayes quand on demande vingt-cinq pour cent.
+        combien = len(ordonnes) * part_due // 100
         retardataires = {e.id for e in ordonnes[:combien]}
 
         regles = 0

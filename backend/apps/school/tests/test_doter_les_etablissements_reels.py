@@ -32,18 +32,31 @@ from apps.accounts.models import User, UserRole
 from apps.school.management.commands.doter_les_etablissements_reels import Command
 from apps.school.management.commands.insert_classes import ESTABLISSEMENT_CLASSES
 from apps.school.models import (
+    BulletinDelivery,
+    CanteenSubscription,
     ClassRoom,
+    DisciplineIncident,
     Etablissement,
     ExamInvigilation,
     ExamPlanning,
     FeeType,
+    LibraryCategory,
+    LibraryCollection,
+    LibraryDocument,
+    ParentProfile,
     Payment,
+    PromotionDecision,
+    PromotionRun,
+    PromotionRunStatus,
+    SmsProviderConfig,
     StockItem,
     Student,
+    StudentAcademicHistory,
     StudentFee,
     Subject,
     Teacher,
     TeacherScheduleSlot,
+    TeacherTimeEntry,
 )
 
 
@@ -119,6 +132,45 @@ class LeNomDeLaClasseDonneSonProgrammeTests(TestCase):
         self.assertTrue(commun, "aucune matiere commune entre trois filieres")
 
 
+class LEchantillonTraverseToutesLesClassesTests(TestCase):
+    """Soixante eleves pris a pas regulier, et non les soixante premiers.
+
+    La liste des eleves arrive classe par classe. Une tranche `[:60]` ne prenait
+    donc que les deux premieres classes: la remise des bulletins, la cantine et
+    la bibliotheque s'ouvraient sur rien pour les onze autres, alors que le
+    compteur global annoncait soixante lignes.
+
+    Ces tests n'ont pas besoin de base: l'echantillonnage est une fonction de
+    liste.
+    """
+
+    def test_il_prend_dans_chaque_classe(self):
+        eleves = [f"c{classe}-e{rang}" for classe in range(13) for rang in range(30)]
+
+        echantillon = Command._un_echantillon(eleves, 60)
+
+        classes = {nom.split("-")[0] for nom in echantillon}
+        self.assertEqual(len(echantillon), 60)
+        self.assertEqual(len(classes), 13)
+
+    def test_il_ne_prend_pas_deux_fois_le_meme(self):
+        eleves = list(range(100))
+
+        echantillon = Command._un_echantillon(eleves, 45)
+
+        self.assertEqual(len(set(echantillon)), 45)
+
+    def test_il_rend_tout_le_monde_quand_on_en_demande_trop(self):
+        """Une petite ecole n'a pas soixante eleves, et ce n'est pas une erreur."""
+        eleves = list(range(20))
+
+        self.assertEqual(Command._un_echantillon(eleves, 60), eleves)
+
+    def test_il_rend_une_liste_vide_sans_eleves(self):
+        self.assertEqual(Command._un_echantillon([], 60), [])
+        self.assertEqual(Command._un_echantillon([1, 2, 3], 0), [])
+
+
 class LAleaNeDependPasDuProcessusTests(TestCase):
     """« Meme graine, meme ecole » -- y compris d'un lancement a l'autre.
 
@@ -159,11 +211,12 @@ class LAleaNeDependPasDuProcessusTests(TestCase):
 
 
 class UneEcoleMonteeDeBoutEnBoutTests(TestCase):
-    """Le montage reel, sur la plus petite ecole et deux eleves par classe.
+    """Le montage reel, sur la plus petite ecole et quatre eleves par classe.
 
-    Deux eleves suffisent: ce qu'on verifie ici, ce sont des proprietes de la
-    commande, pas des volumes. Les notes sont ecartees -- elles pesent trois
-    mille lignes pour ne rien prouver de plus.
+    Quatre eleves suffisent: ce qu'on verifie ici, ce sont des proprietes de la
+    commande, pas des volumes. Les notes, elles, sont indispensables -- les
+    bilans trimestriels et le conseil de fin d'annee s'en deduisent, et sans
+    elles la moyenne de chacun vaut zero.
     """
 
     @classmethod
@@ -177,7 +230,6 @@ class UneEcoleMonteeDeBoutEnBoutTests(TestCase):
             "doter_les_etablissements_reels",
             etablissement=cls.etablissement.name,
             eleves_par_classe=4,
-            sans_notes=True,
             forcer=True,
             stdout=StringIO(),
         )
@@ -248,7 +300,15 @@ class UneEcoleMonteeDeBoutEnBoutTests(TestCase):
         ).count())
 
     def test_un_quart_exactement_n_a_pas_solde_sa_scolarite(self):
-        """Exactement, et non « a peu pres »: un tirage par eleve derivait a 28 %."""
+        """Exactement, et non « a peu pres ».
+
+        Deux derives ont ete corrigees ici. Un tirage par eleve donnait 28 %; et
+        `round()`, qui arrondit au pair le plus proche, faisait monter 37,5 a 38
+        quand il faisait descendre 112,5 a 112 -- deux ecoles obtenaient des
+        regles differentes sans que rien ne le dise.
+
+        La part demandee est un plafond: `effectif * part // 100`.
+        """
         effectif = Student.objects.filter(etablissement=self.etablissement).count()
         du, regle = self._du_et_regle()
 
@@ -256,7 +316,18 @@ class UneEcoleMonteeDeBoutEnBoutTests(TestCase):
             1 for e, montant in du.items() if regle.get(e, Decimal(0)) < montant
         )
 
-        self.assertEqual(non_soldes, effectif // 4)
+        self.assertEqual(non_soldes, effectif * 25 // 100)
+
+    def test_la_part_demandee_est_un_plafond(self):
+        """Elle ne doit jamais etre depassee, meme d'un eleve."""
+        effectif = Student.objects.filter(etablissement=self.etablissement).count()
+        du, regle = self._du_et_regle()
+
+        non_soldes = sum(
+            1 for e, montant in du.items() if regle.get(e, Decimal(0)) < montant
+        )
+
+        self.assertLessEqual(non_soldes * 100, effectif * 25)
 
     def test_l_encadrement_est_nomme(self):
         """Sans directeur ni comptable, l'ecole n'a personne pour l'ouvrir."""
@@ -302,6 +373,212 @@ class UneEcoleMonteeDeBoutEnBoutTests(TestCase):
         self.assertTrue(epreuves.exists())
         self.assertGreater(pourvues, 0)
         self.assertLess(pourvues, epreuves.count())
+
+
+    # ------------------------------------------------------------------------
+    # Ce qui rend les ecrans habites.
+    #
+    # Ces verifications restent dans la meme classe a dessein: `setUpTestData`
+    # est propre a une classe, et en ouvrir une seconde monterait l'ecole une
+    # deuxieme fois pour rien.
+    #
+    # Un compteur non nul ne suffit pas: un ecran d'alertes a besoin d'une
+    # alerte, une liste d'etats a besoin des quatre etats, et un envoi a besoin
+    # d'un destinataire joignable.
+    # ------------------------------------------------------------------------
+
+    def test_chaque_eleve_a_son_bilan_pour_les_trois_trimestres(self):
+        """Sans bilan, le rang s'affiche « - » sur un bulletin reimprime."""
+        effectif = Student.objects.filter(etablissement=self.etablissement).count()
+
+        bilans = StudentAcademicHistory.objects.filter(
+            classroom__etablissement=self.etablissement
+        )
+
+        self.assertEqual(bilans.count(), effectif * 3)
+
+    def test_chaque_classe_a_un_premier_par_trimestre(self):
+        """Un rang qui ne commence pas a 1 n'est pas un classement."""
+        premiers = StudentAcademicHistory.objects.filter(
+            classroom__etablissement=self.etablissement, rank=1
+        ).count()
+
+        self.assertEqual(premiers, 5 * 3)
+
+    def test_la_feuille_d_emargement_porte_des_retards(self):
+        """La tolerance de l'etablissement ne se voit que sur un retardataire."""
+        emargements = TeacherTimeEntry.objects.filter(
+            etablissement=self.etablissement
+        )
+
+        self.assertTrue(emargements.exists())
+        self.assertTrue(emargements.filter(late_minutes__gt=0).exists())
+
+    def test_le_retard_retenu_ne_depasse_pas_l_ecart_reel(self):
+        """`late_minutes` est l'ecart **moins** la tolerance, jamais l'inverse."""
+        tolerance = self.etablissement.timesheet_late_tolerance_minutes or 0
+
+        for ligne in TeacherTimeEntry.objects.filter(
+            etablissement=self.etablissement
+        ):
+            self.assertLessEqual(ligne.tolerated_late_minutes, tolerance)
+
+    def test_aucune_remise_de_bulletin_sans_numero(self):
+        """Le defaut corrige: soixante remises sans destinataire.
+
+        `ParentProfile.whatsapp_phone` se remplit depuis `User.phone` par
+        signal. Les familles n'avaient aucun numero, donc la colonne etait vide
+        et l'envoi n'avait nulle part ou aller.
+        """
+        sans_numero = BulletinDelivery.objects.filter(
+            etablissement=self.etablissement, phone=""
+        )
+
+        self.assertEqual(sans_numero.count(), 0)
+
+    def test_chaque_famille_est_joignable(self):
+        """La cause du defaut ci-dessus, verifiee a la racine."""
+        muettes = ParentProfile.objects.filter(
+            etablissement=self.etablissement, whatsapp_phone=""
+        )
+
+        self.assertEqual(muettes.count(), 0)
+
+    def test_les_quatre_etats_de_remise_existent(self):
+        """Le motif d'echec ne s'affiche que s'il y a un echec."""
+        etats = set(
+            BulletinDelivery.objects.filter(
+                etablissement=self.etablissement
+            ).values_list("status", flat=True)
+        )
+
+        self.assertEqual(etats, {"prepared", "sent", "read", "failed"})
+
+    def test_un_abonnement_cantine_est_suspendu_et_un_autre_termine(self):
+        etats = set(
+            CanteenSubscription.objects.filter(
+                student__etablissement=self.etablissement
+            ).values_list("status", flat=True)
+        )
+
+        self.assertEqual(etats, {"active", "suspended", "ended"})
+
+    def test_le_fonds_numerique_a_ses_trois_niveaux(self):
+        """Sans collection pas de categorie, sans categorie pas de document."""
+        collections = LibraryCollection.objects.filter(
+            etablissement=self.etablissement
+        )
+        documents = LibraryDocument.objects.filter(etablissement=self.etablissement)
+
+        self.assertTrue(collections.exists())
+        self.assertTrue(
+            LibraryCategory.objects.filter(collection__in=collections).exists()
+        )
+        self.assertTrue(documents.exists())
+        self.assertEqual(documents.exclude(import_error="").count(), 1)
+
+    def test_le_fournisseur_de_sms_est_configure_mais_inactif(self):
+        """Configure, pour que l'ecran ait quelque chose a montrer; inactif,
+        pour qu'aucune commande de peuplement ne puisse faire partir un envoi.
+        """
+        fournisseur = SmsProviderConfig.objects.filter(
+            etablissement=self.etablissement
+        ).first()
+
+        self.assertIsNotNone(fournisseur)
+        self.assertFalse(fournisseur.is_active)
+
+    def test_le_jeton_de_la_passerelle_est_manifestement_faux(self):
+        """Cette commande ne depose jamais en base ce qui ressemble a un secret."""
+        fournisseur = SmsProviderConfig.objects.get(
+            etablissement=self.etablissement
+        )
+
+        self.assertIn("demonstration", fournisseur.api_token)
+
+    def test_un_incident_fait_baisser_la_conduite(self):
+        """Un incident consigne sans consequence n'est pas une sanction.
+
+        La conduite restait a 18 pour tout le monde, y compris pour un eleve
+        pris a tricher: le bulletin l'ignorait, et le conseil de fin d'annee
+        promouvait toute l'ecole sans un redoublant.
+        """
+        punis = Student.objects.filter(
+            etablissement=self.etablissement,
+            id__in=DisciplineIncident.objects.values("student_id"),
+        )
+
+        self.assertTrue(punis.exists())
+        for eleve in punis:
+            self.assertLess(eleve.conduite, 18)
+
+    def test_le_conseil_de_fin_d_annee_est_une_simulation(self):
+        """Et surtout pas une execution: elle deplacerait tous les eleves."""
+        simulation = PromotionRun.objects.filter(
+            etablissement=self.etablissement
+        ).first()
+
+        self.assertIsNotNone(simulation)
+        self.assertEqual(simulation.status, PromotionRunStatus.SIMULATED)
+
+    def test_la_simulation_ne_deplace_personne(self):
+        """La classe de chaque eleve est celle ou il etait avant."""
+        classes = set(
+            ClassRoom.objects.filter(etablissement=self.etablissement).values_list(
+                "id", flat=True
+            )
+        )
+        inscrits = set(
+            Student.objects.filter(
+                etablissement=self.etablissement
+            ).values_list("classroom_id", flat=True)
+        )
+
+        self.assertTrue(inscrits <= classes)
+
+    def test_la_conduite_decide_du_redoublement(self):
+        """La regle, et non son resultat: le volume ne doit pas trancher.
+
+        Avec des notes entre 9 et 19, la moyenne seule promeut toute l'ecole.
+        C'est la conduite qui fait le redoublant, et c'est la raison d'etre du
+        second seuil -- sur une ecole de vingt eleves, aucun incident grave ne
+        tombe forcement, et exiger un redoublant ici rendrait le test dependant
+        de l'effectif. La regle, elle, tient a toute taille.
+        """
+        simulation = PromotionRun.objects.get(etablissement=self.etablissement)
+
+        for decision in PromotionDecision.objects.filter(
+            run=simulation
+        ).select_related("student"):
+            if decision.conduite < 10 or decision.average < 10:
+                self.assertEqual(decision.decision, "repeated")
+                self.assertTrue(decision.reason, "un redoublement sans motif")
+            else:
+                self.assertEqual(decision.decision, "promoted")
+                self.assertEqual(decision.reason, "")
+
+    def test_un_redoublant_reste_dans_sa_classe(self):
+        """Sa classe cible est la sienne: c'est ce que redoubler veut dire."""
+        simulation = PromotionRun.objects.get(etablissement=self.etablissement)
+
+        for decision in PromotionDecision.objects.filter(
+            run=simulation, decision="repeated"
+        ):
+            self.assertEqual(
+                decision.target_classroom_id, decision.source_classroom_id
+            )
+
+    def test_le_total_de_la_simulation_est_celui_des_decisions(self):
+        simulation = PromotionRun.objects.get(etablissement=self.etablissement)
+
+        self.assertEqual(
+            simulation.total_students,
+            PromotionDecision.objects.filter(run=simulation).count(),
+        )
+        self.assertEqual(
+            simulation.promoted_count + simulation.repeated_count,
+            simulation.total_students,
+        )
 
 
 class LaCommandeRelanceeNeDoublRienTests(TestCase):
