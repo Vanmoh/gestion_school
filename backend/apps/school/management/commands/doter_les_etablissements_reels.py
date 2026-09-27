@@ -209,6 +209,16 @@ JOURS = ("MON", "TUE", "WED", "THU", "FRI", "SAT")
 
 TRIMESTRES = ("T1", "T2", "T3")
 
+# Ce qui distingue la simulation de fin d'annee posee ici de celle qu'une
+# personne fait depuis l'application. `PromotionRun` n'a pas de champ de
+# provenance; `payload` en tient lieu, et se retrouve par un filtre JSON.
+SIGNATURE_DE_LA_DOTATION = "doter_les_etablissements_reels"
+
+# Les quatre etats d'une remise de bulletin, dans l'ordre ou on les pose. « lu »
+# revient deux fois: c'est le cas le plus frequent, et une ecran ou les quatre
+# etats sont a egalite ne ressemble a aucune ecole.
+ETATS_DE_REMISE = ("sent", "read", "prepared", "read", "failed")
+
 MOTIFS = (
     "Maladie",
     "Transport en panne",
@@ -405,6 +415,7 @@ class Command(BaseCommand):
         enseignants = self._recruter_les_enseignants(
             etablissement, matieres, graine
         )
+        enseignants = self._tous_les_enseignants_de(classes, enseignants)
         creneaux = self._composer_l_emploi_du_temps(classes, matieres, graine)
         self._publier_les_emplois_du_temps(classes)
 
@@ -483,7 +494,7 @@ class Command(BaseCommand):
 
         nom = nom_voulu or (annee.name if annee else self._annee_en_cours())
         debut, fin = self._bornes_de(nom)
-        annee, _ = AcademicYear.objects.get_or_create(
+        annee, _ = self._retrouver_ou_creer(AcademicYear,
             name=nom,
             etablissement=etablissement,
             defaults={"start_date": debut, "end_date": fin},
@@ -510,7 +521,7 @@ class Command(BaseCommand):
     def _creer_les_classes(self, etablissement, annee, noms):
         classes = []
         for nom in noms:
-            classe, _ = ClassRoom.objects.get_or_create(
+            classe, _ = self._retrouver_ou_creer(ClassRoom,
                 name=nom, academic_year=annee, etablissement=etablissement
             )
             classes.append(classe)
@@ -534,7 +545,7 @@ class Command(BaseCommand):
         return tuple(FONDAMENTAL)
 
     def _creer_les_matieres(self, classes):
-        """Une matiere par couple (classe, programme).
+        """Une matiere par couple (classe, programme), et des volumes qui tiennent.
 
         `Subject.classroom` est une cle etrangere: une matiere appartient a une
         classe, et « Mathematiques » existe donc autant de fois qu'il y a de
@@ -543,7 +554,7 @@ class Command(BaseCommand):
         matieres = []
         for classe in classes:
             for nom, code, coefficient in self._curriculum_de(classe.name):
-                matiere, _ = Subject.objects.get_or_create(
+                matiere, _ = self._retrouver_ou_creer(Subject,
                     code=f"{code}-{classe.id}",
                     defaults={
                         "name": nom,
@@ -551,15 +562,91 @@ class Command(BaseCommand):
                         "classroom": classe,
                     },
                 )
-                # Le volume horaire suit le coefficient: sans lui, la
-                # generation d'emploi du temps n'a rien a placer.
-                voulu = 2 if coefficient <= 1 else min(4, 1 + coefficient // 2 + 1)
-                if matiere.weekly_slots != voulu or matiere.classroom_id != classe.id:
-                    matiere.weekly_slots = voulu
+                if matiere.classroom_id != classe.id:
                     matiere.classroom = classe
-                    matiere.save(update_fields=["weekly_slots", "classroom"])
+                    matiere.save(update_fields=["classroom"])
                 matieres.append(matiere)
+
+            # Toutes les matieres de la classe, et non seulement celles du
+            # programme deduit: celles que la base portait deja gardaient
+            # `weekly_slots = 0`, et la generation d'emploi du temps n'avait rien
+            # a placer pour elles. Le bouton « Generer » de l'application
+            # repondait une grille incomplete sans dire pourquoi.
+            self._repartir_les_volumes(classe)
         return matieres
+
+    def _repartir_les_volumes(self, classe):
+        """Donner a chaque matiere ses heures, sans depasser la grille.
+
+        Le volume suivait le coefficient et rien d'autre. Or une classe n'a que
+        `len(JOURS) x len(CRENEAUX)` places par semaine, et le programme en
+        demandait jusqu'a soixante-quatorze pour trente-six: l'emploi du temps
+        se remplissait dans l'ordre ou les matieres arrivaient, et les dernieres
+        n'obtenaient rien. Un enseignant qui ne tenait que celles-la finissait
+        l'annee sans une heure, sans que rien ne le signale.
+
+        La regle est celle d'un vrai conseil d'etablissement: **une heure pour
+        chacune d'abord**, puis le reste aux plus forts coefficients. Une classe
+        a vingt-huit matieres ne peut pas en donner trois a chacune, et le
+        reconnaitre vaut mieux que de laisser la grille trancher par l'ordre
+        d'insertion.
+        """
+        capacite = len(JOURS) * len(CRENEAUX)
+        matieres = list(Subject.objects.filter(classroom=classe).order_by("code"))
+        if not matieres:
+            return
+
+        # Ce que chaque matiere merite si la place ne manquait pas.
+        souhaite = {}
+        for matiere in matieres:
+            coefficient = int(matiere.coefficient or 1)
+            souhaite[matiere.id] = (
+                2 if coefficient <= 1 else min(4, 1 + coefficient // 2 + 1)
+            )
+
+        if sum(souhaite.values()) <= capacite:
+            retenu = souhaite
+        else:
+            # Une heure pour chacune -- c'est le minimum pour qu'une matiere
+            # existe a l'emploi du temps, et donc pour que son enseignant ait
+            # des heures.
+            retenu = {matiere.id: 1 for matiere in matieres[:capacite]}
+            for matiere in matieres[capacite:]:
+                retenu[matiere.id] = 0
+            if len(matieres) > capacite:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"    « {classe.name} »: {len(matieres)} matieres pour "
+                        f"{capacite} places hebdomadaires -- "
+                        f"{len(matieres) - capacite} resteront hors grille."
+                    )
+                )
+
+            # Le reste va aux plus forts coefficients, une heure a la fois, pour
+            # qu'aucune matiere ne prenne tout avant que les autres soient
+            # servies.
+            reste = capacite - sum(retenu.values())
+            par_poids = sorted(
+                (m for m in matieres if retenu[m.id] >= 1),
+                key=lambda m: (-(m.coefficient or 0), m.code),
+            )
+            while reste > 0:
+                servie = False
+                for matiere in par_poids:
+                    if reste == 0:
+                        break
+                    if retenu[matiere.id] < souhaite[matiere.id]:
+                        retenu[matiere.id] += 1
+                        reste -= 1
+                        servie = True
+                if not servie:
+                    break  # toutes au maximum: la place restante ne sert a rien
+
+        for matiere in matieres:
+            voulu = retenu.get(matiere.id, 0)
+            if matiere.weekly_slots != voulu:
+                matiere.weekly_slots = voulu
+                matiere.save(update_fields=["weekly_slots"])
 
     # -------------------------------------------------------------- personnes
 
@@ -572,6 +659,58 @@ class Command(BaseCommand):
         d'autres valeurs -- donc sur d'autres lignes.
         """
         return random.Random(f"{graine}|" + "|".join(str(c) for c in cles))
+
+    @staticmethod
+    def _retrouver_ou_creer(modele, defaults=None, **criteres):
+        """`get_or_create` qui survit a une base deja utilisee.
+
+        La plupart de ces modeles n'ont aucune contrainte d'unicite sur les
+        champs qui les identifient naturellement. Une base sur laquelle on a
+        travaille en porte donc les doublons: celle de developpement avait six
+        `BulletinDelivery` pour le meme eleve et le meme trimestre, et
+        `get_or_create` levait `MultipleObjectsReturned` au premier passage.
+
+        La commande ne tournait ainsi que sur des bases neuves -- ce qui est
+        exactement l'inverse de ce qu'on lui demande: peupler une base existante
+        sans rien y casser.
+
+        On retient la premiere ligne qui correspond, comme le ferait quelqu'un
+        qui ouvre l'ecran. Elle existe: on ne la double pas, et on ne choisit pas
+        a la place de l'ecole laquelle de ses lignes est la bonne.
+        """
+        existante = modele.objects.filter(**criteres).order_by("pk").first()
+        if existante is not None:
+            return existante, False
+        return modele.objects.create(**{**criteres, **(defaults or {})}), True
+
+    @staticmethod
+    def _retrouver_et_mettre_a_jour(modele, defaults=None, **criteres):
+        """Le pendant de `update_or_create`, tolerant aux doublons existants."""
+        existante = modele.objects.filter(**criteres).order_by("pk").first()
+        if existante is None:
+            return modele.objects.create(**{**criteres, **(defaults or {})}), True
+        for champ, valeur in (defaults or {}).items():
+            setattr(existante, champ, valeur)
+        existante.save()
+        return existante, False
+
+    @staticmethod
+    def _une_part(eleves, pourcentage, au_moins=1):
+        """Une part de l'effectif, et non un nombre fixe.
+
+        Un plafond absolu -- « quarante-cinq abonnes a la cantine » -- fait
+        qu'une ecole de quatre cent cinquante eleves parait moins vivante qu'une
+        de cent cinquante: onze pour cent contre trente-cinq. Une part se lit de
+        la meme facon partout.
+
+        `au_moins` ne sert qu'a ce qu'une toute petite ecole n'ait pas zero, et
+        reste donc bas: pose a vingt, il ecrasait la proportion -- une classe de
+        vingt eleves se retrouvait abonnee a cent pour cent.
+        """
+        if not eleves:
+            return []
+        combien = max(au_moins, len(eleves) * pourcentage // 100)
+        return Command._un_echantillon(eleves, min(combien, len(eleves)))
 
     @staticmethod
     def _un_echantillon(eleves, combien):
@@ -635,7 +774,7 @@ class Command(BaseCommand):
                 )
                 identifiant = f"{code.lower()}.{classe.id}.{rang:03d}"
 
-                compte, _ = User.objects.get_or_create(
+                compte, _ = self._retrouver_ou_creer(User,
                     username=identifiant,
                     defaults={
                         "first_name": prenom,
@@ -649,7 +788,7 @@ class Command(BaseCommand):
                 compte.etablissement = etablissement
                 compte.save(update_fields=["password", "is_active", "etablissement"])
 
-                eleve, _ = Student.objects.get_or_create(
+                eleve, _ = self._retrouver_ou_creer(Student,
                     user=compte,
                     defaults={
                         "matricule": matricule,
@@ -694,7 +833,7 @@ class Command(BaseCommand):
                 nom = tirage.choice(NOMS)
                 identifiant = f"{code.lower()}.prof{rang:02d}{indice}"
 
-                compte, _ = User.objects.get_or_create(
+                compte, _ = self._retrouver_ou_creer(User,
                     username=identifiant,
                     defaults={
                         "first_name": prenom,
@@ -712,7 +851,7 @@ class Command(BaseCommand):
                     update_fields=["password", "is_active", "etablissement", "phone"]
                 )
 
-                enseignant, _ = Teacher.objects.get_or_create(
+                enseignant, _ = self._retrouver_ou_creer(Teacher,
                     user=compte,
                     defaults={
                         "employee_code": f"{code}-{rang:02d}{indice}",
@@ -725,7 +864,7 @@ class Command(BaseCommand):
                 enseignants.append(enseignant)
 
                 for matiere in groupe:
-                    TeacherAssignment.objects.get_or_create(
+                    self._retrouver_ou_creer(TeacherAssignment,
                         teacher=enseignant,
                         subject=matiere,
                         classroom=matiere.classroom,
@@ -740,6 +879,24 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------ emploi du temps
 
+    def _tous_les_enseignants_de(self, classes, recrutes):
+        """Ceux que la dotation recrute, **et** ceux que la base portait deja.
+
+        La suite -- emploi du temps, pointage, emargement, paie,
+        disponibilites, surveillance -- ne travaillait que sur les recrutes. Un
+        enseignant deja present, affecte a une classe geree ici, n'avait donc ni
+        feuille d'emargement, ni fiche de paie, ni creneau de disponibilite:
+        quinze sur vingt-quatre au Complexe Scolaire. Il enseigne dans ces
+        classes, il doit exister partout ou l'ecole le compte.
+        """
+        deja = {enseignant.id for enseignant in recrutes}
+        affectes = Teacher.objects.filter(
+            id__in=TeacherAssignment.objects.filter(
+                classroom__in=classes
+            ).values("teacher_id")
+        ).exclude(id__in=deja).select_related("user")
+        return list(recrutes) + list(affectes)
+
     def _composer_l_emploi_du_temps(self, classes, matieres, graine):
         """Place chaque matiere autant de fois que son volume horaire.
 
@@ -750,33 +907,66 @@ class Command(BaseCommand):
         c'est tant mieux.
         """
         poses = 0
-        occupation_classe = set()
-        occupation_prof = set()
-        # Ce que chaque affectation tient deja. Sans ce compte, un second
-        # passage voyait ses propres seances comme « occupees », les sautait, et
-        # replacait son volume entier ailleurs: la grille gonflait de vingt-huit
-        # heures a chaque relance, et l'idempotence promise etait fausse.
-        deja_posees = {}
-
-        for slot in TeacherScheduleSlot.objects.select_related(
-            "assignment"
-        ).filter(assignment__classroom__in=classes):
-            occupation_classe.add(
-                (slot.assignment.classroom_id, slot.day_of_week, slot.start_time)
-            )
-            occupation_prof.add(
-                (slot.assignment.teacher_id, slot.day_of_week, slot.start_time)
-            )
-            deja_posees[slot.assignment_id] = deja_posees.get(slot.assignment_id, 0) + 1
-
         affectations = list(
             TeacherAssignment.objects.filter(classroom__in=classes)
             .select_related("subject", "classroom", "teacher")
             .order_by("classroom_id", "subject_id")
         )
+        volumes = {a.id: a.subject.weekly_slots for a in affectations}
+
+        # Ce que chaque affectation tient deja. Sans ce compte, un second
+        # passage voyait ses propres seances comme « occupees », les sautait, et
+        # replacait son volume entier ailleurs: la grille gonflait de vingt-huit
+        # heures a chaque relance, et l'idempotence promise etait fausse.
+        existantes = {}
+        for slot in TeacherScheduleSlot.objects.select_related("assignment").filter(
+            assignment__classroom__in=classes
+        ):
+            existantes.setdefault(slot.assignment_id, []).append(slot)
+
+        # Le surplus part. C'est la seule facon de converger sur une base dont la
+        # grille est deja pleine: deux classes du LOBK portaient trente-six
+        # seances sur trente-six places, heritees d'un ancien peuplement a trois
+        # heures par matiere. Rien ne pouvait plus y entrer, et deux enseignants
+        # affectes restaient sans une seule heure.
+        #
+        # On ne retire jamais en dessous du volume voulu, et seulement dans les
+        # classes que cette commande gere: ailleurs, l'emploi du temps est
+        # l'affaire de l'ecole.
+        retires = 0
+        for identifiant, slots in existantes.items():
+            voulu = volumes.get(identifiant, 0)
+            if len(slots) <= voulu:
+                continue
+            surplus = sorted(slots, key=lambda s: s.id)[voulu:]
+            TeacherScheduleSlot.objects.filter(
+                id__in=[s.id for s in surplus]
+            ).delete()
+            existantes[identifiant] = sorted(slots, key=lambda s: s.id)[:voulu]
+            retires += len(surplus)
+        if retires:
+            self.stdout.write(
+                f"    {retires} seances en surnombre retirees de la grille."
+            )
+
+        occupation_classe = set()
+        occupation_prof = set()
+        deja_posees = {}
+        for identifiant, slots in existantes.items():
+            deja_posees[identifiant] = len(slots)
+            for slot in slots:
+                occupation_classe.add(
+                    (slot.assignment.classroom_id, slot.day_of_week, slot.start_time)
+                )
+                occupation_prof.add(
+                    (slot.assignment.teacher_id, slot.day_of_week, slot.start_time)
+                )
 
         for affectation in affectations:
-            volume = affectation.subject.weekly_slots or 2
+            # `weekly_slots` tel quel: un zero veut dire « pas d'heure », et non
+            # « valeur par defaut ». Une classe qui compte plus de matieres que
+            # la grille n'a de places en laisse forcement quelques-unes dehors.
+            volume = volumes.get(affectation.id, 0)
             tirage = self._alea(graine, "edt", affectation.id)
             creneaux = [
                 (jour, debut, fin) for jour in JOURS for debut, fin in CRENEAUX
@@ -792,7 +982,7 @@ class Command(BaseCommand):
                 if cle_classe in occupation_classe or cle_prof in occupation_prof:
                     continue
 
-                _, cree = TeacherScheduleSlot.objects.get_or_create(
+                _, cree = self._retrouver_ou_creer(TeacherScheduleSlot,
                     assignment=affectation,
                     day_of_week=jour,
                     start_time=debut,
@@ -835,7 +1025,7 @@ class Command(BaseCommand):
                     cle_prof = (affectation.teacher_id, jour, debut)
                     if cle_classe in occupation_classe or cle_prof in occupation_prof:
                         continue
-                    TeacherScheduleSlot.objects.get_or_create(
+                    self._retrouver_ou_creer(TeacherScheduleSlot,
                         assignment=affectation,
                         day_of_week=jour,
                         start_time=debut,
@@ -852,7 +1042,7 @@ class Command(BaseCommand):
 
     def _publier_les_emplois_du_temps(self, classes):
         for classe in classes:
-            TimetablePublication.objects.update_or_create(
+            self._retrouver_et_mettre_a_jour(TimetablePublication,
                 classroom=classe,
                 defaults={
                     "is_published": True,
@@ -932,7 +1122,7 @@ class Command(BaseCommand):
                         devoirs = [
                             float(tirage.randint(9, 19)) for _ in range(3)
                         ]
-                        note, cree = Grade.objects.get_or_create(
+                        note, cree = self._retrouver_ou_creer(Grade,
                             student=eleve,
                             subject=matiere,
                             classroom=classe,
@@ -949,7 +1139,7 @@ class Command(BaseCommand):
 
                         epreuve = epreuves.get(matiere.id)
                         if epreuve is not None:
-                            ExamResult.objects.get_or_create(
+                            self._retrouver_ou_creer(ExamResult,
                                 session=session,
                                 planning=epreuve,
                                 student=eleve,
@@ -963,7 +1153,7 @@ class Command(BaseCommand):
     def _campagne(self, annee, trimestre):
         rang = TRIMESTRES.index(trimestre)
         debut = annee.start_date + timedelta(days=80 + rang * 90)
-        session, _ = ExamSession.objects.get_or_create(
+        session, _ = self._retrouver_ou_creer(ExamSession,
             title=f"Composition du {rang + 1}er trimestre"
             if rang == 0
             else f"Composition du {rang + 1}e trimestre",
@@ -1029,7 +1219,7 @@ class Command(BaseCommand):
         nommes = 0
         for suffixe, role, fonction in postes:
             tirage = self._alea(graine, "encadrement", etablissement.id, suffixe)
-            compte, cree = User.objects.get_or_create(
+            compte, cree = self._retrouver_ou_creer(User,
                 username=f"{code}.{suffixe}",
                 defaults={
                     "first_name": tirage.choice(PRENOMS_GARCONS + PRENOMS_FILLES),
@@ -1080,7 +1270,7 @@ class Command(BaseCommand):
                     f"{self._code_de(etablissement).lower()}.par{rang:03d}{groupe_rang}"
                 )
 
-                compte, _ = User.objects.get_or_create(
+                compte, _ = self._retrouver_ou_creer(User,
                     username=identifiant,
                     defaults={
                         "first_name": prenom,
@@ -1098,7 +1288,7 @@ class Command(BaseCommand):
                     update_fields=["password", "is_active", "etablissement", "phone"]
                 )
 
-                famille, cree = ParentProfile.objects.get_or_create(
+                famille, cree = self._retrouver_ou_creer(ParentProfile,
                     user=compte,
                     defaults={
                         "etablissement": etablissement,
@@ -1114,6 +1304,17 @@ class Command(BaseCommand):
                     if eleve.parent_id is None:
                         eleve.parent = famille
                         eleve.save(update_fields=["parent"])
+
+        # Les familles que la base portait deja: elles n'ont pas passe par le
+        # bloc ci-dessus, et restaient donc injoignables. Une famille sans
+        # numero ne recoit aucun bulletin, et l'oubli ne se voit qu'a l'envoi.
+        deja_la = ParentProfile.objects.filter(
+            children__in=eleves, user__phone=""
+        ).select_related("user").distinct()
+        for famille in deja_la:
+            tirage = self._alea(graine, "numero", famille.user_id)
+            famille.user.phone = self._numero_malien(tirage)
+            famille.user.save(update_fields=["phone"])
         return crees
 
     def _faire_l_appel(self, annee, classes, eleves, graine):
@@ -1143,7 +1344,7 @@ class Command(BaseCommand):
                     retard = (not absent) and tirage.random() < 0.08
                     if not absent and not retard:
                         continue
-                    Attendance.objects.get_or_create(
+                    self._retrouver_ou_creer(Attendance,
                         student=eleve,
                         date=jour,
                         defaults={
@@ -1155,7 +1356,7 @@ class Command(BaseCommand):
                     )
                 # La feuille se valide et se verrouille, comme le surveillant
                 # le fait chaque soir.
-                _, cree = AttendanceSheetValidation.objects.get_or_create(
+                _, cree = self._retrouver_ou_creer(AttendanceSheetValidation,
                     classroom=classe,
                     date=jour,
                     defaults={"is_locked": True, "validated_at": timezone.now()},
@@ -1174,7 +1375,7 @@ class Command(BaseCommand):
                 )
                 absent = tirage.random() < 0.03
                 retard = (not absent) and tirage.random() < 0.10
-                _, cree = TeacherAttendance.objects.get_or_create(
+                _, cree = self._retrouver_ou_creer(TeacherAttendance,
                     teacher=enseignant,
                     date=jour,
                     defaults={
@@ -1211,7 +1412,7 @@ class Command(BaseCommand):
                 continue
             categorie, gravite, description = tirage.choice(MOTIFS_DE_DISCIPLINE)
             traite = tirage.random() < 0.6
-            _, cree = DisciplineIncident.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(DisciplineIncident,
                 student=eleve,
                 incident_date=timezone.localdate() - timedelta(
                     days=tirage.randint(1, 60)
@@ -1229,9 +1430,28 @@ class Command(BaseCommand):
             )
             crees += 1 if cree else 0
 
-            # `update_or_create` plutot qu'un decrement: relancee, la commande
-            # ne doit pas creuser la note un peu plus a chaque passage.
-            voulue = max(Decimal("0"), Decimal("18") - retrait[gravite])
+        # La conduite se relit des incidents en base, et non du dernier pose.
+        # Deux raisons: un eleve peut en porter plusieurs -- c'est le plus grave
+        # qui compte, pas le dernier ecrit -- et une base deja utilisee en porte
+        # que cette commande n'a pas creees. Deux eleves sanctionnes gardaient
+        # ainsi 18 de conduite, et leur incident restait sans consequence.
+        #
+        # Relue plutot que decrementee, elle ne se creuse pas a chaque passage.
+        gravites = {}
+        for identifiant, gravite in DisciplineIncident.objects.filter(
+            student__in=eleves
+        ).values_list("student_id", "severity"):
+            pire = gravites.get(identifiant)
+            if pire is None or retrait.get(gravite, Decimal("0")) > retrait.get(
+                pire, Decimal("0")
+            ):
+                gravites[identifiant] = gravite
+
+        for eleve in eleves:
+            gravite = gravites.get(eleve.id)
+            if gravite is None:
+                continue
+            voulue = max(Decimal("0"), Decimal("18") - retrait.get(gravite, Decimal("0")))
             if eleve.conduite != voulue:
                 eleve.conduite = voulue
                 eleve.save(update_fields=["conduite"])
@@ -1248,7 +1468,7 @@ class Command(BaseCommand):
         arretes = 0
         for classe in classes:
             for trimestre in TRIMESTRES[:2]:
-                _, cree = GradeValidation.objects.get_or_create(
+                _, cree = self._retrouver_ou_creer(GradeValidation,
                     classroom=classe,
                     academic_year=annee,
                     term=trimestre,
@@ -1258,7 +1478,7 @@ class Command(BaseCommand):
                     },
                 )
                 arretes += 1 if cree else 0
-                BulletinPublication.objects.get_or_create(
+                self._retrouver_ou_creer(BulletinPublication,
                     classroom=classe,
                     academic_year=annee,
                     term=trimestre,
@@ -1289,7 +1509,7 @@ class Command(BaseCommand):
                 cle = (enseignant.user_id, epreuve.exam_date, epreuve.start_time)
                 if cle in occupes:
                     continue
-                _, cree = ExamInvigilation.objects.get_or_create(
+                _, cree = self._retrouver_ou_creer(ExamInvigilation,
                     planning=epreuve, supervisor=enseignant.user
                 )
                 occupes.add(cle)
@@ -1305,7 +1525,7 @@ class Command(BaseCommand):
         montre pas ce qu'il sait faire.
         """
         aujourdhui = timezone.localdate()
-        campagne, _ = AvailabilityCampaign.objects.get_or_create(
+        campagne, _ = self._retrouver_ou_creer(AvailabilityCampaign,
             etablissement=etablissement,
             academic_year=annee,
             status="open",
@@ -1328,7 +1548,7 @@ class Command(BaseCommand):
             for jour in sorted(tirage.sample(JOURS, 3)):
                 debut, fin = tirage.choice(CRENEAUX)
                 genre = tirage.choice(["preferred", "possible", "unavailable"])
-                _, cree = TeacherAvailabilitySlot.objects.get_or_create(
+                _, cree = self._retrouver_ou_creer(TeacherAvailabilitySlot,
                     teacher=enseignant,
                     campaign=campagne,
                     day_of_week=jour,
@@ -1358,7 +1578,7 @@ class Command(BaseCommand):
             heures = TeacherScheduleSlot.objects.filter(
                 assignment__teacher=enseignant
             ).count()
-            _, cree = TeacherPayroll.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(TeacherPayroll,
                 teacher=enseignant,
                 month=premier,
                 defaults={
@@ -1384,7 +1604,7 @@ class Command(BaseCommand):
         )
         crees = 0
         for rang, (libelle, montant, categorie, payee) in enumerate(lignes):
-            _, cree = Expense.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(Expense,
                 label=libelle,
                 date=aujourdhui - timedelta(days=30 * rang + 3),
                 etablissement=etablissement,
@@ -1424,7 +1644,7 @@ class Command(BaseCommand):
             # `hash()` d'une chaine a chaque processus, et la commande promet le
             # contraire -- meme graine, meme ecole, jusqu'au numero d'ouvrage.
             tirage = self._alea(graine, "isbn", titre)
-            ouvrage, cree = Book.objects.get_or_create(
+            ouvrage, cree = self._retrouver_ou_creer(Book,
                 title=titre,
                 etablissement=etablissement,
                 defaults={
@@ -1439,11 +1659,13 @@ class Command(BaseCommand):
             ouvrages.append(ouvrage)
             total += 1 if cree else 0
 
-        emprunteurs = self._un_echantillon(eleves, 12)
+        # Trois pour cent des eleves ont un livre sorti: c'est un ordre de
+        # grandeur de bibliotheque scolaire, et il suit la taille de l'ecole.
+        emprunteurs = self._une_part(eleves, 3, au_moins=3)
         for rang, eleve in enumerate(emprunteurs):
             ouvrage = ouvrages[rang % len(ouvrages)]
             en_retard = rang % 3 == 1
-            _, cree = Borrow.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(Borrow,
                 student=eleve,
                 book=ouvrage,
                 borrowed_at=aujourdhui - timedelta(days=25 if en_retard else 6),
@@ -1463,7 +1685,7 @@ class Command(BaseCommand):
         for rang, (nom, prix) in enumerate(
             (("Riz au gras", 500), ("Tô sauce arachide", 400), ("Riz sauce feuille", 450))
         ):
-            menu, cree = CanteenMenu.objects.get_or_create(
+            menu, cree = self._retrouver_ou_creer(CanteenMenu,
                 menu_date=aujourdhui - timedelta(days=rang),
                 etablissement=etablissement,
                 name=nom,
@@ -1472,9 +1694,10 @@ class Command(BaseCommand):
             menus.append(menu)
             total += 1 if cree else 0
 
-        for eleve in self._un_echantillon(eleves, 40):
+        # Un tiers des eleves mange a la cantine un jour donne.
+        for eleve in self._une_part(eleves, 33, au_moins=3):
             menu = menus[eleve.id % len(menus)]
-            _, cree = CanteenService.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(CanteenService,
                 student=eleve,
                 menu=menu,
                 served_on=menu.menu_date,
@@ -1482,7 +1705,7 @@ class Command(BaseCommand):
             )
             total += 1 if cree else 0
 
-        fournisseur, cree = Supplier.objects.get_or_create(
+        fournisseur, cree = self._retrouver_ou_creer(Supplier,
             name="Librairie du Fleuve",
             etablissement=etablissement,
             defaults={"phone": "76 00 00 00", "email": "contact@fleuve.ml"},
@@ -1496,7 +1719,7 @@ class Command(BaseCommand):
             ("Marqueur tableau", 18, 6, "unité"),
         )
         for nom, quantite, seuil, unite in articles:
-            article, cree = StockItem.objects.get_or_create(
+            article, cree = self._retrouver_ou_creer(StockItem,
                 name=nom,
                 etablissement=etablissement,
                 defaults={
@@ -1511,7 +1734,7 @@ class Command(BaseCommand):
             # a la main n'est ni une entree ni une sortie, et le recalcul de
             # `StockItem.quantite` ramenait alors tous les articles a zero --
             # quatre alertes de seuil au lieu d'une.
-            StockMovement.objects.get_or_create(
+            self._retrouver_ou_creer(StockMovement,
                 item=article,
                 movement_type=StockMovementType.IN,
                 quantity=quantite,
@@ -1539,7 +1762,7 @@ class Command(BaseCommand):
             ("teachers", "Remise des copies avant vendredi", "Dépôt au secrétariat."),
             ("staff", "Inventaire de la caisse lundi", "Présence de la comptabilité requise."),
         ):
-            _, cree = Announcement.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(Announcement,
                 etablissement=etablissement,
                 title=titre,
                 defaults={"message": message, "audience": public, "author": directeur},
@@ -1552,7 +1775,7 @@ class Command(BaseCommand):
             etablissement=etablissement, role=UserRole.PARENT
         ).first()
         if famille is not None:
-            _, cree = Notification.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(Notification,
                 etablissement=etablissement,
                 recipient=famille,
                 title="Bulletin du premier trimestre disponible",
@@ -1565,25 +1788,25 @@ class Command(BaseCommand):
             total += 1 if cree else 0
 
         if directeur is not None and enseignants:
-            groupe, _ = Conversation.objects.get_or_create(
+            groupe, _ = self._retrouver_ou_creer(Conversation,
                 etablissement=etablissement,
                 title="Équipe pédagogique",
                 defaults={"is_group": True},
             )
-            ConversationParticipant.objects.get_or_create(
+            self._retrouver_ou_creer(ConversationParticipant,
                 conversation=groupe, user=directeur, defaults={"is_admin": True}
             )
             for enseignant in enseignants[:5]:
-                ConversationParticipant.objects.get_or_create(
+                self._retrouver_ou_creer(ConversationParticipant,
                     conversation=groupe, user=enseignant.user
                 )
-            premier, cree = ChatMessage.objects.get_or_create(
+            premier, cree = self._retrouver_ou_creer(ChatMessage,
                 conversation=groupe,
                 sender=directeur,
                 content="Conseil de classe jeudi à 16h, salle des professeurs.",
             )
             total += 1 if cree else 0
-            _, cree = ChatMessage.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(ChatMessage,
                 conversation=groupe,
                 sender=enseignants[0].user,
                 content="Bien noté, j'apporte les relevés.",
@@ -1637,7 +1860,7 @@ class Command(BaseCommand):
                 ).time()
                 depart = time(17, 0) if tirage.random() < 0.8 else None
                 heures = Decimal("8.00") if depart else Decimal("0.00")
-                _, cree = TeacherTimeEntry.objects.get_or_create(
+                _, cree = self._retrouver_ou_creer(TeacherTimeEntry,
                     teacher=enseignant,
                     entry_date=jour,
                     defaults={
@@ -1674,7 +1897,13 @@ class Command(BaseCommand):
         ).first()
 
         remises = 0
-        for eleve in self._un_echantillon(eleves, 60):
+        rang_de_remise = 0
+        # Tous les eleves, et non un echantillon: remettre les bulletins est un
+        # acte collectif -- une ecole ne les distribue pas a soixante familles
+        # sur quatre cent cinquante. Le plafond fixe faisait par ailleurs qu'une
+        # grande ecole paraissait moins active qu'une petite: quinze pour cent
+        # contre quarante-huit.
+        for eleve in eleves:
             # `BulletinDelivery.parent` pointe la fiche de famille, pas le
             # compte: c'est la famille qui recoit le bulletin, et elle porte son
             # propre numero WhatsApp.
@@ -1682,9 +1911,15 @@ class Command(BaseCommand):
             if parent is None:
                 continue
             tirage = self._alea(graine, "remise", eleve.id)
-            etat = tirage.choice(["sent", "read", "read", "prepared", "failed"])
+            # Les quatre etats par rotation, et non par tirage: l'ecran de remise
+            # est fait pour les distinguer, et le motif d'echec ne s'affiche que
+            # s'il y a un echec. Un tirage les donne presque toujours tous, mais
+            # « presque » ne suffit pas a une petite ecole -- et la promesse
+            # « les quatre etats existent » ne doit pas dependre de l'effectif.
+            etat = ETATS_DE_REMISE[rang_de_remise % len(ETATS_DE_REMISE)]
+            rang_de_remise += 1
             envoye = timezone.now() - timedelta(days=tirage.randint(1, 20))
-            _, cree = BulletinDelivery.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(BulletinDelivery,
                 student=eleve,
                 academic_year=annee,
                 term="T1",
@@ -1714,13 +1949,24 @@ class Command(BaseCommand):
         repas servis sans jamais dire qui est abonne, ni qui ne l'est plus.
         """
         poses = 0
-        for rang, eleve in enumerate(self._un_echantillon(eleves, 45)):
-            etat = "active"
-            if rang % 15 == 7:
+        # Quarante pour cent sont abonnes: la cantine est facultative, un
+        # abonnement pour tous serait aussi faux qu'un abonnement pour dix.
+        abonnes = self._une_part(eleves, 40, au_moins=3)
+        for rang, eleve in enumerate(abonnes):
+            # Un suspendu et un termine des le deuxieme et le troisieme abonne:
+            # avec « un sur quinze », une ecole de dix abonnes n'en avait aucun,
+            # et l'ecran ne montrait jamais ce qu'il sait montrer.
+            if rang == 1 and len(abonnes) >= 3:
+                etat = "suspended"
+            elif rang == 2 and len(abonnes) >= 3:
+                etat = "ended"
+            elif rang % 15 == 7:
                 etat = "suspended"
             elif rang % 15 == 11:
                 etat = "ended"
-            _, cree = CanteenSubscription.objects.get_or_create(
+            else:
+                etat = "active"
+            _, cree = self._retrouver_ou_creer(CanteenSubscription,
                 student=eleve,
                 academic_year=annee,
                 defaults={
@@ -1760,7 +2006,7 @@ class Command(BaseCommand):
         for rang, (cle, libelle, categories) in enumerate(arbre):
             # Le code est unique par etablissement: il porte donc le sigle de
             # l'ecole, sans quoi la deuxieme ecole montee echouerait.
-            collection, cree = LibraryCollection.objects.get_or_create(
+            collection, cree = self._retrouver_ou_creer(LibraryCollection,
                 etablissement=etablissement,
                 code=f"{code}-{cle}",
                 defaults={"label": libelle, "position": rang},
@@ -1768,7 +2014,7 @@ class Command(BaseCommand):
             total += 1 if cree else 0
 
             for position, (nom, titres) in enumerate(categories):
-                categorie, cree = LibraryCategory.objects.get_or_create(
+                categorie, cree = self._retrouver_ou_creer(LibraryCategory,
                     collection=collection,
                     name=nom,
                     defaults={"position": position},
@@ -1777,7 +2023,7 @@ class Command(BaseCommand):
 
                 for index, titre in enumerate(titres):
                     rate = index == 0 and cle == "annales"
-                    _, cree = LibraryDocument.objects.get_or_create(
+                    _, cree = self._retrouver_ou_creer(LibraryDocument,
                         category=categorie,
                         title=titre,
                         defaults={
@@ -1801,7 +2047,7 @@ class Command(BaseCommand):
 
         # Le fournisseur de SMS: sans lui, l'ecran des envois dit seulement
         # qu'aucun fournisseur n'est configure, et rien d'autre.
-        _, cree = SmsProviderConfig.objects.get_or_create(
+        _, cree = self._retrouver_ou_creer(SmsProviderConfig,
             etablissement=etablissement,
             defaults={
                 "provider_name": "Passerelle de démonstration",
@@ -1884,33 +2130,53 @@ class Command(BaseCommand):
         promus = sum(
             1 for l in lignes if l["decision"] == PromotionDecisionType.PROMOTED
         )
-        simulation, _ = PromotionRun.objects.get_or_create(
+        # La simulation porte sa signature dans `payload`, et on ne la retrouve
+        # que par elle. Sans cela, la dotation reprenait la simulation qu'une
+        # personne avait faite depuis l'application et lui ajoutait ses
+        # decisions: IFP-OBK annoncait « 471 decisions pour 450 eleves », dont
+        # vingt et une concernant des eleves d'une autre annee. Le travail de
+        # l'ecole et celui de la dotation ne se melangent pas.
+        simulation = PromotionRun.objects.filter(
             etablissement=etablissement,
             source_academic_year=annee,
             status=PromotionRunStatus.SIMULATED,
-            defaults={
-                # Pas d'annee cible: l'ecole simule en juin, avant de l'ouvrir.
-                "target_academic_year": None,
-                "min_average": seuil,
-                "min_conduite": Decimal("10"),
-                "executed_by": directeur,
-                "total_students": len(lignes),
-                "promoted_count": promus,
-                "repeated_count": len(lignes) - promus,
-                "archived_count": 0,
-                "payload": {
-                    "source_classrooms": [classe.id for classe in classes],
-                    "classroom_mapping": {
-                        str(source): (cible.id if cible else None)
-                        for source, cible in cibles.items()
-                    },
+            payload__origine=SIGNATURE_DE_LA_DOTATION,
+        ).order_by("pk").first()
+
+        attributs = {
+            # Pas d'annee cible: l'ecole simule en juin, avant de l'ouvrir.
+            "target_academic_year": None,
+            "min_average": seuil,
+            "min_conduite": Decimal("10"),
+            "executed_by": directeur,
+            "total_students": len(lignes),
+            "promoted_count": promus,
+            "repeated_count": len(lignes) - promus,
+            "archived_count": 0,
+            "payload": {
+                "origine": SIGNATURE_DE_LA_DOTATION,
+                "source_classrooms": [classe.id for classe in classes],
+                "classroom_mapping": {
+                    str(source): (cible.id if cible else None)
+                    for source, cible in cibles.items()
                 },
             },
-        )
+        }
+        if simulation is None:
+            simulation = PromotionRun.objects.create(
+                etablissement=etablissement,
+                source_academic_year=annee,
+                status=PromotionRunStatus.SIMULATED,
+                **attributs,
+            )
+        else:
+            for champ, valeur in attributs.items():
+                setattr(simulation, champ, valeur)
+            simulation.save()
 
         posees = 0
         for ligne in lignes:
-            _, cree = PromotionDecision.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(PromotionDecision,
                 run=simulation,
                 student=ligne["eleve"],
                 defaults={
@@ -1925,6 +2191,30 @@ class Command(BaseCommand):
                 },
             )
             posees += 1 if cree else 0
+
+        # Les compteurs se relisent des decisions en base, et non des lignes que
+        # l'on vient de calculer: une simulation deja presente porte les siennes,
+        # et les additionner de tete donnait « 21 eleves annonces pour 471
+        # decisions ». Ce qui est affiche doit etre ce qui est enregistre.
+        en_base = PromotionDecision.objects.filter(run=simulation)
+        simulation.total_students = en_base.count()
+        simulation.promoted_count = en_base.filter(
+            decision=PromotionDecisionType.PROMOTED
+        ).count()
+        simulation.repeated_count = en_base.filter(
+            decision=PromotionDecisionType.REPEATED
+        ).count()
+        simulation.archived_count = en_base.filter(
+            decision=PromotionDecisionType.ARCHIVED
+        ).count()
+        simulation.save(
+            update_fields=[
+                "total_students",
+                "promoted_count",
+                "repeated_count",
+                "archived_count",
+            ]
+        )
         return posees
 
     @staticmethod
@@ -1951,7 +2241,7 @@ class Command(BaseCommand):
 
         poses = 0
         for classe in classes:
-            _, cree = FeeSchedule.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(FeeSchedule,
                 etablissement=etablissement,
                 academic_year=annee,
                 classroom=classe,
@@ -1965,7 +2255,7 @@ class Command(BaseCommand):
             )
             poses += 1 if cree else 0
 
-            _, cree = FeeSchedule.objects.get_or_create(
+            _, cree = self._retrouver_ou_creer(FeeSchedule,
                 etablissement=etablissement,
                 academic_year=annee,
                 classroom=classe,
@@ -2033,7 +2323,7 @@ class Command(BaseCommand):
                 # pour les derniers mois des retardataires.
                 if frais_du.id in derniers:
                     continue
-                _, cree = Payment.objects.get_or_create(
+                _, cree = self._retrouver_ou_creer(Payment,
                     fee=frais_du,
                     reference=f"REG-{eleve.id:06d}-{rang:02d}",
                     defaults={

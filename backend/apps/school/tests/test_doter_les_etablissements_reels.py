@@ -40,6 +40,7 @@ from apps.school.models import (
     ExamInvigilation,
     ExamPlanning,
     FeeType,
+    Grade,
     LibraryCategory,
     LibraryCollection,
     LibraryDocument,
@@ -55,6 +56,8 @@ from apps.school.models import (
     StudentFee,
     Subject,
     Teacher,
+    TeacherAssignment,
+    TeacherPayroll,
     TeacherScheduleSlot,
     TeacherTimeEntry,
 )
@@ -280,6 +283,35 @@ class UneEcoleMonteeDeBoutEnBoutTests(TestCase):
 
         self.assertEqual(list(sans_heures), [])
 
+    def test_chaque_eleve_est_note_dans_toutes_ses_matieres_aux_trois_trimestres(
+        self,
+    ):
+        """La consigne, mot pour mot: toutes les matieres, tous les trimestres.
+
+        Sur une base neuve, c'est atteignable et atteint. Sur une base deja
+        utilisee, une classe peut porter la meme matiere deux ou trois fois --
+        heritee d'anciens peuplements -- et seules celles du programme deduit
+        sont notees. Ce test fixe la promesse la ou elle tient.
+        """
+        for classe in ClassRoom.objects.filter(etablissement=self.etablissement):
+            matieres = set(
+                Subject.objects.filter(classroom=classe).values_list("id", flat=True)
+            )
+            self.assertTrue(matieres, f"{classe.name} sans matiere")
+            for eleve in Student.objects.filter(classroom=classe):
+                for trimestre in ("T1", "T2", "T3"):
+                    notees = set(
+                        Grade.objects.filter(
+                            student=eleve, term=trimestre
+                        ).values_list("subject_id", flat=True)
+                    )
+                    self.assertEqual(
+                        notees,
+                        matieres,
+                        f"{eleve.matricule} en {trimestre}: "
+                        f"{len(notees)} matieres notees sur {len(matieres)}",
+                    )
+
     def test_chaque_matiere_a_un_volume_horaire(self):
         """Sans `weekly_slots`, la generation d'emploi du temps n'a rien a placer."""
         sans_volume = Subject.objects.filter(
@@ -453,6 +485,65 @@ class UneEcoleMonteeDeBoutEnBoutTests(TestCase):
         )
 
         self.assertEqual(etats, {"prepared", "sent", "read", "failed"})
+
+    def test_chaque_famille_recoit_le_bulletin(self):
+        """Remettre les bulletins est un acte collectif, pas un echantillon.
+
+        Le plafond etait de soixante remises quelle que soit l'ecole: quinze
+        pour cent des familles a IFP-OBK contre quarante-huit au petit lycee. La
+        meme base racontait deux ecoles differentes.
+        """
+        avec_famille = Student.objects.filter(
+            etablissement=self.etablissement, parent__isnull=False
+        )
+        servis = BulletinDelivery.objects.filter(
+            student__in=avec_famille
+        ).values("student_id").distinct().count()
+
+        self.assertTrue(avec_famille.exists())
+        self.assertEqual(servis, avec_famille.count())
+
+    def test_chaque_enseignant_affecte_emarge_et_est_paye(self):
+        """Un enseignant affecte existe partout ou l'ecole le compte.
+
+        Seuls ceux que la dotation recrutait figuraient sur la feuille
+        d'emargement et sur la paie. Un enseignant deja present dans la base,
+        affecte a une classe geree ici, n'avait ni l'une ni l'autre -- quinze sur
+        vingt-quatre au Complexe Scolaire.
+        """
+        affectes = set(
+            TeacherAssignment.objects.filter(
+                classroom__etablissement=self.etablissement
+            ).values_list("teacher_id", flat=True)
+        )
+        emargent = set(
+            TeacherTimeEntry.objects.filter(teacher_id__in=affectes).values_list(
+                "teacher_id", flat=True
+            )
+        )
+        payes = set(
+            TeacherPayroll.objects.filter(teacher_id__in=affectes).values_list(
+                "teacher_id", flat=True
+            )
+        )
+
+        self.assertTrue(affectes)
+        self.assertEqual(emargent, affectes)
+        self.assertEqual(payes, affectes)
+
+    def test_la_part_d_abonnes_a_la_cantine_ne_depend_pas_de_la_taille(self):
+        """Une part, et non un nombre fixe.
+
+        « Quarante-cinq abonnes » donnait onze pour cent dans une ecole de
+        quatre cent cinquante eleves et trente-cinq dans une de cent cinquante.
+        """
+        effectif = Student.objects.filter(etablissement=self.etablissement).count()
+        abonnes = CanteenSubscription.objects.filter(
+            student__etablissement=self.etablissement
+        ).count()
+
+        self.assertGreaterEqual(abonnes * 100, effectif * 20)
+        self.assertLessEqual(abonnes * 100, effectif * 70)
 
     def test_un_abonnement_cantine_est_suspendu_et_un_autre_termine(self):
         etats = set(
