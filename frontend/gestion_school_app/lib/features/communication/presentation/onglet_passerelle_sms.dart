@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/error/motif_du_refus.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../domain/communication_models.dart';
@@ -42,6 +43,13 @@ class _OngletPasserelleSmsState extends ConsumerState<OngletPasserelleSms> {
     super.dispose();
   }
 
+  /// Ce que le serveur a répondu au dernier geste refusé.
+  ///
+  /// Les écrans disaient « Création refusée » là où le serveur expliquait
+  /// précisément ce qu'il reprochait. L'utilisateur voyait donc un refus sans
+  /// son motif, alors que le motif venait d'être écrit.
+  Object? get _erreur => ref.read(communicationMutationProvider).error;
+
   void _dire(String message, {bool succes = false, bool erreur = false}) {
     if (!mounted) return;
     ForegroundNotice.show(context, message, isSuccess: succes, isError: erreur);
@@ -70,7 +78,7 @@ class _OngletPasserelleSmsState extends ConsumerState<OngletPasserelleSms> {
         );
 
     if (ref.read(communicationMutationProvider).hasError) {
-      _dire('Enregistrement refusé.', erreur: true);
+      _dire(motifDuRefus(_erreur), erreur: true);
       return;
     }
 
@@ -88,7 +96,7 @@ class _OngletPasserelleSmsState extends ConsumerState<OngletPasserelleSms> {
         .basculerUnePasserelle(id: passerelle.id, active: !passerelle.active);
 
     if (ref.read(communicationMutationProvider).hasError) {
-      _dire('Changement refusé.', erreur: true);
+      _dire(motifDuRefus(_erreur), erreur: true);
     } else {
       _dire(
         passerelle.active
@@ -129,7 +137,7 @@ class _OngletPasserelleSmsState extends ConsumerState<OngletPasserelleSms> {
         .retirerUnePasserelle(passerelle.id);
 
     if (ref.read(communicationMutationProvider).hasError) {
-      _dire('Suppression refusée.', erreur: true);
+      _dire(motifDuRefus(_erreur), erreur: true);
     } else {
       _dire('Passerelle supprimée.', succes: true);
     }
