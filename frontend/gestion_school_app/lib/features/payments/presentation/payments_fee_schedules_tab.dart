@@ -315,6 +315,59 @@ class _DialogueDeBareme extends StatefulWidget {
   State<_DialogueDeBareme> createState() => _DialogueDeBaremeState();
 }
 
+/// Un tarif courant, prêt à poser.
+///
+/// Une école fixe presque toujours les mêmes trois choses : une inscription en
+/// un versement, une scolarité mensuelle, parfois une scolarité trimestrielle.
+/// Les proposer d'un geste évite de faire raisonner le directeur en
+/// « occurrences » — un mot qui n'appartient pas à son métier.
+class _ModeleDeBareme {
+  final String libelle;
+  final String type;
+  final String intitule;
+  final int occurrences;
+  final IconData icone;
+
+  const _ModeleDeBareme({
+    required this.libelle,
+    required this.type,
+    required this.intitule,
+    required this.occurrences,
+    required this.icone,
+  });
+}
+
+const _modelesDeBareme = <_ModeleDeBareme>[
+  _ModeleDeBareme(
+    libelle: 'Inscription',
+    type: 'registration',
+    intitule: 'Inscription',
+    occurrences: 1,
+    icone: Icons.how_to_reg_outlined,
+  ),
+  _ModeleDeBareme(
+    libelle: 'Scolarité, 9 mois',
+    type: 'monthly',
+    intitule: 'Scolarité mensuelle',
+    occurrences: 9,
+    icone: Icons.calendar_month_outlined,
+  ),
+  _ModeleDeBareme(
+    libelle: 'Scolarité, 3 trimestres',
+    type: 'monthly',
+    intitule: 'Scolarité trimestrielle',
+    occurrences: 3,
+    icone: Icons.calendar_view_month_outlined,
+  ),
+  _ModeleDeBareme(
+    libelle: 'Frais d\'examen',
+    type: 'exam',
+    intitule: 'Frais d\'examen',
+    occurrences: 1,
+    icone: Icons.school_outlined,
+  ),
+];
+
 class _DialogueDeBaremeState extends State<_DialogueDeBareme> {
   final _libelle = TextEditingController();
   final _montant = TextEditingController();
@@ -331,6 +384,64 @@ class _DialogueDeBaremeState extends State<_DialogueDeBareme> {
     ('monthly', 'Frais mensuels'),
     ('exam', 'Frais d\'examen'),
   ];
+
+  /// Applique un tarif courant: tout se remplit, le montant reste à saisir.
+  void _poserLeModele(_ModeleDeBareme modele) {
+    setState(() {
+      _type = modele.type;
+      _libelle.text = modele.intitule;
+      _occurrences.text = '${modele.occurrences}';
+    });
+  }
+
+  /// La date se choisit au calendrier.
+  ///
+  /// Elle se tapait au format « 2025-10-05 », que rien ne rappelait et qu'une
+  /// saisie à l'envers faisait refuser par le serveur après coup.
+  Future<void> _choisirLaPremiereEcheance() async {
+    final aujourdhui = DateTime.now();
+    final actuelle = DateTime.tryParse(_echeance.text.trim());
+    final choisie = await showDatePicker(
+      context: context,
+      initialDate: actuelle ?? aujourdhui,
+      firstDate: DateTime(aujourdhui.year - 1),
+      lastDate: DateTime(aujourdhui.year + 3),
+      helpText: 'Première échéance',
+    );
+    if (choisie == null) return;
+    setState(() {
+      _echeance.text = choisie.toIso8601String().split('T').first;
+    });
+  }
+
+  /// Ce que ce barème coûtera à chaque élève, et à combien d'élèves.
+  ///
+  /// C'est la question que se pose celui qui fixe un tarif, et l'écran n'y
+  /// répondait pas: il fallait multiplier de tête un montant par un nombre
+  /// d'échéances pour savoir ce qu'on engageait.
+  String? get _cePourQuoiOnSEngage {
+    final montant = double.tryParse(
+      _montant.text.trim().replaceAll(',', '.').replaceAll(' ', ''),
+    );
+    final fois = int.tryParse(_occurrences.text.trim()) ?? 0;
+    if (montant == null || montant <= 0 || fois <= 0) return null;
+
+    final total = montant * fois;
+    final ou = _classeId == null
+        ? 'tous les élèves de l\'année'
+        : (widget.classes.firstWhere(
+                  (c) => c['id'] == _classeId,
+                  orElse: () => const {},
+                )['name'] ??
+                'la classe choisie')
+              .toString();
+
+    if (fois == 1) {
+      return '${montantEnFrancs(total)} par élève, en un versement — $ou.';
+    }
+    return '$fois × ${montantEnFrancs(montant)} = ${montantEnFrancs(total)} '
+        'par élève sur l\'année — $ou.';
+  }
 
   @override
   void dispose() {
@@ -391,6 +502,29 @@ class _DialogueDeBaremeState extends State<_DialogueDeBareme> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Les tarifs courants, d'un geste: on remplit le formulaire plutôt
+            // que de faire raisonner l'utilisateur en « occurrences ».
+            Text(
+              'Tarifs courants',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final modele in _modelesDeBareme)
+                  ActionChip(
+                    key: Key('modele-${modele.type}-${modele.occurrences}'),
+                    avatar: Icon(modele.icone, size: 18),
+                    label: Text(modele.libelle),
+                    onPressed: _enregistrement
+                        ? null
+                        : () => _poserLeModele(modele),
+                  ),
+              ],
+            ),
+            const Divider(height: 26),
             DropdownButtonFormField<int?>(
               isExpanded: true,
               initialValue: _classeId,
@@ -437,32 +571,76 @@ class _DialogueDeBaremeState extends State<_DialogueDeBareme> {
             ),
             const SizedBox(height: 10),
             TextField(
+              key: const Key('bareme-montant'),
               controller: _montant,
               enabled: !_enregistrement,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
                 labelText: 'Montant par échéance (FCFA)',
               ),
             ),
             const SizedBox(height: 10),
             TextField(
+              key: const Key('bareme-premiere-echeance'),
               controller: _echeance,
               enabled: !_enregistrement,
-              decoration: const InputDecoration(
+              readOnly: true,
+              onTap: _enregistrement ? null : _choisirLaPremiereEcheance,
+              decoration: InputDecoration(
                 labelText: 'Première échéance',
-                hintText: '2025-10-05',
+                hintText: 'Choisir une date',
+                suffixIcon: IconButton(
+                  tooltip: 'Choisir la date',
+                  icon: const Icon(Icons.event_outlined),
+                  onPressed: _enregistrement
+                      ? null
+                      : _choisirLaPremiereEcheance,
+                ),
+                helperText: 'Les échéances suivantes s\'espacent d\'un mois.',
               ),
             ),
             const SizedBox(height: 10),
             TextField(
+              key: const Key('bareme-echeances'),
               controller: _occurrences,
               enabled: !_enregistrement,
               keyboardType: TextInputType.number,
+              onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
                 labelText: 'Nombre d\'échéances',
                 helperText: '1 pour un frais unique, 9 pour neuf mensualités.',
               ),
             ),
+
+            // Ce qu'on engage, dit avant d'enregistrer: il fallait jusqu'ici
+            // multiplier de tête un montant par un nombre d'échéances.
+            if (_cePourQuoiOnSEngage != null) ...[
+              const SizedBox(height: 14),
+              Container(
+                key: const Key('bareme-recapitulatif'),
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.primaryContainer.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.calculate_outlined, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _cePourQuoiOnSEngage!,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (_erreur != null) ...[
               const SizedBox(height: 12),
               Text(

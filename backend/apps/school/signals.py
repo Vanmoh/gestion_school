@@ -16,7 +16,14 @@ from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from .dashboard_cache import invalidate_stats
-from .models import Expense, ParentProfile, Payment, Student, StudentFee
+from .models import (
+    Expense,
+    FeeSchedule,
+    ParentProfile,
+    Payment,
+    Student,
+    StudentFee,
+)
 
 
 @receiver(post_save, sender=Payment)
@@ -191,3 +198,36 @@ def _statuer_a_la_creation_de_la_fiche(sender, instance, created, **kwargs):
         return
     if created:
         _recalculer_pour(instance)
+
+
+@receiver(post_save, sender=Student)
+def _facturer_l_eleve_a_son_inscription(sender, instance, created, **kwargs):
+    """Applique a un nouvel eleve les baremes de frais de sa classe.
+
+    Sans cela, le bareme ne suivait pas les arrivees: un eleve inscrit en
+    novembre n'avait **aucun frais** tant que personne ne recliquait sur
+    « Appliquer ». Et le piege etait qu'il ne s'agissait pas d'une dette
+    cachee mais d'une facture jamais etablie -- l'eleve n'apparaissait ni dans
+    les relances, ni dans les impayes. Il ne devait officiellement rien, et
+    l'oubli ne se voyait nulle part.
+
+    Le bareme et l'inscription restent independants, comme
+    `apps/school/inscription.py` l'explique: la fiche s'ouvre sans qu'aucun
+    tarif soit fixe, et poser le bareme ensuite rattrape les eleves deja la.
+    Ce recepteur ferme le dernier cas ou l'ordre comptait encore.
+
+    Il ne fait rien de plus que ce que le bouton faisait deja: `appliquer()`
+    ne cree que les frais manquants, et le couple (eleve, bareme, echeance)
+    porte une contrainte d'unicite. Rejouer est donc sans effet.
+    """
+    if not created or instance.classroom_id is None:
+        return
+
+    for bareme in FeeSchedule.objects.filter(classroom_id=instance.classroom_id):
+        # Un bareme a la fois: si l'un d'eux est mal renseigne, les autres
+        # doivent quand meme produire leurs frais. Une inscription ne peut pas
+        # echouer parce qu'un tarif de cantine est incoherent.
+        try:
+            bareme.appliquer()
+        except Exception:
+            continue
