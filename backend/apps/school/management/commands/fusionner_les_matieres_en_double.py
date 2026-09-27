@@ -33,7 +33,7 @@ from collections import defaultdict
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from apps.school.management.commands.doter_les_etablissements_reels import (
     Command as CommandeDeDotation,
@@ -60,6 +60,12 @@ def cle_de_matiere(nom):
     du sigle --, les mots courts sont ecartes, et le pluriel ne compte pas. Ce
     qui reste est un ensemble de mots, insensible a l'ordre: « Histoire-Geo » et
     « Geographie-Histoire » se rejoignent, ce qui est voulu.
+
+    **Les chiffres, eux, restent.** Une premiere version les jetait, et
+    « Langue vivante 1 » se confondait alors avec « Langue vivante 2 »: deux
+    langues differentes, que la fusion aurait reduites a une. Un chiffre dans un
+    intitule de matiere distingue presque toujours -- LV1 et LV2, un niveau, un
+    groupe -- et il n'y a aucun cas ou l'ignorer soit necessaire.
     """
     sans_accent = "".join(
         caractere
@@ -68,7 +74,9 @@ def cle_de_matiere(nom):
     )
     sans_parenthese = re.sub(r"\(.*?\)", " ", sans_accent).lower()
     mots = re.findall(r"[a-z]+", sans_parenthese)
+    chiffres = re.findall(r"\d+", sans_parenthese)
     retenus = {mot.rstrip("s") for mot in mots if len(mot) > 2}
+    retenus |= {f"#{chiffre}" for chiffre in chiffres}
     return tuple(sorted(retenus)) or (sans_parenthese.strip(),)
 
 
@@ -151,6 +159,13 @@ class Command(BaseCommand):
             f"  dont {combien} notes et resultats {mot} sur la matiere gardee "
             "-- aucun eleve ne perd sa seule note."
         )
+        if bilan["conflits"]:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  {bilan['conflits']} paire(s) laissee(s) en place sur un "
+                    "conflit d'integrite: voir les lignes ci-dessus."
+                )
+            )
         self.stdout.write("")
         if appliquer:
             self.stdout.write(
@@ -199,8 +214,22 @@ class Command(BaseCommand):
                 for champ, valeur in compte.items():
                     bilan[champ] += valeur
                 bilan["reprises"] += compte.pop("reprises_prevues", 0)
-                if appliquer:
+                if not appliquer:
+                    continue
+                try:
                     bilan["deplacees"] += self._fusionner(gardee, retiree)
+                except IntegrityError as souci:
+                    # La paire reste en place, et on continue. Sur deux cent
+                    # cinquante-neuf fusions, une seule contrainte inattendue
+                    # arretait tout le reste; nommer le cas et poursuivre vaut
+                    # mieux que de tout reprendre a zero.
+                    bilan["conflits"] += 1
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"      laissee en place: {souci.__class__.__name__} "
+                            f"-- {str(souci).splitlines()[0]}"
+                        )
+                    )
 
     @staticmethod
     def _celle_qu_on_garde(groupe, classe):
@@ -287,13 +316,32 @@ class Command(BaseCommand):
             deja.add((note.student_id, note.term))
             deplacees += 1
 
-        # 2. Les resultats d'examen suivent leur epreuve, qui appartient a une
-        #    autre matiere: seul leur libelle de matiere change. L'unicite porte
-        #    sur (epreuve, eleve), que ce report ne touche pas.
-        reportes = ExamResult.objects.filter(subject=retiree).exclude(
+        # 2. Les resultats d'examen. `ExamResult` porte **deux** contraintes, et
+        #    la seconde m'avait echappe:
+        #
+        #      - (epreuve, eleve) quand l'epreuve existe: changer la matiere ne
+        #        la touche pas, le report est libre;
+        #      - (session, eleve, matiere) quand il n'y a pas d'epreuve: le
+        #        report peut alors heurter un resultat deja porte par la matiere
+        #        gardee, et c'est ce qui a interrompu la premiere execution.
+        rattaches = ExamResult.objects.filter(subject=retiree).exclude(
             planning__subject=retiree
         )
-        deplacees += reportes.update(subject=gardee)
+        deplacees += rattaches.filter(planning__isnull=False).update(subject=gardee)
+
+        deja_dans_la_session = set(
+            ExamResult.objects.filter(
+                subject=gardee, planning__isnull=True
+            ).values_list("session_id", "student_id")
+        )
+        for resultat in rattaches.filter(planning__isnull=True):
+            couple = (resultat.session_id, resultat.student_id)
+            if couple in deja_dans_la_session:
+                resultat.delete()  # la matiere gardee porte deja celui-la
+                continue
+            ExamResult.objects.filter(pk=resultat.pk).update(subject=gardee)
+            deja_dans_la_session.add(couple)
+            deplacees += 1
 
         # 3. Ce qui reste part, du plus dependant au moins dependant.
         epreuves = ExamPlanning.objects.filter(subject=retiree)

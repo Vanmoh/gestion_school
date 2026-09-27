@@ -61,6 +61,26 @@ class LeRapprochementDesNomsTests(TestCase):
             cle_de_matiere("Education civique et morale (ECM)"),
         )
 
+    def test_un_chiffre_distingue_deux_matieres(self):
+        """Le defaut qui a interrompu la premiere execution reelle.
+
+        « Langue vivante 1 » et « Langue vivante 2 » sont deux langues
+        differentes. La cle jetait les chiffres, et la fusion allait les reduire
+        a une seule -- seule une contrainte de base l'a arretee, par chance.
+        """
+        self.assertNotEqual(
+            cle_de_matiere("Langue vivante 1"), cle_de_matiere("Langue vivante 2")
+        )
+
+    def test_les_niveaux_et_groupes_restent_distincts(self):
+        for gauche, droite in (
+            ("Mathématiques 3e", "Mathématiques 4e"),
+            ("Anglais LV1", "Anglais LV2"),
+            ("Atelier groupe 1", "Atelier groupe 2"),
+        ):
+            with self.subTest(couple=(gauche, droite)):
+                self.assertNotEqual(cle_de_matiere(gauche), cle_de_matiere(droite))
+
     def test_l_ordre_des_mots_ne_compte_pas(self):
         """« Histoire-Geo » et « Geo-Histoire » designent la meme matiere."""
         self.assertEqual(
@@ -217,6 +237,97 @@ class AucunEleveNePerdSaSeuleNoteTests(SocleDUneClasseEnDoubleTests):
                             student=eleve, subject=self.gardee, term=trimestre
                         ).exists()
                     )
+
+
+class LesResultatsDExamenSuiventLeursDeuxContraintesTests(
+    SocleDUneClasseEnDoubleTests
+):
+    """`ExamResult` porte deux unicites, et la seconde m'avait echappe.
+
+    (epreuve, eleve) quand l'epreuve existe; (session, eleve, matiere) quand il
+    n'y en a pas. Reporter la matiere d'un resultat sans epreuve peut heurter la
+    seconde, et c'est ce qui a interrompu la fusion apres quatre matieres sur
+    deux cent cinquante-neuf.
+    """
+
+    def _session(self, trimestre="T1"):
+        from apps.school.models import ExamSession
+
+        session, _ = ExamSession.objects.get_or_create(
+            title=f"Composition {trimestre}",
+            term=trimestre,
+            academic_year=self.annee,
+            defaults={
+                "start_date": date(2025, 12, 1),
+                "end_date": date(2025, 12, 7),
+            },
+        )
+        return session
+
+    def _resultat(self, session, eleve, matiere, note):
+        from apps.school.models import ExamResult
+
+        return ExamResult.objects.create(
+            session=session,
+            student=eleve,
+            subject=matiere,
+            score=Decimal(note),
+        )
+
+    def test_un_resultat_sans_equivalent_est_reporte(self):
+        from apps.school.models import ExamResult
+
+        eleve = self._eleve("020")
+        session = self._session()
+        resultat = self._resultat(session, eleve, self.doublon, 13)
+
+        self._fusionner(appliquer=True, forcer=True)
+
+        resultat.refresh_from_db()
+        self.assertEqual(resultat.subject_id, self.gardee.pk)
+        self.assertEqual(ExamResult.objects.count(), 1)
+
+    def test_un_resultat_en_conflit_est_supprime_et_non_reporte(self):
+        """Celui de la matiere gardee fait foi, et la fusion ne s'arrete pas."""
+        from apps.school.models import ExamResult
+
+        eleve = self._eleve("021")
+        session = self._session()
+        self._resultat(session, eleve, self.gardee, 17)
+        self._resultat(session, eleve, self.doublon, 8)
+
+        self._fusionner(appliquer=True, forcer=True)
+
+        restants = ExamResult.objects.filter(student=eleve, session=session)
+        self.assertEqual(restants.count(), 1)
+        self.assertEqual(restants.first().score, Decimal(17))
+        self.assertFalse(Subject.objects.filter(pk=self.doublon.pk).exists())
+
+    def test_la_fusion_va_jusqu_au_bout_malgre_un_conflit(self):
+        """Une paire en conflit ne doit pas emporter les suivantes."""
+        eleve = self._eleve("022")
+        session = self._session()
+        self._resultat(session, eleve, self.gardee, 15)
+        self._resultat(session, eleve, self.doublon, 6)
+
+        autre = Subject.objects.create(
+            name="Anglais",
+            code=f"AN-{self.classe.id}",
+            coefficient=Decimal(2),
+            classroom=self.classe,
+        )
+        en_double = Subject.objects.create(
+            name="Anglais (LV)",
+            code="AN_CG",
+            coefficient=Decimal(2),
+            classroom=self.classe,
+        )
+        self._noter(eleve, en_double, "T1", 12)
+
+        self._fusionner(appliquer=True, forcer=True)
+
+        self.assertFalse(Subject.objects.filter(pk=en_double.pk).exists())
+        self.assertTrue(Subject.objects.filter(pk=autre.pk).exists())
 
 
 class CeQuElleNeTouchePasTests(SocleDUneClasseEnDoubleTests):
