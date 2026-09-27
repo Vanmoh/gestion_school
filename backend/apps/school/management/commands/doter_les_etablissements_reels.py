@@ -43,20 +43,27 @@ from django.utils import timezone
 from apps.accounts.models import User, UserRole
 from apps.school.models import (
     AcademicYear,
+    Attendance,
+    AttendanceSheetValidation,
+    BulletinPublication,
     ClassRoom,
     Etablissement,
     ExamPlanning,
     ExamResult,
     ExamSession,
+    DisciplineIncident,
     FeeSchedule,
     FeeType,
+    GradeValidation,
     Grade,
+    ParentProfile,
     Payment,
     Student,
     StudentFee,
     Subject,
     Teacher,
     TeacherAssignment,
+    TeacherAttendance,
     TeacherScheduleSlot,
     TimetablePublication,
 )
@@ -172,6 +179,24 @@ CRENEAUX_DE_COMPOSITION = (
 JOURS = ("MON", "TUE", "WED", "THU", "FRI", "SAT")
 
 TRIMESTRES = ("T1", "T2", "T3")
+
+MOTIFS = (
+    "Maladie",
+    "Transport en panne",
+    "Raison familiale",
+    "Convocation administrative",
+)
+
+MOTIFS_DE_DISCIPLINE = (
+    ("retard", "low", "Arrivée après la sonnerie, sans justificatif."),
+    ("tenue", "low", "Tenue non conforme au règlement intérieur."),
+    ("indiscipline", "medium", "Bavardages répétés malgré les rappels."),
+    ("insolence", "medium", "Propos irrespectueux envers un surveillant."),
+    ("absence_injustifiee", "medium", "Absence non justifiée en cours."),
+    ("triche", "high", "Documents non autorisés pendant une composition."),
+    ("degradation", "high", "Matériel de classe détérioré."),
+    ("violence", "high", "Altercation dans la cour de récréation."),
+)
 
 # Ce qu'une annee coute, et comment elle se paie.
 FRAIS_INSCRIPTION = Decimal("25000")
@@ -296,15 +321,47 @@ class Command(BaseCommand):
         return ESTABLISSEMENT_CLASSES
 
     def _classes_de(self, etablissement, listes):
-        """Les classes prevues pour cette ecole, par son nom ou ses alias."""
+        """Les classes prevues pour cette ecole, par son sigle puis par son nom.
+
+        Le sigle d'abord, et c'est tout l'enjeu: « Lycee Technique Oumar Bah
+        (LTOB) » et « Lycee Technique Oumar Bah (LOBK) » ne different que par
+        lui. Une comparaison par inclusion donnait les cinq classes du premier
+        au second, qui en compte treize -- deux ecoles distinctes se
+        retrouvaient avec le meme programme.
+        """
         nom = etablissement.name.strip().lower()
+        sigles = {s.strip().lower() for s in re.findall(r"\(([^)]+)\)", nom)}
+        code = (etablissement.code or "").strip().lower()
+        if code:
+            sigles.add(code)
+
+        # 1. Le sigle, qui distingue deux ecoles homonymes.
         for cle, valeur in listes.items():
-            noms = [cle] + list(valeur.get("aliases", []))
-            for candidat in noms:
-                c = candidat.strip().lower()
-                if c == nom or c in nom or nom in c:
-                    return valeur["classes"]
-        return None
+            candidats = {cle.strip().lower()} | {
+                a.strip().lower() for a in valeur.get("aliases", [])
+            }
+            if sigles & candidats:
+                return valeur["classes"]
+
+        # 2. L'egalite stricte du nom ou d'un alias.
+        for cle, valeur in listes.items():
+            candidats = {cle.strip().lower()} | {
+                a.strip().lower() for a in valeur.get("aliases", [])
+            }
+            if nom in candidats:
+                return valeur["classes"]
+
+        # 3. A defaut seulement, l'inclusion -- et uniquement si une seule
+        #    ecole repond, sans quoi on ne sait pas laquelle on designe.
+        proches = [
+            valeur["classes"]
+            for cle, valeur in listes.items()
+            if any(
+                candidat.strip().lower() in nom
+                for candidat in [cle] + list(valeur.get("aliases", []))
+            )
+        ]
+        return proches[0] if len(proches) == 1 else None
 
     # ------------------------------------------------------------ une ecole
 
@@ -326,10 +383,15 @@ class Command(BaseCommand):
         if not options["sans_notes"]:
             notes = self._saisir_les_notes(annee, classes, matieres, eleves, graine)
 
+        familles = self._rattacher_les_familles(etablissement, eleves, graine)
         baremes = self._poser_les_baremes(etablissement, annee, classes, options)
         frais = self._facturer_la_scolarite(
             etablissement, annee, eleves, options["part_non_soldee"], graine
         )
+        appels = self._faire_l_appel(annee, classes, eleves, graine)
+        pointages = self._pointer_les_enseignants(annee, enseignants, graine)
+        incidents = self._consigner_la_discipline(annee, eleves, graine)
+        bulletins = self._arreter_les_bulletins(annee, classes)
 
         self.stdout.write(f"  classes              {len(classes)}")
         self.stdout.write(f"  matieres             {len(matieres)}")
@@ -337,8 +399,13 @@ class Command(BaseCommand):
         self.stdout.write(f"  enseignants          {len(enseignants)}")
         self.stdout.write(f"  creneaux d'horaire   {creneaux}")
         self.stdout.write(f"  notes saisies        {notes}")
+        self.stdout.write(f"  familles             {familles}")
         self.stdout.write(f"  baremes de frais     {baremes}")
         self.stdout.write(f"  frais emis           {frais}")
+        self.stdout.write(f"  journees d'appel     {appels}")
+        self.stdout.write(f"  pointages enseignants {pointages}")
+        self.stdout.write(f"  incidents            {incidents}")
+        self.stdout.write(f"  bulletins arretes    {bulletins}")
 
     # ------------------------------------------------------------- structure
 
@@ -796,6 +863,210 @@ class Command(BaseCommand):
         )
 
     # ---------------------------------------------------------------- frais
+
+    def _rattacher_les_familles(self, etablissement, eleves, graine):
+        """Un parent par fratrie, et des fratries qui existent.
+
+        Sans `ParentProfile`, le role famille n'a rien a montrer: ni « Mes
+        enfants », ni bulletin, ni reste a payer. C'est un role entier de
+        l'application qui reste vide.
+
+        Les eleves sont groupes par nom de famille, comme dans une ecole: un
+        parent a souvent deux enfants dans l'etablissement, et l'ecran
+        « Mes enfants » n'a de sens que si certains en ont plusieurs.
+        """
+        par_nom = {}
+        for eleve in eleves:
+            if eleve.parent_id is not None:
+                continue
+            nom = (getattr(eleve.user, "last_name", "") or "").strip().upper()
+            par_nom.setdefault(nom or "SANS-NOM", []).append(eleve)
+
+        crees = 0
+        for rang, (nom, fratrie) in enumerate(sorted(par_nom.items()), start=1):
+            # Une fratrie par tranche de trois: au-dela, ce sont des homonymes.
+            for groupe_rang, groupe in enumerate(
+                self._repartir(fratrie, maximum=3), start=1
+            ):
+                tirage = self._alea(graine, "parent", etablissement.id, nom, groupe_rang)
+                prenom = tirage.choice(PRENOMS_GARCONS + PRENOMS_FILLES)
+                identifiant = (
+                    f"{self._code_de(etablissement).lower()}.par{rang:03d}{groupe_rang}"
+                )
+
+                compte, _ = User.objects.get_or_create(
+                    username=identifiant,
+                    defaults={
+                        "first_name": prenom,
+                        "last_name": nom,
+                        "role": UserRole.PARENT,
+                        "etablissement": etablissement,
+                    },
+                )
+                compte.set_password("Parent@2026")
+                compte.is_active = True
+                compte.etablissement = etablissement
+                compte.save(update_fields=["password", "is_active", "etablissement"])
+
+                famille, cree = ParentProfile.objects.get_or_create(
+                    user=compte,
+                    defaults={
+                        "etablissement": etablissement,
+                        "profession": tirage.choice(
+                            ["Commerçant", "Enseignant", "Agriculteur",
+                             "Fonctionnaire", "Artisan", "Infirmier"]
+                        ),
+                    },
+                )
+                crees += 1 if cree else 0
+
+                for eleve in groupe:
+                    if eleve.parent_id is None:
+                        eleve.parent = famille
+                        eleve.save(update_fields=["parent"])
+        return crees
+
+    def _faire_l_appel(self, annee, classes, eleves, graine):
+        """Vingt jours d'appel, absences et retards compris.
+
+        Un registre d'absences vide ne montre ni le taux d'assiduite du
+        tableau de bord, ni la feuille d'appel, ni les justificatifs. Vingt
+        jours suffisent a faire apparaitre des habitudes -- un eleve qui
+        arrive souvent en retard se voit.
+        """
+        jours = self._jours_ouvres(20)
+        par_classe = {}
+        for eleve in eleves:
+            par_classe.setdefault(eleve.classroom_id, []).append(eleve)
+
+        journees = 0
+        for classe in classes:
+            ses_eleves = par_classe.get(classe.id, [])
+            if not ses_eleves:
+                continue
+            for jour in jours:
+                for eleve in ses_eleves:
+                    tirage = self._alea(
+                        graine, "appel", eleve.id, jour.isoformat()
+                    )
+                    absent = tirage.random() < 0.04
+                    retard = (not absent) and tirage.random() < 0.08
+                    if not absent and not retard:
+                        continue
+                    Attendance.objects.get_or_create(
+                        student=eleve,
+                        date=jour,
+                        defaults={
+                            "academic_year": annee,
+                            "is_absent": absent,
+                            "is_late": retard,
+                            "reason": tirage.choice(MOTIFS) if absent else "",
+                        },
+                    )
+                # La feuille se valide et se verrouille, comme le surveillant
+                # le fait chaque soir.
+                _, cree = AttendanceSheetValidation.objects.get_or_create(
+                    classroom=classe,
+                    date=jour,
+                    defaults={"is_locked": True, "validated_at": timezone.now()},
+                )
+                journees += 1 if cree else 0
+        return journees
+
+    def _pointer_les_enseignants(self, annee, enseignants, graine):
+        """L'emargement des enseignants, qui alimente la paie."""
+        jours = self._jours_ouvres(20)
+        poses = 0
+        for enseignant in enseignants:
+            for jour in jours:
+                tirage = self._alea(
+                    graine, "pointage", enseignant.id, jour.isoformat()
+                )
+                absent = tirage.random() < 0.03
+                retard = (not absent) and tirage.random() < 0.10
+                _, cree = TeacherAttendance.objects.get_or_create(
+                    teacher=enseignant,
+                    date=jour,
+                    defaults={
+                        "academic_year": annee,
+                        "is_absent": absent,
+                        "is_late": retard,
+                        "reason": tirage.choice(MOTIFS) if (absent or retard) else "",
+                    },
+                )
+                poses += 1 if cree else 0
+        return poses
+
+    def _consigner_la_discipline(self, annee, eleves, graine):
+        """Des incidents, de gravites et d'etats varies.
+
+        Dont certains non encore traites, et un dont la famille n'a pas ete
+        prevenue: c'est ce que l'ecran met en avant, et il faut donc que cela
+        existe.
+        """
+        crees = 0
+        for eleve in eleves:
+            tirage = self._alea(graine, "discipline", eleve.id)
+            if tirage.random() > 0.08:
+                continue
+            categorie, gravite, description = tirage.choice(MOTIFS_DE_DISCIPLINE)
+            traite = tirage.random() < 0.6
+            _, cree = DisciplineIncident.objects.get_or_create(
+                student=eleve,
+                incident_date=timezone.localdate() - timedelta(
+                    days=tirage.randint(1, 60)
+                ),
+                category=categorie,
+                defaults={
+                    "academic_year": annee,
+                    "description": description,
+                    "severity": gravite,
+                    "sanction": "Avertissement écrit." if traite else "",
+                    "status": "resolved" if traite else "open",
+                    "parent_notified": traite and tirage.random() < 0.8,
+                    "resolved_at": timezone.now() if traite else None,
+                },
+            )
+            crees += 1 if cree else 0
+        return crees
+
+    def _arreter_les_bulletins(self, annee, classes):
+        """Valider les notes, puis ouvrir les bulletins aux familles.
+
+        Sans validation, les notes restent modifiables et le bulletin n'est pas
+        arrete; sans publication, la famille ne voit rien -- c'est l'embargo,
+        et il fonctionne. Les deux premiers trimestres sont arretes, le
+        troisieme reste ouvert: une annee en cours, pas une annee close.
+        """
+        arretes = 0
+        for classe in classes:
+            for trimestre in TRIMESTRES[:2]:
+                _, cree = GradeValidation.objects.get_or_create(
+                    classroom=classe,
+                    academic_year=annee,
+                    term=trimestre,
+                    defaults={
+                        "is_validated": True,
+                        "validated_at": timezone.now(),
+                    },
+                )
+                arretes += 1 if cree else 0
+                BulletinPublication.objects.get_or_create(
+                    classroom=classe,
+                    academic_year=annee,
+                    term=trimestre,
+                    defaults={"is_published": True},
+                )
+        return arretes
+
+    @staticmethod
+    def _jours_ouvres(combien):
+        jours, jour = [], timezone.localdate()
+        while len(jours) < combien:
+            if jour.weekday() < 5:
+                jours.append(jour)
+            jour -= timedelta(days=1)
+        return jours
 
     def _poser_les_baremes(self, etablissement, annee, classes, options):
         """Un bareme par classe, que l'ecole pourra ensuite modifier.
