@@ -61,6 +61,7 @@ from apps.school.models import (
     Subject,
     Teacher,
     TeacherAssignment,
+    TeacherAttendance,
     TeacherPayroll,
     TeacherScheduleSlot,
     TeacherTimeEntry,
@@ -420,6 +421,34 @@ class Command(BaseCommand):
             erreurs.append(
                 f"{code}: {len(affectes) - len(payes)} enseignants affectes "
                 "sans fiche de paie"
+            )
+
+        # Et personne d'autre: un pointage suppose une seance a assurer. Neuf
+        # cent vingt lignes existaient pour des enseignants sans une matiere, et
+        # un registre d'absences ne dit pas qui enseigne quoi -- rien ne le
+        # signalait.
+        pointes_a_tort = (
+            TeacherAttendance.objects.filter(
+                teacher__etablissement=etablissement
+            )
+            .exclude(teacher__id__in=TeacherAssignment.objects.values("teacher_id"))
+            .count()
+        )
+        if pointes_a_tort:
+            erreurs.append(
+                f"{code}: {pointes_a_tort} pointages d'enseignants sans une "
+                "seule matiere -- il n'y a rien a assurer"
+            )
+
+        emarges_a_tort = (
+            TeacherTimeEntry.objects.filter(etablissement=etablissement)
+            .exclude(teacher__id__in=TeacherAssignment.objects.values("teacher_id"))
+            .count()
+        )
+        if emarges_a_tort:
+            erreurs.append(
+                f"{code}: {emarges_a_tort} emargements d'enseignants sans une "
+                "seule matiere -- il n'y a aucune seance a couvrir"
             )
 
         # --- la remise des bulletins, famille par famille -----------------

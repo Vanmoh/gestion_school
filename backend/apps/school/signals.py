@@ -16,6 +16,7 @@ from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from .dashboard_cache import invalidate_stats
+from .enseignement import refuser_si_il_n_enseigne_rien
 from .models import (
     Expense,
     FeeSchedule,
@@ -23,6 +24,8 @@ from .models import (
     Payment,
     Student,
     StudentFee,
+    TeacherAttendance,
+    TeacherTimeEntry,
 )
 
 
@@ -231,3 +234,38 @@ def _facturer_l_eleve_a_son_inscription(sender, instance, created, **kwargs):
             bareme.appliquer()
         except Exception:
             continue
+
+
+@receiver(pre_save, sender=TeacherAttendance)
+def _ne_pointer_que_ceux_qui_enseignent(sender, instance, **kwargs):
+    """Un pointage suppose une seance a assurer.
+
+    La verification est ici, et non seulement dans le serializer, parce que le
+    serializer ne couvre que l'API. Les commandes de peuplement, l'admin Django
+    et tout code futur ecrivent directement, et c'est ainsi que neuf cent vingt
+    pointages sont apparus pour des enseignants sans une matiere.
+
+    Un `pre_save` est le seul point de passage commun a tous ces chemins. Il
+    leve `ValidationError`, que DRF transforme en 400 avec le message, et qui
+    dans une commande s'affiche telle quelle.
+    """
+    refuser_si_il_n_enseigne_rien(instance.teacher, quoi="Ce pointage")
+
+
+@receiver(pre_save, sender=TeacherTimeEntry)
+def _n_emarger_que_ceux_qui_enseignent(sender, instance, **kwargs):
+    """L'emargement aussi suppose des seances a couvrir.
+
+    `TeacherTimeEntryCoverage` dit a quoi sert ce modele: rapprocher une heure
+    d'arrivee des cours effectivement assures. Son `validate()` tolere deja un
+    emargement un jour sans cours -- une reunion, une surveillance -- a condition
+    d'en donner le motif, et c'est juste. Mais quelqu'un qui ne tient aucune
+    matiere n'a de cours **aucun** jour: cinq cent cinquante-quatre emargements
+    existaient ainsi, sans rien a couvrir.
+
+    Le creneau d'emploi du temps, lui, n'a pas besoin de cette garde: il pend a
+    l'affectation (`TeacherScheduleSlot.assignment`) et ne peut donc pas exister
+    sans elle. La regle y tient par construction, ce qui vaut mieux qu'une
+    verification.
+    """
+    refuser_si_il_n_enseigne_rien(instance.teacher, quoi="Cet émargement")

@@ -55,6 +55,12 @@ class _EmploiDuTempsMixin:
         cls.physique = Subject.objects.create(
             name="Physique", code="PHY", coefficient=1, classroom=cls.classe
         )
+        # La matiere du collegue. Une matiere n'a qu'un enseignant a la fois
+        # (contrainte `une_matiere_un_enseignant`): les tests qui ont besoin d'un
+        # second enseignant lui donnent la sienne, et non celle du premier.
+        cls.anglais = Subject.objects.create(
+            name="Anglais", code="ANG", coefficient=1, classroom=cls.classe
+        )
         cls.enseignant = cls._enseignant("prof_concordance")
         cls.direction = User.objects.create_user(
             username="dir_concordance",
@@ -464,7 +470,7 @@ class ConcordanceApiTests(_EmploiDuTempsMixin, APITestCase):
 
     def test_l_enseignant_ne_voit_que_sa_propre_concordance(self):
         collegue = self._enseignant("prof_voisin")
-        self._creneau(collegue, self.maths, "MON", time(10, 0), time(12, 0))
+        self._creneau(collegue, self.anglais, "MON", time(10, 0), time(12, 0))
 
         self.client.force_authenticate(self.enseignant.user)
         reponse = self.client.get(
@@ -498,7 +504,7 @@ class ConcordanceApiTests(_EmploiDuTempsMixin, APITestCase):
 
     def test_le_filtre_par_enseignant_isole_sa_ligne(self):
         collegue = self._enseignant("prof_filtre")
-        self._creneau(collegue, self.maths, "MON", time(10, 0), time(12, 0))
+        self._creneau(collegue, self.anglais, "MON", time(10, 0), time(12, 0))
 
         reponse = self._concordance(teacher=collegue.id)
 
@@ -507,7 +513,7 @@ class ConcordanceApiTests(_EmploiDuTempsMixin, APITestCase):
 
     def test_les_ecarts_les_plus_lourds_arrivent_en_tete(self):
         collegue = self._enseignant("prof_assidu")
-        self._creneau(collegue, self.maths, "MON", time(10, 0), time(12, 0))
+        self._creneau(collegue, self.anglais, "MON", time(10, 0), time(12, 0))
         TeacherTimeEntry.objects.create(
             teacher=collegue,
             entry_date=self.lundi,

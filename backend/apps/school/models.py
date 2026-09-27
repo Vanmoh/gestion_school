@@ -312,12 +312,33 @@ class Teacher(TimeStampedModel):
 
 
 class TeacherAssignment(TimeStampedModel):
+    """Qui enseigne quoi, et ou.
+
+    Un enseignant tient plusieurs matieres; une matiere n'a qu'un enseignant a la
+    fois. La seconde moitie de cette phrase n'etait ecrite nulle part:
+    `unique_together` interdisait d'affecter deux fois le meme enseignant a la
+    meme matiere, mais laissait passer deux enseignants differents.
+
+    Le defaut ne se voyait pas la ou il naissait. Une matiere a deux titulaires
+    reclame deux fois son volume horaire, et la grille de la classe -- trente-six
+    places par semaine -- deborde sans le dire: trente et un enseignants ont ainsi
+    fini une annee sans une seule heure de cours, alors que chaque emploi du temps
+    s'affichait « complet ». Un bulletin ne dit pas qui enseigne; rien ne
+    signalait donc le probleme.
+    """
+
     teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, related_name="assignments")
     subject = models.ForeignKey(Subject, on_delete=models.PROTECT, related_name="teacher_assignments")
     classroom = models.ForeignKey(ClassRoom, on_delete=models.PROTECT, related_name="teacher_assignments")
 
     class Meta:
         unique_together = ("teacher", "subject", "classroom")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["subject", "classroom"],
+                name="une_matiere_un_enseignant",
+            )
+        ]
 
 
 class WeekDay(models.TextChoices):

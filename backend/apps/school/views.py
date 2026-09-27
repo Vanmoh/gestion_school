@@ -1310,14 +1310,26 @@ class AcademicYearViewSet(BaseModelViewSet):
             matiere_cible = matieres_par_source.get(affectation.subject_id)
             if classe_cible is None or matiere_cible is None:
                 continue
-            copie, creee = TeacherAssignment.objects.get_or_create(
+            # Une matiere n'a qu'un enseignant a la fois. Ce `get_or_create`
+            # portait sur les trois champs: si l'annee cible confiait deja la
+            # matiere a quelqu'un d'autre, il tentait d'en ajouter un second --
+            # ce que la contrainte `une_matiere_un_enseignant` refuse desormais,
+            # et ce qui aurait interrompu toute la reprise sur une erreur
+            # d'integrite. On reprend donc ce qui est en place quand il y en a.
+            deja_en_place = TeacherAssignment.objects.filter(
+                subject=matiere_cible, classroom=classe_cible
+            ).first()
+            if deja_en_place is not None:
+                affectations_par_source[affectation.id] = deja_en_place
+                continue
+
+            copie = TeacherAssignment.objects.create(
                 teacher=affectation.teacher,
                 subject=matiere_cible,
                 classroom=classe_cible,
             )
             affectations_par_source[affectation.id] = copie
-            if creee:
-                compte_rendu["affectations"] += 1
+            compte_rendu["affectations"] += 1
 
         if not reprises["emploi_du_temps"]:
             return compte_rendu
@@ -8616,6 +8628,13 @@ class TeacherPayrollViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
 
         if teacher_id not in (None, ""):
             qs = qs.filter(id=teacher_id)
+
+        # Un enseignant sans aucune matiere n'a pas d'heures, donc une fiche a
+        # zero franc: du bruit dans la liste des paies, et une ligne que le
+        # censeur puis le comptable devraient viser pour rien. Ceux qui ont
+        # enseigne un mois passe gardent la fiche de ce mois-la -- on ne cree
+        # simplement pas celle d'aujourd'hui pour qui n'enseigne plus.
+        qs = qs.filter(assignments__isnull=False).distinct()
 
         generated_ids = []
         skipped_final = 0

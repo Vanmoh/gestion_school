@@ -32,12 +32,14 @@ Trois proprietes qu'il ne faut pas lui retirer:
 
 import random
 import re
+from collections import Counter
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Count
 from django.utils import timezone
 
 from apps.accounts.models import User, UserRole
@@ -218,6 +220,11 @@ SIGNATURE_DE_LA_DOTATION = "doter_les_etablissements_reels"
 # revient deux fois: c'est le cas le plus frequent, et une ecran ou les quatre
 # etats sont a egalite ne ressemble a aucune ecole.
 ETATS_DE_REMISE = ("sent", "read", "prepared", "read", "failed")
+
+# Part de la grille hebdomadaire qu'on remplit. Le reste est la marge qui rend
+# l'emploi du temps realisable: un enseignant partage entre cinq classes a besoin
+# de creneaux libres pour ne pas se retrouver a deux endroits a la fois.
+PART_UTILISEE_DE_LA_GRILLE = 85
 
 MOTIFS = (
     "Maladie",
@@ -415,6 +422,7 @@ class Command(BaseCommand):
         enseignants = self._recruter_les_enseignants(
             etablissement, matieres, graine
         )
+        self._une_matiere_un_enseignant(classes)
         enseignants = self._tous_les_enseignants_de(classes, enseignants)
         creneaux = self._composer_l_emploi_du_temps(classes, matieres, graine)
         self._publier_les_emplois_du_temps(classes)
@@ -436,20 +444,30 @@ class Command(BaseCommand):
             etablissement, annee, eleves, options["part_non_soldee"], graine
         )
         appels = self._faire_l_appel(annee, classes, eleves, graine)
-        pointages = self._pointer_les_enseignants(annee, enseignants, graine)
+        # Le pointage, l'emargement et la paie ne concernent que ceux qui
+        # enseignent reellement dans ces classes. Les autres -- ceux qui ont
+        # perdu leur matiere au profit de son titulaire -- n'ont aucune seance a
+        # assurer: les pointer n'aurait aucun sens, et c'est ainsi que neuf cent
+        # vingt pointages sont apparus pour des enseignants sans cours.
+        en_poste = [
+            enseignant
+            for enseignant in enseignants
+            if enseignant.assignments.filter(classroom__in=classes).exists()
+        ]
+        pointages = self._pointer_les_enseignants(annee, en_poste, graine)
         incidents = self._consigner_la_discipline(annee, eleves, graine)
         bulletins = self._arreter_les_bulletins(annee, classes)
         surveillances = self._affecter_les_surveillants(classes, enseignants, graine)
         dispos = self._ouvrir_les_disponibilites(
             etablissement, annee, enseignants, graine
         )
-        paies = self._preparer_la_paie(etablissement, annee, enseignants)
+        paies = self._preparer_la_paie(etablissement, annee, en_poste)
         depenses = self._engager_des_depenses(etablissement, annee)
         vie = self._animer_la_vie_scolaire(etablissement, eleves, graine)
         mots = self._ouvrir_la_communication(etablissement, enseignants, eleves)
         bilans = self._archiver_les_bilans(annee, classes)
         emargements = self._emarger_les_arrivees(
-            etablissement, enseignants, graine
+            etablissement, en_poste, graine
         )
         remises = self._remettre_les_bulletins(etablissement, annee, eleves, graine)
         abonnes = self._abonner_a_la_cantine(annee, eleves)
@@ -573,7 +591,23 @@ class Command(BaseCommand):
             # a placer pour elles. Le bouton « Generer » de l'application
             # repondait une grille incomplete sans dire pourquoi.
             self._repartir_les_volumes(classe)
-        return matieres
+
+        # Et c'est **toutes** les matieres de la classe qu'on rend, pas seulement
+        # celles du programme deduit. La suite en decoule: un enseignant par
+        # matiere, une place a l'emploi du temps, une epreuve au calendrier, et
+        # une note pour chaque eleve aux trois trimestres.
+        #
+        # Auparavant, une matiere heritee d'un ancien peuplement -- LABO, TP,
+        # SVT -- gardait les notes des eleves qui l'avaient deja et restait vide
+        # pour les autres: dix matieres notees sur vingt-et-une, et un bulletin a
+        # moitie rempli. Le faire plus tot aurait ete pire, car la meme matiere
+        # figurait alors deux ou trois fois dans la classe; il fallait fusionner
+        # d'abord.
+        return list(
+            Subject.objects.filter(classroom__in=classes).order_by(
+                "classroom_id", "code"
+            )
+        )
 
     def _repartir_les_volumes(self, classe):
         """Donner a chaque matiere ses heures, sans depasser la grille.
@@ -591,10 +625,23 @@ class Command(BaseCommand):
         reconnaitre vaut mieux que de laisser la grille trancher par l'ordre
         d'insertion.
         """
-        capacite = len(JOURS) * len(CRENEAUX)
+        # Une part de la grille reste libre, et ce n'est pas du gachis. Remplie
+        # a ras bord -- trente-six heures demandees pour trente-six places --
+        # la seconde contrainte devient insoluble: un enseignant n'est pas dans
+        # deux classes au meme moment, et celui qui tient l'EPS des cinq classes
+        # doit trouver dix moments distincts. Quarante enseignants se sont ainsi
+        # retrouves sans une heure, alors que chaque grille etait « complete ».
+        capacite = len(JOURS) * len(CRENEAUX) * PART_UTILISEE_DE_LA_GRILLE // 100
         matieres = list(Subject.objects.filter(classroom=classe).order_by("code"))
         if not matieres:
             return
+
+        # Une heure au minimum par matiere, et c'est suffisant: une matiere n'a
+        # qu'un enseignant a la fois, donc une heure suffit a ce qu'il en ait.
+        # C'est `_une_matiere_un_enseignant` qui le garantit; sans elle, une
+        # matiere tenue par deux professeurs aurait eu besoin de deux heures, et
+        # le plancher aurait fini par depasser la grille.
+        plancher = {matiere.id: 1 for matiere in matieres}
 
         # Ce que chaque matiere merite si la place ne manquait pas.
         souhaite = {}
@@ -607,18 +654,21 @@ class Command(BaseCommand):
         if sum(souhaite.values()) <= capacite:
             retenu = souhaite
         else:
-            # Une heure pour chacune -- c'est le minimum pour qu'une matiere
-            # existe a l'emploi du temps, et donc pour que son enseignant ait
-            # des heures.
-            retenu = {matiere.id: 1 for matiere in matieres[:capacite]}
-            for matiere in matieres[capacite:]:
-                retenu[matiere.id] = 0
-            if len(matieres) > capacite:
+            # Son plancher pour chacune -- le minimum pour que chaque enseignant
+            # de la matiere ait au moins une heure.
+            retenu = {}
+            reste_a_placer = capacite
+            for matiere in matieres:
+                part = min(plancher[matiere.id], reste_a_placer)
+                retenu[matiere.id] = part
+                reste_a_placer -= part
+            manquantes = [m for m in matieres if retenu[m.id] < plancher[m.id]]
+            if manquantes:
                 self.stdout.write(
                     self.style.WARNING(
-                        f"    « {classe.name} »: {len(matieres)} matieres pour "
-                        f"{capacite} places hebdomadaires -- "
-                        f"{len(matieres) - capacite} resteront hors grille."
+                        f"    « {classe.name} »: {sum(plancher.values())} heures "
+                        f"minimum pour {capacite} places -- "
+                        f"{len(manquantes)} matiere(s) servie(s) en dessous."
                     )
                 )
 
@@ -627,7 +677,7 @@ class Command(BaseCommand):
             # servies.
             reste = capacite - sum(retenu.values())
             par_poids = sorted(
-                (m for m in matieres if retenu[m.id] >= 1),
+                (m for m in matieres if retenu[m.id] >= plancher[m.id]),
                 key=lambda m: (-(m.coefficient or 0), m.code),
             )
             while reste > 0:
@@ -864,12 +914,61 @@ class Command(BaseCommand):
                 enseignants.append(enseignant)
 
                 for matiere in groupe:
+                    # Une matiere ne se confie qu'a un seul enseignant a la fois.
+                    # Si la base en tient deja un, on ne lui en ajoute pas un
+                    # second: c'est la regle de l'ecole, et l'ignorer donnait
+                    # vingt-deux affectations pour quatorze matieres -- chacune
+                    # reclamant son volume, la grille debordait.
+                    if TeacherAssignment.objects.filter(
+                        subject=matiere, classroom=matiere.classroom
+                    ).exists():
+                        continue
                     self._retrouver_ou_creer(TeacherAssignment,
                         teacher=enseignant,
                         subject=matiere,
                         classroom=matiere.classroom,
                     )
         return enseignants
+
+    def _une_matiere_un_enseignant(self, classes):
+        """La regle de l'ecole: plusieurs matieres par enseignant, jamais
+        l'inverse.
+
+        `TeacherAssignment` interdit le meme enseignant deux fois sur une matiere
+        (`unique_together`), mais laisse passer **deux enseignants differents**.
+        La base de developpement en portait huit par classe, heritees de
+        peuplements successifs, et l'emploi du temps n'avait aucune chance:
+        quatorze matieres, vingt-deux affectations, chacune reclamant le volume
+        entier de sa matiere.
+
+        On garde celui qui enseigne reellement -- le plus d'heures posees --, et
+        a egalite le plus ancien, qui est le choix qu'avait fait l'ecole. Les
+        creneaux des autres tombent en cascade avec leur affectation.
+        """
+        retirees = 0
+        for matiere_id, classe_id in (
+            TeacherAssignment.objects.filter(classroom__in=classes)
+            .values_list("subject_id", "classroom_id")
+            .distinct()
+        ):
+            concurrentes = list(
+                TeacherAssignment.objects.filter(
+                    subject_id=matiere_id, classroom_id=classe_id
+                ).annotate(heures=Count("schedule_slots"))
+            )
+            if len(concurrentes) < 2:
+                continue
+            gardee = max(concurrentes, key=lambda a: (a.heures, -a.id))
+            for affectation in concurrentes:
+                if affectation.id != gardee.id:
+                    affectation.delete()
+                    retirees += 1
+        if retirees:
+            self.stdout.write(
+                f"    {retirees} affectation(s) en doublon retiree(s): "
+                "une matiere, un enseignant."
+            )
+        return retirees
 
     @staticmethod
     def _repartir(elements, maximum):
@@ -912,7 +1011,24 @@ class Command(BaseCommand):
             .select_related("subject", "classroom", "teacher")
             .order_by("classroom_id", "subject_id")
         )
-        volumes = {a.id: a.subject.weekly_slots for a in affectations}
+        # Le volume de la matiere va entier a son affectation: il n'y en a qu'une
+        # par matiere, `_une_matiere_un_enseignant` s'en est assure. Le partager
+        # entre plusieurs -- ce qu'une version precedente faisait -- revenait a
+        # accepter la situation au lieu de la corriger, et a donner une heure et
+        # demie a chacun de deux professeurs qui n'auraient pas du coexister.
+        volumes = {}
+        for affectation in affectations:
+            volumes[affectation.id] = affectation.subject.weekly_slots or 0
+
+        # Les plus contraints d'abord. Un enseignant present dans cinq classes a
+        # cinq fois moins de liberte qu'un autre: le placer en dernier revient a
+        # lui laisser les miettes, et il finit sans heures. Classer par charge
+        # decroissante est la regle de tout emploi du temps -- on commence par ce
+        # qui ne rentre presque pas.
+        charge = Counter(a.teacher_id for a in affectations)
+        affectations.sort(
+            key=lambda a: (-charge[a.teacher_id], a.classroom_id, a.subject_id)
+        )
 
         # Ce que chaque affectation tient deja. Sans ce compte, un second
         # passage voyait ses propres seances comme « occupees », les sautait, et
@@ -1182,7 +1298,13 @@ class Command(BaseCommand):
             days=rang // len(CRENEAUX_DE_COMPOSITION)
         )
         if jour > session.end_date:
-            jour = session.end_date
+            # La fenetre s'allonge; elle n'ecrase pas. Ramener le jour au dernier
+            # de la campagne posait deux compositions a la meme heure pour la
+            # meme classe des que le programme depassait vingt-et-une matieres --
+            # trois creneaux sur sept jours. Une ecole qui a plus de matieres
+            # compose plus longtemps, voila tout.
+            session.end_date = jour
+            session.save(update_fields=["end_date"])
         debut, fin = CRENEAUX_DE_COMPOSITION[rang % len(CRENEAUX_DE_COMPOSITION)]
 
         return ExamPlanning.objects.create(
