@@ -84,6 +84,21 @@ Finder _tuiles() {
   });
 }
 
+/// Le contrôleur d'un champ, comme le pilote le récupère.
+///
+/// C'est la seule prise sur un champ de saisie quand le clavier de test n'est
+/// pas enregistré — ce qui est le cas de toute prise d'intégration réelle.
+TextEditingController? _controleurDe(WidgetTester tester, Key cle) {
+  final champ = find.byKey(cle);
+  if (champ.evaluate().isEmpty) return null;
+  final editable = find.descendant(
+    of: champ,
+    matching: find.byType(EditableText),
+  );
+  if (editable.evaluate().isEmpty) return null;
+  return tester.widget<EditableText>(editable.first).controller;
+}
+
 Future<_Transport> _monter(WidgetTester tester) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = const Size(1280, 720);
@@ -188,16 +203,31 @@ void main() {
       }
     }
 
-    // La frappe du pilote, lettre après lettre, par `enterText`.
+    // La frappe du pilote : par le **contrôleur** du champ, seule voie qui
+    // fonctionne en prise réelle. `IntegrationTestWidgetsFlutterBinding`
+    // déclare `registerTestTextInput => false`, donc ni `testTextInput` ni
+    // `tester.enterText`, qui s'appuie dessus, n'écrivent quoi que ce soit.
     for (final (champ, texte) in [
       (kChampIdentifiant, 'directeur'),
       (kChampMotDePasse, 'Password@123'),
     ]) {
+      final controleur = _controleurDe(tester, champ);
+      expect(controleur, isNotNull, reason: 'le champ doit avoir un contrôleur');
       for (var n = 1; n <= texte.length; n++) {
-        await tester.enterText(find.byKey(champ), texte.substring(0, n));
+        final morceau = texte.substring(0, n);
+        controleur!.value = TextEditingValue(
+          text: morceau,
+          selection: TextSelection.collapsed(offset: morceau.length),
+        );
         await tester.pump(const Duration(milliseconds: 5));
       }
     }
+
+    expect(
+      _controleurDe(tester, kChampIdentifiant)?.text,
+      'directeur',
+      reason: 'écrire dans le contrôleur doit vraiment remplir le champ',
+    );
 
     await tester.tap(
       find.widgetWithText(FilledButton, 'Se connecter'),

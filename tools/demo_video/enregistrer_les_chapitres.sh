@@ -181,12 +181,28 @@ tourner_une_prise() {
   fi
 
   # La geometrie se lit, elle ne se suppose pas: la barre de titre GTK decale la
-  # vue Flutter, et c'est ce decalage que le montage applique aux encadres.
-  DISPLAY="$affichage" xwininfo -id "$identifiant" > "$geometrie" 2>/dev/null || true
-  local hauteur_vue
-  hauteur_vue="$(awk '/Height:/ {print $2; exit}' "$geometrie" 2>/dev/null || echo "$HAUTEUR")"
+  # vue Flutter, et c'est ce decalage que le montage applique au recadrage.
+  #
+  # Mais elle se lit **une fois la fenetre posee**. Mesuree a l'instant ou elle
+  # parait, la fenetre fait dix pixels de haut: le decalage valait alors 710, le
+  # montage recadrait une bande de dix pixels, et la video ne montrait rien de
+  # l'application. On attend donc une hauteur plausible avant de mesurer.
+  local hauteur_vue=0
+  for _ in $(seq 1 40); do
+    DISPLAY="$affichage" xwininfo -id "$identifiant" > "$geometrie" 2>/dev/null || true
+    hauteur_vue="$(awk '/^  Height:/ {print $2; exit}' "$geometrie" 2>/dev/null || echo 0)"
+    [[ "${hauteur_vue:-0}" -ge $(( HAUTEUR / 2 )) ]] && break
+    sleep 0.5
+  done
+
   local decalage=$(( HAUTEUR - hauteur_vue ))
-  [[ "$decalage" -lt 0 ]] && decalage=0
+  # Une barre de titre fait quelques dizaines de pixels. Au-dela, c'est que la
+  # mesure est fausse -- et mieux vaut filmer la fenetre entiere, quitte a
+  # garder sa barre de titre a l'image, que de recadrer sur du vide.
+  if [[ "$decalage" -lt 0 || "$decalage" -gt 120 ]]; then
+    echo "Chapitre $rang: hauteur mesuree ${hauteur_vue}px, decalage ignore." >&2
+    decalage=0
+  fi
   echo "decalage_vertical=$decalage" >> "$geometrie"
 
   ffmpeg -nostdin -loglevel warning -y \

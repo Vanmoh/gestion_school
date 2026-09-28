@@ -14,8 +14,11 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import User, UserRole
 from apps.school.models import (
     AcademicYear,
+    ClassRoom,
     Etablissement,
+    Subject,
     Teacher,
+    TeacherAssignment,
     TeacherTimeEntry,
 )
 
@@ -24,7 +27,7 @@ class SyntheseDesHeuresTests(APITestCase):
     @classmethod
     def setUpTestData(cls):
         cls.etablissement = Etablissement.objects.create(name="Etab Heures", code="EH2")
-        AcademicYear.objects.create(
+        cls.annee = AcademicYear.objects.create(
             name="2025-2026 EH2",
             start_date=date(2025, 9, 1),
             end_date=date(2026, 7, 31),
@@ -38,8 +41,19 @@ class SyntheseDesHeuresTests(APITestCase):
             etablissement=cls.etablissement,
         )
 
+        # Une classe et une matiere par enseignant. On n'emarge que quelqu'un qui
+        # enseigne (`enseignement.refuser_si_il_n_enseigne_rien`), et une matiere
+        # n'a qu'un titulaire a la fois: chacun a donc la sienne. Un enseignant
+        # qui pointe des heures enseigne forcement quelque chose -- le decor est
+        # plus fidele qu'avant, ou personne n'avait de cours.
+        cls.classe = ClassRoom.objects.create(
+            name="6A", academic_year=cls.annee, etablissement=cls.etablissement
+        )
+
         cls.awa = cls._enseignant("awa_heures", "Awa", "Traore", "ENS-01", 2500)
         cls.moussa = cls._enseignant("moussa_heures", "Moussa", "Diarra", "ENS-02", 3000)
+        cls._affecter(cls.awa, "Mathematiques", "MAT-EH2")
+        cls._affecter(cls.moussa, "Physique", "PHY-EH2")
 
         # Awa: 6 heures en mars, plus 4 heures hors de l'intervalle teste.
         cls._pointage(cls.awa, date(2026, 3, 2), time(8, 0), time(11, 0), 3)
@@ -64,6 +78,15 @@ class SyntheseDesHeuresTests(APITestCase):
             hire_date=date(2025, 9, 1),
             hourly_rate=Decimal(taux),
             etablissement=cls.etablissement,
+        )
+
+    @classmethod
+    def _affecter(cls, enseignant, nom, code):
+        matiere = Subject.objects.create(
+            name=nom, code=code, coefficient=1, classroom=cls.classe
+        )
+        return TeacherAssignment.objects.create(
+            teacher=enseignant, subject=matiere, classroom=cls.classe
         )
 
     @classmethod

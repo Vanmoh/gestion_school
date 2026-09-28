@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/error/motif_du_refus.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../domain/exam_models.dart';
@@ -65,16 +66,11 @@ class _OngletCalendrierState extends ConsumerState<OngletCalendrier> {
     if (etat.hasError) {
       // Le serveur dit précisément ce qui ne va pas: épreuve hors de la
       // campagne, matière étrangère à la classe, horaire inversé.
-      _dire('Épreuve refusée : ${_motif(etat.error)}', erreur: true);
+      _dire('Épreuve refusée : ${motifDuRefus(etat.error)}', erreur: true);
     } else {
       setState(() => _creationDepliee = false);
       _dire('Épreuve planifiée.', succes: true);
     }
-  }
-
-  String _motif(Object? erreur) {
-    final texte = erreur?.toString() ?? '';
-    return texte.length > 160 ? '${texte.substring(0, 160)}…' : texte;
   }
 
   Future<void> _supprimer(ExamPlanningItem epreuve) async {
@@ -105,7 +101,10 @@ class _OngletCalendrierState extends ConsumerState<OngletCalendrier> {
     await ref.read(examMutationProvider.notifier).deletePlanning(epreuve.id);
     final etat = ref.read(examMutationProvider);
     if (etat.hasError) {
-      _dire('Suppression refusée : ${_motif(etat.error)}', erreur: true);
+      _dire(
+        'Suppression refusée : ${motifDuRefus(etat.error)}',
+        erreur: true,
+      );
     } else {
       _dire('Épreuve supprimée.', succes: true);
     }
@@ -118,7 +117,10 @@ class _OngletCalendrierState extends ConsumerState<OngletCalendrier> {
         : await controleur.publierLEpreuve(epreuve.id);
 
     if (ref.read(examMutationProvider).hasError) {
-      _dire('Opération refusée par le serveur.', erreur: true);
+      _dire(
+        motifDuRefus(ref.read(examMutationProvider).error),
+        erreur: true,
+      );
     } else {
       _dire(message ?? 'Opération effectuée.', succes: true);
     }

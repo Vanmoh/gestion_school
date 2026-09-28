@@ -139,27 +139,48 @@ class PiloteDeDemonstration {
 
   /// Frappe un texte caractère par caractère, pour que la saisie se voie.
   ///
-  /// Par `enterText` sur le champ, et non par `testTextInput`: ce dernier est
-  /// le clavier **factice** de `flutter_test`, qui n'est pas branché quand la
-  /// prise tourne sur une vraie plateforme. Rien n'était donc saisi, le
-  /// formulaire restait vide, et la connexion n'atteignait même pas le serveur
-  /// — l'API n'a vu passer aucune requête d'authentification.
+  /// **Par le contrôleur du champ, et par rien d'autre.** Ni
+  /// `testTextInput.enterText`, ni `tester.enterText` qui s'appuie dessus, ne
+  /// fonctionnent ici : `IntegrationTestWidgetsFlutterBinding` déclare
+  /// `registerTestTextInput => false`, donc le clavier de test n'est jamais
+  /// enregistré. Quatre tournages s'y sont arrêtés, et en silence — le
+  /// formulaire restait vide, le bouton n'envoyait rien, et le serveur n'a
+  /// jamais vu passer la moindre demande d'authentification. Le journal parlait
+  /// pendant ce temps de modules « fermés à ce profil ».
   ///
-  /// `enterText` pose la valeur d'un coup; on la repose donc lettre après
-  /// lettre, ce qui donne la même frappe visible sans dépendre du mock.
+  /// Écrire dans le contrôleur met le champ à jour et déclenche la validation
+  /// du formulaire, qui lit cette même valeur. On repose la valeur lettre après
+  /// lettre: la frappe se voit à l'image, sans dépendre d'un clavier absent.
   Future<void> taperLentement(Finder champ, String texte) async {
-    if (champ.evaluate().isEmpty) {
+    final controleur = _controleurDe(champ);
+    if (controleur == null) {
       journal.dire('(champ absent : ${champ.describeMatch(Plurality.one)})');
       return;
     }
+
     await tester.tap(champ.first, warnIfMissed: false);
     await tester.pump(const Duration(milliseconds: 250));
 
     for (var longueur = 1; longueur <= texte.length; longueur++) {
-      await tester.enterText(champ.first, texte.substring(0, longueur));
+      final morceau = texte.substring(0, longueur);
+      controleur.value = TextEditingValue(
+        text: morceau,
+        selection: TextSelection.collapsed(offset: morceau.length),
+      );
       await tester.pump(const Duration(milliseconds: 45));
     }
     await tester.pump(const Duration(milliseconds: 400));
+  }
+
+  /// Le contrôleur de texte d'un champ, ou `null` s'il n'y en a pas.
+  TextEditingController? _controleurDe(Finder champ) {
+    if (champ.evaluate().isEmpty) return null;
+    final editable = find.descendant(
+      of: champ,
+      matching: find.byType(EditableText),
+    );
+    if (editable.evaluate().isEmpty) return null;
+    return tester.widget<EditableText>(editable.first).controller;
   }
 
   /// Fait défiler doucement, pour montrer le bas d'un écran.
@@ -247,14 +268,38 @@ class PiloteDeDemonstration {
         await _chercherLEtablissement(etablissement.trim());
       }
 
-      final restantes = _tuilesDEtablissement();
+      // Une recherche qui ne laisse rien ne doit pas laisser le pilote sur le
+      // portail: on efface et on reprend la liste entière. Entrer dans une
+      // autre école vaut mieux que ne pas entrer du tout — et le journal le
+      // dira, ce qu'un abandon silencieux ne faisait pas.
+      var restantes = _tuilesDEtablissement();
+      if (restantes.evaluate().isEmpty &&
+          _carteDeReprise().evaluate().isEmpty) {
+        journal.dire('(la recherche n\'a laissé aucune école : on l\'efface)');
+        final champ = find.byType(TextField);
+        if (champ.evaluate().isNotEmpty) {
+          await tester.enterText(champ.first, '');
+          await _pomperUnPeu(const Duration(milliseconds: 900));
+        }
+        restantes = _tuilesDEtablissement();
+      }
+
       if (restantes.evaluate().isNotEmpty) {
-        await appuyer(restantes.first, apres: const Duration(seconds: 2));
+        journal.dire('École choisie : ${_nomDeLaTuile(restantes.first)}.');
+        await appuyer(restantes.first, apres: const Duration(seconds: 3));
       } else if (_carteDeReprise().evaluate().isNotEmpty) {
         // L'école cherchée est celle qu'on a déjà ouverte: elle n'est plus
         // dans la grille, elle est en tête sous « Reprendre ».
-        await appuyer(_carteDeReprise().first, apres: const Duration(seconds: 2));
+        await appuyer(
+          _carteDeReprise().first,
+          apres: const Duration(seconds: 3),
+        );
+        journal.dire('École reprise.');
+      } else {
+        journal.dire('(aucune école à choisir sur le portail)');
       }
+    } else {
+      journal.dire('(pas de portail : le choix était déjà fait)');
     }
 
     if (!await attendre(
@@ -269,14 +314,24 @@ class PiloteDeDemonstration {
     await taperLentement(find.byKey(kChampIdentifiant), identifiant);
     await taperLentement(find.byKey(kChampMotDePasse), motDePasse);
 
+    // On relit ce qui est réellement dans le champ. Deux tournages se sont
+    // arrêtés sur un formulaire vide sans que rien ne le dise: le serveur n'a
+    // jamais vu passer de demande d'authentification, et le journal parlait
+    // pourtant de modules « fermés à ce profil ».
+    journal.dire('Identifiant saisi : « ${_contenuDuChamp(kChampIdentifiant)} ».');
+
     final bouton = find.widgetWithText(FilledButton, 'Se connecter');
     if (bouton.evaluate().isNotEmpty) {
-      await appuyer(bouton.first, apres: const Duration(seconds: 4));
+      await appuyer(bouton.first, apres: const Duration(seconds: 5));
+      journal.dire('Connexion demandée.');
     } else {
       // Repli: le libellé change pendant la connexion, la forme reste.
       final secours = find.byType(FilledButton);
       if (secours.evaluate().isNotEmpty) {
-        await appuyer(secours.last, apres: const Duration(seconds: 4));
+        await appuyer(secours.last, apres: const Duration(seconds: 5));
+        journal.dire('Connexion demandée (bouton de repli).');
+      } else {
+        journal.dire('(aucun bouton de connexion trouvé)');
       }
     }
 
@@ -292,6 +347,13 @@ class PiloteDeDemonstration {
     }
   }
 
+  /// Ce qu'un champ contient réellement, pour le dire au journal.
+  ///
+  /// Un mot de passe n'y passe jamais: le journal part en artefact public.
+  String _contenuDuChamp(Key cle) {
+    return _controleurDe(find.byKey(cle))?.text ?? '(champ absent)';
+  }
+
   /// Ouvre un module par sa clé de menu.
   ///
   /// Par la clé et jamais par le libellé : celui-ci change selon le rôle, si
@@ -299,6 +361,15 @@ class PiloteDeDemonstration {
   /// à l'autre.
   Future<bool> ouvrirLeModule(String cleDuModule, {String? sousTitre}) async {
     final entree = find.byKey(ValueKey('menu-$cleDuModule'));
+
+    // La barre latérale défile, et ce qui est hors écran n'est pas construit:
+    // un super-administrateur, qui a pourtant tous les droits, se voyait
+    // refuser cinq modules parce que leurs entrées étaient simplement plus bas
+    // que la fenêtre. Un écran absent de l'arbre n'est pas un écran fermé.
+    if (entree.evaluate().isEmpty) {
+      await _amenerLEntreeDansLaVue(entree);
+    }
+
     if (entree.evaluate().isEmpty) {
       journal.dire('(module fermé à ce profil : $cleDuModule)');
       return false;
@@ -307,6 +378,53 @@ class PiloteDeDemonstration {
     if (sousTitre != null) journal.dire(sousTitre);
     await _pomperUnPeu(poseParEcran);
     return true;
+  }
+
+  /// Le nom porté par une tuile d'établissement, pour le dire au journal.
+  ///
+  /// Entrer dans la mauvaise école déconnecte aussitôt — le serveur a
+  /// enregistré la séquence: connexion acceptée, puis `logout` dans la seconde.
+  /// Savoir laquelle a été choisie est donc la première chose à journaliser.
+  String _nomDeLaTuile(Finder tuile) {
+    final textes = find.descendant(of: tuile, matching: find.byType(Text));
+    for (final element in textes.evaluate()) {
+      final texte = (element.widget as Text).data ?? '';
+      if (texte.trim().length > 3) return texte.trim();
+    }
+    return '(nom illisible)';
+  }
+
+  /// Fait défiler la barre latérale jusqu'à une entrée de menu.
+  ///
+  /// On remonte d'abord au `Scrollable` qui porte les entrées — celui de la
+  /// barre, et non celui de la page ouverte à côté, qui défilerait sans jamais
+  /// révéler le menu.
+  Future<void> _amenerLEntreeDansLaVue(Finder entree) async {
+    final repere = find.byKey(const ValueKey('menu-dashboard'));
+    final connue = repere.evaluate().isNotEmpty
+        ? repere
+        : find.byWidgetPredicate(
+            (widget) =>
+                widget.key is ValueKey<String> &&
+                (widget.key as ValueKey<String>).value.startsWith('menu-'),
+          );
+    if (connue.evaluate().isEmpty) return;
+
+    final barre = find.ancestor(of: connue.first, matching: find.byType(Scrollable));
+    if (barre.evaluate().isEmpty) return;
+
+    try {
+      await tester.scrollUntilVisible(
+        entree,
+        140,
+        scrollable: barre.first,
+        maxScrolls: 30,
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+    } catch (_) {
+      // L'entrée n'existe pas pour ce profil: c'est un module réellement
+      // fermé, et l'appelant le dira.
+    }
   }
 
   /// Souligne un widget à l'image, en journalisant son vrai rectangle.
@@ -343,6 +461,65 @@ class PiloteDeDemonstration {
       find.widgetWithText(Tab, libelle),
       apres: const Duration(milliseconds: 1200),
     );
+  }
+
+  /// Tous les modules de l'application, dans l'ordre de la barre latérale.
+  ///
+  /// Les six derniers noms de `_items` sont des groupes, pas des écrans: ils
+  /// n'ont pas d'entrée de menu à ouvrir.
+  static const modulesDeLApplication = <String>[
+    'dashboard',
+    'students',
+    'student_lookup',
+    'teachers',
+    'academics',
+    'academic_imports',
+    'grades',
+    'promotion',
+    'attendance',
+    'discipline',
+    'exams',
+    'timetable',
+    'finance',
+    'reports',
+    'activity_logs',
+    'backup_restore',
+    'users',
+    'etablissements',
+    'personnalisation',
+    'communication',
+    'library',
+    'canteen',
+    'stock',
+  ];
+
+  /// Ouvre chaque écran ouvert à ce profil, l'un après l'autre.
+  ///
+  /// Le propos d'un tel passage n'est pas de montrer un geste mais **l'étendue
+  /// du profil**: ce qu'un rôle voit, et ce qu'il ne voit pas. Les modules
+  /// fermés sont sautés sans bruit — `ouvrirLeModule` ne trouve pas leur entrée
+  /// de menu, ce qui est la définition même d'un module fermé.
+  ///
+  /// Il vient **après** les gestes distinctifs de chaque chapitre: on montre
+  /// d'abord le métier, puis l'inventaire.
+  Future<int> parcourirTousLesModules({
+    Duration pose = const Duration(milliseconds: 2200),
+    Set<String> sauter = const {},
+  }) async {
+    var ouverts = 0;
+    for (final cle in modulesDeLApplication) {
+      if (sauter.contains(cle)) continue;
+      final entree = find.byKey(ValueKey('menu-$cle'));
+      if (entree.evaluate().isEmpty) {
+        await _amenerLEntreeDansLaVue(entree);
+      }
+      if (entree.evaluate().isEmpty) continue;
+      await appuyer(entree, apres: const Duration(milliseconds: 900));
+      await poser(duree: pose);
+      ouverts++;
+    }
+    journal.dire('$ouverts écrans ouverts à ce profil.');
+    return ouverts;
   }
 
   // ------------------------------------------------------------- la clôture

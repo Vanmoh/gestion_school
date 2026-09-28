@@ -134,7 +134,16 @@ class ApplicationDuBaremeTests(DecorDeBareme, APITestCase):
         self.assertEqual(StudentFee.objects.get().amount_due, Decimal("25000"))
 
     def test_la_rejouer_ne_double_pas_les_frais(self):
-        """C'est ce qui permet de rattraper un élève inscrit en janvier."""
+        """L'élève inscrit en janvier est rattrapé — mais plus par ce bouton.
+
+        Il l'est désormais à son inscription : le barème de sa classe
+        s'applique tout seul. Auparavant il n'avait aucun frais tant que
+        personne ne recliquait ici, et l'oubli ne se voyait nulle part puisque
+        une facture jamais établie ne produit aucun impayé.
+
+        Ce que ce test tient toujours : rejouer l'application ne crée aucun
+        doublon, et le nouvel élève a bien ses trois échéances.
+        """
         self._eleve("F001")
         bareme = self._bareme(occurrences=3)
         bareme.appliquer()
@@ -142,8 +151,8 @@ class ApplicationDuBaremeTests(DecorDeBareme, APITestCase):
         nouveau = self._eleve("F002")
         resultat = bareme.appliquer()
 
-        self.assertEqual(resultat["crees"], 3)
-        self.assertEqual(resultat["deja_en_place"], 3)
+        self.assertEqual(resultat["crees"], 0)
+        self.assertEqual(resultat["deja_en_place"], 6)
         self.assertEqual(StudentFee.objects.filter(student=nouveau).count(), 3)
         self.assertEqual(StudentFee.objects.count(), 6)
 

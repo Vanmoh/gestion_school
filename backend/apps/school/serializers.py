@@ -6,6 +6,8 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models
 from django.utils import timezone
+
+from .enseignement import refuser_si_il_n_enseigne_rien
 from rest_framework import serializers
 from .term_utils import normalize_term
 from apps.accounts.access import affinement_autorise
@@ -406,6 +408,16 @@ class TeacherAssignmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = TeacherAssignment
         fields = "__all__"
+        # `validators = []` desactive ceux que DRF deduit du modele. Il en
+        # deduirait un de la contrainte `une_matiere_un_enseignant`, qui repond
+        # « The fields subject, classroom must make a unique set. » -- en anglais,
+        # et sans dire qui tient deja la matiere. Il s'executerait **avant**
+        # `validate()`, donc le message ci-dessus, qui nomme l'enseignant en
+        # place, ne serait jamais vu.
+        #
+        # Rien n'est perdu: `validate()` couvre (matiere, classe), et donc a
+        # plus forte raison (enseignant, matiere, classe).
+        validators = []
 
 
 class TeacherScheduleSlotSerializer(serializers.ModelSerializer):
@@ -1293,6 +1305,19 @@ class TeacherAttendanceSerializer(serializers.ModelSerializer):
     def get_teacher_employee_code(self, obj):
         return obj.teacher.employee_code if obj.teacher else ""
 
+    def validate(self, attrs):
+        """La meme regle que le signal, mais dite avant d'ecrire.
+
+        Le signal protege la base quel que soit le chemin; celui-ci donne la
+        reponse a l'ecran sans passer par une erreur d'integrite.
+        """
+        enseignant = attrs.get("teacher") or getattr(self.instance, "teacher", None)
+        try:
+            refuser_si_il_n_enseigne_rien(enseignant, quoi="Ce pointage")
+        except DjangoValidationError as refus:
+            raise serializers.ValidationError(refus.message_dict)
+        return attrs
+
     class Meta:
         model = TeacherAttendance
         fields = "__all__"
@@ -1364,6 +1389,12 @@ class TeacherTimeEntrySerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         attrs = super().validate(attrs)
         teacher = attrs.get("teacher") or getattr(self.instance, "teacher", None)
+        # Avant tout le reste: sans matiere affectee, il n'y a aucune seance a
+        # couvrir, et les verifications de planning qui suivent n'ont plus d'objet.
+        try:
+            refuser_si_il_n_enseigne_rien(teacher, quoi="Cet émargement")
+        except DjangoValidationError as refus:
+            raise serializers.ValidationError(refus.message_dict)
         entry_date = attrs.get("entry_date") or getattr(self.instance, "entry_date", None)
         check_in_time = attrs.get("check_in_time") or getattr(self.instance, "check_in_time", None)
         check_out_time = attrs.get("check_out_time") or getattr(self.instance, "check_out_time", None)

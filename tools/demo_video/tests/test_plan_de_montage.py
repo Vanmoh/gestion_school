@@ -187,6 +187,40 @@ class PlacementDesCadresTests(unittest.TestCase):
     def test_une_geometrie_sans_decalage_vaut_zero(self):
         self.assertEqual(pm.lire_le_decalage("Width: 1280\n"), 0.0)
 
+    def test_un_decalage_aberrant_est_ignore(self):
+        """Le defaut qui a rendu une video illisible.
+
+        La fenetre avait ete mesuree pendant son ouverture: dix pixels de haut,
+        donc un decalage de sept cent dix. Le montage recadrait une bande de dix
+        pixels et la video ne montrait rien de l'application -- sans qu'aucune
+        etape n'echoue, puisque ffmpeg recadre volontiers sur du vide.
+        """
+        self.assertEqual(pm.lire_le_decalage("decalage_vertical=710\n"), 0.0)
+        self.assertEqual(pm.lire_le_decalage("decalage_vertical=-5\n"), 0.0)
+
+    def test_un_decalage_plausible_est_garde(self):
+        """Une barre de titre GTK fait quelques dizaines de pixels."""
+        self.assertEqual(pm.lire_le_decalage("decalage_vertical=37\n"), 37.0)
+        self.assertEqual(pm.lire_le_decalage("decalage_vertical=0\n"), 0.0)
+
+    def test_un_cadre_n_est_pas_pousse_hors_de_l_image_par_un_decalage_faux(self):
+        """Sans borne, chaque encadre se serait retrouve sous l'image."""
+        evenements = [
+            {
+                "type": "cadre",
+                "epoch_ms": 105000,
+                "duree_ms": 4000,
+                "cadre": [100, 200, 300, 40],
+            }
+        ]
+
+        decalage = pm.lire_le_decalage("decalage_vertical=710\n")
+        annotations = pm.convertir_en_annotations(
+            evenements, t0_ms=100000, decalage_vertical=decalage, duree_du_rush=60
+        )
+
+        self.assertEqual(annotations[0].cadre, (100, 200, 300, 40))
+
 
 class SousTitresTests(unittest.TestCase):
     def test_l_horodatage_suit_le_format_attendu(self):

@@ -285,8 +285,13 @@ class PlacementHorsDisponibiliteTests(_CollecteMixin, APITestCase):
             teacher=cls.enseignant, subject=cls.maths, classroom=cls.classe
         )
         cls.muet = cls._enseignant("prof_muet")
+        # Sa propre matiere: une matiere n'a qu'un enseignant a la fois
+        # (contrainte `une_matiere_un_enseignant`).
+        cls.physique = Subject.objects.create(
+            name="Physique", code="PHY-DISPO", coefficient=1, classroom=cls.classe
+        )
         cls.affectation_muet = TeacherAssignment.objects.create(
-            teacher=cls.muet, subject=cls.maths, classroom=cls.classe
+            teacher=cls.muet, subject=cls.physique, classroom=cls.classe
         )
 
     def setUp(self):
