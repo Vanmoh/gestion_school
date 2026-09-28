@@ -168,6 +168,28 @@ familles, la discipline, les examens, le stock, le conseil — et les sept volet
 d'abonnés à la cantine, les trois niveaux du fonds numérique, et que la
 passerelle SMS reste **inactive**.
 
+## Les règles de métier qu'elle respecte
+
+Trois règles encadrent tout ce qui suit, et elles sont décrites dans
+[QUI_ENSEIGNE_QUOI.md](QUI_ENSEIGNE_QUOI.md) :
+
+- **une matière, un enseignant** — contrainte `une_matiere_un_enseignant`,
+  migration 0071. La dotation retire les titulaires en trop de son périmètre ;
+- **on ne pointe que quelqu'un qui enseigne** — la dotation ne produit pointage,
+  émargement et paie que pour les enseignants affectés dans ses classes ;
+- **le créneau d'emploi du temps** ne peut pas exister sans affectation, par
+  construction.
+
+Les enseignants qui perdent leur matière au profit de son titulaire n'ont plus
+rien à enseigner. `retirer_les_enseignants_sans_matiere` les retire — simulation
+par défaut, épargne les comptes saisis par l'école, et propose la désactivation
+plutôt que la suppression :
+
+```bash
+python manage.py retirer_les_enseignants_sans_matiere
+python manage.py retirer_les_enseignants_sans_matiere --desactiver --appliquer
+```
+
 ## Les doublons de matières : `fusionner_les_matieres_en_double`
 
 Une base sur laquelle on a travaillé des mois accumule les programmes. La classe
@@ -205,6 +227,17 @@ gardée ; seules les redondantes disparaissent.
   manifestement faux, afin qu'aucun peuplement ne puisse faire partir un envoi.
 - **Elle ne remplace pas `insert_classes`** : elle y lit la liste des classes,
   et ne devine jamais une école qu'elle ne reconnaît pas.
+- **Elle ne supprime pas les enseignants devenus inutiles.** Ils restent, et le
+  contrôle les signale ; les retirer est une décision d'école, pas de peuplement.
+
+## Ce qui n'a pas été vérifié de bout en bout
+
+`peupler_les_quatre_ecoles.sh` a tourné en entier sur la base de développement, et
+son contrôle est sorti en code 0. **`remettre_la_base_a_neuf.sh` n'a jamais été
+exécuté** : il détruit le volume PostgreSQL, et l'essayer aurait emporté la base
+sur laquelle tout le reste a été vérifié. Sa syntaxe est valide et ses garde-fous
+sont relus, mais la première exécution réelle reste à faire — de préférence quand
+vous n'avez rien à perdre dans ce volume.
 
 ## Les comptes créés
 
