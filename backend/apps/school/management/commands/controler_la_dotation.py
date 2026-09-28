@@ -166,10 +166,15 @@ class Command(BaseCommand):
             for message in erreurs:
                 self.stdout.write(self.style.ERROR(f"  erreur: {message}"))
             self.stdout.write("")
+            # Le remede voyage avec chaque anomalie, et non en bas de page.
+            # « Relancez la dotation » etait faux pour les lignes anterieures a
+            # la regle -- des pointages d'enseignants que la dotation ne connait
+            # pas: les relancer ne les corrigeait jamais, et un conseil faux fait
+            # perdre plus de temps qu'un silence.
             self.stdout.write(
                 self.style.ERROR(
-                    f"{len(erreurs)} anomalie(s) dans le perimetre de la dotation. "
-                    "Relancez « doter_les_etablissements_reels »."
+                    f"{len(erreurs)} anomalie(s) dans le perimetre de la "
+                    "dotation. Le remede est indique avec chacune."
                 )
             )
             # `SystemExit` plutot que `CommandError`: l'appelant lit le code de
@@ -437,7 +442,9 @@ class Command(BaseCommand):
         if pointes_a_tort:
             erreurs.append(
                 f"{code}: {pointes_a_tort} pointages d'enseignants sans une "
-                "seule matiere -- il n'y a rien a assurer"
+                "seule matiere -- il n'y a rien a assurer. Affectez-leur une "
+                "matiere, ou retirez-les avec "
+                "« retirer_les_enseignants_sans_matiere »"
             )
 
         emarges_a_tort = (
@@ -448,7 +455,8 @@ class Command(BaseCommand):
         if emarges_a_tort:
             erreurs.append(
                 f"{code}: {emarges_a_tort} emargements d'enseignants sans une "
-                "seule matiere -- il n'y a aucune seance a couvrir"
+                "seule matiere -- il n'y a aucune seance a couvrir. Meme remede "
+                "que ci-dessus"
             )
 
         # --- la remise des bulletins, famille par famille -----------------
