@@ -31,6 +31,10 @@ LARGEUR = 1280
 HAUTEUR = 720
 IMAGES_PAR_SECONDE = 25
 
+# Au-dela, le decalage mesure n'est pas une barre de titre mais une erreur
+# de mesure: recadrer dessus reviendrait a filmer une bande vide.
+DECALAGE_MAXIMAL = 120
+
 # Les neuf chapitres, dans l'ordre de la video.
 #
 # Recopies du cote Dart (`chapitresDeLaDemonstration`) parce que le montage doit
@@ -214,9 +218,17 @@ def lire_le_decalage(contenu_geometrie: str) -> float:
     for ligne in contenu_geometrie.splitlines():
         if ligne.startswith("decalage_vertical="):
             try:
-                return float(ligne.split("=", 1)[1].strip())
+                decalage = float(ligne.split("=", 1)[1].strip())
             except ValueError:
                 return 0.0
+            # Deuxieme filet, apres celui du script d'enregistrement: un
+            # decalage de sept cents pixels a deja fait recadrer une bande de
+            # dix pixels de haut, et la video ne montrait rien de
+            # l'application. Une barre de titre fait quelques dizaines de
+            # pixels; au-dela, on prefere garder l'image entiere.
+            if decalage < 0 or decalage > DECALAGE_MAXIMAL:
+                return 0.0
+            return decalage
     return 0.0
 
 

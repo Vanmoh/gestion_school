@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/error/motif_du_refus.dart';
 import '../domain/personnalisation.dart';
 import 'personnalisation_controller.dart';
 
@@ -211,25 +212,10 @@ class _PersonnalisationPageState extends ConsumerState<PersonnalisationPage> {
       _dire('Personnalisation enregistrée.', succes: true);
     } on DioException catch (erreur) {
       if (!mounted) return;
-      _dire(_detail(erreur));
+      _dire(motifDuRefus(erreur, parDefaut: 'Enregistrement impossible.'));
     } finally {
       if (mounted) setState(() => _enregistrement = false);
     }
-  }
-
-  /// Le motif du refus tel que le serveur le formule : « attendu une couleur
-  /// au format #RRGGBB » vaut mieux qu'un code d'erreur.
-  String _detail(DioException erreur) {
-    final donnees = erreur.response?.data;
-    if (donnees is Map) {
-      if (donnees['detail'] != null) return donnees['detail'].toString();
-      final premier = donnees.values.firstOrNull;
-      if (premier is List && premier.isNotEmpty) {
-        return premier.first.toString();
-      }
-      if (premier != null) return premier.toString();
-    }
-    return 'Enregistrement impossible.';
   }
 
   void _dire(String texte, {bool succes = false}) {

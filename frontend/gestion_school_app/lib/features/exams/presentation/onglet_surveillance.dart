@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/error/motif_du_refus.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../../core/widgets/foreground_notice.dart';
 import '../domain/exam_models.dart';
@@ -46,8 +47,10 @@ class _OngletSurveillanceState extends ConsumerState<OngletSurveillance> {
         );
 
     if (ref.read(examMutationProvider).hasError) {
-      _dire('Affectation refusée. Ce surveillant tient peut-être déjà cette '
-          'épreuve.', erreur: true);
+      _dire(
+        motifDuRefus(ref.read(examMutationProvider).error),
+        erreur: true,
+      );
     } else {
       _dire('Surveillant affecté.', succes: true);
     }
@@ -59,7 +62,10 @@ class _OngletSurveillanceState extends ConsumerState<OngletSurveillance> {
         .deleteInvigilation(affectation.id);
 
     if (ref.read(examMutationProvider).hasError) {
-      _dire('Retrait refusé.', erreur: true);
+      _dire(
+        motifDuRefus(ref.read(examMutationProvider).error),
+        erreur: true,
+      );
     } else {
       _dire('Surveillant retiré.', succes: true);
     }

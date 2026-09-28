@@ -23,7 +23,7 @@ fi
 
 docker_compose() {
   "${DOCKER_CMD[@]}" compose "$@"
-fi
+}
 
 echo "ATTENTION: cette action va supprimer les conteneurs ET les volumes (données MySQL incluses)."
 read -r -p "Tapez RESET pour confirmer: " confirm

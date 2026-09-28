@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/error/motif_du_refus.dart';
 import '../../../core/permissions/module_permissions.dart';
 import '../../../core/widgets/barre_recherche_module.dart';
 import '../../../core/widgets/foreground_notice.dart';
@@ -43,6 +44,13 @@ class _OngletAnnoncesState extends ConsumerState<OngletAnnonces> {
     super.dispose();
   }
 
+  /// Ce que le serveur a répondu au dernier geste refusé.
+  ///
+  /// Les écrans disaient « Création refusée » là où le serveur expliquait
+  /// précisément ce qu'il reprochait. L'utilisateur voyait donc un refus sans
+  /// son motif, alors que le motif venait d'être écrit.
+  Object? get _erreur => ref.read(communicationMutationProvider).error;
+
   void _dire(String message, {bool succes = false, bool erreur = false}) {
     if (!mounted) return;
     ForegroundNotice.show(context, message, isSuccess: succes, isError: erreur);
@@ -61,7 +69,7 @@ class _OngletAnnoncesState extends ConsumerState<OngletAnnonces> {
         .publierUneAnnonce(titre: titre, message: message, public: _public);
 
     if (ref.read(communicationMutationProvider).hasError) {
-      _dire('Publication refusée.', erreur: true);
+      _dire(motifDuRefus(_erreur), erreur: true);
       return;
     }
 
@@ -77,7 +85,7 @@ class _OngletAnnoncesState extends ConsumerState<OngletAnnonces> {
         .corrigerUneAnnonce(id: annonce.id, public: vers);
 
     if (ref.read(communicationMutationProvider).hasError) {
-      _dire('Changement refusé.', erreur: true);
+      _dire(motifDuRefus(_erreur), erreur: true);
     } else {
       _dire('Annonce désormais adressée à ${vers.libelle}.', succes: true);
     }
@@ -112,7 +120,7 @@ class _OngletAnnoncesState extends ConsumerState<OngletAnnonces> {
         .retirerUneAnnonce(annonce.id);
 
     if (ref.read(communicationMutationProvider).hasError) {
-      _dire('Retrait refusé.', erreur: true);
+      _dire(motifDuRefus(_erreur), erreur: true);
     } else {
       _dire('Annonce retirée.', succes: true);
     }
