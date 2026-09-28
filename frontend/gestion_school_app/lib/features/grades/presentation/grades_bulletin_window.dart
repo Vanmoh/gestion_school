@@ -72,7 +72,9 @@ extension _DialogueDesBulletins on _GradesPageState {
     var selectedYear = _selectedAcademicYear;
     if (selectedYear == null ||
         !_years.any((row) => _asInt(row['id']) == selectedYear)) {
-      selectedYear = _asInt(_years.first['id']);
+      // L'annee active: un bulletin imprime pour une autre annee porte des
+      // tirets partout, et rien ne dit pourquoi.
+      selectedYear = anneeARetenir(_years);
     }
 
     var selectedTerm = _currentTermOrDefault();

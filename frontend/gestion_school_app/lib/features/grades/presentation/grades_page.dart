@@ -18,6 +18,7 @@ import 'bulletin_whatsapp_page.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../core/network/chargement_tolerant.dart';
 import '../../../core/widgets/indicateur.dart';
+import '../../../core/academics/annee_a_retenir.dart';
 
 part 'grades_bulletin_window.dart';
 part 'grades_exam_dialog.dart';
@@ -152,9 +153,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               : null;
         }
 
-        _selectedAcademicYear ??= _years.isNotEmpty
-            ? _asInt(_years.first['id'])
-            : null;
+        // L'annee active, et non la premiere servie par l'API: aucun ordre
+        // n'etait defini, et le jour ou le hasard a mis l'annee suivante en
+        // tete, cet ecran a repondu « Aucune note enregistree » sur une base qui
+        // en comptait soixante-huit mille.
+        _selectedAcademicYear ??= anneeARetenir(_years);
 
         final classStudents = _studentsForClassroom(_selectedClassroom);
         final classSubjects = _subjectsForClassroom(_selectedClassroom);

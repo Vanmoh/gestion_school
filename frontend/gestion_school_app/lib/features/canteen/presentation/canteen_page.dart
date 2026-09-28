@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/chargement_tolerant.dart';
 import '../../../core/widgets/indicateur.dart';
+import '../../../core/academics/annee_a_retenir.dart';
 
 class CanteenPage extends ConsumerStatefulWidget {
   const CanteenPage({super.key});
@@ -89,9 +90,7 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
         _selectedSubStudent ??= students.isNotEmpty
             ? _asInt(students.first['id'])
             : null;
-        _selectedSubYear ??= years.isNotEmpty
-            ? _asInt(years.first['id'])
-            : null;
+        _selectedSubYear ??= anneeARetenir(years);
         _selectedServiceStudent ??= students.isNotEmpty
             ? _asInt(students.first['id'])
             : null;

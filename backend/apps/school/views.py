@@ -1024,6 +1024,18 @@ class AcademicYearViewSet(BaseModelViewSet):
     search_fields = ["name"]
     ordering_fields = ["name", "start_date", "end_date", "is_active"]
     filterset_fields = ["is_active", "is_closed"]
+    # L'annee active d'abord, puis la plus recente. Aucun ordre n'etait defini
+    # -- ni ici, ni sur le modele -- et la liste sortait donc dans l'ordre
+    # physique des lignes, qui change des qu'on en met une a jour. Cinq ecrans
+    # retenaient « la premiere » comme annee par defaut: le jour ou ce hasard a
+    # designe l'annee suivante, « Notes & Bulletins » a repondu « Aucune note
+    # enregistree » sur une base qui en comptait soixante-huit mille.
+    #
+    # Les ecrans choisissent desormais l'annee active explicitement
+    # (`core/academics/annee_a_retenir.dart`), mais une liste servie dans un
+    # ordre indefini reste un piege pour le prochain qui en prendra le premier
+    # element.
+    ordering = ["-is_active", "-start_date"]
     queryset = AcademicYear.objects.select_related("etablissement").all()
     serializer_class = AcademicYearSerializer
 
