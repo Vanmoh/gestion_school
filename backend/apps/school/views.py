@@ -3314,9 +3314,42 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         )
 
     def get_queryset(self):
+        """L'etablissement d'abord, puis ses classes.
+
+        La matrice annonce `L*` pour l'enseignant, le parent et l'eleve -- une
+        portee restreinte « deja appliquee par le get_queryset de la vue ». Elle
+        ne l'etait pas ici: un parent recevait les cent cinquante creneaux des
+        cinq classes de l'ecole quand ses enfants n'en occupent que trois, et un
+        eleve les recevait tous pour la sienne.
+
+        Cela ne se voyait pas -- l'ecran n'affiche que les classes auxquelles il
+        a droit par ailleurs -- et c'est precisement ce qui rendait l'ecart
+        durable: la donnee partait quand meme.
+
+        Le perimetre suit le sens documente de l'etoile: « ses classes, ses
+        enfants, soi ». L'enseignant voit l'emploi du temps **des classes ou il
+        enseigne**, et non ses seules heures: savoir quand sa classe est prise
+        fait partie de son metier.
+        """
         queryset = super().get_queryset()
         user = self.request.user
         requested_etablissement = self._requested_etablissement()
+
+        role = getattr(user, "role", "")
+        if role == UserRole.STUDENT:
+            queryset = queryset.filter(
+                assignment__classroom__students__user_id=user.id
+            ).distinct()
+        elif role == UserRole.PARENT:
+            queryset = queryset.filter(
+                assignment__classroom__students__parent__user_id=user.id
+            ).distinct()
+        elif role == UserRole.TEACHER:
+            queryset = queryset.filter(
+                assignment__classroom_id__in=TeacherAssignment.objects.filter(
+                    teacher__user_id=user.id
+                ).values("classroom_id")
+            )
 
         if requested_etablissement is not None:
             queryset = queryset.filter(assignment__classroom__etablissement=requested_etablissement)

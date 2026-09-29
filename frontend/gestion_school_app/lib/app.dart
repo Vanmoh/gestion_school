@@ -52,6 +52,7 @@ import 'features/payments/presentation/payments_page.dart';
 import 'features/reports/presentation/reports_page.dart';
 import 'features/stock/presentation/stock_page.dart';
 import 'features/students/presentation/students_controller.dart';
+import 'features/student_lookup/presentation/dossier_de_la_famille_page.dart';
 import 'features/student_lookup/presentation/student_lookup_page.dart';
 import 'features/students/presentation/students_page.dart';
 import 'features/teachers/presentation/teachers_page.dart';
@@ -758,6 +759,16 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
     if (item.keyName == 'exams' &&
         (role == 'parent' || role == 'student')) {
       return const ParentExamsPage();
+    }
+
+    // Le dossier: le sien pour un eleve, ceux de ses enfants pour un parent.
+    // L'ecran commun s'ouvre sur une barre de recherche, ce qui revenait a leur
+    // demander de retrouver ce qu'ils savent deja -- et laissait croire qu'ils
+    // pouvaient ouvrir le dossier de n'importe qui, alors que le serveur le
+    // leur refuse.
+    if (item.keyName == 'student_lookup' &&
+        (role == 'parent' || role == 'student')) {
+      return const DossierDeLaFamillePage();
     }
 
     if (item.keyName != 'dashboard') {
