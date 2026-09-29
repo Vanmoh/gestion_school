@@ -1035,7 +1035,7 @@ class AcademicYearViewSet(BaseModelViewSet):
     # (`core/academics/annee_a_retenir.dart`), mais une liste servie dans un
     # ordre indefini reste un piege pour le prochain qui en prendra le premier
     # element.
-    ordering = ["-is_active", "-start_date"]
+    ordering = ["-is_active", "-start_date", "-id"]
     queryset = AcademicYear.objects.select_related("etablissement").all()
     serializer_class = AcademicYearSerializer
 
@@ -1367,7 +1367,7 @@ class AcademicYearViewSet(BaseModelViewSet):
 
 class EtablissementViewSet(viewsets.ModelViewSet):
     access_module = "etablissements"
-    queryset = Etablissement.objects.all().order_by('name')
+    queryset = Etablissement.objects.all().order_by('name', 'id')
     serializer_class = EtablissementSerializer
     parser_classes = (MultiPartParser, FormParser, JSONParser)
 
@@ -1505,7 +1505,7 @@ class ClassRoomViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
 
 class SubjectViewSet(BaseModelViewSet):
     access_module = "academics"
-    queryset = Subject.objects.all().order_by("name")
+    queryset = Subject.objects.all().order_by("name", "id")
     serializer_class = SubjectSerializer
     # `classroom` n'est pas declare ici: get_queryset le traite deja, avec
     # une portee plus large que l'egalite simple (une matiere rattachee a la
@@ -3849,7 +3849,7 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
 
 class TimetablePublicationViewSet(EtablissementScopeMixin, viewsets.ReadOnlyModelViewSet):
     access_module = "timetable"
-    queryset = TimetablePublication.objects.select_related("classroom", "published_by").all().order_by("classroom__name")
+    queryset = TimetablePublication.objects.select_related("classroom", "published_by").all().order_by("classroom__name", "id")
     serializer_class = TimetablePublicationSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     filterset_fields = ["classroom", "is_published", "is_locked"]
@@ -3892,7 +3892,7 @@ class BulletinPublicationViewSet(EtablissementScopeMixin, viewsets.ReadOnlyModel
             "published_by",
         )
         .all()
-        .order_by("classroom__name", "term")
+        .order_by("classroom__name", "term", "id")
     )
     serializer_class = BulletinPublicationSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
@@ -5108,7 +5108,7 @@ class StudentViewSet(BaseModelViewSet):
 
 class StudentAcademicHistoryViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "students"
-    queryset = StudentAcademicHistory.objects.select_related("student", "academic_year", "classroom").all().order_by("-academic_year_id", "rank")
+    queryset = StudentAcademicHistory.objects.select_related("student", "academic_year", "classroom").all().order_by("-academic_year_id", "rank", "id")
     serializer_class = StudentAcademicHistorySerializer
     filterset_fields = ["student", "academic_year", "classroom"]
     search_fields = [
@@ -7352,6 +7352,7 @@ class FeeScheduleViewSet(AnneeScolaireScopeMixin, EtablissementScopedModelViewSe
     queryset = FeeSchedule.objects.select_related(
         "academic_year", "classroom", "etablissement"
     ).all()
+    ordering = ["classroom__name", "fee_type", "first_due_date", "id"]
     serializer_class = FeeScheduleSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     pagination_class = StandardResultsSetPagination
@@ -8807,7 +8808,7 @@ class TeacherPayrollViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
 
 class AnnouncementViewSet(EtablissementScopedModelViewSet):
     access_module = "communication"
-    queryset = Announcement.objects.select_related("author", "etablissement").all().order_by("-created_at")
+    queryset = Announcement.objects.select_related("author", "etablissement").all().order_by("-created_at", "-id")
     serializer_class = AnnouncementSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     # L'ecran cherchait dans ses trois listes en memoire, sur la page qu'il
@@ -8840,7 +8841,7 @@ class AnnouncementViewSet(EtablissementScopedModelViewSet):
 
 class NotificationViewSet(EtablissementScopedModelViewSet):
     access_module = "communication"
-    queryset = Notification.objects.select_related("recipient", "etablissement").all().order_by("-created_at")
+    queryset = Notification.objects.select_related("recipient", "etablissement").all().order_by("-created_at", "-id")
     serializer_class = NotificationSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
     # « Qu'est-ce qui n'est pas parti » est la seule question qu'on pose a une
@@ -8956,6 +8957,7 @@ class LibraryCollectionViewSet(_LibraryEtagereMixin, BaseModelViewSet):
     access_module = "library"
     serializer_class = LibraryCollectionSerializer
     queryset = LibraryCollection.objects.all()
+    ordering = ["position", "label", "id"]
     pagination_class = None
 
     def get_queryset(self):
@@ -8999,6 +9001,7 @@ class LibraryCategoryViewSet(_LibraryEtagereMixin, BaseModelViewSet):
     access_module = "library"
     serializer_class = LibraryCategoryWriteSerializer
     queryset = LibraryCategory.objects.select_related("collection").all()
+    ordering = ["position", "name", "id"]
     pagination_class = None
 
     def get_queryset(self):
@@ -9653,7 +9656,7 @@ class CanteenMenuViewSet(BaseModelViewSet):
 
 class CanteenSubscriptionViewSet(BaseModelViewSet):
     access_module = "canteen"
-    queryset = CanteenSubscription.objects.select_related("student", "student__user", "academic_year").all().order_by("-created_at")
+    queryset = CanteenSubscription.objects.select_related("student", "student__user", "academic_year").all().order_by("-created_at", "-id")
     serializer_class = CanteenSubscriptionSerializer
     filterset_fields = ["student", "academic_year", "status"]
 
@@ -10087,7 +10090,7 @@ class ExamInvigilationViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     # refus ni la trace que les notes de classe recoivent.
     academic_year_field = "planning__session__academic_year"
     access_module = "exams"
-    queryset = ExamInvigilation.objects.select_related("planning", "planning__session", "planning__classroom", "planning__subject", "supervisor").all().order_by("-created_at")
+    queryset = ExamInvigilation.objects.select_related("planning", "planning__session", "planning__classroom", "planning__subject", "supervisor").all().order_by("-created_at", "-id")
     serializer_class = ExamInvigilationSerializer
     filterset_fields = ["planning", "supervisor", "planning__session"]
     search_fields = [
@@ -10542,7 +10545,7 @@ class StockItemViewSet(EtablissementScopedModelViewSet):
 
 class StockMovementViewSet(BaseModelViewSet):
     access_module = "stock"
-    queryset = StockMovement.objects.select_related("item", "item__etablissement").all().order_by("-created_at")
+    queryset = StockMovement.objects.select_related("item", "item__etablissement").all().order_by("-created_at", "-id")
     serializer_class = StockMovementSerializer
 
 
@@ -10612,7 +10615,7 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
             "decisions__source_classroom",
             "decisions__target_classroom",
         )
-        .order_by("-created_at")
+        .order_by("-created_at", "-id")
     )
     serializer_class = PromotionRunSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
