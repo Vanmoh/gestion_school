@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../domain/discipline_incident.dart';
+import '../../../core/roles/perimetre_enseignant.dart';
 
 /// Acces reseau du module discipline.
 ///
@@ -29,6 +30,12 @@ class DisciplineRepository {
   /// Sans `page_size`: le client HTTP suit alors les liens `next` et rend
   /// la liste complete. Le lui repasser ici rendrait la main a l'appelant
   /// et tronquerait la reponse a une seule page.
+  /// La reponse brute, pour les routes qui rendent un objet et non une liste.
+  Future<dynamic> _fetchBrut(String path, {Map<String, dynamic>? query}) async {
+    final response = await dio.get(path, queryParameters: query);
+    return response.data;
+  }
+
   Future<List<Map<String, dynamic>>> _fetchAll(
     String path, {
     Map<String, dynamic>? query,
@@ -77,17 +84,18 @@ class DisciplineRepository {
       return _toStudents(await _fetchAll('/students/'));
     }
 
-    final teachers = await _fetchAll(
-      '/teachers/',
-      query: {'user': currentUserId},
+    // Ses propres routes: le module « teachers » lui est ferme, et ces deux
+    // appels levaient un 403 -- l'enseignant ne pouvait designer aucun eleve,
+    // donc declarer aucun incident.
+    final teachers = lignesDeLaFiche(
+      await _fetchBrut(routeDeLaFicheEnseignant('teacher')),
     );
     if (teachers.isEmpty) return const [];
     final teacherId = (teachers.first['id'] as num?)?.toInt() ?? 0;
     if (teacherId <= 0) return const [];
 
-    final assignments = await _fetchAll(
-      '/teacher-assignments/',
-      query: {'teacher': teacherId},
+    final assignments = lignesDeLaFiche(
+      await _fetchBrut(routeDesAffectations('teacher')),
     );
     final classroomIds = assignments
         .map((row) => (row['classroom'] as num?)?.toInt() ?? 0)

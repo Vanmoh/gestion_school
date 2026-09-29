@@ -9,6 +9,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/providers/navigation_intents.dart';
 import '../../auth/presentation/auth_controller.dart';
 import 'dashboard_shared_ui.dart';
+import '../../../core/roles/perimetre_enseignant.dart';
 
 List<Map<String, dynamic>> _rows(dynamic data) {
   if (data is Map<String, dynamic> && data['results'] is List) {
@@ -995,9 +996,12 @@ class _TeacherDashboardPageState extends ConsumerState<TeacherDashboardPage> {
     if (mounted) setState(() => _loading = true);
     final authUser = ref.read(authControllerProvider).value;
     final dio = ref.read(dioProvider);
+    // Ses propres routes: le module « teachers » lui est ferme, et les deux
+    // 403 que `_safeGetRows` avalait faisaient afficher zero classe, zero
+    // matiere et zero creneau sur son ecran d'accueil.
     final results = await Future.wait([
-      _safeGetRows(dio, '/teachers/'),
-      _safeGetRows(dio, '/teacher-assignments/'),
+      _safeGetRows(dio, routeDeLaFicheEnseignant(authUser?.role)),
+      _safeGetRows(dio, routeDesAffectations(authUser?.role)),
       _safeGetRows(dio, '/teacher-schedule-slots/'),
       _safeGetRows(dio, '/discipline-incidents/'),
       _safeGetRows(dio, '/teacher-time-entries/'),

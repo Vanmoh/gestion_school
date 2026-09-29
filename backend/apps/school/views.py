@@ -1774,8 +1774,47 @@ class TeacherAssignmentViewSet(BaseModelViewSet):
     # refaisait le tri cote client sur cet echantillon.
     filterset_fields = ["teacher", "classroom", "subject"]
 
+    def get_permissions(self):
+        # « mes-affectations » n'est pas de la gestion du personnel: il rend a
+        # l'enseignant connecte les matieres qu'il tient, rien d'autre. Meme
+        # exemption que « teachers/mon-profil », et pour la meme raison -- avec
+        # la meme consequence quand elle manque.
+        #
+        # Le module « teachers » est ferme a l'enseignant. Son ecran de notes
+        # demandait pourtant `/teachers/` et `/teacher-assignments/` pour savoir
+        # quelles classes lui montrer: il recevait deux 403, que la couche
+        # reseau avalait, et concluait « Classes 0 ». Une enseignante affectee a
+        # deux matieres n'avait acces a aucune de ses classes, et rien a
+        # l'ecran ne disait pourquoi.
+        if self.action == "mes_affectations":
+            return [permissions.IsAuthenticated()]
+        return super().get_permissions()
 
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[permissions.IsAuthenticated],
+        url_path="mes-affectations",
+    )
+    def mes_affectations(self, request):
+        """Les matieres que l'enseignant connecte tient, et leurs classes.
 
+        Sans pagination: un enseignant en a quelques-unes, et l'ecran qui les
+        demande a besoin de **toutes** pour savoir ce qu'il a le droit de
+        montrer. Une premiere page de cent lignes suffirait aujourd'hui, mais
+        c'est exactement le genre de suffisance qui se retourne le jour ou
+        quelqu'un enseigne dans douze classes.
+        """
+        profil = Teacher.objects.filter(user=request.user).first()
+        if profil is None:
+            return Response([])
+
+        affectations = (
+            TeacherAssignment.objects.filter(teacher=profil)
+            .select_related("teacher", "subject", "classroom")
+            .order_by("classroom__name", "subject__name", "id")
+        )
+        return Response(self.get_serializer(affectations, many=True).data)
 
 
     def _resolve_target_etablissement(self):
