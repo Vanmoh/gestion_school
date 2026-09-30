@@ -112,6 +112,43 @@ class ToutesLesListesSeDepartagentTests(SimpleTestCase):
             "ou disparaitre.\n  " + "\n  ".join(boiteuses),
         )
 
+    def test_aucun_get_queryset_ne_perd_le_tri_declare(self):
+        """Une requete reconstruite de zero ne herite pas de l'ordre.
+
+        `TeacherAssignmentViewSet` declarait `.order_by("id")` sur son
+        `queryset`, puis son `get_queryset` repartait de
+        `TeacherAssignment.objects.select_related(...)`. Le tri ne suivait pas:
+        la liste partait sans `ORDER BY`, et DRF le disait dans un
+        `UnorderedObjectListWarning` que personne ne lisait.
+
+        Les deux tests precedents ne pouvaient pas le voir: ils inspectent
+        l'attribut `queryset`, qui restait trie. Celui-ci lit la methode.
+
+        La regle est simple: un `get_queryset` part de `super()` -- et herite --
+        ou trie lui-meme.
+        """
+        import inspect as introspection
+
+        boiteuses = []
+        for nom, vue in sorted(_vues_de_liste().items()):
+            if nom in EXEMPTEES:
+                continue
+            methode = vue.__dict__.get("get_queryset")
+            if methode is None:
+                continue  # herite: l'ordre de `queryset` s'applique
+            source = introspection.getsource(methode)
+            if "super()" in source or "order_by" in source:
+                continue
+            boiteuses.append(nom)
+
+        self.assertEqual(
+            boiteuses,
+            [],
+            "Ces `get_queryset` reconstruisent la requete sans trier, et "
+            "perdent l'ordre declare sur `queryset`:\n  "
+            + "\n  ".join(boiteuses),
+        )
+
     def test_le_recensement_trouve_bien_des_vues(self):
         """Garde-fou du test lui-meme.
 

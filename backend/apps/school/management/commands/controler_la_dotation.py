@@ -37,6 +37,7 @@ from apps.school.management.commands.doter_les_etablissements_reels import (
 from apps.school.management.commands.insert_classes import ESTABLISSEMENT_CLASSES
 from apps.school.models import (
     AcademicYear,
+    Attendance,
     BulletinDelivery,
     CanteenSubscription,
     ClassRoom,
@@ -44,6 +45,7 @@ from apps.school.models import (
     Etablissement,
     ExamInvigilation,
     ExamPlanning,
+    Expense,
     FeeType,
     ParentProfile,
     Payment,
@@ -157,6 +159,22 @@ class Command(BaseCommand):
                 self.style.WARNING("Aucun etablissement dote: rien a controler.")
             )
             return
+
+        # Ce qui n'appartient a aucun etablissement echappe a la boucle
+        # ci-dessus, qui compte ecole par ecole. Dix depenses d'avril 2026
+        # etaient dans ce cas: datees en pleine annee scolaire, mais sans
+        # `etablissement`. Sans ecole, pas d'annee -- elles sont donc invisibles
+        # deux fois, absentes de la liste de chaque ecole et de chaque annee.
+        # Aucun `pre_save` ne peut les sauver: « a quelle ecole appartient
+        # "Achat fournitures"? » demande une decision humaine.
+        sans_ecole = Expense.objects.filter(etablissement__isnull=True).count()
+        if sans_ecole:
+            avertissements.append(
+                f"{sans_ecole} depenses sans etablissement -- invisibles dans "
+                "toutes les ecoles et toutes les annees. Remede: leur attribuer "
+                "une ecole a la main (`Expense.objects.filter("
+                "etablissement__isnull=True)`)."
+            )
 
         for message in avertissements:
             self.stdout.write(self.style.WARNING(f"  hors perimetre: {message}"))
@@ -549,6 +567,55 @@ class Command(BaseCommand):
                 f"{code}: {hors_listes} eleves dans des classes hors "
                 "« insert_classes », non dotes"
             )
+
+        # --- ce qui n'est rattache a aucune annee -------------------------
+        #
+        # Une ligne sans annee n'apparait sur aucun ecran: le filtre demande
+        # `academic_year=<annee>` et `NULL` n'y repond pas. Comme l'application
+        # envoie l'en-tete d'annee partout, elle est invisible -- donc
+        # incorrigeable, faute d'etre vue. Quarante-quatre lignes etaient dans
+        # ce cas avant que `rattachement_a_l_annee` ne les comble.
+        #
+        # Un avertissement et non une erreur: une depense d'aout ou une paie de
+        # juillet ne tombent legitimement dans aucune annee scolaire. C'est le
+        # nombre qui parle, pas son existence.
+        orphelines = self._lignes_sans_annee(etablissement)
+        if orphelines:
+            detail = ", ".join(f"{n} {quoi}" for quoi, n in orphelines.items())
+            self._ligne("lignes sans annee", detail)
+            avertis.append(
+                f"{code}: {sum(orphelines.values())} lignes sans annee scolaire "
+                f"({detail}) -- invisibles a l'ecran. Le rattachement se deduit "
+                "de la date (`rattachement_a_l_annee`), donc celles qui restent "
+                "portent une date hors de toute annee: vacances, ou une annee "
+                "jamais ouverte. Remede: corriger la date, ou ouvrir l'annee "
+                "qui la couvre."
+            )
+
+    def _lignes_sans_annee(self, etablissement):
+        """Les lignes datees de cet etablissement qu'aucune annee ne reclame.
+
+        Quatre modeles seulement: ce sont les quatre dont `academic_year` est
+        nullable. Les autres portent une cle obligatoire et ne peuvent pas
+        deriver.
+        """
+        compte = {}
+        for quoi, requete in (
+            ("absences", Attendance.objects.filter(
+                student__etablissement=etablissement, academic_year__isnull=True)),
+            ("incidents", DisciplineIncident.objects.filter(
+                student__etablissement=etablissement, academic_year__isnull=True)),
+            ("depenses", Expense.objects.filter(
+                etablissement=etablissement, academic_year__isnull=True)),
+            ("fiches de paie", TeacherPayroll.objects.filter(
+                teacher__etablissement=etablissement, academic_year__isnull=True)),
+            ("pointages", TeacherAttendance.objects.filter(
+                teacher__etablissement=etablissement, academic_year__isnull=True)),
+        ):
+            n = requete.count()
+            if n:
+                compte[quoi] = n
+        return compte
 
     # ----------------------------------------------------------------- outils
 

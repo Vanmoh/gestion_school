@@ -516,8 +516,18 @@ def _active_academic_year(etablissement=None):
     return repli.order_by("-start_date", "-id").first()
 
 
-def _active_academic_year_label() -> str:
-    year = _active_academic_year()
+def _active_academic_year_label(etablissement=None) -> str:
+    """Le libelle de l'annee **de cette ecole**.
+
+    Sans portee, `AcademicYear.courante(None)` rend `filter(is_active=True)`
+    trie par `-start_date`: l'annee active de n'importe quelle ecole, en
+    pratique celle qui a commence le plus tard. Les quatre etablissements
+    s'appelant aujourd'hui tous « 2025-2026 », rien ne se voyait -- mais le
+    jour ou l'un ouvre 2026-2027, les bulletins, cartes et certificats des
+    trois autres porteraient cette annee-la. Sur un document imprime, que
+    personne ne peut plus corriger.
+    """
+    year = _active_academic_year(etablissement)
 
     if year is None:
         current_year = timezone.localdate().year
@@ -772,11 +782,14 @@ def _draw_student_card_template(
     first_name, last_name, _ = _student_name_parts(student)
     class_name = student.classroom.name if student.classroom else "Non attribuee"
     birth_date = student.birth_date.strftime("%d/%m/%Y") if student.birth_date else "-"
-    year_label = _active_academic_year_label()
+    # L'ecole de l'eleve, et non la premiere active venue: c'est sa carte, et
+    # la date de validite en dessous vient de la meme annee.
+    etablissement_de_l_eleve = _student_etablissement(student)
+    year_label = _active_academic_year_label(etablissement_de_l_eleve)
 
     # Une carte sans echeance reste valable indefiniment aux yeux de celui qui
     # la controle: celle de 2019 ressemble a celle de cette annee.
-    annee = _active_academic_year()
+    annee = _active_academic_year(etablissement_de_l_eleve)
     fin_annee = getattr(annee, "end_date", None)
     validity_label = (
         f"Valable jusqu'au {fin_annee.strftime('%d/%m/%Y')}" if fin_annee else ""
@@ -4599,7 +4612,10 @@ def _build_certificat_payload(student: Student, *, verify_base_url: str = "") ->
     logo_path = _etablissement_logo_path(student) or _school_logo_path()
 
     annee = _active_academic_year(etablissement)
-    annee_label = str(getattr(annee, "name", "") or "").strip() or _active_academic_year_label()
+    annee_label = (
+        str(getattr(annee, "name", "") or "").strip()
+        or _active_academic_year_label(etablissement)
+    )
 
     _, _, nom_complet = _student_name_parts(student)
     classe = student.classroom.name if student.classroom else "non affectée"
@@ -5402,7 +5418,11 @@ class StudentCardVerifyView(APIView):
                 valide=False,
             )
 
-        annee_courante = _active_academic_year_label()
+        # L'ecole qui a emis la carte: c'est son annee que le controleur
+        # compare a celle imprimee, pas celle d'une autre.
+        annee_courante = _active_academic_year_label(
+            getattr(student, "etablissement", None)
+        )
         ecole = str(getattr(getattr(student, "etablissement", None), "name", "") or "")
 
         if student.is_archived:
@@ -5502,7 +5522,7 @@ class StaffRosterPdfView(APIView):
             teachers,
             school=school,
             logo_path=logo_path,
-            year_label=_active_academic_year_label(),
+            year_label=_active_academic_year_label(etablissement),
         )
         return pdf_output_response(pdf, "liste_enseignants.pdf")
 
@@ -5575,15 +5595,21 @@ class ClassRosterPdfView(APIView):
         par_classe = [(item.name, par_classe_map[item.id]) for item in classrooms]
 
         premier_eleve = next((eleve for _, eleves in par_classe for eleve in eleves), None)
+
+        # L'ecole est resolue avant l'alternative, et non dans une seule de ses
+        # branches: le libelle d'annee imprime en bas du document la reclame
+        # dans les deux cas. Un listing d'une classe pleine passait par la
+        # branche de gauche, ou la variable n'existait pas.
+        etablissement = _student_etablissement(premier_eleve) if premier_eleve else None
+        if etablissement is None and target_etablissement_id:
+            etablissement = Etablissement.objects.filter(
+                id=target_etablissement_id
+            ).first()
+
         if premier_eleve is not None:
             school = _school_identity_for_student(premier_eleve)
             logo_path = _etablissement_logo_path(premier_eleve) or _school_logo_path()
         else:
-            etablissement = (
-                Etablissement.objects.filter(id=target_etablissement_id).first()
-                if target_etablissement_id
-                else None
-            )
             school = _school_identity()
             if etablissement is not None:
                 school = {**school, "name": etablissement.name}
@@ -5593,7 +5619,7 @@ class ClassRosterPdfView(APIView):
             par_classe,
             school=school,
             logo_path=logo_path,
-            year_label=_active_academic_year_label(),
+            year_label=_active_academic_year_label(etablissement),
             with_summary=classroom_id is None,
         )
 

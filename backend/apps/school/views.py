@@ -314,9 +314,15 @@ def journaliser_ecriture_annee_close(request, annee, module):
 class AnneeScolaireScopeMixin:
     """Restreint une vue a l'annee scolaire choisie, et protege les annees closes.
 
-    Le filtrage ne s'applique que si l'ecran demande une annee: sans
-    en-tete, la vue rend ce qu'elle rendait avant. C'est ce qui permet a la
-    bascule d'arriver ecran par ecran sans casser les autres.
+    L'annee retenue est celle que l'ecran demande (`X-Academic-Year-Id`), a
+    defaut l'annee active de l'etablissement consulte. Le filtrage n'etait
+    d'abord applique qu'avec l'en-tete, pour que la bascule arrive ecran par
+    ecran; les vingt-cinq vues la portent desormais, et le repli ferme le
+    dernier trou -- sans en-tete, l'API rendait deux annees additionnees.
+
+    Un appel qui ne designe aucun etablissement, lui, n'est pas filtre: replier
+    sur `AcademicYear.courante(None)` rendrait l'annee d'une ecole au hasard, et
+    filtrer les quatre sur celle-la serait pire que ne pas filtrer.
 
     Une annee cloturee reste consultable. L'ecriture y est reservee a la
     direction -- une note corrigee apres remise des bulletins n'est pas un
@@ -326,6 +332,58 @@ class AnneeScolaireScopeMixin:
     # Chemin vers l'annee depuis l'objet de la vue. Les vues qui portent
     # `academic_year` directement n'ont rien a declarer.
     academic_year_field = "academic_year"
+
+    # Garder les lignes qui n'ont pas encore de rattachement.
+    #
+    # `Student.classroom` et `Subject.classroom` sont nullables: un eleve
+    # inscrit mais pas encore affecte n'appartient a aucune annee, et un filtre
+    # brut le ferait disparaitre de la liste ou on vient justement l'affecter.
+    # Il n'est pas d'une autre annee -- il n'est d'aucune, ce qui n'est pas la
+    # meme chose.
+    academic_year_keep_orphans = False
+
+    # Le filtre reduit-il la liste a l'annee demandee?
+    #
+    # Non pour les vues dont le metier est justement de traverser les annees.
+    # `StudentAcademicHistory` est le parcours d'un eleve: le reduire a l'annee
+    # active, c'est afficher une ligne la ou l'ecran promet un parcours. Un
+    # redoublant n'y voyait plus son annee precedente, et le rang d'ou il
+    # venait disparaissait du dossier.
+    #
+    # Ces vues gardent le mixin: la protection des annees closes et le
+    # `?academic_year=` explicite restent, c'est seulement la restriction
+    # implicite qui tombe.
+    academic_year_filtre_la_liste = True
+
+    # Le filtre s'applique-t-il aussi quand on demande **un** objet?
+    #
+    # Non pour les vues dont l'objet existe independamment de l'annee. Un eleve
+    # en est le cas unique: `Student.classroom` ne contient que sa classe
+    # **actuelle**, donc un eleve promu de 6eme en 5eme n'a plus aucun lien avec
+    # l'annee passee. Le filtrer par l'annee choisie le fait disparaitre -- et
+    # avec lui `/students/<id>/dossier/`, qui est justement l'ecran qu'on ouvre
+    # pour regarder le passe. La direction lisait 404 sur un eleve inscrit.
+    #
+    # La liste, elle, reste filtree: « qui est dans une classe de cette annee »
+    # est une question legitime, et c'est ce qui a corrige les 611 eleves lus
+    # pour 450 inscrits.
+    academic_year_filtre_le_detail = True
+
+    # Sans en-tete, faut-il retenir l'annee active?
+    #
+    # Oui par defaut: c'etait le dernier trou du mixin, et sans en-tete l'API
+    # rendait 611 eleves pour 450 inscrits.
+    #
+    # Non pour une liste qui est le **seul chemin** vers une autre annee.
+    # `ClassRoomViewSet` en est le cas: la fiche d'un eleve ne porte que son
+    # inscription en cours, donc une famille qui remonte d'une annee pour
+    # rouvrir un ancien bulletin trouve l'ancienne classe dans cette liste et
+    # nulle part ailleurs. Le repli la vidait, et le bulletin redevenait
+    # introuvable.
+    #
+    # L'en-tete explicite, elle, filtre toujours: le choix d'un ecran prime sur
+    # un defaut. C'est pourquoi ce drapeau ne porte que sur le repli.
+    academic_year_repli_implicite = True
 
     def filter_queryset(self, queryset):
         """Branche le filtre d'annee sur la chaine de filtrage de DRF.
@@ -338,10 +396,65 @@ class AnneeScolaireScopeMixin:
         return self._filtrer_par_annee(super().filter_queryset(queryset))
 
     def _filtrer_par_annee(self, queryset):
+        if not self.academic_year_filtre_la_liste:
+            return queryset
+        # `filter_queryset` sert la liste et le detail: DRF l'appelle depuis
+        # `get_object`. C'est ce qui a permis au filtre d'arriver sans toucher
+        # aux `get_queryset` a douze points de retour, mais cela oblige a
+        # distinguer ici les deux usages.
+        #
+        # `self.detail` et non `self.action != "list"`: DRF le pose par route,
+        # et il vaut donc `True` pour `/students/<id>/dossier/` comme pour la
+        # lecture simple, `False` pour les actions qui agregent -- lesquelles
+        # doivent bien rester filtrees.
+        if not self.academic_year_filtre_le_detail and getattr(self, "detail", False):
+            return queryset
+
         annee = self._requested_academic_year()
+        if (
+            annee is None
+            and self.academic_year_repli_implicite
+            and not getattr(self, "detail", False)
+        ):
+            # Repli sur l'annee active de l'etablissement -- pour les listes
+            # seulement.
+            #
+            # Jamais pour une lecture par identifiant: demander l'objet #123 ne
+            # laisse aucune ambiguite sur l'annee voulue, donc un filtre ne peut
+            # que le cacher. La portee d'etablissement, elle, protege toujours.
+            #
+            # Trois tests l'ont montre, et ils decrivent de vrais besoins:
+            # corriger la note d'un eleve promu, lire la classe d'une annee
+            # passee, et ecrire sur une annee close -- toutes des operations qui
+            # portent justement sur une autre annee que l'active.
+            #
+            # Le mixin ne filtrait qu'avec l'en-tete, pour que la bascule arrive
+            # ecran par ecran. La bascule est finie -- vingt-cinq vues la
+            # portent -- mais la permissivite restait: sans en-tete, l'API
+            # rendait 611 eleves pour 450 inscrits. L'application envoie
+            # l'en-tete, donc elle ne voyait rien; un export, un script, ou un
+            # ecran qui interroge avant que l'annee soit chargee le voyaient.
+            #
+            # Seulement si l'etablissement est connu. `AcademicYear.courante(None)`
+            # rend `filter(is_active=True)` trie par `-start_date`: l'annee
+            # active de n'importe quelle ecole. Replier dessus filtrerait les
+            # quatre ecoles sur l'annee d'une seule -- pire que ne pas filtrer.
+            # Un superadmin qui regarde l'ensemble continue donc de tout voir.
+            etablissement = self._resolve_target_etablissement()
+            if etablissement is not None:
+                annee = AcademicYear.courante(etablissement)
         if annee is None:
             return queryset
-        return queryset.filter(**{self.academic_year_field: annee})
+        if not self.academic_year_keep_orphans:
+            return queryset.filter(**{self.academic_year_field: annee})
+
+        # La racine du chemin porte le rattachement: `classroom` dans
+        # `classroom__academic_year`. C'est son absence qui fait l'orphelin.
+        racine = self.academic_year_field.split("__")[0]
+        return queryset.filter(
+            Q(**{self.academic_year_field: annee})
+            | Q(**{f"{racine}__isnull": True})
+        )
 
     def _annee_de_l_objet(self, instance):
         objet = instance
@@ -1409,6 +1522,10 @@ class EtablissementViewSet(viewsets.ModelViewSet):
 
 
 class ClassRoomViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
+    # Voir `academic_year_repli_implicite`: cette liste est le seul chemin
+    # d'une famille vers la classe de l'annee passee, donc vers l'ancien
+    # bulletin. Un ecran qui veut une seule annee la demande.
+    academic_year_repli_implicite = False
     access_module = "academics"
     # L'effectif vient d'une annotation: le calculer par classe ferait une
     # requete de comptage par ligne de la liste.
@@ -1503,8 +1620,10 @@ class ClassRoomViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         )
 
 
-class SubjectViewSet(BaseModelViewSet):
+class SubjectViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "academics"
+    academic_year_field = "classroom__academic_year"
+    academic_year_keep_orphans = True
     queryset = Subject.objects.all().order_by("name", "id")
     serializer_class = SubjectSerializer
     # `classroom` n'est pas declare ici: get_queryset le traite deja, avec
@@ -1726,7 +1845,11 @@ class TeacherViewSet(BaseModelViewSet):
     def get_queryset(self):
         self._backfill_missing_teacher_etablissements()
         user = self.request.user
-        qs = Teacher.objects.select_related("user", "etablissement")
+        # Le tri est ici: cette methode repart de zero et n'herite pas de
+        # l'ordre declare sur `queryset`.
+        qs = Teacher.objects.select_related("user", "etablissement").order_by(
+            "user__last_name", "user__first_name", "id"
+        )
         requested_etablissement = self._requested_etablissement()
 
         if requested_etablissement is not None:
@@ -1764,8 +1887,9 @@ class TeacherViewSet(BaseModelViewSet):
         serializer.save(etablissement=target_etablissement)
 
 
-class TeacherAssignmentViewSet(BaseModelViewSet):
+class TeacherAssignmentViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "teachers"
+    academic_year_field = "classroom__academic_year"
     queryset = TeacherAssignment.objects.select_related("teacher", "subject", "classroom").all().order_by("id")
     serializer_class = TeacherAssignmentSerializer
     # Sans cette liste, `?teacher=` etait accepte et ignore: la page
@@ -1828,9 +1952,14 @@ class TeacherAssignmentViewSet(BaseModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        # L'ordre est ici et non seulement sur `queryset`: cette methode
+        # reconstruit la requete de zero, et le tri declare plus haut ne la
+        # suivait pas. La liste partait donc sans `ORDER BY` -- DRF le disait
+        # dans un `UnorderedObjectListWarning` que personne ne lisait -- et la
+        # pagination pouvait repeter ou perdre une ligne entre deux pages.
         qs = TeacherAssignment.objects.select_related(
             "teacher", "subject", "classroom", "teacher__etablissement", "classroom__etablissement"
-        )
+        ).order_by("classroom__name", "subject__name", "id")
         requested_etablissement = self._requested_etablissement()
 
         if requested_etablissement is not None:
@@ -1870,7 +1999,7 @@ class TeacherAssignmentViewSet(BaseModelViewSet):
         serializer.save()
 
 
-class AvailabilityCampaignViewSet(BaseModelViewSet):
+class AvailabilityCampaignViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     """Les campagnes de collecte des disponibilites.
 
     Meme module de droits que les disponibilites elles-memes: qui les lit
@@ -2113,8 +2242,9 @@ class AvailabilityCampaignViewSet(BaseModelViewSet):
         )
 
 
-class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
+class TeacherAvailabilitySlotViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "teacher_availability"
+    academic_year_field = "campaign__academic_year"
     DAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT"]
     DAY_LABELS = {
         "MON": "Lundi",
@@ -2519,8 +2649,9 @@ class TeacherAvailabilitySlotViewSet(BaseModelViewSet):
         return base.none()
 
 
-class TeacherScheduleSlotViewSet(BaseModelViewSet):
+class TeacherScheduleSlotViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "timetable"
+    academic_year_field = "assignment__classroom__academic_year"
     DAY_ORDER = ["MON", "TUE", "WED", "THU", "FRI", "SAT"]
     DAY_LABELS = {
         "MON": "Lundi",
@@ -3450,7 +3581,12 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
     @action(detail=False, methods=["get"], permission_classes=[permissions.IsAuthenticated])
     def teacher_workload(self, request):
         classroom_id = self._parse_classroom_id(request)
-        queryset = self.get_queryset()
+        # `get_queryset()` seul ignore l'annee: `filter_queryset` est ce qui
+        # l'applique, et une action ne passe pas par lui. La charge horaire
+        # additionnait donc les creneaux des deux annees -- un enseignant
+        # present dans les deux paraissait faire le double de ses heures, et
+        # c'est ce chiffre que la direction lit pour arbitrer les services.
+        queryset = self._filtrer_par_annee(self.get_queryset())
         if classroom_id:
             queryset = queryset.filter(assignment__classroom_id=classroom_id)
 
@@ -3665,20 +3801,36 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
     def export_excel(self, request):
         classroom_id = self._parse_classroom_id(request)
 
+        # Les classes de l'annee de travail, et non de toutes les annees. Le
+        # classeur global sortait trente onglets pour quinze classes sur
+        # IFP-OBK, les deux annees melangees et rien pour les distinguer --
+        # dans un fichier qu'on imprime et qu'on distribue.
+        #
+        # Le filtre n'est pas pose dans `_scoped_classroom_queryset`: ce
+        # helper sert aussi a `duplicate_schedule`, qui recopie justement un
+        # emploi du temps d'une annee sur la suivante. Le borner casserait la
+        # seule operation dont le metier est de traverser les annees.
+        annee = self._requested_academic_year()
+        classes = self._scoped_classroom_queryset()
+        if annee is not None:
+            classes = classes.filter(academic_year=annee)
+
         if classroom_id:
-            classrooms = list(self._scoped_classroom_queryset().filter(id=classroom_id).order_by("name"))
+            classrooms = list(classes.filter(id=classroom_id).order_by("name"))
             if not classrooms:
                 return Response({"detail": "Classe introuvable."}, status=404)
             filename = f"planning_classe_{classroom_id}.xlsx"
         else:
-            classrooms = list(self._scoped_classroom_queryset().order_by("name"))
+            classrooms = list(classes.order_by("name"))
             filename = "planning_global_multi_classes.xlsx"
 
         wb = Workbook()
         default_sheet = wb.active
         wb.remove(default_sheet)
 
-        workload_rows = self._teacher_workload_rows(self.get_queryset())
+        workload_rows = self._teacher_workload_rows(
+            self._filtrer_par_annee(self.get_queryset())
+        )
         ws_load = wb.create_sheet("Charge Enseignants")
         ws_load.append(
             [
@@ -3919,8 +4071,9 @@ class TeacherScheduleSlotViewSet(BaseModelViewSet):
         return response
 
 
-class TimetablePublicationViewSet(EtablissementScopeMixin, viewsets.ReadOnlyModelViewSet):
+class TimetablePublicationViewSet(AnneeScolaireScopeMixin, EtablissementScopeMixin, viewsets.ReadOnlyModelViewSet):
     access_module = "timetable"
+    academic_year_field = "classroom__academic_year"
     queryset = TimetablePublication.objects.select_related("classroom", "published_by").all().order_by("classroom__name", "id")
     serializer_class = TimetablePublicationSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
@@ -3947,7 +4100,7 @@ class TimetablePublicationViewSet(EtablissementScopeMixin, viewsets.ReadOnlyMode
         return qs.filter(classroom__etablissement=getattr(user, "etablissement", None))
 
 
-class BulletinPublicationViewSet(EtablissementScopeMixin, viewsets.ReadOnlyModelViewSet):
+class BulletinPublicationViewSet(AnneeScolaireScopeMixin, EtablissementScopeMixin, viewsets.ReadOnlyModelViewSet):
     """La validation des bulletins, classe par classe et periode par periode.
 
     En lecture seule par les routes ordinaires: valider n'est pas modifier un
@@ -4190,7 +4343,11 @@ class ParentProfileViewSet(BaseModelViewSet):
     def get_queryset(self):
         self._backfill_missing_parent_profiles()
         user = self.request.user
-        qs = ParentProfile.objects.select_related("user")
+        # Le tri est ici: cette methode repart de zero et n'herite pas de
+        # l'ordre declare sur `queryset`.
+        qs = ParentProfile.objects.select_related("user").order_by(
+            "user__last_name", "user__first_name", "id"
+        )
 
         requested_etablissement = self._requested_etablissement()
         if requested_etablissement is not None:
@@ -4225,8 +4382,14 @@ class ParentProfileViewSet(BaseModelViewSet):
         serializer.save(etablissement=target)
 
 
-class StudentViewSet(BaseModelViewSet):
+class StudentViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "students"
+    academic_year_field = "classroom__academic_year"
+    academic_year_keep_orphans = True
+    # Un eleve ne cesse pas d'exister quand on regarde une autre annee: voir
+    # `academic_year_filtre_le_detail`. Ses faits -- absences, notes, incidents --
+    # restent rendus annee par annee, chacun par sa propre vue.
+    academic_year_filtre_le_detail = False
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
@@ -4280,12 +4443,28 @@ class StudentViewSet(BaseModelViewSet):
         le tableau decrit ce qu'on regarde. Melanger les deux etait la source
         de la confusion.
         """
-        queryset = self.get_queryset()
+        # L'annee de travail: celle que l'ecran demande, a defaut l'active de
+        # l'etablissement consulte -- et non la premiere active venue, car
+        # depuis que chaque ecole a les siennes, `filter(is_active=True)` sans
+        # portee rendait l'annee d'une autre.
+        active_year = self._scoped_academic_year()
 
-        # L'annee de l'etablissement consulte, et non la premiere active
-        # venue: depuis que chaque ecole a les siennes, `filter(is_active=True)`
-        # sans portee rendait l'annee d'une autre.
-        active_year = AcademicYear.courante(self._resolve_target_etablissement())
+        # La carte **nomme** une annee: elle doit donc compter celle-la.
+        # Elle annoncait « 2025-2026 : 611 eleves » sur une annee qui en
+        # comptait 450, parce que le decompte ignorait l'annee tandis que
+        # l'etiquette l'affichait. Un chiffre faux portant le nom de la bonne
+        # annee est plus trompeur qu'un chiffre sans etiquette.
+        #
+        # Le filtre est pose ici explicitement, et non laisse a
+        # `_filtrer_par_annee`: celui-ci ne filtre que si l'en-tete est
+        # presente, alors que l'etiquette, elle, s'affiche toujours.
+        queryset = self.get_queryset()
+        if active_year is not None:
+            queryset = queryset.filter(
+                Q(classroom__academic_year=active_year)
+                | Q(classroom__isnull=True)
+            )
+
         if active_year is not None:
             enrolled_this_year = Q(
                 enrollment_date__gte=active_year.start_date,
@@ -4867,7 +5046,13 @@ class StudentViewSet(BaseModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Student.objects.select_related("user", "classroom", "parent", "parent__user")
+        # Le tri est ici: cette methode repart de zero -- et par huit chemins de
+        # retour -- donc l'ordre declare sur `queryset` ne la suivait pas. Une
+        # liste d'eleves sans `ORDER BY` se repagine differemment a chaque
+        # appel: un eleve peut apparaitre deux fois, ou pas du tout.
+        qs = Student.objects.select_related(
+            "user", "classroom", "parent", "parent__user"
+        ).order_by("user__last_name", "user__first_name", "id")
         role = getattr(user, "role", "")
         if role == UserRole.STUDENT:
             return qs.filter(user_id=user.id)
@@ -5179,6 +5364,12 @@ class StudentViewSet(BaseModelViewSet):
 
 
 class StudentAcademicHistoryViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
+    # Le parcours d'un eleve traverse les annees: c'est sa raison d'etre.
+    # L'ecran « Dossier eleve » appelle `/student-history/?student=<id>` sans
+    # preciser d'annee, et l'en-tete global en ajoutait une -- le parcours se
+    # reduisait alors a l'annee active. Sur IFP-OBK, 502 bilans sur 1 893
+    # etaient ainsi masques.
+    academic_year_filtre_la_liste = False
     access_module = "students"
     queryset = StudentAcademicHistory.objects.select_related("student", "academic_year", "classroom").all().order_by("-academic_year_id", "rank", "id")
     serializer_class = StudentAcademicHistorySerializer
@@ -7433,7 +7624,24 @@ class FeeScheduleViewSet(AnneeScolaireScopeMixin, EtablissementScopedModelViewSe
     search_fields = ["label", "classroom__name"]
 
     def get_queryset(self):
-        return self._filter_by_scope(super().get_queryset())
+        """Le bareme de sa classe, et pas celui des autres.
+
+        Une famille lisait les dix baremes de l'ecole -- cinq classes, deux
+        lignes chacune -- alors que son enfant n'en suit qu'un. Ce que paie la
+        classe voisine ne la regarde pas, et `L*` dit precisement « ses ».
+        """
+        queryset = self._filter_by_scope(super().get_queryset())
+        role = getattr(self.request.user, "role", None)
+
+        if role == UserRole.STUDENT:
+            return queryset.filter(
+                classroom__students__user_id=self.request.user.id
+            ).distinct()
+        if role == UserRole.PARENT:
+            return queryset.filter(
+                classroom__students__parent__user_id=self.request.user.id
+            ).distinct()
+        return queryset
 
     def perform_create(self, serializer):
         serializer.save(etablissement=self._resolve_target_etablissement())
@@ -7906,8 +8114,9 @@ class StudentFeeViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         serializer.save()
 
 
-class PaymentViewSet(BaseModelViewSet):
+class PaymentViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "finance"
+    academic_year_field = "fee__academic_year"
     queryset = Payment.objects.filter(is_cancelled=False)
     serializer_class = PaymentSerializer
     permission_classes = [permissions.IsAuthenticated, HasModuleAccess]
@@ -8314,7 +8523,23 @@ class ExpenseViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         return getattr(user, "etablissement", None)
 
     def get_queryset(self):
+        """Ce que l'ecole depense ne regarde pas les familles.
+
+        Le module « finance » leur est ouvert en `L*` -- ils y lisent **leurs**
+        frais et **leurs** paiements. Mais la meme cle ouvrait aussi les
+        depenses: un parent et un eleve recevaient « Reparation du groupe
+        electrogene -- 180 000 » et le reste de la comptabilite de l'ecole.
+
+        L'ecran masquait pourtant l'onglet (`peutVoirLesDepenses`), et c'est ce
+        qui rendait l'ecart durable: rien ne se voyait, la donnee partait quand
+        meme. Leur perimetre ne contient aucune depense; il est donc vide, et
+        c'est ce que dit l'etoile.
+        """
         user = self.request.user
+        role = getattr(user, "role", None)
+        if role in {UserRole.PARENT, UserRole.STUDENT}:
+            return super().get_queryset().none()
+
         qs = super().get_queryset()
         requested_etablissement = self._requested_etablissement()
 
@@ -8322,7 +8547,7 @@ class ExpenseViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
             return qs.filter(etablissement=requested_etablissement)
         if self._has_requested_scope():
             return qs.none()
-        if getattr(user, "role", None) == "super_admin":
+        if role == "super_admin":
             return qs
         return qs.filter(etablissement=getattr(user, "etablissement", None))
 
@@ -9507,8 +9732,10 @@ class BookViewSet(BaseModelViewSet):
         livre.recalculer_disponibilite()
 
 
-class BorrowViewSet(BaseModelViewSet):
+class BorrowViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "library"
+    academic_year_field = "student__classroom__academic_year"
+    academic_year_keep_orphans = True
     queryset = Borrow.objects.select_related("student", "book").all().order_by("-borrowed_at", "-id")
     serializer_class = BorrowSerializer
 
@@ -9726,7 +9953,7 @@ class CanteenMenuViewSet(BaseModelViewSet):
         serializer.save(etablissement=self._resolve_target_etablissement())
 
 
-class CanteenSubscriptionViewSet(BaseModelViewSet):
+class CanteenSubscriptionViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "canteen"
     queryset = CanteenSubscription.objects.select_related("student", "student__user", "academic_year").all().order_by("-created_at", "-id")
     serializer_class = CanteenSubscriptionSerializer
@@ -9781,8 +10008,10 @@ class CanteenSubscriptionViewSet(BaseModelViewSet):
         serializer.save()
 
 
-class CanteenServiceViewSet(BaseModelViewSet):
+class CanteenServiceViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "canteen"
+    academic_year_field = "student__classroom__academic_year"
+    academic_year_keep_orphans = True
     queryset = CanteenService.objects.select_related("student", "student__user", "menu").all().order_by("-served_on", "-id")
     serializer_class = CanteenServiceSerializer
     filterset_fields = ["student", "menu", "served_on", "is_paid"]
@@ -11029,6 +11258,29 @@ class PromotionRunViewSet(EtablissementScopedModelViewSet):
             raise ValidationError(
                 {"target_academic_year": "L'annee cible doit etre differente de l'annee source."}
             )
+        # Une promotion va vers l'avant. Rien ne le verifiait: seule l'egalite
+        # des deux annees etait refusee, et « differente » laisse passer le
+        # passe.
+        #
+        # L'ecran de promotion choisit sa cible en prenant « une autre annee que
+        # la source », dans une liste triee par `-is_active, -start_date`. Tant
+        # qu'une ecole n'a que l'annee courante et la suivante, cela tombe
+        # juste. Des qu'elle aura une annee passee -- c'est-a-dire apres sa
+        # premiere promotion -- la cible proposee sera cette annee passee.
+        #
+        # Et une promotion s'applique: elle reaffecte `Student.classroom` et
+        # ecrit dans `StudentAcademicHistory`. Renvoyer une cohorte entiere dans
+        # l'annee d'avant ne se defait pas d'un clic.
+        if target_year.start_date <= source_year.start_date:
+            raise ValidationError(
+                {
+                    "target_academic_year": (
+                        f"L'annee cible « {target_year.name} » commence avant "
+                        f"l'annee source « {source_year.name} ». Une promotion "
+                        "va vers l'annee suivante."
+                    )
+                }
+            )
 
         if min_average < Decimal("0") or min_average > Decimal("20"):
             raise ValidationError({"min_average": "Le seuil de moyenne doit etre entre 0 et 20."})
@@ -11196,17 +11448,52 @@ class DashboardViewSet(viewsets.ViewSet):
             return requested
         return getattr(user, "etablissement", None)
 
+    def _annee_de_travail(self, request, etablissement):
+        """L'annee que l'ecran demande, a defaut l'active de cette ecole.
+
+        Le tableau de bord ne consultait aucune annee. Sur IFP-OBK, qui en a
+        deux ouvertes, il annoncait donc **611 eleves** pour 450 inscrits et
+        **30 classes** pour 15 -- et les memes chiffres qu'on demande l'annee
+        active, aucune annee, ou l'annee suivante. C'est l'ecran le plus
+        regarde de l'application.
+        """
+        brut = (
+            request.headers.get("X-Academic-Year-Id")
+            or request.query_params.get("academic_year")
+            or request.query_params.get("academic_year_scope")
+        )
+        if brut not in (None, ""):
+            try:
+                annee_id = int(brut)
+            except (TypeError, ValueError):
+                annee_id = None
+            if annee_id and annee_id > 0:
+                requete = AcademicYear.objects.filter(id=annee_id)
+                if etablissement is not None:
+                    # Une annee d'une autre ecole ne doit pas ouvrir ses
+                    # chiffres a qui en passe l'identifiant.
+                    requete = requete.filter(etablissement=etablissement)
+                annee = requete.first()
+                if annee is not None:
+                    return annee
+        return AcademicYear.courante(etablissement)
+
     def list(self, request):
         month_start = timezone.now().date().replace(day=1)
         active_etablissement = self._resolve_dashboard_scope(request)
         if getattr(request.user, "role", None) == UserRole.SUPER_ADMIN and active_etablissement is None:
             raise ValidationError({"etablissement": "Selectionnez un etablissement actif."})
 
+        annee = self._annee_de_travail(request, active_etablissement)
+
         # Cle et duree viennent de dashboard_cache, que les signaux
-        # d'invalidation utilisent aussi (voir signals.py).
+        # d'invalidation utilisent aussi (voir signals.py). L'annee en fait
+        # partie: sans elle, basculer d'annee rendait les chiffres de l'autre
+        # pendant une minute.
         cache_key = stats_cache_key(
             active_etablissement.id if active_etablissement is not None else None,
             month_start,
+            annee.id if annee is not None else None,
         )
         cached = cache.get(cache_key)
         if cached is not None:
@@ -11224,6 +11511,21 @@ class DashboardViewSet(viewsets.ViewSet):
             attendance_qs = attendance_qs.filter(student__etablissement=active_etablissement)
             classrooms_qs = classrooms_qs.filter(etablissement=active_etablissement)
             teachers_qs = teachers_qs.filter(etablissement=active_etablissement)
+
+        if annee is not None:
+            classrooms_qs = classrooms_qs.filter(academic_year=annee)
+            # L'effectif de l'annee, c'est-a-dire les eleves qu'une de ses
+            # classes accueille. Un eleve inscrit mais pas encore affecte n'y
+            # figure pas: il est compte a part, dans `students_unassigned`,
+            # parce qu'il demande une action et non un decompte.
+            students_qs = students_qs.filter(classroom__academic_year=annee)
+            attendance_qs = attendance_qs.filter(academic_year=annee)
+            # Les enseignants qui tiennent effectivement une classe de
+            # l'annee. Le total brut comptait les 76 fiches de l'ecole, dont
+            # celles d'annees passees et celles sans aucune matiere.
+            teachers_qs = teachers_qs.filter(
+                assignments__classroom__academic_year=annee
+            ).distinct()
 
         revenue = payment_qs.aggregate(value=Sum("amount"))["value"] or 0
         expenses_qs = Expense.objects.filter(date__gte=month_start)
@@ -11261,6 +11563,74 @@ class DashboardViewSet(viewsets.ViewSet):
         classroom_count = classrooms_qs.count()
         teacher_count = teachers_qs.count()
 
+        # --- le recouvrement, qui manquait entierement -------------------
+        #
+        # C'est le chiffre d'une ecole malienne: ce qui a ete facture, ce qui
+        # est rentre, ce qui reste. Le tableau de bord n'en portait aucune
+        # trace -- il affichait « Benefice net 66 965 000 F », qui est en
+        # realite le montant encaisse, les charges non doublement validees
+        # etant exclues du calcul.
+        #
+        # Les deux sommes sont prises separement et rapprochees en Python. Un
+        # seul `annotate(Sum("amount_due"), Sum("payments__amount"))`
+        # multiplierait `amount_due` par le nombre de paiements de la ligne:
+        # trois versements sur un frais de 15 000 F feraient 45 000 F de du.
+        du_par_eleve = {}
+        regle_par_eleve = {}
+        if annee is not None:
+            frais_qs = StudentFee.objects.filter(
+                academic_year=annee, student__in=students_qs
+            )
+            du_par_eleve = dict(
+                frais_qs.values_list("student").annotate(v=Sum("amount_due"))
+            )
+            regle_par_eleve = dict(
+                Payment.objects.filter(fee__in=frais_qs, is_cancelled=False)
+                .values_list("fee__student")
+                .annotate(v=Sum("amount"))
+            )
+
+        fees_due = sum(du_par_eleve.values(), Decimal(0))
+        fees_collected = sum(regle_par_eleve.values(), Decimal(0))
+        fees_outstanding = fees_due - fees_collected
+        collection_rate = (
+            float(fees_collected / fees_due * 100) if fees_due else 0.0
+        )
+        students_unpaid = sum(
+            1
+            for eleve, montant in du_par_eleve.items()
+            if (regle_par_eleve.get(eleve) or Decimal(0)) < montant
+        )
+
+        # Un eleve inscrit sans classe n'est ni dans l'effectif de l'annee ni
+        # nulle part: il demande une affectation, donc il se compte a part.
+        students_unassigned = Student.objects.filter(
+            is_archived=False, classroom__isnull=True
+        )
+        if active_etablissement is not None:
+            students_unassigned = students_unassigned.filter(
+                etablissement=active_etablissement
+            )
+        students_unassigned = students_unassigned.count()
+
+        expenses_pending_count = expenses_qs.filter(
+            level_two_validated_at__isnull=True
+        ).count()
+
+        # Les charges qui attendent une signature sur **toute** l'annee, et
+        # non sur le seul mois courant. Une depense de mars non validee bloque
+        # autant qu'une de septembre, et c'est le total qui se decide: sur
+        # IFP-OBK, 2 lignes ce mois-ci contre 36 sur l'annee.
+        attente_annee = Expense.objects.filter(level_two_validated_at__isnull=True)
+        if active_etablissement is not None:
+            attente_annee = attente_annee.filter(etablissement=active_etablissement)
+        if annee is not None:
+            attente_annee = attente_annee.filter(academic_year=annee)
+        year_expenses_pending = (
+            attente_annee.aggregate(value=Sum("amount"))["value"] or 0
+        )
+        year_expenses_pending_count = attente_annee.count()
+
         etablissement_payload = None
         if active_etablissement is not None:
             etablissement_payload = {
@@ -11282,9 +11652,105 @@ class DashboardViewSet(viewsets.ViewSet):
             "classrooms": classroom_count,
             "teachers": teacher_count,
             "active_etablissement": etablissement_payload,
+            # L'annee que ces chiffres decrivent. Elle est renvoyee pour que
+            # l'ecran la nomme: c'est son absence qui a laisse « 611 eleves »
+            # s'afficher pendant des mois sans que personne ne s'interroge.
+            "academic_year": (
+                {
+                    "id": annee.id,
+                    "name": annee.name,
+                    "start_date": annee.start_date,
+                    "end_date": annee.end_date,
+                    "is_closed": annee.is_closed,
+                }
+                if annee is not None
+                else None
+            ),
+            "fees_due": fees_due,
+            "fees_collected": fees_collected,
+            "fees_outstanding": fees_outstanding,
+            "collection_rate": round(collection_rate, 1),
+            "students_unpaid": students_unpaid,
+            "students_unassigned": students_unassigned,
+            "expenses_pending_count": expenses_pending_count,
+            "year_expenses_pending": year_expenses_pending,
+            "year_expenses_pending_count": year_expenses_pending_count,
         }
         cache.set(cache_key, payload, STATS_CACHE_SECONDS)
         return Response(payload)
+
+    @action(detail=False, methods=["get"], url_path="echeancier")
+    def echeancier(self, request):
+        """Ce qui etait du chaque mois, et ce qui est rentre.
+
+        La courbe du tableau de bord s'appuyait sur `created_at` des
+        paiements, c'est-a-dire l'heure de saisie: `Payment` ne porte aucune
+        date de paiement. Un recu ecrit le 30 et saisi le 2 tombe donc dans le
+        mois suivant, et un import en masse fait tenir une annee entiere dans
+        un seul mois -- c'est exactement ce que la base montee en une fois
+        donne a voir: 66 960 000 F sur septembre et zero partout ailleurs.
+
+        Ici le mois vient de `StudentFee.due_date`, l'echeance. Elle est fixee
+        par le bareme et ne bouge pas, donc la serie decrit l'ecole et non le
+        rythme de saisie du caissier. Un versement est rattache au mois de
+        l'echeance qu'il solde, ce qui est la question posee: « sommes-nous a
+        jour sur l'echeancier? »
+
+        Sur IFP-OBK, la reponse tient en un coup d'oeil: solde jusqu'en mars,
+        puis 1 680 000 F manquants chaque mois -- trois mois qui font les
+        5 040 000 F de reste.
+        """
+        active_etablissement = self._resolve_dashboard_scope(request)
+        annee = self._annee_de_travail(request, active_etablissement)
+        if annee is None:
+            return Response({"annee": None, "mois": [], "du": 0, "encaisse": 0})
+
+        frais = StudentFee.objects.filter(academic_year=annee)
+        if active_etablissement is not None:
+            frais = frais.filter(student__etablissement=active_etablissement)
+
+        du_par_mois = {
+            ligne["m"]: ligne["v"] or 0
+            for ligne in frais.annotate(m=TruncMonth("due_date"))
+            .values("m")
+            .annotate(v=Sum("amount_due"))
+        }
+        encaisse_par_mois = {
+            ligne["m"]: ligne["v"] or 0
+            for ligne in Payment.objects.filter(fee__in=frais, is_cancelled=False)
+            .annotate(m=TruncMonth("fee__due_date"))
+            .values("m")
+            .annotate(v=Sum("amount"))
+        }
+
+        # Les mois des echeances, et non les douze mois de l'annee: un bareme
+        # qui s'arrete en juin ne doit pas afficher deux colonnes vides que
+        # personne ne sait interpreter.
+        mois = sorted(set(du_par_mois) | set(encaisse_par_mois))
+        lignes = []
+        for m in mois:
+            if m is None:
+                continue
+            du = du_par_mois.get(m) or 0
+            encaisse = encaisse_par_mois.get(m) or 0
+            lignes.append(
+                {
+                    "mois": m.date() if hasattr(m, "date") else m,
+                    "libelle": f"{m.month:02d}/{m.year}",
+                    "du": du,
+                    "encaisse": encaisse,
+                    "manque": du - encaisse,
+                }
+            )
+
+        return Response(
+            {
+                "annee": {"id": annee.id, "name": annee.name},
+                "mois": lignes,
+                "du": sum((l["du"] for l in lignes), Decimal(0)),
+                "encaisse": sum((l["encaisse"] for l in lignes), Decimal(0)),
+            }
+        )
 
     @action(detail=False, methods=["get"], url_path="finances-annuelles")
     def finances_annuelles(self, request):

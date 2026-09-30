@@ -19,3 +19,13 @@ final dashboardStatsProvider = FutureProvider<DashboardStats>((ref) async {
 final financesAnnuellesProvider = FutureProvider<FinancesAnnuelles>((ref) async {
   return ref.read(dashboardRepositoryProvider).fetchFinancesAnnuelles();
 });
+
+/// L'échéancier de l'année contre les encaissements.
+///
+/// Séparé des compteurs pour la même raison que le rapport financier: la page
+/// doit afficher ses quatre chiffres même si cette agrégation échoue. Un
+/// tableau de bord qui s'efface en entier parce qu'une courbe manque est
+/// moins utile qu'un tableau de bord amputé d'une courbe.
+final echeancierProvider = FutureProvider<Echeancier>((ref) async {
+  return ref.read(dashboardRepositoryProvider).fetchEcheancier();
+});

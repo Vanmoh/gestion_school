@@ -37,10 +37,15 @@ class DashboardStatsCacheTests(APITestCase):
     def setUpTestData(cls):
         cls.etablissement = Etablissement.objects.create(name="LTOB")
         cls.autre = Etablissement.objects.create(name="Groupe Scolaire Sabalibougou")
+        # L'annee appartient a l'ecole, comme les cinq de la base reelle:
+        # aucune n'y est orpheline. Sans ce rattachement, le tableau de bord
+        # ne resolvait aucune annee et ses filtres restaient inertes -- le
+        # montage ne pouvait donc rien verifier de leur effet.
         cls.year = AcademicYear.objects.create(
             name="2025-2026",
             start_date=date(2025, 9, 1),
             end_date=date(2026, 7, 31),
+            etablissement=cls.etablissement,
             is_active=True,
         )
         cls.classroom = ClassRoom.objects.create(
@@ -177,7 +182,15 @@ class DashboardStatsCacheTests(APITestCase):
         self._stats()
 
         month_start = timezone.now().date().replace(day=1)
-        self.assertIsNotNone(cache.get(stats_cache_key(self.etablissement.id, month_start)))
+        # L'annee fait partie de la cle: sans elle, basculer sur l'annee
+        # suivante rendait les chiffres de la precedente pendant une minute.
+        self.assertIsNotNone(
+            cache.get(
+                stats_cache_key(self.etablissement.id, month_start, self.year.id)
+            )
+        )
         # La portee voisine ne doit rien avoir herite de cette lecture: une cle
         # partagee servirait les totaux d'une ecole a l'autre.
-        self.assertIsNone(cache.get(stats_cache_key(self.autre.id, month_start)))
+        self.assertIsNone(
+            cache.get(stats_cache_key(self.autre.id, month_start, self.year.id))
+        )
