@@ -5,6 +5,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/network/chargement_tolerant.dart';
 import '../../../core/widgets/indicateur.dart';
 import '../../../core/academics/annee_a_retenir.dart';
+import '../../../core/permissions/module_permissions.dart';
 
 class CanteenPage extends ConsumerStatefulWidget {
   const CanteenPage({super.key});
@@ -194,6 +195,15 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
+    // Trois formulaires vivent sur cet ecran -- creer un menu, abonner un
+    // eleve, enregistrer un repas servi -- et aucun n'etait garde. La famille,
+    // qui a « cantine » en lecture seule, les voyait tous: le serveur refusait
+    // ensuite chaque envoi par un 403.
+    //
+    // Ce n'etait donc pas une faille, mais une promesse non tenue -- et c'est
+    // pire qu'un ecran vide: on remplit un formulaire, on clique, et l'on
+    // apprend alors qu'on n'y avait pas droit.
+    final peutEcrire = ref.watch(currentPermissionsProvider).canWrite('canteen');
     final studentById = {for (final s in _students) _asInt(s['id']): s};
     final menuById = {for (final m in _menus) _asInt(m['id']): m};
 
@@ -531,6 +541,12 @@ class _CanteenPageState extends ConsumerState<CanteenPage> {
                   servicePanel,
                 ],
               );
+
+              // Sans droit d'ecriture, il ne reste que le suivi -- ce que la
+              // famille vient chercher: les repas servis et leur reglement.
+              if (!peutEcrire) {
+                return followupPanel;
+              }
 
               if (isWide) {
                 return Row(

@@ -344,6 +344,36 @@ List<String> entreesDeMenuVisiblesPour(ModulePermissions droits) => [
     if (_entreeVisiblePour(entree, droits)) entree.keyName,
 ];
 
+/// Les actions rapides de la palette, avec le droit que chacune exige.
+///
+/// Une action qui **ecrit** se garde par `canWrite`; `canRead` ne dit que le
+/// droit d'ouvrir l'ecran. « Encaisser maintenant » etait gardee par `canRead`:
+/// un parent et un eleve, qui lisent ici leur propre facture, se voyaient donc
+/// proposer d'encaisser. Le serveur l'aurait refuse -- mais offrir un geste
+/// qu'on refusera ensuite est une promesse qu'on ne tient pas.
+///
+/// Cette table existe pour que la regle se lise et se teste ailleurs que dans
+/// l'arbre de widgets, comme `entreesDeMenuVisiblesPour` pour le menu.
+const Map<String, bool> actionsRapidesEtLeurNiveau = {
+  'activity_logs': false,
+  'communication': false,
+  'reports': false,
+  'finance': false,
+  // La seule qui ecrit: elle ouvre la fenetre d'encaissement.
+  'finance:encaisser': true,
+  'timetable': false,
+  'grades': false,
+};
+
+/// Les actions rapides ouvertes a ce profil.
+List<String> actionsRapidesVisiblesPour(ModulePermissions droits) => [
+  for (final action in actionsRapidesEtLeurNiveau.entries)
+    if (action.value
+        ? droits.canWrite(action.key.split(':').first)
+        : droits.canRead(action.key.split(':').first))
+      action.key,
+];
+
 /// Ce que la matrice et le profil disent de cette entree, sans la regle
 /// croisee entre « Gestion des eleves » et « Dossier eleve »: celle-ci
 /// interroge l'autre entree et bouclerait.
@@ -646,6 +676,18 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
   ModulePermissions get _permissions => ref.read(currentPermissionsProvider);
 
   bool _isItemVisible(String key) => _permissions.canRead(key);
+
+  /// Vrai si ce profil peut **ecrire** dans ce module.
+  ///
+  /// La palette proposait « Encaisser maintenant » des que les finances etaient
+  /// *lisibles*: un parent et un eleve, qui y lisent leur propre facture,
+  /// voyaient donc l'action d'encaisser. Le serveur l'aurait refusee, mais
+  /// offrir un geste qu'on refusera ensuite est une promesse qu'on ne tient
+  /// pas -- et ici, la promesse etait d'encaisser sa propre scolarite.
+  ///
+  /// Une action qui ecrit se garde par `canWrite`. `canRead` ne dit que le
+  /// droit d'ouvrir l'ecran.
+  bool _peutEcrireSur(String key) => _permissions.canWrite(key);
 
   /// Une entree est visible des qu'une seule de ses cles l'est -- et a
   /// condition que ce dont son ecran depend le soit aussi.
@@ -1288,7 +1330,9 @@ class _AdminShellState extends ConsumerState<_AdminShell> {
                     _navigateToShellItem('finance');
                   },
                 ),
-              if (_isItemVisible('finance'))
+              // `_peutEcrireSur` et non `_isItemVisible`: encaisser est une
+              // ecriture, et la famille ne lit ici que sa propre facture.
+              if (_peutEcrireSur('finance'))
                 ListTile(
                   leading: const Icon(Icons.point_of_sale_rounded),
                   title: const Text('Encaisser maintenant'),

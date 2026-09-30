@@ -543,6 +543,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     required double impayes,
     double? tresorerie,
     bool tresorerieAttendue = false,
+    bool laFamille = false,
   }) {
     return Container(
       width: double.infinity,
@@ -561,12 +562,17 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
         children: [
           // La periode n'y figure pas: le filtre juste au-dessus l'affiche
           // deja, et cette ligne ne porte que des montants.
+          // L'ecole encaisse, la famille verse: ce sont deux points de vue sur
+          // le meme argent, et le bandeau tenait celui de la caisse pour tout le
+          // monde. Un parent lisait « Montant encaisse » et « Impayes » au-dessus
+          // de sa propre facture -- les mots de celui a qui il doit, pas les
+          // siens. L'onglet en dessous disait deja « Ce qui reste a payer ».
           IndicateurFinance(
-            libelle: 'Montant encaissé',
+            libelle: laFamille ? 'Déjà versé' : 'Montant encaissé',
             valeur: encaisse == null ? '…' : montantEnFrancs(encaisse),
           ),
           IndicateurFinance(
-            libelle: 'Impayés',
+            libelle: laFamille ? 'Reste à payer' : 'Impayés',
             valeur: montantEnFrancs(impayes),
           ),
           if (tresorerieAttendue)
@@ -3572,6 +3578,13 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
 
             return Column(
               children: [
+                // La barre d'outils du comptable: chercher un reglement par
+                // matricule ou reference, filtrer par methode d'encaissement,
+                // imprimer une selection de recus. Rien de tout cela n'a de sens
+                // pour une famille qui a dix versements et un enfant: elle les a
+                // tous sous les yeux, et la methode par laquelle l'ecole a
+                // encaisse ne la concerne pas.
+                if (!laFamille)
                 Container(
                   padding: const EdgeInsets.fromLTRB(18, 12, 18, 10),
                   decoration: BoxDecoration(
@@ -3758,6 +3771,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                   impayes: outstandingTotal,
                   tresorerie: totauxDeLaPeriode?.resultat,
                   tresorerieAttendue: peutVoirLesDepenses,
+                  laFamille: laFamille,
                 ),
                 // La barre ne sert a rien devant un seul onglet: le profil
                 // qui n'en ouvre qu'un y est deja.
