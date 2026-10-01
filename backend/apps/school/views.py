@@ -51,6 +51,7 @@ from apps.common.models import ActivityLog
 # ligne » dans la meme application finissent par se contredire.
 from apps.common.presence import FENETRE_PRESENCE
 from apps.chat.models import ChatPresence
+from .enseignement import classes_de_l_enseignant, est_enseignant
 from .portee_du_tableau_de_bord import (
     peut_lire_globalement,
     restreindre_au_role,
@@ -1575,6 +1576,13 @@ class ClassRoomViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         if classes_familiales is not None:
             return qs.filter(id__in=classes_familiales)
 
+        if est_enseignant(user):
+            # Le selecteur de « Mon emploi du temps » restait vide alors que
+            # l'ecole a cinq classes: il les demandait toutes et n'en proposait
+            # aucune. Borne a ses deux classes, il a enfin quelque chose a
+            # offrir -- et c'est ce que l'enseignante demandait.
+            return qs.filter(id__in=classes_de_l_enseignant(user))
+
         if requested_etablissement is not None:
             qs = qs.filter(etablissement=requested_etablissement)
         elif self._has_requested_scope():
@@ -1688,6 +1696,23 @@ class SubjectViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
             if requested_classroom_id:
                 scoped_qs = scoped_qs.filter(classroom_id=requested_classroom_id)
             return scoped_qs
+
+        if est_enseignant(user):
+            # Les matieres qu'il tient, et non les soixante-dix-huit de
+            # l'ecole. L'ecran de son emploi du temps affichait « Matieres 78 »
+            # a cote de « Affectations 2 »: deux compteurs cote a cote, l'un de
+            # l'ecole et l'autre de lui, sans que rien ne les distingue.
+            #
+            # Par l'affectation **et** par la classe: une matiere peut etre
+            # rattachee a la classe sans que sa colonne `classroom` le dise,
+            # exactement comme pour le perimetre familial juste au-dessus.
+            siennes = qs.filter(
+                Q(teacher_assignments__teacher__user_id=user.id)
+                | Q(classroom_id__in=classes_de_l_enseignant(user))
+            ).distinct()
+            if requested_classroom_id:
+                siennes = siennes.filter(classroom_id=requested_classroom_id)
+            return siennes
 
         if requested_etablissement is not None:
             scoped_qs = (
@@ -5068,6 +5093,13 @@ class StudentViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
             return qs.filter(user_id=user.id)
         if role == UserRole.PARENT:
             return qs.filter(parent__user_id=user.id)
+        if role == UserRole.TEACHER:
+            # L'enseignant tombait jusqu'ici dans la branche generale et
+            # recevait toute l'ecole: cent cinquante eleves pour une
+            # enseignante qui en a soixante. Pire que le comptage, le detail:
+            # elle pouvait ouvrir le dossier nominatif -- notes, absences,
+            # parcours -- d'un enfant qu'elle n'a pas en charge.
+            return qs.filter(classroom_id__in=classes_de_l_enseignant(user))
 
         requested_etablissement = self._requested_etablissement()
         if requested_etablissement is not None:
@@ -8724,6 +8756,19 @@ class TeacherPayrollViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = super().get_queryset()
+
+        # Sa fiche, et pas celle de ses collegues. **Avant** toute portee
+        # d'etablissement: c'est le plus grave des defauts de perimetre
+        # mesures -- l'API rendait les quarante-trois fiches de l'ecole a une
+        # enseignante qui en a deux, donc le salaire de ses vingt-deux
+        # collegues.
+        #
+        # La matrice classe `payroll` en `L*` pour un enseignant: la sienne.
+        # Le filtre vaut pour la liste **et** pour le detail, car un filtre de
+        # liste sans refus sur l'identifiant laisse passer qui le devine.
+        if est_enseignant(user):
+            return qs.filter(teacher__user_id=user.id)
+
         requested_etablissement = self._requested_etablissement()
 
         if requested_etablissement is not None:
