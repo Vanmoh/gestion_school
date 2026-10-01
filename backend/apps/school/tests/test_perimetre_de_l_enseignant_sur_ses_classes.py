@@ -34,6 +34,7 @@ from rest_framework.test import APIClient
 from apps.accounts.models import User, UserRole
 from apps.school.models import (
     AcademicYear,
+    Grade,
     ClassRoom,
     Etablissement,
     Student,
@@ -290,3 +291,128 @@ class LeDirecteurGardeSaVueDEnsembleTests(SocleDeDeuxEnseignants):
         self.assertEqual(
             self._lire_en_direction("/api/teacher-payrolls/").data["count"], 4
         )
+
+
+class IlLitSaClasseEtNEcritQueCeQuIlEnseigneTests(SocleDeDeuxEnseignants):
+    """La lecture suit la classe, l'ecriture suit l'affectation.
+
+    Rendre les matieres de ses classes -- et non les deux qu'il enseigne --
+    elargit ce qu'il **voit**: le bulletin nomme ce que l'eleve etudie par
+    ailleurs. Il fallait donc verifier que cela n'elargit pas ce qu'il
+    **signe**.
+
+    Le decoupage est le bon: un enseignant voit le bulletin complet de ses
+    eleves, et ne note que ce qu'il enseigne.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        # Une seconde matiere dans SA classe, tenue par le collegue.
+        cls.pas_la_sienne = Subject.objects.create(
+            name="Physique-Chimie",
+            code="PC-GM",
+            coefficient=Decimal(3),
+            classroom=cls.sienne_a,
+        )
+        TeacherAssignment.objects.create(
+            teacher=cls.collegue,
+            subject=cls.pas_la_sienne,
+            classroom=cls.sienne_a,
+        )
+        cls.eleve = Student.objects.filter(classroom=cls.sienne_a).first()
+        cls.sa_matiere = Subject.objects.filter(
+            teacher_assignments__teacher=cls.prof, classroom=cls.sienne_a
+        ).first()
+
+    def _ecrire_une_note(self, matiere, trimestre="T1"):
+        client = APIClient()
+        client.force_authenticate(user=self.prof.user)
+        return client.post(
+            "/api/grades/",
+            {
+                "student": self.eleve.id,
+                "subject": matiere.id,
+                "classroom": self.sienne_a.id,
+                "academic_year": self.annee.id,
+                "term": trimestre,
+                "value": "14",
+            },
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
+            HTTP_X_ACADEMIC_YEAR_ID=str(self.annee.id),
+        )
+
+    def test_il_voit_la_matiere_qu_il_n_enseigne_pas_dans_sa_classe(self):
+        """C'est le choix assume: le bulletin nomme toutes les matieres."""
+        reponse = self._lire("/api/subjects/", page_size=50)
+
+        codes = {ligne["code"] for ligne in reponse.data["results"]}
+        self.assertIn("PC-GM", codes)
+
+    def test_mais_il_ne_peut_pas_y_mettre_de_note(self):
+        reponse = self._ecrire_une_note(self.pas_la_sienne)
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("subject", reponse.data)
+
+    def test_il_note_bien_la_matiere_qu_il_enseigne(self):
+        """La restriction ne doit pas l'empecher de faire son travail."""
+        reponse = self._ecrire_une_note(self.sa_matiere)
+
+        self.assertEqual(
+            reponse.status_code, status.HTTP_201_CREATED, reponse.data
+        )
+
+    def test_il_ne_modifie_pas_une_note_d_une_autre_classe(self):
+        """404 et non 403: elle n'est meme pas dans son perimetre de lecture."""
+        matiere_ailleurs = Subject.objects.filter(classroom=self.autre_a).first()
+        note = Grade.objects.create(
+            student=Student.objects.filter(classroom=self.autre_a).first(),
+            subject=matiere_ailleurs,
+            classroom=self.autre_a,
+            academic_year=self.annee,
+            term="T1",
+            value=Decimal("10"),
+        )
+
+        client = APIClient()
+        client.force_authenticate(user=self.prof.user)
+        reponse = client.patch(
+            f"/api/grades/{note.id}/",
+            {"value": "20"},
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
+            HTTP_X_ACADEMIC_YEAR_ID=str(self.annee.id),
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_il_pointe_une_absence_dans_sa_classe(self):
+        client = APIClient()
+        client.force_authenticate(user=self.prof.user)
+        reponse = client.post(
+            "/api/attendances/",
+            {"student": self.eleve.id, "date": "2025-11-12", "is_absent": True},
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
+            HTTP_X_ACADEMIC_YEAR_ID=str(self.annee.id),
+        )
+
+        self.assertEqual(
+            reponse.status_code, status.HTTP_201_CREATED, reponse.data
+        )
+
+    def test_il_ne_pointe_pas_une_absence_ailleurs(self):
+        etranger = Student.objects.filter(classroom=self.autre_b).first()
+        client = APIClient()
+        client.force_authenticate(user=self.prof.user)
+        reponse = client.post(
+            "/api/attendances/",
+            {"student": etranger.id, "date": "2025-11-12", "is_absent": True},
+            format="json",
+            HTTP_X_ETABLISSEMENT_ID=str(self.etablissement.id),
+            HTTP_X_ACADEMIC_YEAR_ID=str(self.annee.id),
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
