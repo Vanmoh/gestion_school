@@ -48,6 +48,44 @@ class DashboardRepository {
       yearExpensesPending: toDouble(data['year_expenses_pending']),
       yearExpensesPendingCount:
           (data['year_expenses_pending_count'] as num?)?.toInt() ?? 0,
+      generalAverage: toDouble(data['general_average']),
+      gradesCount: (data['grades_count'] as num?)?.toInt() ?? 0,
+      bulletinsDelivered: (data['bulletins_delivered'] as num?)?.toInt() ?? 0,
+      bulletinsTotal: (data['bulletins_total'] as num?)?.toInt() ?? 0,
+      bulletinsFailed: (data['bulletins_failed'] as num?)?.toInt() ?? 0,
+      teacherAbsences: (data['teacher_absences'] as num?)?.toInt() ?? 0,
+      teacherLate: (data['teacher_late'] as num?)?.toInt() ?? 0,
+      payrollTotal: toDouble(data['payroll_total']),
+      payrollCount: (data['payroll_count'] as num?)?.toInt() ?? 0,
+      stockBelowThreshold:
+          (data['stock_below_threshold'] as num?)?.toInt() ?? 0,
+      stockTotal: (data['stock_total'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// Qui est en ligne maintenant, par rôle.
+  ///
+  /// Route séparée et non mise en cache côté serveur: l'écran la redemande
+  /// toutes les quinze secondes, et la charge utile du tableau de bord est
+  /// gardée soixante — y glisser la présence l'aurait figée.
+  Future<PresenceParRole> fetchPresence() async {
+    final response = await dio.get('/dashboard/presence/');
+    final data = response.data as Map<String, dynamic>;
+
+    Map<String, int> entiers(dynamic brut) {
+      if (brut is! Map) return const {};
+      return {
+        for (final entree in brut.entries)
+          entree.key.toString(): (entree.value as num?)?.toInt() ?? 0,
+      };
+    }
+
+    return PresenceParRole(
+      fenetreSecondes: (data['fenetre_secondes'] as num?)?.toInt() ?? 75,
+      totalEnLigne: (data['total_en_ligne'] as num?)?.toInt() ?? 0,
+      enLigneParRole: entiers(data['en_ligne_par_role']),
+      jamaisConnectesParRole: entiers(data['jamais_connectes_par_role']),
+      comptesParRole: entiers(data['comptes_par_role']),
     );
   }
 

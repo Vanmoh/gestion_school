@@ -47,6 +47,14 @@ from apps.accounts.models import UserRole
 from apps.accounts.permissions import HasModuleAccess
 from apps.common.pagination import StandardResultsSetPagination
 from apps.common.models import ActivityLog
+# `FENETRE_PRESENCE` et non un seuil reinvente: deux definitions de « en
+# ligne » dans la meme application finissent par se contredire.
+from apps.common.presence import FENETRE_PRESENCE
+from apps.chat.models import ChatPresence
+from .portee_du_tableau_de_bord import (
+    peut_lire_globalement,
+    restreindre_au_role,
+)
 from .dashboard_cache import STATS_CACHE_SECONDS, stats_cache_key
 from . import annonces, examens, planification
 from .term_utils import TERMS, normalize_term
@@ -57,6 +65,8 @@ from .models import (
     AttendanceSheetValidation,
     Book,
     Borrow,
+    BulletinDelivery,
+    BulletinDeliveryStatus,
     BulletinPublication,
     CanteenMenu,
     CanteenService,
@@ -6912,7 +6922,7 @@ class TeacherAttendanceViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         )
 
 
-class TeacherTimeEntryViewSet(BaseModelViewSet):
+class TeacherTimeEntryViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
     access_module = "teacher_timesheet"
     queryset = TeacherTimeEntry.objects.select_related("teacher", "teacher__user", "recorded_by").all().order_by("-entry_date", "-id")
     serializer_class = TeacherTimeEntrySerializer
@@ -11497,7 +11507,10 @@ class DashboardViewSet(viewsets.ViewSet):
         )
         cached = cache.get(cache_key)
         if cached is not None:
-            return Response(cached)
+            # Restreindre **aussi** au sortir du cache: sans cela, le premier
+            # directeur a consulter l'ecran remplissait la cle, et la famille
+            # qui lisait dans la minute recevait sa charge utile entiere.
+            return Response(self._restreindre(cached, request))
 
         payment_qs = Payment.objects.filter(created_at__date__gte=month_start, is_cancelled=False)
         students_qs = Student.objects.filter(is_archived=False)
@@ -11631,6 +11644,68 @@ class DashboardViewSet(viewsets.ViewSet):
         )
         year_expenses_pending_count = attente_annee.count()
 
+        # --- l'ecole, en face de l'argent ---------------------------------
+        #
+        # Le tableau de bord ne parlait que de caisse: recettes, depenses,
+        # benefice. Sur l'ecran d'accueil d'un directeur d'ecole, aucun signal
+        # pedagogique -- ni moyenne, ni bulletin, ni presence des enseignants.
+        # 26 730 notes saisies sur IFP-OBK, et pas un mot a l'accueil.
+        notes_qs = Grade.objects.filter(student__in=students_qs)
+        if annee is not None:
+            notes_qs = notes_qs.filter(academic_year=annee)
+        agregat_notes = notes_qs.aggregate(
+            moyenne=Avg("value"), combien=Count("id")
+        )
+        general_average = float(agregat_notes["moyenne"] or 0)
+        grades_count = agregat_notes["combien"] or 0
+
+        bulletins_qs = BulletinDelivery.objects.filter(student__in=students_qs)
+        if annee is not None:
+            bulletins_qs = bulletins_qs.filter(academic_year=annee)
+        # « Remis » c'est parti **et** lu: un bulletin prepare ne l'est pas, et
+        # un envoi en echec appelle une action, pas un decompte.
+        bulletins_total = bulletins_qs.count()
+        bulletins_delivered = bulletins_qs.filter(
+            status__in=(BulletinDeliveryStatus.SENT, BulletinDeliveryStatus.READ)
+        ).count()
+        bulletins_failed = bulletins_qs.filter(
+            status=BulletinDeliveryStatus.FAILED
+        ).count()
+
+        # L'assiduite des enseignants, que l'ecran passait sous silence alors
+        # qu'il montrait celle des eleves. On paie a l'heure: savoir si
+        # l'enseignant est la compte au moins autant.
+        pointages_qs = TeacherAttendance.objects.all()
+        if active_etablissement is not None:
+            pointages_qs = pointages_qs.filter(
+                teacher__etablissement=active_etablissement
+            )
+        if annee is not None:
+            pointages_qs = pointages_qs.filter(academic_year=annee)
+        teacher_absences = pointages_qs.filter(is_absent=True).count()
+        teacher_late = pointages_qs.filter(is_late=True).count()
+
+        # La masse salariale: la principale charge de l'ecole, absente du
+        # tableau de bord. 29 913 950 FCFA sur IFP-OBK.
+        paie_qs = TeacherPayroll.objects.all()
+        if active_etablissement is not None:
+            paie_qs = paie_qs.filter(teacher__etablissement=active_etablissement)
+        if annee is not None:
+            paie_qs = paie_qs.filter(academic_year=annee)
+        agregat_paie = paie_qs.aggregate(montant=Sum("amount"), combien=Count("id"))
+        payroll_total = agregat_paie["montant"] or 0
+        payroll_count = agregat_paie["combien"] or 0
+
+        # Le stock sous son seuil: une ligne « a traiter » toute prete, que le
+        # modele portait deja sans que rien ne la remonte.
+        stock_qs = StockItem.objects.all()
+        if active_etablissement is not None:
+            stock_qs = stock_qs.filter(etablissement=active_etablissement)
+        stock_total = stock_qs.count()
+        stock_below_threshold = stock_qs.filter(
+            quantity__lte=F("minimum_threshold")
+        ).count()
+
         etablissement_payload = None
         if active_etablissement is not None:
             etablissement_payload = {
@@ -11675,9 +11750,124 @@ class DashboardViewSet(viewsets.ViewSet):
             "expenses_pending_count": expenses_pending_count,
             "year_expenses_pending": year_expenses_pending,
             "year_expenses_pending_count": year_expenses_pending_count,
+            "general_average": round(general_average, 2),
+            "grades_count": grades_count,
+            "bulletins_delivered": bulletins_delivered,
+            "bulletins_total": bulletins_total,
+            "bulletins_failed": bulletins_failed,
+            "teacher_absences": teacher_absences,
+            "teacher_late": teacher_late,
+            "payroll_total": payroll_total,
+            "payroll_count": payroll_count,
+            "stock_below_threshold": stock_below_threshold,
+            "stock_total": stock_total,
         }
+        # Le cache garde la charge utile **complete**: elle ne depend que de la
+        # portee et de l'annee, pas du compte qui lit. Une cle par role
+        # multiplierait le cache par neuf pour la meme requete.
         cache.set(cache_key, payload, STATS_CACHE_SECONDS)
-        return Response(payload)
+        return Response(self._restreindre(payload, request))
+
+    @staticmethod
+    def _restreindre(payload, request):
+        """Ne rend a chaque role que les chiffres que la matrice lui accorde.
+
+        La vue rendait la meme charge utile a tout le monde. Un parent et un
+        eleve recevaient donc le recouvrement de l'ecole, ses impayes et sa
+        **masse salariale**; un censeur et un surveillant aussi, alors que la
+        matrice leur interdit le module `finance`; un comptable recevait la
+        moyenne generale et les absences, qui ne le concernent pas.
+
+        La matrice classait pourtant parent, eleve et enseignant en `L*` --
+        lecture restreinte. L'etoile y est documentaire: c'est au code de
+        l'appliquer, et la vue ne regardait pas le role.
+        """
+        return restreindre_au_role(
+            payload, getattr(request.user, "role", "") or ""
+        )
+
+    @action(detail=False, methods=["get"], url_path="presence")
+    def presence(self, request):
+        """Qui est en ligne maintenant, par role.
+
+        **Sa propre route, et sans cache.** La charge utile de `/dashboard/`
+        est gardee soixante secondes -- elle agrege une quinzaine de mesures
+        qu'on ne recalcule pas a chaque affichage. Y glisser la presence
+        l'aurait figee: l'ecran la redemande toutes les quinze secondes, et il
+        aurait relu la meme valeur quatre fois avant qu'elle ne change. « Temps
+        reel » aurait ete un abus de langage.
+
+        Une requete legere, donc, plutot que tout le tableau de bord.
+
+        La regle vient de `apps.common.presence`: **en ligne = un signe de vie
+        dans les soixante-quinze secondes**, trois battements manques. Elle ne
+        se fonde deliberement pas sur `connection_count`, qui reste bloque a 1
+        quand un socket meurt sans prevenir -- quatre lignes de la base reelle
+        sont dans ce cas, et la fenetre les ignore comme il faut.
+
+        Deliberement pas une deuxieme definition de « en ligne »: deux regles
+        concurrentes dans la meme application finissent toujours par se
+        contredire, et c'est le defaut que ce lot a corrige trois fois.
+        """
+        role = getattr(request.user, "role", "") or ""
+        # Savoir qui est connecte est une information d'administration: la
+        # matrice reserve `users` au super-admin, au promoteur et au directeur.
+        if not peut_lire_globalement(role, "users"):
+            raise PermissionDenied(
+                "La presence des comptes n'est pas accessible a votre profil."
+            )
+
+        active_etablissement = self._resolve_dashboard_scope(request)
+
+        # `get_user_model()` et non un import direct: c'est la convention du
+        # fichier, qui n'importe jamais le modele utilisateur en tete.
+        comptes = get_user_model().objects.all()
+        if active_etablissement is not None:
+            comptes = comptes.filter(etablissement=active_etablissement)
+
+        seuil = timezone.now() - FENETRE_PRESENCE
+        en_ligne = dict(
+            ChatPresence.objects.filter(
+                user__in=comptes, last_seen_at__gte=seuil
+            )
+            .values_list("user__role")
+            .annotate(combien=Count("id"))
+        )
+
+        # Les comptes jamais ouverts, qui repondent a une autre question: non
+        # pas « qui travaille maintenant » mais « qui n'a jamais commence ».
+        # Sur IFP-OBK, 75 enseignants sur 75 et 609 eleves sur 610.
+        #
+        # `last_login` **et** la presence: un compte peut avoir ete vu par le
+        # middleware sans que `last_login` soit pose, selon le chemin
+        # d'authentification.
+        #
+        # Une seule requete, et c'est la subtilite: `chat_presence__...__isnull`
+        # produit une jointure externe, donc elle attrape **aussi** les comptes
+        # qui n'ont aucune ligne de presence. Une deuxieme requete pour ceux-la
+        # les comptait une seconde fois -- 1 216 eleves « jamais connectes »
+        # pour 610 comptes, ce que la somme a trahi aussitot.
+        jamais = dict(
+            comptes.filter(
+                last_login__isnull=True, chat_presence__last_seen_at__isnull=True
+            )
+            .values_list("role")
+            .annotate(combien=Count("id"))
+        )
+
+        par_role = dict(
+            comptes.values_list("role").annotate(combien=Count("id"))
+        )
+
+        return Response(
+            {
+                "fenetre_secondes": int(FENETRE_PRESENCE.total_seconds()),
+                "total_en_ligne": sum(en_ligne.values()),
+                "en_ligne_par_role": en_ligne,
+                "jamais_connectes_par_role": jamais,
+                "comptes_par_role": par_role,
+            }
+        )
 
     @action(detail=False, methods=["get"], url_path="echeancier")
     def echeancier(self, request):
@@ -11700,6 +11890,14 @@ class DashboardViewSet(viewsets.ViewSet):
         puis 1 680 000 F manquants chaque mois -- trois mois qui font les
         5 040 000 F de reste.
         """
+        # L'echeancier est un etat de la caisse: il releve de `finance`, que la
+        # matrice refuse au censeur, au surveillant et a l'enseignant, et
+        # n'accorde a la famille que pour son propre dossier.
+        if not peut_lire_globalement(getattr(request.user, "role", "") or "", "finance"):
+            raise PermissionDenied(
+                "L'echeancier de l'etablissement n'est pas accessible a votre profil."
+            )
+
         active_etablissement = self._resolve_dashboard_scope(request)
         annee = self._annee_de_travail(request, active_etablissement)
         if annee is None:

@@ -72,6 +72,17 @@ const _chiffres = DashboardStats(
   studentsUnpaid: 112,
   yearExpensesPending: 4124000,
   yearExpensesPendingCount: 36,
+  generalAverage: 13.3,
+  gradesCount: 26730,
+  bulletinsDelivered: 276,
+  bulletinsTotal: 455,
+  bulletinsFailed: 92,
+  teacherAbsences: 83,
+  teacherLate: 253,
+  payrollTotal: 29913950,
+  payrollCount: 119,
+  stockBelowThreshold: 1,
+  stockTotal: 5,
 );
 
 const _echeancier = Echeancier(
@@ -115,10 +126,19 @@ ModulePermissions _droits() {
   );
 }
 
+const _presence = PresenceParRole(
+  fenetreSecondes: 75,
+  totalEnLigne: 7,
+  enLigneParRole: {'director': 1, 'accountant': 1, 'teacher': 5},
+  jamaisConnectesParRole: {'teacher': 74, 'student': 608, 'parent': 159},
+  comptesParRole: {'teacher': 75, 'student': 610, 'parent': 162},
+);
+
 Future<void> _monter(
   WidgetTester tester, {
   AsyncValue<DashboardStats> chiffres = const AsyncValue.data(_chiffres),
   AsyncValue<Echeancier> echeancier = const AsyncValue.data(_echeancier),
+  AsyncValue<PresenceParRole> presence = const AsyncValue.data(_presence),
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = const Size(1700, 2600);
@@ -133,6 +153,14 @@ Future<void> _monter(
       overrides: [
         dioProvider.overrideWithValue(dio),
         currentPermissionsProvider.overrideWithValue(_droits()),
+        presenceProvider.overrideWith((ref) async {
+          return presence.when(
+            data: (valeur) => valeur,
+            error: (erreur, pile) =>
+                Future<PresenceParRole>.error(erreur, pile),
+            loading: () => Completer<PresenceParRole>().future,
+          );
+        }),
         echeancierProvider.overrideWith((ref) async {
           return echeancier.when(
             data: (valeur) => valeur,
@@ -211,6 +239,61 @@ void main() {
       );
 
       expect(find.text('Aucune année active'), findsOneWidget);
+    });
+  });
+
+  group('les deux rangées', () {
+    testWidgets('elles sont nommées, pour qu_on sache où chercher', (
+      tester,
+    ) async {
+      await _monter(tester);
+
+      // Huit chiffres rangés en deux familles nommées se lisent mieux que
+      // quatre qui ne couvrent qu'une seule question.
+      expect(find.text('L\'ARGENT'), findsOneWidget);
+      expect(find.text('L\'ÉCOLE'), findsOneWidget);
+    });
+
+    testWidgets('l_école a enfin des chiffres à elle', (tester) async {
+      await _monter(tester);
+
+      // Le tableau de bord ne parlait que de caisse: 26 730 notes saisies, et
+      // pas un mot à l'accueil.
+      expect(find.text('Moyenne générale'), findsOneWidget);
+      expect(find.text('13,30'), findsOneWidget);
+      expect(find.textContaining('sur 26730 notes saisies'), findsOneWidget);
+      expect(find.text('Bulletins remis'), findsOneWidget);
+      expect(find.text('276'), findsOneWidget);
+      expect(find.text('sur 455'), findsOneWidget);
+    });
+
+    testWidgets('l_assiduité des enseignants est montrée, pas seulement celle des élèves', (
+      tester,
+    ) async {
+      await _monter(tester);
+
+      // On paie à l'heure: savoir si l'enseignant est là compte au moins
+      // autant que l'absence d'un élève.
+      expect(
+        find.textContaining('83 absences et 253 retards côté enseignants'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('la masse salariale apparaît', (tester) async {
+      await _monter(tester);
+
+      expect(find.text('Masse salariale'), findsOneWidget);
+      expect(find.textContaining('119 fiches de paie'), findsOneWidget);
+    });
+
+    testWidgets('l_encaissé du mois est revenu', (tester) async {
+      await _monter(tester);
+
+      // La refonte l'avait perdu: le « Bénéfice net » retiré était faux, mais
+      // ne rien mettre à la place privait la direction du chiffre qu'elle
+      // regarde le matin.
+      expect(find.text('Encaissé ce mois-ci'), findsOneWidget);
     });
   });
 
@@ -349,6 +432,15 @@ void main() {
         find.textContaining('112 élèves ont un reste à payer'),
         findsOneWidget,
       );
+      // 455 préparés, 276 remis: 179 restent, dont 92 en échec d'envoi.
+      expect(
+        find.textContaining('179 bulletins ne sont pas remis'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('1 article est sous leur seuil'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('une école à jour ne s_invente pas de tâches', (tester) async {
@@ -382,10 +474,98 @@ void main() {
             encaisse: 6750000,
           ),
         ),
+        // Et personne de dormant: une école « à jour » l'est aussi de ce
+        // côté-là, sinon la ligne des comptes jamais ouverts s'ajoute.
+        presence: const AsyncValue.data(
+          PresenceParRole(fenetreSecondes: 75, totalEnLigne: 4),
+        ),
       );
 
       expect(find.text('Rien n\'attend de décision.'), findsOneWidget);
       expect(find.text('Chaque échéance de l\'année est soldée.'), findsOneWidget);
+    });
+  });
+
+  group('le statut temps réel', () {
+    testWidgets('le bandeau nomme les rôles présents', (tester) async {
+      await _monter(tester);
+
+      expect(find.text('EN LIGNE MAINTENANT'), findsOneWidget);
+      expect(find.text('direction'), findsOneWidget);
+      expect(find.text('comptable'), findsOneWidget);
+      expect(find.text('enseignants'), findsOneWidget);
+      expect(find.text('5'), findsOneWidget);
+    });
+
+    testWidgets('la fenêtre vient du serveur, pas du client', (tester) async {
+      await _monter(tester);
+
+      // Deux définitions de « en ligne » dans la même application finiraient
+      // par se contredire: l'écran affiche celle que le serveur applique.
+      expect(
+        find.textContaining('signe de vie de moins de 75 s'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('personne en ligne se dit, au lieu d_un bandeau vide', (
+      tester,
+    ) async {
+      await _monter(
+        tester,
+        presence: const AsyncValue.data(
+          PresenceParRole(fenetreSecondes: 75, totalEnLigne: 0),
+        ),
+      );
+
+      expect(
+        find.text('Personne n\'est connecté en ce moment.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('un refus efface le bandeau sans crier à la panne', (
+      tester,
+    ) async {
+      // Savoir qui est connecté est une information d'administration: un rôle
+      // sans droit sur `users` reçoit 403, et son absence n'est pas une panne.
+      await _monter(
+        tester,
+        presence: AsyncValue.error(Exception('403'), StackTrace.empty),
+      );
+
+      expect(find.text('EN LIGNE MAINTENANT'), findsNothing);
+      expect(find.textContaining('Erreur'), findsNothing);
+      // Le reste de la page tient.
+      expect(find.text('450'), findsOneWidget);
+    });
+
+    testWidgets('les comptes jamais ouverts passent en tête d_À traiter', (
+      tester,
+    ) async {
+      await _monter(tester);
+
+      // Le fait le plus important d'un déploiement qui commence, et qu'aucun
+      // écran ne disait: les comptes existent et personne ne les ouvre.
+      expect(
+        find.textContaining('608 élèves n’ont jamais ouvert l’application'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('sur 610 comptes créés'), findsOneWidget);
+    });
+
+    testWidgets('sans compte dormant, aucune ligne de plus', (tester) async {
+      await _monter(
+        tester,
+        presence: const AsyncValue.data(
+          PresenceParRole(fenetreSecondes: 75, totalEnLigne: 3),
+        ),
+      );
+
+      expect(
+        find.textContaining('jamais ouvert l’application'),
+        findsNothing,
+      );
     });
   });
 }

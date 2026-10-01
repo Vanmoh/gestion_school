@@ -29,13 +29,22 @@ from rest_framework.test import APIClient
 from apps.accounts.models import User, UserRole
 from apps.school.models import (
     AcademicYear,
+    BulletinDelivery,
+    BulletinDeliveryStatus,
     ClassRoom,
     Etablissement,
     Expense,
     FeeType,
+    Grade,
     Payment,
+    StockItem,
     Student,
     StudentFee,
+    Subject,
+    Teacher,
+    TeacherAssignment,
+    TeacherAttendance,
+    TeacherPayroll,
 )
 
 
@@ -326,3 +335,149 @@ class LEcheancierTests(SocleDeDeuxAnnees):
 
         self.assertEqual(Decimal(rendu["du"]), Decimal("20000"))
         self.assertEqual(Decimal(rendu["encaisse"]), Decimal("14000"))
+
+
+class LEcoleAEnfinDesChiffresTests(SocleDeDeuxAnnees):
+    """Le tableau de bord ne parlait que de caisse.
+
+    Recettes, depenses, benefice: sur l'ecran d'accueil d'un directeur
+    d'**ecole**, aucun signal pedagogique. 26 730 notes saisies sur IFP-OBK, et
+    pas un mot a l'accueil. Ni bulletin, ni moyenne, ni presence des
+    enseignants -- alors que l'ecran montrait l'absence des eleves.
+
+    La masse salariale manquait aussi: 29 913 950 FCFA, la principale charge de
+    l'etablissement, invisible.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        eleves = list(Student.objects.filter(classroom=cls.classe).order_by("id"))
+        matiere = Subject.objects.create(
+            name="Mathématiques",
+            code="MA-TB",
+            coefficient=Decimal(4),
+            classroom=cls.classe,
+        )
+        # Trois notes: 12, 14, 16 -> moyenne 14,00.
+        for eleve, valeur in zip(eleves, (Decimal("12"), Decimal("14"), Decimal("16"))):
+            Grade.objects.create(
+                student=eleve,
+                subject=matiere,
+                classroom=cls.classe,
+                academic_year=cls.cette_annee,
+                term="T1",
+                value=valeur,
+            )
+        # Quatre bulletins: deux remis, un prepare, un en echec.
+        for eleve, etat in zip(
+            eleves + eleves[:1],
+            (
+                BulletinDeliveryStatus.SENT,
+                BulletinDeliveryStatus.READ,
+                BulletinDeliveryStatus.PREPARED,
+                BulletinDeliveryStatus.FAILED,
+            ),
+        ):
+            BulletinDelivery.objects.create(
+                student=eleve,
+                academic_year=cls.cette_annee,
+                etablissement=cls.etablissement,
+                term="T1",
+                status=etat,
+            )
+
+        compte = User.objects.create_user(
+            username="ltb.prof.tb",
+            password="x",
+            role=UserRole.TEACHER,
+            etablissement=cls.etablissement,
+        )
+        cls.prof = Teacher.objects.create(
+            user=compte,
+            employee_code="LTB-TB",
+            hire_date=date(2024, 9, 1),
+            etablissement=cls.etablissement,
+        )
+        # Une matiere, sinon `_ne_pointer_que_ceux_qui_enseignent` refuse le
+        # pointage -- et il a raison: quelqu'un qui ne tient aucune matiere n'a
+        # de cours aucun jour, donc aucune presence a constater.
+        TeacherAssignment.objects.create(
+            teacher=cls.prof, subject=matiere, classroom=cls.classe
+        )
+        TeacherAttendance.objects.create(
+            teacher=cls.prof,
+            date=date(2025, 10, 6),
+            academic_year=cls.cette_annee,
+            is_absent=True,
+        )
+        TeacherAttendance.objects.create(
+            teacher=cls.prof,
+            date=date(2025, 10, 7),
+            academic_year=cls.cette_annee,
+            is_late=True,
+        )
+        TeacherPayroll.objects.create(
+            teacher=cls.prof,
+            month=date(2025, 10, 1),
+            academic_year=cls.cette_annee,
+            amount=Decimal("150000"),
+        )
+        StockItem.objects.create(
+            etablissement=cls.etablissement,
+            name="Craie",
+            quantity=2,
+            minimum_threshold=10,
+        )
+        StockItem.objects.create(
+            etablissement=cls.etablissement,
+            name="Registres",
+            quantity=50,
+            minimum_threshold=10,
+        )
+
+    def test_la_moyenne_generale_est_rendue(self):
+        rendu = self._bord(self.cette_annee)
+
+        self.assertEqual(rendu["general_average"], 14.0)
+        self.assertEqual(rendu["grades_count"], 3)
+
+    def test_les_bulletins_distinguent_remis_prepare_et_echec(self):
+        """« Remis » c'est parti **et** lu.
+
+        Un bulletin prepare ne l'est pas, et un envoi en echec appelle une
+        action plutot qu'un decompte -- d'ou les trois nombres.
+        """
+        rendu = self._bord(self.cette_annee)
+
+        self.assertEqual(rendu["bulletins_total"], 4)
+        self.assertEqual(rendu["bulletins_delivered"], 2)
+        self.assertEqual(rendu["bulletins_failed"], 1)
+
+    def test_l_assiduite_des_enseignants_est_rendue(self):
+        """On paie a l'heure: la presence de l'enseignant compte autant."""
+        rendu = self._bord(self.cette_annee)
+
+        self.assertEqual(rendu["teacher_absences"], 1)
+        self.assertEqual(rendu["teacher_late"], 1)
+
+    def test_la_masse_salariale_est_rendue(self):
+        rendu = self._bord(self.cette_annee)
+
+        self.assertEqual(Decimal(rendu["payroll_total"]), Decimal("150000"))
+        self.assertEqual(rendu["payroll_count"], 1)
+
+    def test_le_stock_sous_seuil_est_compte(self):
+        rendu = self._bord(self.cette_annee)
+
+        self.assertEqual(rendu["stock_below_threshold"], 1)
+        self.assertEqual(rendu["stock_total"], 2)
+
+    def test_tout_cela_suit_l_annee(self):
+        """L'annee suivante n'herite ni des notes ni de la paie de celle-ci."""
+        rendu = self._bord(self.annee_suivante)
+
+        self.assertEqual(rendu["grades_count"], 0)
+        self.assertEqual(rendu["bulletins_total"], 0)
+        self.assertEqual(rendu["teacher_absences"], 0)
+        self.assertEqual(Decimal(rendu["payroll_total"]), Decimal("0"))

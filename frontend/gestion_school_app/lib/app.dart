@@ -32,6 +32,7 @@ import 'features/backup/presentation/backup_restore_page.dart';
 import 'features/promotion/presentation/promotion_page.dart';
 import 'features/dashboard/presentation/dashboard_controller.dart';
 import 'features/dashboard/presentation/dashboard_page.dart';
+import 'features/dashboard/presentation/dashboards_encadrement.dart';
 import 'features/dashboard/presentation/role_dashboards.dart';
 import 'features/exams/presentation/exams_controller.dart';
 import 'features/exams/presentation/exams_module_page.dart';

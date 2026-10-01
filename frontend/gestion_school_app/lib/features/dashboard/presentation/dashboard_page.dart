@@ -25,12 +25,15 @@
 /// termine par ce qui demande une décision.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/format/montant.dart';
 import '../../../core/providers/navigation_intents.dart';
 import '../domain/dashboard_stats.dart';
+import 'dashboard_cartes.dart';
 import 'dashboard_controller.dart';
 
 class DashboardPage extends ConsumerStatefulWidget {
@@ -60,6 +63,10 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   Widget build(BuildContext context) {
     final compteurs = ref.watch(dashboardStatsProvider);
     final echeancier = ref.watch(echeancierProvider);
+    // Écouté ici pour que la ligne « jamais connectés » du bloc « À traiter »
+    // en dispose. Le bandeau, lui, l'écoute pour son propre compte: son
+    // minuteur de quinze secondes ne doit pas reconstruire toute la page.
+    final presence = ref.watch(presenceProvider);
 
     return RefreshIndicator(
       onRefresh: _actualiser,
@@ -70,10 +77,11 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
             child: CircularProgressIndicator(),
           ),
         ),
-        error: (erreur, _) => _Panne(erreur: erreur, onReessayer: _actualiser),
+        error: (erreur, _) => Panne(erreur: erreur, onReessayer: _actualiser),
         data: (stats) => _Contenu(
           stats: stats,
           echeancier: echeancier,
+          presence: presence,
           onActualiser: _actualiser,
           onOuvrirModule: _ouvrirModule,
         ),
@@ -83,66 +91,18 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
 }
 
 /// Une panne se dit, au lieu de laisser la page muette.
-class _Panne extends StatelessWidget {
-  const _Panne({required this.erreur, required this.onReessayer});
-
-  final Object erreur;
-  final Future<void> Function() onReessayer;
-
-  @override
-  Widget build(BuildContext context) {
-    final couleurs = Theme.of(context).colorScheme;
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.cloud_off_outlined, color: couleurs.error),
-                    const SizedBox(width: 10),
-                    Text(
-                      'Erreur de chargement',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Les compteurs ne sont pas arrivés. $erreur',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: onReessayer,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Réessayer'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _Contenu extends StatelessWidget {
   const _Contenu({
     required this.stats,
     required this.echeancier,
+    required this.presence,
     required this.onActualiser,
     required this.onOuvrirModule,
   });
 
   final DashboardStats stats;
   final AsyncValue<Echeancier> echeancier;
+  final AsyncValue<PresenceParRole> presence;
   final Future<void> Function() onActualiser;
   final void Function(String) onOuvrirModule;
 
@@ -151,8 +111,10 @@ class _Contenu extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       children: [
-        _EnTete(stats: stats, onActualiser: onActualiser),
-        const SizedBox(height: 24),
+        EnTete(stats: stats, onActualiser: onActualiser),
+        const SizedBox(height: 14),
+        const _BandeauPresence(),
+        const SizedBox(height: 22),
         _QuatreChiffres(stats: stats),
         const SizedBox(height: 20),
         _PanneauEcheancier(echeancier: echeancier),
@@ -160,6 +122,7 @@ class _Contenu extends StatelessWidget {
         _ATraiter(
           stats: stats,
           echeancier: echeancier.valueOrNull,
+          presence: presence.valueOrNull,
           onOuvrirModule: onOuvrirModule,
         ),
       ],
@@ -172,137 +135,178 @@ class _Contenu extends StatelessWidget {
 /// L'année est ici parce que son absence est ce qui a permis à « 611 élèves »
 /// de s'afficher pendant des mois sans que personne ne s'interroge. Un écran
 /// qui nomme sa période rend l'écart visible au premier regard.
-class _EnTete extends StatelessWidget {
-  const _EnTete({required this.stats, required this.onActualiser});
+class _BandeauPresence extends ConsumerStatefulWidget {
+  const _BandeauPresence();
 
-  final DashboardStats stats;
-  final Future<void> Function() onActualiser;
+  @override
+  ConsumerState<_BandeauPresence> createState() => _BandeauPresenceState();
+}
+
+class _BandeauPresenceState extends ConsumerState<_BandeauPresence> {
+  static const _cadence = Duration(seconds: 15);
+  Timer? _minuteur;
+
+  @override
+  void initState() {
+    super.initState();
+    _minuteur = Timer.periodic(_cadence, (_) {
+      // `mounted` avant d'invalider: un minuteur qui survit à la page ferait
+      // repartir une requête sur un provider que plus personne n'écoute.
+      if (mounted) {
+        ref.invalidate(presenceProvider);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _minuteur?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final presence = ref.watch(presenceProvider);
+
+    return presence.when(
+      // Ni pendant le chargement ni en cas de refus: un bandeau qui clignote à
+      // chaque rafraîchissement serait pire que pas de bandeau.
+      loading: () => const SizedBox.shrink(),
+      error: (_, _) => const SizedBox.shrink(),
+      data: (donnees) => _LigneDePresence(presence: donnees),
+    );
+  }
+}
+
+class _LigneDePresence extends StatelessWidget {
+  const _LigneDePresence({required this.presence});
+
+  final PresenceParRole presence;
+
+  /// L'ordre d'affichage, et les noms qu'une école emploie.
+  ///
+  /// Les rôles d'encadrement d'abord: ce sont eux dont la présence se décide,
+  /// et un directeur qui cherche son comptable ne veut pas parcourir six cents
+  /// élèves d'abord.
+  static const _ordre = <String, String>{
+    'director': 'direction',
+    'censor': 'censeur',
+    'accountant': 'comptable',
+    'supervisor': 'surveillant',
+    'teacher': 'enseignants',
+    'parent': 'parents',
+    'student': 'élèves',
+  };
 
   @override
   Widget build(BuildContext context) {
     final textes = Theme.of(context).textTheme;
     final couleurs = Theme.of(context).colorScheme;
-    final annee = stats.academicYearName;
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: couleurs.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
               Text(
-                stats.activeEtablissementName?.trim().isNotEmpty == true
-                    ? stats.activeEtablissementName!
-                    : 'Tableau de bord',
-                style: textes.headlineSmall?.copyWith(
+                'EN LIGNE MAINTENANT',
+                style: textes.labelSmall?.copyWith(
+                  color: couleurs.onSurfaceVariant,
                   fontWeight: FontWeight.w700,
-                  height: 1.15,
+                  letterSpacing: 1.2,
                 ),
               ),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 10,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  if (annee != null && annee.isNotEmpty)
-                    _Etiquette(
-                      texte: 'Année $annee',
-                      icone: Icons.event_outlined,
-                      accentuee: true,
-                    )
-                  else
-                    const _Etiquette(
-                      texte: 'Aucune année active',
-                      icone: Icons.event_busy_outlined,
-                    ),
-                  if (stats.academicYearClosed)
-                    const _Etiquette(
-                      texte: 'Année clôturée',
-                      icone: Icons.lock_outline,
-                    ),
-                  if (stats.academicYearStart != null &&
-                      stats.academicYearEnd != null)
-                    Text(
-                      'du ${_jour(stats.academicYearStart!)} '
-                      'au ${_jour(stats.academicYearEnd!)}',
-                      style: textes.bodySmall?.copyWith(
-                        color: couleurs.onSurfaceVariant,
-                      ),
-                    ),
-                ],
+              const SizedBox(width: 8),
+              Text(
+                '· signe de vie de moins de ${presence.fenetreSecondes} s',
+                style: textes.labelSmall?.copyWith(
+                  color: couleurs.onSurfaceVariant,
+                ),
               ),
             ],
           ),
-        ),
-        const SizedBox(width: 12),
-        IconButton.filledTonal(
-          onPressed: onActualiser,
-          icon: const Icon(Icons.refresh),
-          tooltip: 'Actualiser',
-        ),
-      ],
-    );
-  }
-
-  /// « 2025-09-01 » devient « 01/09/2025 ».
-  static String _jour(String iso) {
-    final parts = iso.split('-');
-    if (parts.length < 3) return iso;
-    final jour = parts[2].split('T').first;
-    return '$jour/${parts[1]}/${parts[0]}';
-  }
-}
-
-class _Etiquette extends StatelessWidget {
-  const _Etiquette({
-    required this.texte,
-    required this.icone,
-    this.accentuee = false,
-  });
-
-  final String texte;
-  final IconData icone;
-  final bool accentuee;
-
-  @override
-  Widget build(BuildContext context) {
-    final couleurs = Theme.of(context).colorScheme;
-    final fond = accentuee
-        ? couleurs.primary.withValues(alpha: 0.12)
-        : couleurs.surfaceContainerHighest;
-    final encre = accentuee ? couleurs.primary : couleurs.onSurfaceVariant;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: fond,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icone, size: 14, color: encre),
-          const SizedBox(width: 6),
-          Text(
-            texte,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: encre,
-              fontWeight: FontWeight.w600,
+          const SizedBox(height: 8),
+          if (presence.totalEnLigne == 0)
+            Text(
+              'Personne n\'est connecté en ce moment.',
+              style: textes.bodySmall?.copyWith(
+                color: couleurs.onSurfaceVariant,
+              ),
+            )
+          else
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                for (final entree in _ordre.entries)
+                  if ((presence.enLigneParRole[entree.key] ?? 0) > 0)
+                    _Pastille(
+                      combien: presence.enLigneParRole[entree.key]!,
+                      libelle: entree.value,
+                    ),
+              ],
             ),
-          ),
         ],
       ),
     );
   }
 }
 
-/// Quatre chiffres, et une phrase par chiffre.
+class _Pastille extends StatelessWidget {
+  const _Pastille({required this.combien, required this.libelle});
+
+  final int combien;
+  final String libelle;
+
+  @override
+  Widget build(BuildContext context) {
+    final textes = Theme.of(context).textTheme;
+    final couleurs = Theme.of(context).colorScheme;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Un point plein: la présence se dit par la forme autant que par la
+        // couleur, et le bandeau ne garde que les rôles qui en ont.
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            color: couleurs.primary,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 7),
+        Text(
+          '$combien',
+          style: textes.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          libelle,
+          style: textes.bodySmall?.copyWith(color: couleurs.onSurfaceVariant),
+        ),
+      ],
+    );
+  }
+}
+
+/// Deux rangées de quatre, étiquetées « L'argent » et « L'école ».
 ///
-/// Quatre et non neuf: au-delà, on ne lit plus, on balaie. Et une phrase
-/// plutôt qu'un pourcentage nu, parce qu'un nombre sans son sens oblige
-/// chacun à l'interpréter — souvent de travers.
+/// Quatre chiffres valent mieux que neuf, mais **huit rangés en deux familles
+/// nommées se lisent mieux que quatre qui n'en couvrent qu'une seule**. La
+/// version précédente ne parlait que de caisse: un directeur d'école lisait
+/// son recouvrement et ses charges, et rien sur ses 26 730 notes, ses
+/// bulletins ou la présence de ses enseignants.
+///
+/// La structure fait le travail que le nombre ne peut pas faire: on cherche
+/// dans la rangée qui répond à sa question, pas dans un tapis de cartes.
 class _QuatreChiffres extends StatelessWidget {
   const _QuatreChiffres({required this.stats});
 
@@ -310,18 +314,19 @@ class _QuatreChiffres extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cartes = <Widget>[
-      _CarteChiffre(
-        libelle: 'Effectif de l\'année',
-        valeur: '${stats.students}',
-        unite: stats.students == 1 ? 'élève' : 'élèves',
-        phrase:
-            '${stats.classrooms} ${stats.classrooms == 1 ? "classe" : "classes"}'
-            ' · ${stats.teachers} '
-            '${stats.teachers == 1 ? "enseignant" : "enseignants"}',
-        icone: Icons.groups_outlined,
-      ),
-      _CarteChiffre(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Rangee(titre: 'L\'argent', cartes: _lArgent()),
+        const SizedBox(height: 22),
+        Rangee(titre: 'L\'école', cartes: _lEcole()),
+      ],
+    );
+  }
+
+  List<Widget> _lArgent() {
+    return [
+      CarteChiffre(
         libelle: 'Recouvrement',
         valeur: _taux(stats.collectionRate),
         phrase: stats.feesOutstanding > 0
@@ -330,7 +335,21 @@ class _QuatreChiffres extends StatelessWidget {
         icone: Icons.savings_outlined,
         jauge: stats.feesDue > 0 ? stats.collectionRate / 100 : null,
       ),
-      _CarteChiffre(
+      // Ce que la refonte avait perdu: l'ancien écran montrait « Recettes du
+      // mois » et « Bénéfice net ». Le bénéfice était faux -- il n'était que
+      // l'encaissement, les charges non doublement validées étant exclues --
+      // mais le retirer sans rien mettre à la place privait la direction du
+      // chiffre qu'elle regarde le matin.
+      CarteChiffre(
+        libelle: 'Encaissé ce mois-ci',
+        valeur: montantAbrege(stats.monthlyRevenue),
+        unite: 'FCFA',
+        phrase: (stats.monthlyExpenses + stats.monthlyExpensesPending) > 0
+            ? '${montantEnFrancs(stats.monthlyExpenses + stats.monthlyExpensesPending)} de charges sur le mois'
+            : 'aucune charge enregistrée ce mois-ci',
+        icone: Icons.payments_outlined,
+      ),
+      CarteChiffre(
         libelle: 'Dépenses à valider',
         valeur: montantAbrege(stats.yearExpensesPending),
         unite: 'FCFA',
@@ -342,191 +361,77 @@ class _QuatreChiffres extends StatelessWidget {
         icone: Icons.approval_outlined,
         alerte: stats.yearExpensesPendingCount > 0,
       ),
-      _CarteChiffre(
-        libelle: 'Absences du mois',
-        valeur: '${stats.monthlyAbsences}',
-        phrase: stats.phraseDesAbsences,
-        icone: Icons.event_busy_outlined,
+      CarteChiffre(
+        libelle: 'Masse salariale',
+        valeur: montantAbrege(stats.payrollTotal),
+        unite: 'FCFA',
+        phrase: stats.payrollCount == 0
+            ? 'aucune fiche de paie sur l\'année'
+            : '${stats.payrollCount} '
+                  '${stats.payrollCount == 1 ? "fiche" : "fiches"} de paie',
+        icone: Icons.badge_outlined,
       ),
     ];
+  }
 
-    return LayoutBuilder(
-      builder: (context, contraintes) {
-        // Quatre de front sur un bureau, deux sur une tablette, une seule sur
-        // un téléphone. Le seuil vient de la largeur qu'un montant en francs
-        // demande sans se couper: « 5 040 000 FCFA » ne tient pas sous 240 px.
-        final parLigne = contraintes.maxWidth >= 1000
-            ? 4
-            : contraintes.maxWidth >= 620
-            ? 2
-            : 1;
-        const ecart = 14.0;
-        final largeur =
-            (contraintes.maxWidth - ecart * (parLigne - 1)) / parLigne;
-
-        return Wrap(
-          spacing: ecart,
-          runSpacing: ecart,
-          children: [
-            for (final carte in cartes)
-              SizedBox(width: largeur, child: carte),
-          ],
-        );
-      },
-    );
+  List<Widget> _lEcole() {
+    return [
+      CarteChiffre(
+        libelle: 'Effectif de l\'année',
+        valeur: '${stats.students}',
+        unite: stats.students == 1 ? 'élève' : 'élèves',
+        phrase:
+            '${stats.classrooms} ${stats.classrooms == 1 ? "classe" : "classes"}'
+            ' · ${stats.teachers} '
+            '${stats.teachers == 1 ? "enseignant" : "enseignants"}',
+        icone: Icons.groups_outlined,
+      ),
+      CarteChiffre(
+        libelle: 'Moyenne générale',
+        valeur: _note(stats.generalAverage),
+        unite: '/ 20',
+        phrase: stats.gradesCount == 0
+            ? 'aucune note saisie sur l\'année'
+            : 'sur ${stats.gradesCount} '
+                  '${stats.gradesCount == 1 ? "note" : "notes"} saisies',
+        icone: Icons.school_outlined,
+      ),
+      CarteChiffre(
+        libelle: 'Bulletins remis',
+        valeur: '${stats.bulletinsDelivered}',
+        unite: 'sur ${stats.bulletinsTotal}',
+        phrase: stats.bulletinsFailed > 0
+            ? '${stats.bulletinsFailed} '
+                  '${stats.bulletinsFailed == 1 ? "envoi a échoué" : "envois ont échoué"}'
+            : stats.bulletinsTotal == 0
+            ? 'aucun bulletin préparé'
+            : 'aucun envoi en échec',
+        icone: Icons.description_outlined,
+        jauge: stats.partDesBulletins,
+        alerte: stats.bulletinsFailed > 0,
+      ),
+      CarteChiffre(
+        libelle: 'Assiduité',
+        valeur: '${stats.monthlyAbsences}',
+        unite: 'absences élèves',
+        phrase: stats.phraseDesEnseignants,
+        icone: Icons.event_busy_outlined,
+        alerte: stats.teacherAbsences > 0,
+      ),
+    ];
   }
 
   static String _taux(double valeur) {
     final arrondi = valeur.toStringAsFixed(1).replaceAll('.', ',');
     return '$arrondi %';
   }
-}
 
-class _CarteChiffre extends StatelessWidget {
-  const _CarteChiffre({
-    required this.libelle,
-    required this.valeur,
-    required this.phrase,
-    required this.icone,
-    this.unite,
-    this.jauge,
-    this.alerte = false,
-  });
-
-  final String libelle;
-  final String valeur;
-  final String? unite;
-  final String phrase;
-  final IconData icone;
-
-  /// La part réalisée, entre 0 et 1, quand le chiffre est un ratio.
-  ///
-  /// Une jauge sur piste de même teinte, et non un camembert de deux parts:
-  /// « 93 % d'un total » se lit d'un coup sur une barre, et la part manquante
-  /// occupe visuellement la place qu'elle représente.
-  final double? jauge;
-
-  final bool alerte;
-
-  @override
-  Widget build(BuildContext context) {
-    final textes = Theme.of(context).textTheme;
-    final couleurs = Theme.of(context).colorScheme;
-
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icone, size: 18, color: couleurs.onSurfaceVariant),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    libelle,
-                    style: textes.labelLarge?.copyWith(
-                      color: couleurs.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Text(
-                  valeur,
-                  style: textes.displaySmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    height: 1,
-                  ),
-                ),
-                if (unite != null) ...[
-                  const SizedBox(width: 6),
-                  Text(
-                    unite!,
-                    style: textes.bodyMedium?.copyWith(
-                      color: couleurs.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            if (jauge != null) ...[
-              const SizedBox(height: 12),
-              _Jauge(part: jauge!),
-            ],
-            const SizedBox(height: 10),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (alerte) ...[
-                  Icon(
-                    Icons.pending_actions_outlined,
-                    size: 15,
-                    color: couleurs.error,
-                  ),
-                  const SizedBox(width: 6),
-                ],
-                Expanded(
-                  child: Text(
-                    phrase,
-                    style: textes.bodySmall?.copyWith(
-                      color: alerte ? couleurs.error : couleurs.onSurfaceVariant,
-                      height: 1.35,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
+  static String _note(double valeur) {
+    return valeur.toStringAsFixed(2).replaceAll('.', ',');
   }
 }
 
-/// La part réalisée, sur une piste de la même teinte.
-class _Jauge extends StatelessWidget {
-  const _Jauge({required this.part});
-
-  final double part;
-
-  @override
-  Widget build(BuildContext context) {
-    final couleurs = Theme.of(context).colorScheme;
-    final borne = part.clamp(0.0, 1.0);
-
-    return Semantics(
-      label: 'Réalisé ${(borne * 100).round()} pour cent',
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(999),
-        child: LinearProgressIndicator(
-          value: borne,
-          minHeight: 8,
-          backgroundColor: couleurs.primary.withValues(alpha: 0.16),
-          valueColor: AlwaysStoppedAnimation(couleurs.primary),
-        ),
-      ),
-    );
-  }
-}
-
-/// Une seule courbe: ce qui était dû chaque mois, et ce qui est rentré.
-///
-/// Une seule, parce que l'écran en portait quatre — un radar, des barres, un
-/// anneau, des sparklines — et qu'aucune ne disait quoi faire.
-///
-/// Le mois vient de l'échéance du barème et non de l'heure de saisie du
-/// paiement: `Payment` ne porte aucune date de paiement, donc un reçu écrit le
-/// 30 et saisi le 2 tombait dans le mois suivant, et un import en masse faisait
-/// tenir une année dans un seul mois.
+/// Une rangée nommée, et ses cartes qui se replient selon la largeur.
 class _PanneauEcheancier extends StatelessWidget {
   const _PanneauEcheancier({required this.echeancier});
 
@@ -855,71 +760,69 @@ class _ATraiter extends StatelessWidget {
   const _ATraiter({
     required this.stats,
     required this.echeancier,
+    required this.presence,
     required this.onOuvrirModule,
   });
 
   final DashboardStats stats;
   final Echeancier? echeancier;
+  final PresenceParRole? presence;
   final void Function(String) onOuvrirModule;
 
   @override
   Widget build(BuildContext context) {
-    final textes = Theme.of(context).textTheme;
-    final couleurs = Theme.of(context).colorScheme;
-    final lignes = _lignes();
-
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'À traiter',
-              style: textes.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 4),
-            if (lignes.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.check_circle_outline,
-                      size: 18,
-                      color: couleurs.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Rien n\'attend de décision.',
-                        style: textes.bodyMedium?.copyWith(
-                          color: couleurs.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else
-              for (final ligne in lignes)
-                _LigneAction(
-                  ligne: ligne,
-                  onOuvrir: () => onOuvrirModule(ligne.module),
-                ),
-          ],
-        ),
-      ),
-    );
+    // Le rendu vit dans `ATraiter`, partage par les sept tableaux de bord.
+    // Ici ne reste que le **choix des lignes**, qui est propre a la direction:
+    // « ce qui demande une decision » depend du role -- un surveillant voit des
+    // feuilles d'appel, un comptable des charges a valider.
+    return ATraiter(lignes: _lignes(), onOuvrirModule: onOuvrirModule);
   }
 
-  List<_Action> _lignes() {
-    final actions = <_Action>[];
+  /// Les noms des rôles, tels qu'une école les emploie.
+  static const _nomDuRole = <String, String>{
+    'teacher': 'enseignants',
+    'student': 'élèves',
+    'parent': 'parents',
+    'director': 'comptes de direction',
+    'censor': 'censeurs',
+    'accountant': 'comptables',
+    'supervisor': 'surveillants',
+    'promoter': 'promoteurs',
+  };
+
+  List<ActionATraiter> _lignes() {
+    final actions = <ActionATraiter>[];
+
+    // En tête, parce que c'est le fait le plus important d'un déploiement qui
+    // commence: les comptes existent, les identifiants ont été générés, et
+    // personne n'ouvre l'application. Sur IFP-OBK, 74 enseignants sur 75 et
+    // 608 élèves sur 610 ne s'y sont jamais connectés — et aucun écran ne le
+    // disait.
+    //
+    // Question distincte de celle du bandeau: non pas « qui travaille
+    // maintenant » mais « qui n'a jamais commencé », et c'est de loin la plus
+    // urgente.
+    final absents = presence?.leRoleLePlusAbsent;
+    if (absents != null && absents.$2 > 0) {
+      final libelle = _nomDuRole[absents.$1] ?? absents.$1;
+      final total = presence?.comptesParRole[absents.$1];
+      actions.add(
+        ActionATraiter(
+          titre:
+              '${absents.$2} $libelle n’ont jamais ouvert l’application',
+          detail: total == null
+              ? 'Distribuez-leur leurs identifiants'
+              : 'sur $total comptes créés',
+          icone: Icons.no_accounts_outlined,
+          module: 'users',
+          urgent: true,
+        ),
+      );
+    }
 
     if (stats.yearExpensesPendingCount > 0) {
       actions.add(
-        _Action(
+        ActionATraiter(
           titre:
               '${stats.yearExpensesPendingCount} '
               '${stats.yearExpensesPendingCount == 1 ? "dépense attend" : "dépenses attendent"}'
@@ -934,7 +837,7 @@ class _ATraiter extends StatelessWidget {
 
     if (stats.studentsUnpaid > 0) {
       actions.add(
-        _Action(
+        ActionATraiter(
           titre:
               '${stats.studentsUnpaid} '
               '${stats.studentsUnpaid == 1 ? "élève a" : "élèves ont"}'
@@ -949,7 +852,7 @@ class _ATraiter extends StatelessWidget {
     final decrochage = echeancier?.premierDecrochage;
     if (decrochage != null) {
       actions.add(
-        _Action(
+        ActionATraiter(
           titre: 'Le recouvrement décroche depuis ${decrochage.libelle}',
           detail: '${montantEnFrancs(decrochage.manque)} sur ce mois',
           icone: Icons.trending_down,
@@ -959,9 +862,40 @@ class _ATraiter extends StatelessWidget {
       );
     }
 
+    final bulletinsManquants = stats.bulletinsTotal - stats.bulletinsDelivered;
+    if (bulletinsManquants > 0) {
+      actions.add(
+        ActionATraiter(
+          titre:
+              '$bulletinsManquants '
+              '${bulletinsManquants == 1 ? "bulletin n’est pas remis" : "bulletins ne sont pas remis"}',
+          detail: stats.bulletinsFailed > 0
+              ? 'dont ${stats.bulletinsFailed} en échec d\'envoi'
+              : 'sur ${stats.bulletinsTotal} préparés',
+          icone: Icons.description_outlined,
+          module: 'reports',
+          urgent: stats.bulletinsFailed > 0,
+        ),
+      );
+    }
+
+    if (stats.stockBelowThreshold > 0) {
+      actions.add(
+        ActionATraiter(
+          titre:
+              '${stats.stockBelowThreshold} '
+              '${stats.stockBelowThreshold == 1 ? "article est" : "articles sont"}'
+              ' sous leur seuil',
+          detail: 'sur ${stats.stockTotal} en magasin',
+          icone: Icons.inventory_2_outlined,
+          module: 'stock',
+        ),
+      );
+    }
+
     if (stats.studentsUnassigned > 0) {
       actions.add(
-        _Action(
+        ActionATraiter(
           titre:
               '${stats.studentsUnassigned} '
               '${stats.studentsUnassigned == 1 ? "élève inscrit n’a" : "élèves inscrits n’ont"}'
@@ -978,75 +912,3 @@ class _ATraiter extends StatelessWidget {
   }
 }
 
-class _Action {
-  const _Action({
-    required this.titre,
-    required this.detail,
-    required this.icone,
-    required this.module,
-    this.urgent = false,
-  });
-
-  final String titre;
-  final String detail;
-  final IconData icone;
-  final String module;
-  final bool urgent;
-}
-
-class _LigneAction extends StatelessWidget {
-  const _LigneAction({required this.ligne, required this.onOuvrir});
-
-  final _Action ligne;
-  final VoidCallback onOuvrir;
-
-  @override
-  Widget build(BuildContext context) {
-    final textes = Theme.of(context).textTheme;
-    final couleurs = Theme.of(context).colorScheme;
-    final encre = ligne.urgent ? couleurs.error : couleurs.onSurfaceVariant;
-
-    return InkWell(
-      onTap: onOuvrir,
-      borderRadius: BorderRadius.circular(10),
-      child: Padding(
-        // 48 px de haut au minimum: une ligne cliquable doit pouvoir être
-        // touchée au doigt.
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-        child: Row(
-          children: [
-            Icon(ligne.icone, size: 19, color: encre),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    ligne.titre,
-                    style: textes.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      height: 1.3,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    ligne.detail,
-                    style: textes.bodySmall?.copyWith(
-                      color: couleurs.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(
-              Icons.chevron_right,
-              size: 20,
-              color: couleurs.onSurfaceVariant,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

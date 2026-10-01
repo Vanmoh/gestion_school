@@ -50,6 +50,30 @@ class DashboardStats {
   final double feesOutstanding;
   final double collectionRate;
 
+  /// L'école, en face de l'argent.
+  ///
+  /// Le tableau de bord ne parlait que de caisse — recettes, dépenses,
+  /// bénéfice. Sur l'écran d'accueil d'un directeur d'école, aucun signal
+  /// pédagogique: ni moyenne, ni bulletin, ni présence des enseignants.
+  /// 26 730 notes saisies sur IFP-OBK, et pas un mot à l'accueil.
+  final double generalAverage;
+  final int gradesCount;
+  final int bulletinsDelivered;
+  final int bulletinsTotal;
+  final int bulletinsFailed;
+
+  /// L'assiduité des enseignants, que l'écran passait sous silence alors
+  /// qu'il montrait celle des élèves. On paie à l'heure.
+  final int teacherAbsences;
+  final int teacherLate;
+
+  /// La masse salariale: la principale charge de l'école.
+  final double payrollTotal;
+  final int payrollCount;
+
+  final int stockBelowThreshold;
+  final int stockTotal;
+
   /// Des nombres qui appellent une action, et non un décompte.
   final int studentsUnpaid;
   final int studentsUnassigned;
@@ -83,7 +107,44 @@ class DashboardStats {
     this.studentsUnassigned = 0,
     this.yearExpensesPending = 0,
     this.yearExpensesPendingCount = 0,
+    this.generalAverage = 0,
+    this.gradesCount = 0,
+    this.bulletinsDelivered = 0,
+    this.bulletinsTotal = 0,
+    this.bulletinsFailed = 0,
+    this.teacherAbsences = 0,
+    this.teacherLate = 0,
+    this.payrollTotal = 0,
+    this.payrollCount = 0,
+    this.stockBelowThreshold = 0,
+    this.stockTotal = 0,
   });
+
+  /// La part des bulletins effectivement remis, pour la jauge.
+  ///
+  /// `null` quand aucun bulletin n'est attendu: une jauge à zéro laisserait
+  /// croire à un retard là où il n'y a simplement rien à remettre.
+  double? get partDesBulletins {
+    if (bulletinsTotal == 0) return null;
+    return bulletinsDelivered / bulletinsTotal;
+  }
+
+  /// La phrase qui accompagne l'assiduité des enseignants.
+  String get phraseDesEnseignants {
+    if (teacherAbsences == 0 && teacherLate == 0) {
+      return 'aucune absence ni retard relevés';
+    }
+    final morceaux = <String>[];
+    if (teacherAbsences > 0) {
+      morceaux.add(
+        '$teacherAbsences ${teacherAbsences == 1 ? "absence" : "absences"}',
+      );
+    }
+    if (teacherLate > 0) {
+      morceaux.add('$teacherLate ${teacherLate == 1 ? "retard" : "retards"}');
+    }
+    return '${morceaux.join(" et ")} côté enseignants';
+  }
 
   /// La phrase qui accompagne le nombre d'absences.
   ///
@@ -193,4 +254,51 @@ class FinancesAnnuelles {
   });
 
   bool get estVide => mois.isEmpty;
+}
+
+
+/// Qui est en ligne maintenant, par rôle.
+///
+/// « En ligne » n'est pas une approximation ici: le projet tient une
+/// WebSocket ouverte (Channels + Redis), le client bat toutes les vingt
+/// secondes, et chaque appel REST rafraîchit aussi la présence. La règle vient
+/// de `apps/common/presence.py` — **un signe de vie dans les 75 secondes**,
+/// trois battements manqués — et elle ignore délibérément le compteur de
+/// connexions, qui reste bloqué quand un socket meurt sans prévenir.
+///
+/// Sa propre route, non mise en cache: la charge utile du tableau de bord est
+/// gardée soixante secondes, et y glisser la présence l'aurait figée.
+class PresenceParRole {
+  /// La fenêtre que le serveur applique, en secondes. Affichée telle quelle
+  /// plutôt que recopiée: deux définitions de « en ligne » finiraient par se
+  /// contredire.
+  final int fenetreSecondes;
+  final int totalEnLigne;
+  final Map<String, int> enLigneParRole;
+  final Map<String, int> jamaisConnectesParRole;
+  final Map<String, int> comptesParRole;
+
+  const PresenceParRole({
+    this.fenetreSecondes = 75,
+    this.totalEnLigne = 0,
+    this.enLigneParRole = const {},
+    this.jamaisConnectesParRole = const {},
+    this.comptesParRole = const {},
+  });
+
+  /// Le rôle dont le plus de comptes n'ont jamais ouvert l'application.
+  ///
+  /// C'est la question la plus urgente sur une base réelle: 74 enseignants sur
+  /// 75 n'ont jamais ouvert l'application, et aucun écran ne le disait.
+  (String, int)? get leRoleLePlusAbsent {
+    String? pire;
+    var combien = 0;
+    jamaisConnectesParRole.forEach((role, n) {
+      if (n > combien) {
+        pire = role;
+        combien = n;
+      }
+    });
+    return pire == null ? null : (pire!, combien);
+  }
 }

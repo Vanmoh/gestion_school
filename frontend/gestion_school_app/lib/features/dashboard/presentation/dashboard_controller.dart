@@ -29,3 +29,15 @@ final financesAnnuellesProvider = FutureProvider<FinancesAnnuelles>((ref) async 
 final echeancierProvider = FutureProvider<Echeancier>((ref) async {
   return ref.read(dashboardRepositoryProvider).fetchEcheancier();
 });
+
+
+/// Qui est en ligne, rafraîchi toutes les quinze secondes par l'écran.
+///
+/// Séparé des compteurs: ceux-ci coûtent une quinzaine d'agrégations et sont
+/// mis en cache soixante secondes côté serveur, alors que la présence est une
+/// requête légère qui doit rester fraîche. Un rôle sans droit sur le module
+/// `users` reçoit 403, et l'écran se contente alors de ne pas peindre le
+/// bandeau.
+final presenceProvider = FutureProvider<PresenceParRole>((ref) async {
+  return ref.read(dashboardRepositoryProvider).fetchPresence();
+});
