@@ -542,6 +542,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
     required double? encaisse,
     required double impayes,
     double? tresorerie,
+    double? enAttente,
     bool tresorerieAttendue = false,
     bool laFamille = false,
   }) {
@@ -580,6 +581,16 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
               libelle: 'Trésorerie nette',
               valeur: tresorerie == null ? '…' : montantEnFrancs(tresorerie),
               couleur: (tresorerie ?? 0) < 0 ? scheme.error : null,
+              // Sans cette phrase, « Trésorerie nette » affiche le même montant
+              // que « Montant encaissé » et cela ressemble à une erreur. C'en
+              // est la conséquence: le résultat ne soustrait que les charges
+              // validées aux deux niveaux, et une école qui n'a pas fait
+              // tourner son circuit n'en a aucune. Le chiffre en attente était
+              // déjà dans la réponse du serveur; il manquait seulement à
+              // l'écran.
+              precision: (enAttente ?? 0) > 0
+                  ? 'hors ${montantEnFrancs(enAttente!)} de charges à valider'
+                  : null,
             ),
         ],
       ),
@@ -715,6 +726,20 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
   bool _isTeacherFinanceReadOnly(String? role) {
     return !ref.read(currentPermissionsProvider).canWrite('payroll');
   }
+
+  /// Cette page montre-t-elle à quelqu'un **sa propre** paie?
+  ///
+  /// La matrice classe `payroll` en `L*` pour un enseignant: il ne lit que sa
+  /// fiche. L'écran, lui, gardait les mots de l'administration — « Total à
+  /// payer, tous enseignants » devant une enseignante qui est seule, et un
+  /// bouton « Générer paie horaire » grisé qui lui promettait une action
+  /// qu'elle n'a pas.
+  ///
+  /// `scoped` et non le nom du rôle: c'est la même question posée à la source
+  /// qui fait autorité, et un droit modifié dans `access.py` se répercute sans
+  /// qu'on y pense.
+  bool get _estSaProprePaie =>
+      ref.watch(currentPermissionsProvider).of('payroll').scoped;
 
   /// Les journaux exportes nomment chaque payeur et chaque montant.
   ///
@@ -2930,7 +2955,11 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      'Total à payer, tous enseignants',
+                      // « tous enseignants » devant une enseignante qui est
+                      // seule sur sa propre page de paie: l'etiquette etait
+                      // ecrite pour l'administration et servie telle quelle a
+                      // qui ne voit que sa ligne.
+                      _estSaProprePaie ? 'Total de mes heures' : 'Total à payer, tous enseignants',
                       style: textTheme.titleSmall,
                     ),
                     Text(
@@ -2988,7 +3017,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Paie horaire enseignants',
+              _estSaProprePaie ? 'Mes fiches de paie' : 'Paie horaire enseignants',
               style: Theme.of(context).textTheme.titleSmall,
             ),
             const SizedBox(height: 6),
@@ -2997,11 +3026,22 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
             // jamais au comptable, qui l'a, et toujours au directeur et à
             // l'enseignant, qui lisaient donc le nom d'un autre poste que le
             // leur — assorti d'une validation dont ils ne disposent pas.
+            // Les deux blocs de cette page passaient pour un doublon, faute de
+            // dire ce qui les separe: celui du dessus **calcule** ce qui est du
+            // d'apres les pointages, celui-ci liste les fiches **emises**.
+            // Calculer, generer, valider, payer: quatre etapes, et seules les
+            // deux premieres sont ici.
             Text(
-              lectureSeule
+              _estSaProprePaie
+                  ? 'Les fiches déjà émises pour vous. Le montant ci-dessus est '
+                        'ce que vos pointages représentent; il devient une fiche '
+                        'quand le censeur la génère.'
+                  : lectureSeule
                   ? 'Consultation seule: la génération et la double validation '
                         'appartiennent au censeur puis au comptable.'
-                  : 'Génération de la paie mensuelle et double validation N1/N2.',
+                  : 'Génération de la paie mensuelle et double validation N1/N2. '
+                        'Le bloc ci-dessus calcule les heures; celui-ci émet les '
+                        'fiches.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 10),
@@ -3009,20 +3049,27 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
               spacing: 10,
               runSpacing: 10,
               children: [
-                SizedBox(
-                  width: 180,
-                  child: TextField(
-                    controller: _payrollMonthController,
-                    decoration: const InputDecoration(labelText: 'Mois paie (YYYY-MM)'),
+                // Le champ « Mois paie » et le bouton de génération ne
+                // s'affichent qu'à qui peut s'en servir. Les montrer grisés à
+                // une enseignante lui promettait une action qu'elle n'a pas,
+                // et ajoutait un second sélecteur de période sans rapport avec
+                // celui du bloc au-dessus.
+                if (!lectureSeule) ...[
+                  SizedBox(
+                    width: 180,
+                    child: TextField(
+                      controller: _payrollMonthController,
+                      decoration: const InputDecoration(
+                        labelText: 'Mois paie (YYYY-MM)',
+                      ),
+                    ),
                   ),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: (lectureSeule || _financeBusy)
-                      ? null
-                      : _generateTeacherPayroll,
-                  icon: const Icon(Icons.calculate_outlined),
-                  label: const Text('Générer paie horaire'),
-                ),
+                  FilledButton.tonalIcon(
+                    onPressed: _financeBusy ? null : _generateTeacherPayroll,
+                    icon: const Icon(Icons.calculate_outlined),
+                    label: const Text('Générer paie horaire'),
+                  ),
+                ],
                 OutlinedButton.icon(
                   onPressed: _loadTeacherFinanceSection,
                   icon: const Icon(Icons.refresh),
@@ -3032,7 +3079,9 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
             ),
             const SizedBox(height: 12),
             Text(
-              'Synthese paie horaire (${_financePayrolls.length})',
+              _estSaProprePaie
+                  ? 'Mes fiches (${_financePayrolls.length})'
+                  : 'Synthèse paie horaire (${_financePayrolls.length})',
               style: Theme.of(context).textTheme.titleSmall,
             ),
             const SizedBox(height: 8),
@@ -3770,6 +3819,7 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage>
                   encaisse: totauxDeLaPeriode?.recettes,
                   impayes: outstandingTotal,
                   tresorerie: totauxDeLaPeriode?.resultat,
+                  enAttente: totauxDeLaPeriode?.depensesEnAttente,
                   tresorerieAttendue: peutVoirLesDepenses,
                   laFamille: laFamille,
                 ),

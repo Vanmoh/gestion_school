@@ -511,10 +511,19 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            // Teintes du thème et non couleurs écrites en dur: le fond
+            // « 0xFFFFF4E5 » était pensé pour le thème clair, et en sombre il
+            // portait un texte clair sur un fond clair — illisible.
             decoration: BoxDecoration(
-              color: const Color(0xFFFFF4E5),
+              color: Theme.of(
+                context,
+              ).colorScheme.tertiary.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFF1C27D)),
+              border: Border.all(
+                color: Theme.of(
+                  context,
+                ).colorScheme.tertiary.withValues(alpha: 0.45),
+              ),
             ),
             child: const Text(
               'Mode lecture seule: vous consultez les heures pointées, '
@@ -527,9 +536,15 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
-              color: const Color(0xFFEAF4FF),
+              color: Theme.of(
+                context,
+              ).colorScheme.primary.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFF9FC5F8)),
+              border: Border.all(
+                color: Theme.of(
+                  context,
+                ).colorScheme.primary.withValues(alpha: 0.45),
+              ),
             ),
             child: const Text(
               'Mode enseignant: vous pouvez consulter votre historique et enregistrer uniquement votre propre pointage.',
@@ -1125,20 +1140,28 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
     return _asInt(row['late_minutes']) > 15;
   }
 
-  Color? _rowHighlightColor(Map<String, dynamic> row) {
+  /// La teinte d'une ligne signalée, prise au thème.
+  ///
+  /// Les trois couleurs étaient écrites en dur — « 0xFFFFE5E5 » pour un retard
+  /// strict, « 0xFFFFF1F0 » pour une anomalie — et pensées pour un fond clair.
+  /// En thème sombre, le texte de la ligne reste clair: clair sur clair, donc
+  /// illisible. Une teinte faible du thème se pose au contraire **au-dessus**
+  /// de la surface courante et laisse le texte lisible dans les deux modes.
+  Color? _rowHighlightColor(BuildContext context, Map<String, dynamic> row) {
+    final couleurs = Theme.of(context).colorScheme;
     if (_isLateStrictRow(row)) {
-      return const Color(0xFFFFE5E5);
+      return couleurs.error.withValues(alpha: 0.16);
     }
     if (_isAnomalyRow(row)) {
-      return const Color(0xFFFFF1F0);
+      return couleurs.error.withValues(alpha: 0.08);
     }
     return null;
   }
 
-  TextStyle? _rowTextStyle(Map<String, dynamic> row) {
+  TextStyle? _rowTextStyle(BuildContext context, Map<String, dynamic> row) {
     if (_isLateStrictRow(row)) {
-      return const TextStyle(
-        color: Color(0xFFB00020),
+      return TextStyle(
+        color: Theme.of(context).colorScheme.error,
         fontWeight: FontWeight.w600,
       );
     }
@@ -1966,11 +1989,11 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
                                 ),
                               ],
                               rows: sortedRows.take(200).map((row) {
-                                final textStyle = _rowTextStyle(row);
+                                final textStyle = _rowTextStyle(context, row);
                                 return DataRow(
                                   onSelectChanged: (_) => _showRowDetails(row),
                                   color: WidgetStateProperty.resolveWith(
-                                    (_) => _rowHighlightColor(row),
+                                    (_) => _rowHighlightColor(context, row),
                                   ),
                                   cells: [
                                     DataCell(Text(_uiDate(row['entry_date']), style: textStyle)),
