@@ -611,6 +611,8 @@ class Command(BaseCommand):
                 teacher__etablissement=etablissement, academic_year__isnull=True)),
             ("pointages", TeacherAttendance.objects.filter(
                 teacher__etablissement=etablissement, academic_year__isnull=True)),
+            ("emargements", TeacherTimeEntry.objects.filter(
+                teacher__etablissement=etablissement, academic_year__isnull=True)),
         ):
             n = requete.count()
             if n:

@@ -48,6 +48,7 @@ from apps.school.models import (
     Teacher,
     TeacherAttendance,
     TeacherPayroll,
+    TeacherTimeEntry,
 )
 from apps.school.rattachement_a_l_annee import annee_de_la_date
 
@@ -137,6 +138,40 @@ class RangerCeQuiEstDateTests(SocleDeDeuxAnnees):
             amount=Decimal("150000"),
         )
         self.assertEqual(paie.academic_year, self.cette_annee)
+
+    def test_un_emargement_est_range_par_sa_date(self):
+        """Le dernier modele date de la famille, et le plus tardif a l'avoir eu.
+
+        Il n'avait aucun champ d'annee, et sa vue n'etait pas bornee: la liste
+        rendait 1 593 emargements sur IFP-OBK -- 751 pour une annee, 842 pour
+        l'autre -- quelle que soit l'annee demandee.
+        """
+        from datetime import time as heure
+
+        emargement = TeacherTimeEntry.objects.create(
+            teacher=self.prof,
+            etablissement=self.etablissement,
+            entry_date=date(2025, 11, 4),
+            check_in_time=heure(7, 55),
+        )
+        self.assertEqual(emargement.academic_year, self.cette_annee)
+
+    def test_un_emargement_de_la_rentree_non_ouverte_reste_sans_annee(self):
+        """Septembre 2026 pour une ecole restee sur 2025-2026.
+
+        1 180 lignes de la base reelle sont dans ce cas. Les ranger de force
+        dans l'annee close serait plus faux que de les laisser en attente: le
+        controle les signale, et l'ecole ouvre son annee.
+        """
+        from datetime import time as heure
+
+        emargement = TeacherTimeEntry.objects.create(
+            teacher=self.prof,
+            etablissement=self.etablissement,
+            entry_date=date(2026, 8, 20),
+            check_in_time=heure(7, 55),
+        )
+        self.assertIsNone(emargement.academic_year)
 
     def test_un_pointage_d_enseignant_est_range_par_sa_date(self):
         """Aucune orpheline en base, et c'est justement le moment de brancher.

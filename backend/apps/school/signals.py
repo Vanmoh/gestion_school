@@ -364,6 +364,28 @@ def _ranger_la_paie_dans_son_annee(sender, instance, **kwargs):
     )
 
 
+@receiver(pre_save, sender=TeacherTimeEntry)
+def _ranger_l_emargement_dans_son_annee(sender, instance, **kwargs):
+    """Le dernier modele date de la famille, et le plus tardif a l'avoir eu.
+
+    Il n'avait pas de champ du tout: sa liste rendait 1 593 emargements sur
+    IFP-OBK -- 751 pour une annee, 842 pour l'autre -- quelle que soit l'annee
+    demandee.
+
+    `etablissement` d'abord, l'enseignant en repli: les deux colonnes sont
+    nullables, et une ligne importee sans ecole reste localisable par
+    l'enseignant qu'elle designe.
+    """
+    if deja_rattache(instance):
+        return
+    rattacher_a_l_annee(
+        instance,
+        date=instance.entry_date,
+        etablissement=instance.etablissement
+        or etablissement_de_l_enseignant(instance.teacher),
+    )
+
+
 @receiver(pre_save, sender=ExamResult)
 def _ne_noter_que_ses_propres_eleves(sender, instance, **kwargs):
     """Une note d'examen relie un eleve a une session de **son** ecole.

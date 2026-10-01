@@ -83,6 +83,30 @@ Deux choses qu'il ne fait pas, volontairement :
   absence rattachée à la main est peut-être une décision de la direction, et ce
   n'est pas à un `pre_save` d'en juger.
 
+## Le dernier modèle daté : l'émargement
+
+`TeacherTimeEntry` n'avait **aucun** champ d'année — pas même un nullable — et
+sa vue n'était pas bornée. Sur IFP-OBK, la liste rendait **1 593 émargements**
+quelle que soit l'année demandée : année active, année suivante, aucun en-tête,
+le même chiffre. Elle en compte 751 pour 2025-2026 et 842 pour 2026-2027.
+
+Le calcul de paie n'était pas touché : `_teacher_hours_worked` borne les
+émargements au mois payé, et un mois n'appartient qu'à une année. Ce sont les
+**listes** qui mélangeaient — la feuille d'émargement et les tableaux de bord
+d'enseignant.
+
+Après la migration `0073` : 751 et 842, et sans en-tête le repli sur l'année
+active donne 751.
+
+Restent **1 180 émargements sans année**, et c'est correct : ils sont datés de
+septembre 2026, pour trois écoles qui n'ont pas encore ouvert 2026-2027. Les
+ranger de force dans l'année close serait plus faux que de les laisser en
+attente. `controler_la_dotation` les compte école par école, et le remède est
+d'ouvrir l'année — pas de corriger le code.
+
+Cela referme la famille : **cinq modèles datés** portent désormais leur année,
+et un `pre_save` la déduit de la date sur chacun.
+
 ## Une liste se filtre, une identité non
 
 `filter_queryset` sert la liste **et** le détail : DRF l'appelle depuis
