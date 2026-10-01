@@ -2711,7 +2711,17 @@ def _render_bulletin_page(pdf: FPDF, payload: dict) -> None:
     available_for_rows = max(26.0, summary_start_y - table_y - header_h)
     row_count = max(len(rows), 1)
     row_h = max(2.5, min(5.4, available_for_rows / row_count))
-    body_font_size = max(6.1, min(8.2, row_h + 2.0))
+    # La police suit la hauteur de ligne, mais de plus pres qu'avant.
+    #
+    # Un bulletin de vingt-deux matieres tombait a 6,1 points: illisible sur
+    # un document qu'on remet a une famille, et plus encore dans la vignette
+    # d'apercu. Or une ligne de quatre millimetres offre onze points de
+    # hauteur -- le texte y etait deux fois plus petit qu'il ne pouvait l'etre.
+    #
+    # `row_h + 3.0` laisse la marge necessaire sous les accents tout en
+    # rendant les notes lisibles, et le plancher passe de 6,1 a 7,0: en
+    # dessous, personne ne lit un tableau de chiffres.
+    body_font_size = max(7.0, min(9.0, row_h + 3.0))
     subject_max_len = max(22, min(64, int(64 * (row_h / 5.4))))
 
     pdf.set_y(table_y)
