@@ -1255,43 +1255,6 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
     return 'N-1: ${_f2(previousHours)} h | Δ ${_signed(delta)} h (${_signed(pct, digits: 1)}%)';
   }
 
-  Widget _kpiComparisonCard(String label, String value, String details) {
-    return Container(
-      width: 240,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(fontSize: 10),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
-                ?.copyWith(fontWeight: FontWeight.w700, fontSize: 16),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            details,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11),
-          ),
-        ],
-      ),
-    );
-  }
-
   List<Map<String, dynamic>> _filteredRowsForRange(({DateTime start, DateTime end}) range) {
     final start = range.start;
     final end = range.end;
@@ -1732,7 +1695,12 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
     }
   }
 
-  Widget _kpiCard(String label, String value) {
+  /// Un compteur, avec au besoin la phrase qui l'explique.
+  ///
+  /// « Profs concernés » occupait une carte entière pour un nombre qui n'a de
+  /// sens qu'à côté d'un autre: deux retards, mais sur combien d'enseignants?
+  /// La phrase le dit sans prendre la place d'un chiffre.
+  Widget _kpiCard(String label, String value, {String? precision}) {
     return Container(
       width: 156,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -1757,6 +1725,17 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
                 .titleMedium
                 ?.copyWith(fontWeight: FontWeight.w700, fontSize: 16),
           ),
+          if (precision != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              precision,
+              maxLines: 2,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontSize: 9.5,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1765,6 +1744,25 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
   Widget _hoursByDayBarChart(List<MapEntry<String, double>> sortedDays) {
     if (sortedDays.isEmpty) {
       return const Center(child: Text('Aucune donnée'));
+    }
+    if (sortedDays.length == 1) {
+      // Une barre unique n'est pas une tendance: sur « Jour », le graphique
+      // affichait une colonne seule au milieu d'un axe vide, qui n'apprenait
+      // rien que le compteur « Heures totales » ne disait déjà.
+      final jour = sortedDays.first;
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            '${jour.value.toStringAsFixed(2)} h sur cette journée.\n'
+            'Choisissez une période plus large pour voir une tendance.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      );
     }
 
     final maxY = sortedDays
@@ -2044,6 +2042,21 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
                 setState(() => _rightPaneTab = values.first);
               },
             ),
+            // La comparaison avec l'an dernier, descendue des compteurs.
+            //
+            // Elle occupait une carte en tête avec son explication en petits
+            // caractères, à côté de « Pointages » et « Heures totales » qu'on
+            // consulte tous les jours. Elle ne se regarde pas au même rythme:
+            // sa place est ici, sous le graphique qu'elle commente.
+            const SizedBox(height: 6),
+            Text(
+              'Heures vs N-1 : '
+              '${_hoursDeltaLabel(currentHours, previousHours)} — '
+              '${_hoursDeltaDetails(currentHours, previousHours)}',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: 8),
             Expanded(
               child: _rightPaneTab == 0
@@ -2279,16 +2292,28 @@ class _TimesheetSummaryDialogState extends State<_TimesheetSummaryDialog> {
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
+                // Trois compteurs, et non six.
+                //
+                // « Auto-fermetures 0 » et « Heures vs N-1 » avec son
+                // explication en petits caractères sont des mesures
+                // d'administration: elles ne se regardent pas tous les jours,
+                // et six chiffres côte à côte se balaient au lieu de se lire.
+                // Les deux rejoignent le volet de droite, avec le graphique.
+                //
+                // Les trois qui restent répondent aux questions du jour:
+                // combien de pointages, combien d'heures, combien de retards.
                 children: [
                   _kpiCard('Pointages', '${kpi['rows']}'),
-                  _kpiCard('Heures totales', '${(_asDouble(kpi['hours']) ).toStringAsFixed(2)} h'),
-                  _kpiCard('Auto-fermetures', '${kpi['autoClosed']}'),
-                  _kpiCard('Retards > 15 min', '${kpi['lateStrict']}'),
-                  _kpiCard('Profs concernes', '${kpi['teachers']}'),
-                  _kpiComparisonCard(
-                    'Heures vs N-1',
-                    _hoursDeltaLabel(currentHours, previousHours),
-                    _hoursDeltaDetails(currentHours, previousHours),
+                  _kpiCard(
+                    'Heures totales',
+                    '${(_asDouble(kpi['hours'])).toStringAsFixed(2)} h',
+                  ),
+                  _kpiCard(
+                    'Retards > 15 min',
+                    '${kpi['lateStrict']}',
+                    precision: '${kpi['teachers']} '
+                        '${_asInt(kpi['teachers']) == 1 ? "enseignant" : "enseignants"} '
+                        'sur la période',
                   ),
                 ],
               ),
