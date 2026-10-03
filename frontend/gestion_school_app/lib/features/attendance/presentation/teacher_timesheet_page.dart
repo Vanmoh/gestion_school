@@ -140,6 +140,24 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
     });
   }
 
+  /// Aucune séance n'est planifiée **nulle part** sur cette date.
+  ///
+  /// À distinguer de « pas de cours à cette heure-là »: le premier cas veut
+  /// dire que l'emploi du temps de l'année qui couvre cette date n'est pas
+  /// monté, et le remède est de le monter — pas de saisir un motif hors
+  /// planning à chaque pointage.
+  ///
+  /// Le cas est réel: au 1er octobre 2026, l'année 2026-2027 d'IFP-OBK compte
+  /// quatorze créneaux pour quinze classes, et aucun enseignant n'y a d'heure.
+  /// L'écran affichait « Aucun cours planifié ne correspond à cette heure »,
+  /// ce qui est exact mais laisse croire à un trou d'une heure.
+  bool get _aucunEmploiDuTempsCeJour {
+    return _concordance.teachers
+        .expand((ligne) => ligne.days)
+        .expand((jour) => jour.sessions)
+        .isEmpty;
+  }
+
   /// « 10:00 » en minutes depuis minuit, null si la chaine est illisible.
   int? _minutesDepuisTexte(String valeur) {
     final morceaux = valeur.split(':');
@@ -707,9 +725,13 @@ class _TeacherTimesheetPageState extends ConsumerState<TeacherTimesheetPage> {
                       // Le champ se signale de lui-meme quand le serveur va
                       // l'exiger, plutot que de laisser decouvrir le refus
                       // apres avoir tout saisi.
-                      helperText: _horsPlanning
-                          ? 'Aucun cours planifié ne correspond à cette heure.'
-                          : null,
+                      helperText: !_horsPlanning
+                          ? null
+                          : _aucunEmploiDuTempsCeJour
+                          ? 'Aucun emploi du temps n\'est posé à cette date: '
+                                'vérifiez que l\'année scolaire qui la couvre '
+                                'est bien montée.'
+                          : 'Aucun cours planifié ne correspond à cette heure.',
                     ),
                   ),
                 ),
