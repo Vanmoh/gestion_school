@@ -10,6 +10,7 @@ import '../domain/availability.dart';
 import 'widgets/availability_grid_view.dart';
 import 'widgets/campaign_banner.dart';
 import 'widgets/campaign_responses_dialog.dart';
+import '../../../core/roles/perimetre_enseignant.dart';
 
 /// La collecte des disponibilités, avant que le planning n'existe.
 ///
@@ -112,18 +113,16 @@ class _TeacherAvailabilityPageState
   }
 
   Future<List<Map<String, dynamic>>> _chargerLesEnseignants() async {
+    // Sa fiche a lui quand c'est un enseignant: le module « teachers » lui est
+    // ferme, et ce 403 remontait jusqu'a « Chargement des disponibilites
+    // impossible » -- il ne pouvait donc pas declarer les siennes, alors que
+    // c'est precisement l'ecran qui le lui demande.
+    final role = ref.read(authControllerProvider).value?.role;
     final reponse = await ref.read(dioProvider).get(
-      '/teachers/',
-      queryParameters: const {'page_size': 300},
+      routeDeLaFicheEnseignant(role),
+      queryParameters: estEnseignant(role) ? null : const {'page_size': 300},
     );
-    final data = reponse.data;
-    final lignes = data is Map<String, dynamic> && data['results'] is List
-        ? data['results'] as List<dynamic>
-        : (data is List<dynamic> ? data : const <dynamic>[]);
-    return lignes
-        .whereType<Map>()
-        .map((ligne) => Map<String, dynamic>.from(ligne))
-        .toList(growable: false);
+    return lignesDeLaFiche(reponse.data);
   }
 
   Future<AvailabilityCampaign?> _chargerLaCampagne(

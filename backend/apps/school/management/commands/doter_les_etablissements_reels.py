@@ -463,11 +463,11 @@ class Command(BaseCommand):
         )
         paies = self._preparer_la_paie(etablissement, annee, en_poste)
         depenses = self._engager_des_depenses(etablissement, annee)
-        vie = self._animer_la_vie_scolaire(etablissement, eleves, graine)
+        vie = self._animer_la_vie_scolaire(etablissement, annee, eleves, graine)
         mots = self._ouvrir_la_communication(etablissement, enseignants, eleves)
         bilans = self._archiver_les_bilans(annee, classes)
         emargements = self._emarger_les_arrivees(
-            etablissement, en_poste, graine
+            etablissement, annee, en_poste, graine
         )
         remises = self._remettre_les_bulletins(etablissement, annee, eleves, graine)
         abonnes = self._abonner_a_la_cantine(annee, eleves)
@@ -801,7 +801,12 @@ class Command(BaseCommand):
     def _inscrire_les_eleves(self, etablissement, classes, effectif, graine):
         eleves = []
         code = self._code_de(etablissement)
-        annee_courte = str(timezone.localdate().year)[-2:]
+        # L'annee d'entree vient de la rentree, pas du jour ou l'on peuple: un
+        # matricule dit quand l'eleve est arrive, et ne doit pas changer de sens
+        # parce qu'on relance la commande un 1er janvier.
+        annee_courte = str(
+            classes[0].academic_year.start_date.year if classes else ""
+        )[-2:]
 
         for classe in classes:
             presents = list(
@@ -1447,7 +1452,7 @@ class Command(BaseCommand):
         jours suffisent a faire apparaitre des habitudes -- un eleve qui
         arrive souvent en retard se voit.
         """
-        jours = self._jours_ouvres(20)
+        jours = self._jours_ouvres_avant(self._jour_de_reference(annee), 20)
         par_classe = {}
         for eleve in eleves:
             par_classe.setdefault(eleve.classroom_id, []).append(eleve)
@@ -1488,7 +1493,7 @@ class Command(BaseCommand):
 
     def _pointer_les_enseignants(self, annee, enseignants, graine):
         """L'emargement des enseignants, qui alimente la paie."""
-        jours = self._jours_ouvres(20)
+        jours = self._jours_ouvres_avant(self._jour_de_reference(annee), 20)
         poses = 0
         for enseignant in enseignants:
             for jour in jours:
@@ -1536,9 +1541,8 @@ class Command(BaseCommand):
             traite = tirage.random() < 0.6
             _, cree = self._retrouver_ou_creer(DisciplineIncident,
                 student=eleve,
-                incident_date=timezone.localdate() - timedelta(
-                    days=tirage.randint(1, 60)
-                ),
+                incident_date=self._jour_de_reference(annee)
+                - timedelta(days=tirage.randint(1, 60)),
                 category=categorie,
                 defaults={
                     "academic_year": annee,
@@ -1646,7 +1650,7 @@ class Command(BaseCommand):
         ceux qui n'ont pas repondu. Une campagne ou tout le monde a repondu ne
         montre pas ce qu'il sait faire.
         """
-        aujourdhui = timezone.localdate()
+        aujourdhui = self._jour_de_reference(annee)
         campagne, _ = self._retrouver_ou_creer(AvailabilityCampaign,
             etablissement=etablissement,
             academic_year=annee,
@@ -1694,7 +1698,7 @@ class Command(BaseCommand):
         regle la plus difficile a expliquer et la plus convaincante a montrer --
         encore faut-il qu'il y ait quelque chose a viser.
         """
-        premier = timezone.localdate().replace(day=1)
+        premier = self._jour_de_reference(annee).replace(day=1)
         crees = 0
         for enseignant in enseignants:
             heures = TeacherScheduleSlot.objects.filter(
@@ -1717,7 +1721,7 @@ class Command(BaseCommand):
 
     def _engager_des_depenses(self, etablissement, annee):
         """Trois mois de depenses, dont une qui attend encore son visa."""
-        aujourdhui = timezone.localdate()
+        aujourdhui = self._jour_de_reference(annee)
         lignes = (
             ("Craie et fournitures de classe", 45000, "Fournitures", True),
             ("Réparation du groupe électrogène", 180000, "Entretien", True),
@@ -1726,13 +1730,19 @@ class Command(BaseCommand):
         )
         crees = 0
         for rang, (libelle, montant, categorie, payee) in enumerate(lignes):
+            # La cle ne porte pas la date. « Carburant du mois » de cette
+            # annee-la est une depense, pas une par jour de peuplement -- et
+            # c'est en la mettant dans la cle qu'on en avait fabrique deux, au
+            # 26 et au 27 juillet. L'ancrer sur l'annee aurait corrige l'avenir
+            # en ajoutant une troisieme ligne au passe; la sortir de la cle
+            # rattrape les deux.
             _, cree = self._retrouver_ou_creer(Expense,
                 label=libelle,
-                date=aujourdhui - timedelta(days=30 * rang + 3),
                 etablissement=etablissement,
+                academic_year=annee,
                 defaults={
                     "amount": Decimal(montant),
-                    "academic_year": annee,
+                    "date": aujourdhui - timedelta(days=30 * rang + 3),
                     "category": categorie,
                     "notes": "" if payee else "En attente de validation.",
                     "paid_on": aujourdhui - timedelta(days=30 * rang)
@@ -1743,13 +1753,21 @@ class Command(BaseCommand):
             crees += 1 if cree else 0
         return crees
 
-    def _animer_la_vie_scolaire(self, etablissement, eleves, graine):
+    def _animer_la_vie_scolaire(self, etablissement, annee, eleves, graine):
         """Bibliotheque, cantine et stock: les trois registres du quotidien.
 
         Des emprunts en retard, des repas impayes et un article sous son seuil:
         chacun de ces ecrans a une alerte a montrer, et elle n'a de sens que
         s'il existe un cas qui la declenche.
         """
+        # Ici, et ici seulement, la date du jour est la bonne reference: un
+        # emprunt « en cours » doit l'etre **maintenant**, et le menu du jour
+        # etre celui d'aujourd'hui. Les ancrer sur l'annee scolaire les
+        # afficherait tous en retard des le lendemain de la reference.
+        #
+        # L'idempotence ne vient donc pas de l'ancre mais de la cle: la date est
+        # descendue dans `defaults`. Une ligne est identifiee par ce qu'elle est
+        # -- cet eleve, ce livre -- et non par le jour ou on l'a creee.
         aujourdhui = timezone.localdate()
         total = 0
 
@@ -1790,8 +1808,9 @@ class Command(BaseCommand):
             _, cree = self._retrouver_ou_creer(Borrow,
                 student=eleve,
                 book=ouvrage,
-                borrowed_at=aujourdhui - timedelta(days=25 if en_retard else 6),
                 defaults={
+                    "borrowed_at": aujourdhui
+                    - timedelta(days=25 if en_retard else 6),
                     "due_date": aujourdhui - timedelta(days=8)
                     if en_retard
                     else aujourdhui + timedelta(days=8),
@@ -1808,10 +1827,13 @@ class Command(BaseCommand):
             (("Riz au gras", 500), ("Tô sauce arachide", 400), ("Riz sauce feuille", 450))
         ):
             menu, cree = self._retrouver_ou_creer(CanteenMenu,
-                menu_date=aujourdhui - timedelta(days=rang),
                 etablissement=etablissement,
                 name=nom,
-                defaults={"unit_price": Decimal(prix), "is_active": True},
+                defaults={
+                    "menu_date": aujourdhui - timedelta(days=rang),
+                    "unit_price": Decimal(prix),
+                    "is_active": True,
+                },
             )
             menus.append(menu)
             total += 1 if cree else 0
@@ -1822,8 +1844,10 @@ class Command(BaseCommand):
             _, cree = self._retrouver_ou_creer(CanteenService,
                 student=eleve,
                 menu=menu,
-                served_on=menu.menu_date,
-                defaults={"is_paid": eleve.id % 4 != 0},
+                defaults={
+                    "served_on": menu.menu_date,
+                    "is_paid": eleve.id % 4 != 0,
+                },
             )
             total += 1 if cree else 0
 
@@ -1957,7 +1981,7 @@ class Command(BaseCommand):
                 ).count()
         return archives
 
-    def _emarger_les_arrivees(self, etablissement, enseignants, graine):
+    def _emarger_les_arrivees(self, etablissement, annee, enseignants, graine):
         """L'heure d'arrivee et de depart, quinze jours durant.
 
         `TeacherAttendance` dit si une seance a ete assuree; `TeacherTimeEntry`
@@ -1970,7 +1994,7 @@ class Command(BaseCommand):
         """
         tolerance = getattr(etablissement, "timesheet_late_tolerance_minutes", 0) or 0
         poses = 0
-        for jour in self._jours_ouvres(15):
+        for jour in self._jours_ouvres_avant(self._jour_de_reference(annee), 15):
             for enseignant in enseignants:
                 tirage = self._alea(graine, "emargement", enseignant.id, jour)
                 if tirage.random() < 0.15:
@@ -2340,8 +2364,40 @@ class Command(BaseCommand):
         return posees
 
     @staticmethod
-    def _jours_ouvres(combien):
-        jours, jour = [], timezone.localdate()
+    def _jour_de_reference(annee):
+        """Le jour a partir duquel se datent les registres, ancre sur l'annee.
+
+        Tout ce qui se date au quotidien -- appel, pointage, emargement,
+        depenses, menus, emprunts, incidents -- partait de `timezone.localdate()`,
+        c'est-a-dire du jour ou l'on lance la commande. Deux consequences, et la
+        premiere dementait une promesse ecrite en tete de fichier:
+
+        - **l'idempotence tombait d'un jour a l'autre.** La date entre dans la
+          cle de `get_or_create`: relancee le lendemain, la commande recreait
+          tout. La base de developpement portait ainsi « Carburant du mois » au
+          26 **et** au 27 juillet. Le test d'idempotence relancait deux fois dans
+          la meme session -- il ne pouvait pas le voir;
+        - **les dates sortaient de l'annee scolaire.** L'annee 2025-2026 se
+          termine le 31 juillet; lancee en septembre 2026, la commande datait ses
+          absences de septembre 2026, soit apres la cloture. Un registre d'appel
+          postérieur a la fin de l'annee qu'il documente.
+
+        L'ancre est donc une propriete de l'annee et non de l'horloge: deux
+        cents jours apres la rentree, soit la fin du deuxieme trimestre. Assez
+        avance pour que les trois trimestres existent, assez loin de la cloture
+        pour que vingt jours ouvres tiennent avant elle.
+        """
+        ancre = annee.start_date + timedelta(days=200)
+        if ancre > annee.end_date:
+            ancre = annee.end_date
+        if ancre < annee.start_date:
+            ancre = annee.start_date
+        return ancre
+
+    @staticmethod
+    def _jours_ouvres_avant(reference, combien):
+        """Les `combien` derniers jours ouvres a partir de `reference`."""
+        jours, jour = [], reference
         while len(jours) < combien:
             if jour.weekday() < 5:
                 jours.append(jour)

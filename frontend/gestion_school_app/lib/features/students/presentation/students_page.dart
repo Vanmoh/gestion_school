@@ -26,6 +26,7 @@ import 'students_controller.dart';
 import 'widgets/student_palette_card.dart';
 import 'widgets/students_dashboard_card.dart';
 import 'widgets/student_roster_dialog.dart';
+import '../../../core/academics/annee_a_retenir.dart';
 
 part 'students_registration_form.dart';
 part 'students_profile_form.dart';
@@ -277,12 +278,8 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
         _registrationClassroomId ??= _classrooms.isNotEmpty
             ? _asInt(_classrooms.first['id'])
             : null;
-        _historyYearId ??= _years.isNotEmpty
-            ? _asInt(_years.first['id'])
-            : null;
-        _feeAcademicYearId ??= _years.isNotEmpty
-            ? _asInt(_years.first['id'])
-            : null;
+        _historyYearId ??= anneeARetenir(_years);
+        _feeAcademicYearId ??= anneeARetenir(_years);
       });
 
       _applyFilters(preferredStudentId: keepSelectedId ?? _selectedStudent?.id);
@@ -2035,7 +2032,7 @@ class _StudentsPageState extends ConsumerState<StudentsPage> {
       }
     }
 
-    activeYear ??= _years.isNotEmpty ? _years.first : null;
+    activeYear ??= ligneDeLAnneeARetenir(_years);
     if (activeYear == null) return 'Non définie';
     return _academicYearLabel(activeYear);
   }

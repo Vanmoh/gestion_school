@@ -181,6 +181,41 @@ void main() {
 
     expect(find.textContaining('Erreur'), findsWidgets);
   });
+
+  testWidgets('la famille ne voit aucun formulaire d_écriture', (tester) async {
+    // Trois formulaires vivent ici -- créer un menu, abonner un élève,
+    // enregistrer un repas servi -- et aucun n'était gardé. La famille, qui a
+    // la cantine en lecture seule, les voyait tous, et le serveur refusait
+    // ensuite chaque envoi par un 403. Offrir un geste qu'on refusera ensuite
+    // est pire qu'un écran vide: on remplit, on clique, et l'on apprend alors
+    // qu'on n'y avait pas droit.
+    await _monter(
+      tester,
+      droits: _droits(canteen: AccessLevel.read, scoped: true),
+    );
+
+    expect(find.text('Creer un menu'), findsNothing);
+    expect(find.textContaining('Abonner'), findsNothing);
+    expect(find.byType(FilledButton), findsNothing);
+  });
+
+  testWidgets('le gestionnaire garde ses formulaires', (tester) async {
+    // La fermeture ne devait pas déborder sur qui tient la cantine.
+    await _monter(tester, droits: _droits(canteen: AccessLevel.write));
+
+    expect(find.text('Creer un menu'), findsOneWidget);
+    expect(find.byType(FilledButton), findsWidgets);
+  });
+
+  testWidgets('la famille garde le suivi des repas', (tester) async {
+    // Ce qu'elle vient chercher reste: les repas servis et leur règlement.
+    await _monter(
+      tester,
+      droits: _droits(canteen: AccessLevel.read, scoped: true),
+    );
+
+    expect(find.text('Menus: 1'), findsOneWidget);
+  });
 }
 
 class _TransportEnPanne implements HttpClientAdapter {

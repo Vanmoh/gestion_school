@@ -1590,6 +1590,25 @@ class TeacherTimeEntry(TimeStampedModel):
         null=True,
         blank=True,
     )
+    # Rattachement a l'annee scolaire, pour ne plus melanger les exercices.
+    # Ce modele ne portait qu'une date, et sa vue n'etait pas bornee: sur
+    # IFP-OBK, qui a deux annees ouvertes, la liste rendait **1 593**
+    # emargements -- 751 pour 2025-2026 et 842 pour 2026-2027 -- quelle que
+    # soit l'annee demandee. La feuille d'emargement et les tableaux de bord
+    # d'enseignant comptaient donc deux exercices en un.
+    #
+    # Nullable comme sur les quatre autres modeles dates: 1 180 lignes de la
+    # base reelle portent une date que nulle annee ne couvre -- septembre 2026,
+    # pour trois ecoles qui n'ont pas encore ouvert 2026-2027. Les ranger de
+    # force dans l'annee close serait plus faux que de les laisser en attente,
+    # et `controler_la_dotation` les signale.
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name="%(class)ss",
+        null=True,
+        blank=True,
+    )
     entry_date = models.DateField()
     check_in_time = models.TimeField()
     check_out_time = models.TimeField(null=True, blank=True)

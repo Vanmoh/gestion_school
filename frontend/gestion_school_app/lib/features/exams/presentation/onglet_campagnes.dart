@@ -412,7 +412,15 @@ class _FormulaireDeCampagne extends StatelessWidget {
                 if (annees.isEmpty) {
                   return const Text('Aucune année scolaire');
                 }
-                final valeur = anneeId ?? annees.first.id;
+                // L'année en cours, et non la première de la liste: le même
+                // raccourci a fait ouvrir « Notes & Bulletins » sur l'année
+                // suivante, qui n'avait aucune note.
+                final valeur = anneeId ??
+                    (annees
+                            .where((annee) => annee.estCourante)
+                            .firstOrNull ??
+                        annees.first)
+                        .id;
                 if (anneeId == null) {
                   WidgetsBinding.instance.addPostFrameCallback(
                     (_) => onAnnee(valeur),

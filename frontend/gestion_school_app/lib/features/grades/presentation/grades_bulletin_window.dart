@@ -11,6 +11,45 @@ part of 'grades_page.dart';
 /// c'est ce qui rend le déplacement sûr sur cinq cents lignes qui manipulent
 /// une douzaine de membres.
 extension _DialogueDesBulletins on _GradesPageState {
+  /// Le bulletin en plein écran, à la demande.
+  ///
+  /// Dans la vignette d'aperçu, vingt-deux matières tiennent en quelques
+  /// millimètres: on devine les notes plus qu'on ne les lit. La police du PDF
+  /// a été relevée, mais une vignette reste une vignette — il faut pouvoir
+  /// l'agrandir.
+  ///
+  /// Même composant et mêmes octets: c'est le PDF déjà chargé qu'on réaffiche,
+  /// sans second appel au serveur.
+  Future<void> _ouvrirEnPleinEcran(BuildContext context, Uint8List bytes) {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => Dialog.fullscreen(
+        child: Scaffold(
+          appBar: AppBar(
+            title: const Text('Bulletin scolaire'),
+            leading: IconButton(
+              icon: const Icon(Icons.close),
+              tooltip: 'Fermer',
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ),
+          // En plein écran, l'impression et le partage reprennent leur sens:
+          // c'est là qu'on regarde le document avant de l'envoyer.
+          body: PdfPreview(
+            build: (_) async => bytes,
+            allowSharing: true,
+            allowPrinting: true,
+            canChangeOrientation: false,
+            canChangePageFormat: false,
+            canDebug: false,
+            initialPageFormat: PdfPageFormat.a4.landscape,
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Le nom d'une classe, tel que l'écran l'affiche déjà.
   String _nomDeLaClasse(int? classroomId) {
     if (classroomId == null) return '';
@@ -72,7 +111,9 @@ extension _DialogueDesBulletins on _GradesPageState {
     var selectedYear = _selectedAcademicYear;
     if (selectedYear == null ||
         !_years.any((row) => _asInt(row['id']) == selectedYear)) {
-      selectedYear = _asInt(_years.first['id']);
+      // L'annee active: un bulletin imprime pour une autre annee porte des
+      // tirets partout, et rien ne dit pourquoi.
+      selectedYear = anneeARetenir(_years);
     }
 
     var selectedTerm = _currentTermOrDefault();
@@ -502,16 +543,66 @@ extension _DialogueDesBulletins on _GradesPageState {
                                             );
                                           }
 
-                                          return PdfPreview(
-                                            build: (_) async => bytes,
-                                            allowSharing: false,
-                                            allowPrinting: false,
-                                            canChangeOrientation: false,
-                                            canChangePageFormat: false,
-                                            canDebug: false,
-                                            maxPageWidth: 780,
-                                            initialPageFormat:
-                                                PdfPageFormat.a4.landscape,
+                                          // Un clic ou un double clic ouvre le
+                                          // bulletin en plein écran. Dans
+                                          // cette vignette, vingt-deux
+                                          // matières tiennent en quelques
+                                          // millimètres: on devine les notes
+                                          // plus qu'on ne les lit.
+                                          //
+                                          // `GestureDetector` par-dessus et
+                                          // non à l'intérieur: `PdfPreview`
+                                          // gère ses propres gestes de
+                                          // défilement, et un
+                                          // `behavior: opaque` les mangerait.
+                                          return Stack(
+                                            children: [
+                                              Positioned.fill(
+                                                child: PdfPreview(
+                                                  build: (_) async => bytes,
+                                                  allowSharing: false,
+                                                  allowPrinting: false,
+                                                  canChangeOrientation: false,
+                                                  canChangePageFormat: false,
+                                                  canDebug: false,
+                                                  maxPageWidth: 780,
+                                                  initialPageFormat:
+                                                      PdfPageFormat.a4.landscape,
+                                                ),
+                                              ),
+                                              Positioned(
+                                                top: 8,
+                                                right: 8,
+                                                child: Tooltip(
+                                                  message:
+                                                      'Afficher en plein écran',
+                                                  child: Material(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .surface
+                                                        .withValues(alpha: 0.9),
+                                                    shape: const CircleBorder(),
+                                                    child: InkWell(
+                                                      customBorder:
+                                                          const CircleBorder(),
+                                                      onTap: () =>
+                                                          _ouvrirEnPleinEcran(
+                                                            context,
+                                                            bytes,
+                                                          ),
+                                                      child: const Padding(
+                                                        padding:
+                                                            EdgeInsets.all(8),
+                                                        child: Icon(
+                                                          Icons.fullscreen,
+                                                          size: 22,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                           );
                                         },
                                       ),

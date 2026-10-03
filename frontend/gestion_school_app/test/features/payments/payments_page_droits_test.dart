@@ -445,8 +445,28 @@ void main() {
         ),
       );
 
-      expect(find.text('Impayés'), findsOneWidget);
+      // « Reste à payer » et non « Impayés »: l'école encaisse, la famille
+      // verse. Ce profil est celui d'un parent, et le bandeau tenait jusqu'ici
+      // le point de vue de la caisse au-dessus de sa propre facture.
+      expect(find.text('Reste à payer'), findsOneWidget);
+      expect(find.text('Impayés'), findsNothing);
       expect(find.text('Trésorerie nette'), findsNothing);
+    });
+
+    testWidgets('la famille lit ce qu_elle a versé, non ce qu_on a encaissé', (
+      tester,
+    ) async {
+      await _monter(
+        tester,
+        _droits(
+          finance: AccessLevel.read,
+          payroll: AccessLevel.none,
+          financeScoped: true,
+        ),
+      );
+
+      expect(find.text('Déjà versé'), findsOneWidget);
+      expect(find.text('Montant encaissé'), findsNothing);
     });
 
     testWidgets('elle survit au changement d_onglet', (tester) async {

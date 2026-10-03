@@ -12,20 +12,31 @@ sont saisis puis verifies dans la foulee sur le meme ecran.
 """
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from .dashboard_cache import invalidate_stats
 from .enseignement import refuser_si_il_n_enseigne_rien
 from .models import (
+    Attendance,
+    DisciplineIncident,
     Expense,
     FeeSchedule,
     ParentProfile,
+    ExamResult,
     Payment,
     Student,
     StudentFee,
     TeacherAttendance,
+    TeacherPayroll,
     TeacherTimeEntry,
+)
+from .rattachement_a_l_annee import (
+    deja_rattache,
+    etablissement_de_l_eleve,
+    etablissement_de_l_enseignant,
+    rattacher_a_l_annee,
 )
 
 
@@ -269,3 +280,150 @@ def _n_emarger_que_ceux_qui_enseignent(sender, instance, **kwargs):
     verification.
     """
     refuser_si_il_n_enseigne_rien(instance.teacher, quoi="Cet émargement")
+
+
+# --- Rattacher a l'annee scolaire ce qui est date -------------------------
+#
+# Quatre modeles acceptent un `academic_year` vide, et une ligne vide est
+# invisible des qu'un ecran choisit une annee: le filtre demande
+# `academic_year=<annee>` et `NULL` n'y repond pas. Comme l'application envoie
+# l'en-tete d'annee sur toutes ses requetes, ces lignes ne s'affichent jamais
+# -- on ne peut donc pas les corriger a l'ecran, faute de les voir.
+#
+# `AttendanceViewSet` posait deja l'annee a la creation
+# (`renseigne_annee_a_la_creation`), mais cela ne couvre que l'API. Les
+# commandes de peuplement, l'admin et les migrations ecrivent directement, et
+# c'est par la que les quarante-quatre orphelines sont entrees.
+#
+# Un `pre_save` couvre tous ces chemins. Il ne leve rien: la ligne est valide,
+# c'est son rangement qui manque.
+
+
+@receiver(pre_save, sender=Attendance)
+def _ranger_l_absence_dans_son_annee(sender, instance, **kwargs):
+    if deja_rattache(instance):
+        return
+    rattacher_a_l_annee(
+        instance,
+        date=instance.date,
+        etablissement=etablissement_de_l_eleve(instance.student),
+    )
+
+
+@receiver(pre_save, sender=DisciplineIncident)
+def _ranger_l_incident_dans_son_annee(sender, instance, **kwargs):
+    if deja_rattache(instance):
+        return
+    rattacher_a_l_annee(
+        instance,
+        date=instance.incident_date,
+        etablissement=etablissement_de_l_eleve(instance.student),
+    )
+
+
+@receiver(pre_save, sender=Expense)
+def _ranger_la_depense_dans_son_annee(sender, instance, **kwargs):
+    # La depense porte son etablissement: c'est le seul des quatre a ne pas
+    # avoir besoin d'un detour par l'eleve ou l'enseignant.
+    if deja_rattache(instance):
+        return
+    rattacher_a_l_annee(
+        instance, date=instance.date, etablissement=instance.etablissement
+    )
+
+
+@receiver(pre_save, sender=TeacherAttendance)
+def _ranger_le_pointage_dans_son_annee(sender, instance, **kwargs):
+    """Aucune orpheline aujourd'hui, et c'est justement le moment de brancher.
+
+    `TeacherAttendance.academic_year` est nullable comme les trois autres. La
+    base n'en compte aucune sans annee -- mais les quarante-quatre autres sont
+    nees de la meme facilite, et rien n'empeche la prochaine commande de
+    peuplement d'en creer ici.
+    """
+    if deja_rattache(instance):
+        return
+    rattacher_a_l_annee(
+        instance,
+        date=instance.date,
+        etablissement=etablissement_de_l_enseignant(instance.teacher),
+    )
+
+
+@receiver(pre_save, sender=TeacherPayroll)
+def _ranger_la_paie_dans_son_annee(sender, instance, **kwargs):
+    # `month` est le premier jour du mois paye. Une paie de juillet ne tombe
+    # dans aucune annee scolaire, et reste donc sans rattachement -- ce qui est
+    # exact: elle solde un service, elle n'appartient pas a une annee.
+    if deja_rattache(instance):
+        return
+    rattacher_a_l_annee(
+        instance,
+        date=instance.month,
+        etablissement=etablissement_de_l_enseignant(instance.teacher),
+    )
+
+
+@receiver(pre_save, sender=TeacherTimeEntry)
+def _ranger_l_emargement_dans_son_annee(sender, instance, **kwargs):
+    """Le dernier modele date de la famille, et le plus tardif a l'avoir eu.
+
+    Il n'avait pas de champ du tout: sa liste rendait 1 593 emargements sur
+    IFP-OBK -- 751 pour une annee, 842 pour l'autre -- quelle que soit l'annee
+    demandee.
+
+    `etablissement` d'abord, l'enseignant en repli: les deux colonnes sont
+    nullables, et une ligne importee sans ecole reste localisable par
+    l'enseignant qu'elle designe.
+    """
+    if deja_rattache(instance):
+        return
+    rattacher_a_l_annee(
+        instance,
+        date=instance.entry_date,
+        etablissement=instance.etablissement
+        or etablissement_de_l_enseignant(instance.teacher),
+    )
+
+
+@receiver(pre_save, sender=ExamResult)
+def _ne_noter_que_ses_propres_eleves(sender, instance, **kwargs):
+    """Une note d'examen relie un eleve a une session de **son** ecole.
+
+    Trois notes de la base reelle ne respectaient pas cela: deux eleves du
+    Lycee Technique et une du Complexe Scolaire portaient un resultat sur une
+    session « Examen Blanc T1 » appartenant a IFP-OBK.
+
+    Le filtre d'etablissement ne les attrapait pas, parce que les deux couches
+    ne suivent pas le meme chemin: la portee d'etablissement passe par
+    `student__etablissement`, celle de l'annee par `session__academic_year`.
+    Chacune etait coherente de son cote, et la ligne se glissait entre les
+    deux -- visible dans la liste de son ecole, mais exclue des que l'annee
+    entrait en jeu, donc introuvable dans l'application.
+
+    Ce n'est pas qu'un defaut d'affichage: la moyenne d'une classe, le rang et
+    le bulletin se calculent sur ces lignes. Une note accrochee a la session
+    d'une autre ecole compte dans un bilan ou elle n'a rien a faire.
+    """
+    eleve = instance.student
+    session = instance.session
+    if eleve is None or session is None:
+        return
+
+    ecole_de_l_eleve = getattr(eleve, "etablissement_id", None)
+    annee = getattr(session, "academic_year", None)
+    ecole_de_la_session = getattr(annee, "etablissement_id", None)
+    if ecole_de_l_eleve is None or ecole_de_la_session is None:
+        # Un rattachement manquant n'est pas une incoherence: `etablissement`
+        # est nullable, et refuser ici bloquerait un import legitime.
+        return
+
+    if ecole_de_l_eleve != ecole_de_la_session:
+        raise ValidationError(
+            {
+                "session": (
+                    "Cette session appartient a un autre etablissement que "
+                    "l'eleve. Choisissez une session de son etablissement."
+                )
+            }
+        )

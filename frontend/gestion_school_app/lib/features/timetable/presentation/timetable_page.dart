@@ -21,6 +21,7 @@ import '../../attendance/domain/timesheet_concordance.dart';
 import '../../imports/presentation/academic_imports_window.dart';
 import 'timetable_workload.dart';
 import '../../../core/widgets/indicateur.dart';
+import '../../../core/roles/perimetre_enseignant.dart';
 
 part 'timetable_page_panneaux.dart';
 part 'timetable_batch_window.dart';
@@ -177,6 +178,8 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
   Future<void> _loadData() async {
     setState(() => _loading = true);
     final dio = ref.read(dioProvider);
+    final authUser = ref.read(authControllerProvider).value;
+    final isTeacherUser = estEnseignant(authUser?.role);
     final storedBaseUrl = await ref.read(tokenStorageProvider).apiBaseUrl();
     final activeApiUrl =
         (storedBaseUrl != null && storedBaseUrl.trim().isNotEmpty)
@@ -186,10 +189,21 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
 
     try {
       final results = await Future.wait([
-        _loadRowsSafely(dio, path: '/teachers/', failures: failures),
+        // Sa fiche a lui quand c'est un enseignant: le module « teachers »
+        // lui est ferme, et le refus se rangeait dans `failures` sans que sa
+        // grille ne puisse plus rien afficher.
+        _loadRowsSafely(
+          dio,
+          path: routeDeLaFicheEnseignant(authUser?.role),
+          failures: failures,
+        ),
         _loadRowsSafely(dio, path: '/subjects/', failures: failures),
         _loadRowsSafely(dio, path: '/classrooms/', failures: failures),
-        _loadRowsSafely(dio, path: '/teacher-assignments/', failures: failures),
+        _loadRowsSafely(
+          dio,
+          path: routeDesAffectations(authUser?.role),
+          failures: failures,
+        ),
         _loadRowsSafely(
           dio,
           path: '/teacher-schedule-slots/',
@@ -203,9 +217,6 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
       ]);
 
       if (!mounted) return;
-
-      final authUser = ref.read(authControllerProvider).value;
-      final isTeacherUser = authUser?.role == 'teacher';
 
       int? loggedTeacherId;
       Set<int> teacherAssignmentIds = <int>{};
@@ -1307,14 +1318,42 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   spacing: 10,
                   runSpacing: 10,
                   children: [
-                    Indicateur(libelle: 'Enseignants', valeur: '${_teachers.length}'),
-                    Indicateur(libelle: 'Matières', valeur: '${_subjects.length}'),
-                    Indicateur(libelle: 'Classes', valeur: '${_classrooms.length}'),
-                    Indicateur(libelle: 'Affectations', valeur: '${_assignments.length}'),
-                    Indicateur(libelle: 'Horaires', valeur: '${_scheduleSlots.length}'),
-                    Indicateur(libelle: 'Classes planifiées', valeur: '${vue.classesWithSlots}'),
-                    Indicateur(libelle: 'Classes publiées', valeur: '${vue.classesPublished}'),
-                    Indicateur(libelle: 'Classes verrouillées', valeur: '${vue.classesLocked}'),
+                    // Quatre pastilles au lieu de huit.
+                    //
+                    // Quatre d'entre elles parlaient des mêmes quinze classes
+                    // — Classes, planifiées, publiées, verrouillées — et trois
+                    // affichaient le même nombre. « Matières » et
+                    // « Affectations » aussi, conséquence de la règle « une
+                    // matière, un enseignant ».
+                    //
+                    // Les rapports sont plus parlants que les totaux répétés,
+                    // et ils se voient surtout le jour où ils cessent d'être
+                    // égaux: une classe non planifiée, une matière sans
+                    // titulaire.
+                    Indicateur(
+                      libelle: 'Classes',
+                      valeur: '${_classrooms.length}',
+                      precision:
+                          '${vue.classesWithSlots} planifiées · '
+                          '${vue.classesPublished} publiées · '
+                          '${vue.classesLocked} verrouillées',
+                    ),
+                    Indicateur(
+                      libelle: 'Affectations',
+                      valeur: '${_assignments.length}',
+                      precision: 'sur ${_subjects.length} matières',
+                      couleur: _assignments.length < _subjects.length
+                          ? vue.colorScheme.error
+                          : null,
+                    ),
+                    Indicateur(
+                      libelle: 'Horaires',
+                      valeur: '${_scheduleSlots.length}',
+                    ),
+                    Indicateur(
+                      libelle: 'Enseignants',
+                      valeur: '${_teachers.length}',
+                    ),
                   ],
                 ),
               ),
@@ -1354,16 +1393,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   icon: const Icon(Icons.add_circle_outline),
                   label: const Text('Ajouter horaire'),
                 ),
-              if (!_isTeacherUser) const SizedBox(height: 10),
-              FloatingActionButton.extended(
-                heroTag: 'fab_timetable_print_pdf',
-                onPressed:
-                    (_saving || !_scheduleApiSupported || vue.selectedClassId == null)
-                    ? null
-                    : _openTimetablePrintFloatingWindow,
-                icon: const Icon(Icons.picture_as_pdf_outlined),
-                label: const Text('Imprimer tableau'),
-              ),
+              // « Imprimer tableau » rejoint le groupe des exports, où ses
+              // quatre frères vivent déjà — XLSX classe, CSV, XLSX global, PDF
+              // global. Ce n'est pas l'action première d'un emploi du temps,
+              // c'est un export parmi cinq, et le seul qui flottait.
+              //
+              // Reste « Ajouter horaire », qui est bien ce qu'on vient faire
+              // sur cet écran. Un bouton flottant par écran, pour l'action qui
+              // le définit.
             ],
           ),
         ),
@@ -1404,6 +1441,46 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
         'subjectCode': subjectCode,
         'subjectName': subjectName,
         'coefficient': coefficient,
+      };
+    }
+
+    // Ce que les creneaux savent d'eux-memes, pour qui n'a pas droit aux
+    // affectations.
+    //
+    // `/teacher-assignments/` est ferme au parent et a l'eleve. Or toute la
+    // grille se construisait a partir de cette table: un creneau dont
+    // l'affectation manquait etait purement et simplement jete, et leur emploi
+    // du temps s'affichait vide -- cent cinquante seances recues, aucune
+    // montree.
+    //
+    // `TeacherScheduleSlotSerializer` porte pourtant deja la classe, son nom,
+    // le code de la matiere et celui de l'enseignant. La donnee etait la; seule
+    // la facon de la lire manquait.
+    final subjectByCode = {
+      for (final s in _subjects) (s['code'] ?? '').toString(): s,
+    };
+
+    for (final slot in _scheduleSlots) {
+      final assignmentId = _asInt(slot['assignment']);
+      if (assignmentId <= 0 || map.containsKey(assignmentId)) continue;
+
+      final classId = _asInt(slot['classroom']);
+      final subjectCode = (slot['subject_code'] ?? '').toString();
+      final subject = subjectByCode[subjectCode];
+
+      map[assignmentId] = {
+        'id': assignmentId,
+        'classroom': classId,
+        'teacherCode': (slot['teacher_code'] ?? '').toString(),
+        // Le nom de l'enseignant vient de l'annuaire, ferme a ces roles: son
+        // code identifie la seance sans le nommer, et c'est suffisant pour lire
+        // un emploi du temps.
+        'teacherName': '',
+        'classroomName': (slot['classroom_name'] ?? 'Classe $classId')
+            .toString(),
+        'subjectCode': subjectCode,
+        'subjectName': (subject?['name'] ?? '').toString(),
+        'coefficient': (subject?['coefficient'] ?? '').toString(),
       };
     }
 

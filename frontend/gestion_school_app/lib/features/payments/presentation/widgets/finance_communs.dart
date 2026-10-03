@@ -23,11 +23,22 @@ class IndicateurFinance extends StatelessWidget {
   /// autres chiffres. Nul, la valeur prend l'encre courante.
   final Color? couleur;
 
+  /// Une phrase qui explique le chiffre, quand il se lit de travers sans elle.
+  ///
+  /// « Trésorerie nette » affichait exactement le même montant que « Montant
+  /// encaissé », ce qui ressemble à une erreur alors que c'en est une
+  /// conséquence: le résultat ne soustrait que les charges validées aux deux
+  /// niveaux, et une école qui n'a pas fait tourner son circuit n'en a aucune.
+  /// Le montant en attente existait dans la réponse du serveur, mais l'écran
+  /// ne le disait pas.
+  final String? precision;
+
   const IndicateurFinance({
     super.key,
     required this.libelle,
     required this.valeur,
     this.couleur,
+    this.precision,
   });
 
   @override
@@ -57,6 +68,15 @@ class IndicateurFinance extends StatelessWidget {
               color: couleur,
             ),
           ),
+          if (precision != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              precision!,
+              style: textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
         ],
       ),
     );

@@ -54,3 +54,38 @@ def refuser_si_il_n_enseigne_rien(enseignant, quoi="Ce pointage"):
             )
         }
     )
+
+
+def classes_de_l_enseignant(user):
+    """Les identifiants des classes ou ce compte a une affectation.
+
+    `StudentViewSet.get_queryset` traitait l'eleve et le parent, puis
+    l'enseignant **tombait dans la branche generale** et recevait toute
+    l'ecole, comme un directeur. Mesure sur la base reelle: une enseignante
+    affectee a deux classes -- soixante eleves -- en recevait cent cinquante,
+    et pouvait ouvrir le dossier nominatif d'un enfant qu'elle n'a pas en
+    charge.
+
+    La matrice classe pourtant `students` en `L*`: lecture **restreinte**.
+    L'etoile y est documentaire, c'est au code de l'appliquer.
+
+    Rend des identifiants et non des objets: les appelants filtrent sur
+    `classroom_id__in`, et une sous-requete evite de ramener les lignes pour
+    les jeter.
+    """
+    from apps.school.models import TeacherAssignment
+
+    return TeacherAssignment.objects.filter(teacher__user_id=user.id).values(
+        "classroom_id"
+    )
+
+
+def est_enseignant(user):
+    """Vrai pour un compte enseignant, faux pour tout le reste.
+
+    Le test vit ici et non en ligne dans chaque vue: quatre vues doivent poser
+    la meme question, et quatre comparaisons de chaine finissent par diverger.
+    """
+    from apps.accounts.models import UserRole
+
+    return getattr(user, "role", "") == UserRole.TEACHER

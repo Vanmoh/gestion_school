@@ -46,7 +46,52 @@ ModulePermissions _famille(String role) => _droits(role, const {
   'reports': AccessLevel.read,
 });
 
+/// Ce que la matrice donne au comptable: les finances en écriture.
+ModulePermissions _comptable() => _droits('accountant', const {
+  'finance': AccessLevel.admin,
+  'reports': AccessLevel.read,
+});
+
 void main() {
+  group('la palette ne propose pas ce qu_elle refusera', () {
+    test('la famille ne se voit pas proposer d_encaisser', () {
+      // « Encaisser maintenant » était gardée par `canRead`. Un parent lit ici
+      // sa propre facture: l_action d_encaisser lui était donc offerte, et le
+      // serveur l_aurait refusée par un 403. Offrir un geste qu_on refusera
+      // ensuite est une promesse qu_on ne tient pas.
+      for (final role in ['parent', 'student']) {
+        expect(
+          actionsRapidesVisiblesPour(_famille(role)),
+          isNot(contains('finance:encaisser')),
+          reason: '$role ne peut pas encaisser',
+        );
+      }
+    });
+
+    test('la famille garde la vue de ses frais', () {
+      // La fermeture ne devait pas emporter la lecture.
+      expect(
+        actionsRapidesVisiblesPour(_famille('parent')),
+        contains('finance'),
+      );
+    });
+
+    test('le comptable garde l_encaissement', () {
+      expect(
+        actionsRapidesVisiblesPour(_comptable()),
+        contains('finance:encaisser'),
+      );
+    });
+
+    test('chaque action d_écriture est déclarée comme telle', () {
+      // La table est le seul endroit où la règle se lit: une action ajoutée
+      // sans son niveau se garderait par défaut en lecture, ce qui est
+      // exactement le défaut corrigé ici.
+      expect(actionsRapidesEtLeurNiveau['finance:encaisser'], isTrue);
+      expect(actionsRapidesEtLeurNiveau['finance'], isFalse);
+    });
+  });
+
   _nomAffiche();
 
   test('aucune entrée de menu ne reste hors des groupes', () {

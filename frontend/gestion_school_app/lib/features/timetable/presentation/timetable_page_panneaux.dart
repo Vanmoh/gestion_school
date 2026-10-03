@@ -157,11 +157,10 @@ extension _PanneauxDuPlanning on _TimetablePageState {
                 ),
             ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            'Actions rapides disponibles via les boutons flottants: ajout d\'horaire et impression PDF.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
+          // La phrase « Actions rapides disponibles via les boutons
+          // flottants » est partie avec le second d'entre eux: un bouton qu'il
+          // faut présenter par écrit ne se découvre pas tout seul, et c'était
+          // l'aveu que ces deux-là ne se voyaient pas.
           if (!_isTeacherUser) ...[
             const SizedBox(height: 10),
             Wrap(
@@ -181,6 +180,19 @@ extension _PanneauxDuPlanning on _TimetablePageState {
                       : _exportGlobalPdf,
                   icon: const Icon(Icons.picture_as_pdf_outlined),
                   label: const Text('Export global PDF'),
+                ),
+                // Descendu du bouton flottant: cinq chemins d'export
+                // cohabitaient sur cet écran, et un seul flottait. Il se lit
+                // mieux à côté de ses frères qu'isolé dans un coin.
+                OutlinedButton.icon(
+                  onPressed:
+                      (_saving ||
+                          !_scheduleApiSupported ||
+                          vue.selectedClassId == null)
+                      ? null
+                      : _openTimetablePrintFloatingWindow,
+                  icon: const Icon(Icons.print_outlined),
+                  label: const Text('Imprimer le tableau'),
                 ),
               ],
             ),

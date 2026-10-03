@@ -565,6 +565,38 @@ class PromotionApiTests(APITestCase):
         self.assertEqual(meme_annee.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("target_academic_year", meme_annee.data)
 
+    def test_a_promotion_never_goes_backwards(self):
+        """« Differente de la source » laissait passer le passe.
+
+        L'ecran choisit sa cible en prenant une autre annee que la source, dans
+        une liste triee par `-is_active, -start_date`. Tant qu'une ecole n'a que
+        l'annee courante et la suivante, cela tombe juste -- mais des sa
+        premiere promotion elle aura une annee passee, et c'est elle qui sera
+        proposee.
+
+        Et une promotion s'applique: elle reaffecte `Student.classroom` et ecrit
+        dans `StudentAcademicHistory`. Renvoyer une cohorte dans l'annee d'avant
+        ne se defait pas d'un clic.
+        """
+        annee_passee = AcademicYear.objects.create(
+            name="2024-2025",
+            start_date=date(2024, 9, 1),
+            end_date=date(2025, 6, 30),
+        )
+        ClassRoom.objects.create(name="5A", academic_year=annee_passee)
+        self._eleve("M001", "Awa")
+        self.client.force_authenticate(self.directeur)
+
+        reponse = self.client.post(
+            "/api/promotion-runs/execute/",
+            self._charge(target_academic_year=annee_passee.id),
+            format="json",
+        )
+
+        self.assertEqual(reponse.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("target_academic_year", reponse.data)
+        self.assertIn("2024-2025", str(reponse.data["target_academic_year"]))
+
     def test_thresholds_outside_zero_twenty_are_refused(self):
         self._eleve("M001", "Awa")
         self.client.force_authenticate(self.directeur)
@@ -622,10 +654,14 @@ class PromotionApiTests(APITestCase):
         self.assertIn("source_classrooms", reponse.data)
 
     def test_a_run_without_any_source_class_is_refused(self):
+        # Avant l'annee cible, et non apres: ce test porte sur une source
+        # **vide**, pas sur le sens de la promotion. Avec 2027-2028 en source et
+        # 2026-2027 en cible, c'est la garde du sens qui repondait -- le test
+        # passait, mais sur un autre refus que celui qu'il annonce.
         vide = AcademicYear.objects.create(
-            name="2027-2028",
-            start_date=date(2027, 9, 1),
-            end_date=date(2028, 6, 30),
+            name="2024-2025",
+            start_date=date(2024, 9, 1),
+            end_date=date(2025, 6, 30),
         )
 
         self.client.force_authenticate(self.directeur)

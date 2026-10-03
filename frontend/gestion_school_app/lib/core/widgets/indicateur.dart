@@ -23,12 +23,21 @@ class Indicateur extends StatelessWidget {
   /// en colonnes régulières plutôt que de se serrer sur leur contenu.
   final double? largeurMinimale;
 
+  /// Une phrase qui situe le chiffre, quand il ne vaut rien seul.
+  ///
+  /// « Classes publiées 15 » à côté de « Classes 15 » occupait deux pastilles
+  /// pour dire une seule chose. La précision range la seconde sous la
+  /// première, et le rapport devient visible — surtout le jour où les deux
+  /// nombres diffèrent, qui est précisément celui où il faut regarder.
+  final String? precision;
+
   const Indicateur({
     super.key,
     required this.libelle,
     required this.valeur,
     this.couleur,
     this.largeurMinimale,
+    this.precision,
   });
 
   @override
@@ -63,6 +72,15 @@ class Indicateur extends StatelessWidget {
               color: couleur,
             ),
           ),
+          if (precision != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              precision!,
+              style: textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
         ],
       ),
     );

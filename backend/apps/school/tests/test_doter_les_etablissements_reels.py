@@ -21,18 +21,29 @@ scolarite, et aucun n'a d'inscription impayee. « A peu pres 25 % » n'est pas l
 consigne, et un tirage par eleve derive: il avait donne 28 %.
 """
 
+from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
+from unittest.mock import patch
 
 from django.core.management import call_command
 from django.db.models import Sum
 from django.test import TestCase
+from django.utils import timezone
 
 from apps.accounts.models import User, UserRole
 from apps.school.management.commands.doter_les_etablissements_reels import Command
 from apps.school.management.commands.insert_classes import ESTABLISSEMENT_CLASSES
 from apps.school.models import (
+    AcademicYear,
+    Attendance,
+    Borrow,
     BulletinDelivery,
+    CanteenMenu,
+    CanteenService,
+    DisciplineIncident,
+    Expense,
+    TeacherAttendance,
     CanteenSubscription,
     ClassRoom,
     DisciplineIncident,
@@ -670,6 +681,86 @@ class UneEcoleMonteeDeBoutEnBoutTests(TestCase):
             simulation.promoted_count + simulation.repeated_count,
             simulation.total_students,
         )
+
+
+class LaCommandeRelanceeUnAutreJourNeDoublRienTests(TestCase):
+    """L'idempotence **d'un jour a l'autre**, que le test precedent ne voyait pas.
+
+    Tout ce qui se date au quotidien -- appel, pointage, emargement, depenses,
+    menus, emprunts, incidents -- partait de `timezone.localdate()`, et cette
+    date entrait dans la cle de `get_or_create`. Relancee le lendemain, la
+    commande recreait donc tout: la base de developpement portait « Carburant du
+    mois » au 26 **et** au 27 juillet.
+
+    `LaCommandeRelanceeNeDoublRienTests` relance dans la meme seconde: il ne
+    pouvait rien voir. Celui-ci deplace l'horloge entre les deux passages, ce
+    qui est exactement ce que fait un utilisateur qui relance le lendemain.
+
+    Deux remedes coexistent, et la difference n'est pas un detail:
+
+    - ce qui appartient a l'annee scolaire est ancre sur elle
+      (`_jour_de_reference`), ce qui corrige au passage des absences datees
+      **apres** la cloture de l'annee qu'elles documentent;
+    - ce qui se juge par rapport a maintenant -- un emprunt en cours, le menu du
+      jour -- garde la date du jour, mais celle-ci descend dans `defaults`: une
+      ligne est identifiee par ce qu'elle est, non par le jour ou on l'a creee.
+    """
+
+    def _compter(self):
+        return {
+            "appels": Attendance.objects.count(),
+            "pointages": TeacherAttendance.objects.count(),
+            "emargements": TeacherTimeEntry.objects.count(),
+            "paies": TeacherPayroll.objects.count(),
+            "depenses": Expense.objects.count(),
+            "incidents": DisciplineIncident.objects.count(),
+            "menus": CanteenMenu.objects.count(),
+            "repas": CanteenService.objects.count(),
+            "emprunts": Borrow.objects.count(),
+        }
+
+    def _doter(self):
+        call_command(
+            "doter_les_etablissements_reels",
+            etablissement="Lycée Technique Oumar Bah (LTOB)",
+            eleves_par_classe=4,
+            sans_notes=True,
+            forcer=True,
+            stdout=StringIO(),
+        )
+
+    def test_relancee_le_lendemain_elle_ne_recree_rien(self):
+        aujourdhui = timezone.localdate()
+        self._doter()
+        avant = self._compter()
+
+        # Le lendemain, puis trois semaines plus tard: une commande de
+        # peuplement se relance quand on en a besoin, pas a date fixe.
+        for decalage in (1, 21):
+            with patch.object(
+                timezone, "localdate", return_value=aujourdhui + timedelta(days=decalage)
+            ):
+                self._doter()
+
+        self.assertEqual(self._compter(), avant)
+
+    def test_les_registres_tombent_dans_l_annee_scolaire(self):
+        """Des absences datees apres la cloture ne documentent rien.
+
+        L'annee 2025-2026 se termine le 31 juillet; lancee en septembre 2026, la
+        commande datait ses absences de septembre 2026.
+        """
+        self._doter()
+
+        annee = AcademicYear.objects.get(
+            etablissement__name="Lycée Technique Oumar Bah (LTOB)", is_active=True
+        )
+        appels = Attendance.objects.filter(academic_year=annee)
+
+        self.assertTrue(appels.exists())
+        for appel in appels:
+            self.assertGreaterEqual(appel.date, annee.start_date)
+            self.assertLessEqual(appel.date, annee.end_date)
 
 
 class LaCommandeRelanceeNeDoublRienTests(TestCase):

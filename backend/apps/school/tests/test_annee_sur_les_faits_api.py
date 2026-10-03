@@ -107,11 +107,23 @@ class AnneeSurLesFaitsTests(APITestCase):
         )
         self.assertEqual([row["id"] for row in courantes], [self.absence_courante.id])
 
-    def test_without_a_year_header_both_years_are_returned(self):
+    def test_without_a_year_header_the_active_year_applies(self):
+        """Sans en-tete, l'annee active s'applique: c'etait le dernier trou.
+
+        Le mixin ne filtrait qu'avec `X-Academic-Year-Id`, pour que la bascule
+        arrive ecran par ecran. La bascule est finie, et la permissivite rendait
+        encore deux annees additionnees a qui n'envoyait pas l'en-tete -- un
+        export, un script, ou un ecran qui interroge avant que l'annee soit
+        chargee.
+
+        Une absence appartient a son annee et rien ne s'y atteint que par cette
+        liste, donc le repli n'y fait rien perdre. `ClassRoomViewSet` est le cas
+        contraire, et porte `academic_year_repli_implicite = False`.
+        """
         toutes = self._resultats(
             self.client.get("/api/attendances/", **self._entetes())
         )
-        self.assertEqual(len(toutes), 2)
+        self.assertEqual([row["id"] for row in toutes], [self.absence_courante.id])
 
     def test_discipline_incidents_follow_the_selected_year(self):
         courants = self._resultats(

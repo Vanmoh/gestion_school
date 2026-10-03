@@ -22,7 +22,19 @@ class StudentLookupPage extends ConsumerStatefulWidget {
   /// Ouvre directement le dossier de cet eleve, sans passer par la recherche.
   final int? initialStudentId;
 
-  const StudentLookupPage({super.key, this.initialStudentId});
+  /// Affiche la barre de recherche.
+  ///
+  /// Fausse pour une famille: un eleve n'a qu'un dossier a consulter -- le
+  /// sien -- et un parent ceux de ses enfants. Leur demander de chercher, c'est
+  /// leur demander de retrouver ce qu'ils savent deja, et la barre laissait
+  /// croire qu'ils pouvaient ouvrir le dossier de n'importe qui.
+  final bool avecRecherche;
+
+  const StudentLookupPage({
+    super.key,
+    this.initialStudentId,
+    this.avecRecherche = true,
+  });
 
   @override
   ConsumerState<StudentLookupPage> createState() => _StudentLookupPageState();
@@ -173,18 +185,20 @@ class _StudentLookupPageState extends ConsumerState<StudentLookupPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _SearchBand(
-                    controller: _controller,
-                    focusNode: _focusNode,
-                    onChanged: _onQueryChanged,
-                    onSubmitted: (value) {
-                      _timer?.cancel();
-                      _search(value);
-                    },
-                    onClear: _reset,
-                    searching: _searching,
-                  ),
-                  const SizedBox(height: 20),
+                  if (widget.avecRecherche) ...[
+                    _SearchBand(
+                      controller: _controller,
+                      focusNode: _focusNode,
+                      onChanged: _onQueryChanged,
+                      onSubmitted: (value) {
+                        _timer?.cancel();
+                        _search(value);
+                      },
+                      onClear: _reset,
+                      searching: _searching,
+                    ),
+                    const SizedBox(height: 20),
+                  ],
                   if (_error.isNotEmpty) _ErrorBanner(message: _error),
                   ..._buildBody(),
                 ],

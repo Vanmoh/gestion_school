@@ -4,9 +4,19 @@ from django.db import transaction
 from apps.school.models import AcademicYear, ClassRoom, Etablissement
 
 
+# Les alias servent a retrouver une ecole dont le nom a derive. Le premier de
+# chaque liste est son **code** a deux lettres, tel qu'il est en base: c'est le
+# seul identifiant qui ne bouge pas, puisqu'il compose les matricules deja
+# distribues (« LT10CT25E0001M »).
+#
+# Sans lui, « LYCCE OBK » -- un nom retape a la main -- ne correspondait a
+# aucune entree: `controler_la_dotation` repondait « hors des listes de classes,
+# non controlee » et cette ecole n'a jamais ete verifiee. Les noms canoniques
+# vivent dans `apps.school.etablissements_reels`.
 ESTABLISSEMENT_CLASSES = {
     "LTOB": {
         "aliases": [
+            "LT",  # le code en base, stable: il compose les matricules
             "LTOB",
             "Lycée Technique Oumar Bah (LTOB)",
             "Lycee Technique Oumar Bah (LTOB)",
@@ -23,6 +33,7 @@ ESTABLISSEMENT_CLASSES = {
     },
     "LOBK": {
         "aliases": [
+            "LO",  # le code en base, stable: il compose les matricules
             "LOBK",
             "Lycée Oumar Bah de Kaloum",
             "Lycee Oumar Bah de Kaloum",
@@ -47,6 +58,7 @@ ESTABLISSEMENT_CLASSES = {
     },
     "IFP-OBK": {
         "aliases": [
+            "IO",  # le code en base, stable: il compose les matricules
             "IFP-OBK",
             "IFP OBK",
             "Institut de Formation Professionnelle Oumar Bah",
@@ -69,8 +81,13 @@ ESTABLISSEMENT_CLASSES = {
             "3ème Année EM2",
         ],
     },
-    "Complexe Scolaire Oumar Bah": {
+    # La cle est le sigle, comme pour les trois autres. Elle valait « Complexe
+    # Scolaire Oumar Bah », un nom complet la ou ses voisines portaient LTOB,
+    # LOBK et IFP-OBK -- et `test_etablissements_reels` a fini par buter dessus.
+    # Le nom complet reste un alias.
+    "CSOB": {
         "aliases": [
+            "CS",  # le code en base, stable: il compose les matricules
             "Complexe Scolaire Oumar Bah",
             "Complexe Scolaire Omar Bah (CSOB)",
             "CSOB",
