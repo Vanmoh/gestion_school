@@ -1318,14 +1318,42 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   spacing: 10,
                   runSpacing: 10,
                   children: [
-                    Indicateur(libelle: 'Enseignants', valeur: '${_teachers.length}'),
-                    Indicateur(libelle: 'Matières', valeur: '${_subjects.length}'),
-                    Indicateur(libelle: 'Classes', valeur: '${_classrooms.length}'),
-                    Indicateur(libelle: 'Affectations', valeur: '${_assignments.length}'),
-                    Indicateur(libelle: 'Horaires', valeur: '${_scheduleSlots.length}'),
-                    Indicateur(libelle: 'Classes planifiées', valeur: '${vue.classesWithSlots}'),
-                    Indicateur(libelle: 'Classes publiées', valeur: '${vue.classesPublished}'),
-                    Indicateur(libelle: 'Classes verrouillées', valeur: '${vue.classesLocked}'),
+                    // Quatre pastilles au lieu de huit.
+                    //
+                    // Quatre d'entre elles parlaient des mêmes quinze classes
+                    // — Classes, planifiées, publiées, verrouillées — et trois
+                    // affichaient le même nombre. « Matières » et
+                    // « Affectations » aussi, conséquence de la règle « une
+                    // matière, un enseignant ».
+                    //
+                    // Les rapports sont plus parlants que les totaux répétés,
+                    // et ils se voient surtout le jour où ils cessent d'être
+                    // égaux: une classe non planifiée, une matière sans
+                    // titulaire.
+                    Indicateur(
+                      libelle: 'Classes',
+                      valeur: '${_classrooms.length}',
+                      precision:
+                          '${vue.classesWithSlots} planifiées · '
+                          '${vue.classesPublished} publiées · '
+                          '${vue.classesLocked} verrouillées',
+                    ),
+                    Indicateur(
+                      libelle: 'Affectations',
+                      valeur: '${_assignments.length}',
+                      precision: 'sur ${_subjects.length} matières',
+                      couleur: _assignments.length < _subjects.length
+                          ? vue.colorScheme.error
+                          : null,
+                    ),
+                    Indicateur(
+                      libelle: 'Horaires',
+                      valeur: '${_scheduleSlots.length}',
+                    ),
+                    Indicateur(
+                      libelle: 'Enseignants',
+                      valeur: '${_teachers.length}',
+                    ),
                   ],
                 ),
               ),
@@ -1365,16 +1393,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage> {
                   icon: const Icon(Icons.add_circle_outline),
                   label: const Text('Ajouter horaire'),
                 ),
-              if (!_isTeacherUser) const SizedBox(height: 10),
-              FloatingActionButton.extended(
-                heroTag: 'fab_timetable_print_pdf',
-                onPressed:
-                    (_saving || !_scheduleApiSupported || vue.selectedClassId == null)
-                    ? null
-                    : _openTimetablePrintFloatingWindow,
-                icon: const Icon(Icons.picture_as_pdf_outlined),
-                label: const Text('Imprimer tableau'),
-              ),
+              // « Imprimer tableau » rejoint le groupe des exports, où ses
+              // quatre frères vivent déjà — XLSX classe, CSV, XLSX global, PDF
+              // global. Ce n'est pas l'action première d'un emploi du temps,
+              // c'est un export parmi cinq, et le seul qui flottait.
+              //
+              // Reste « Ajouter horaire », qui est bien ce qu'on vient faire
+              // sur cet écran. Un bouton flottant par écran, pour l'action qui
+              // le définit.
             ],
           ),
         ),
