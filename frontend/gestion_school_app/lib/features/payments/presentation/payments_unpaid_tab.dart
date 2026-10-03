@@ -502,9 +502,16 @@ extension _OngletDesImpayes on _PaymentsPageState {
                         .where((item) => item.className == row.className)
                         .toList(growable: false);
                     return DataRow(
+                      // Une teinte du thème et non « 0xFFFEEFE8 », une pêche
+                      // très pâle pensée pour le thème clair. En sombre, le
+                      // texte de la ligne reste clair: clair sur clair, et le
+                      // tableau entier devenait illisible — toutes ses lignes
+                      // étant en alerte.
                       color: isAlert
                           ? WidgetStateProperty.resolveWith(
-                              (_) => const Color(0xFFFEEFE8),
+                              (_) => Theme.of(
+                                context,
+                              ).colorScheme.error.withValues(alpha: 0.12),
                             )
                           : null,
                       cells: [

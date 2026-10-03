@@ -1,9 +1,16 @@
-/// Le tableau de bord, écran d'accueil de tous les profils.
+/// Le tableau de bord de la direction, refondu.
 ///
-/// C'est le premier écran que chacun voit en se connectant, et il n'avait
-/// aucun test. Il lit ses chiffres par des providers et complète par des
-/// appels directs : ce qui suit vérifie qu'il s'affiche, qu'il dit son état
-/// pendant le chargement, et qu'une panne n'y laisse pas une page muette.
+/// L'écran affichait neuf blocs, quatre graphiques et trois chiffres faux:
+/// **611 élèves** pour 450 inscrits, **30 classes** pour 15, et un
+/// « Bénéfice net » qui était en réalité le montant encaissé, les charges non
+/// doublement validées étant exclues du calcul. Le recouvrement — le chiffre
+/// d'une école malienne — n'y figurait pas du tout.
+///
+/// Les sept intentions des tests précédents sont conservées: la page se
+/// construit, elle dit son chargement, elle annonce les dépenses à valider,
+/// elle se tait quand il n'y en a pas, une panne se dit, l'axe porte de vrais
+/// mois, et une série manquante ne casse rien. S'y ajoutent celles que le
+/// défaut réclamait: **l'année est nommée**, et le recouvrement est montré.
 library;
 
 import 'dart:async';
@@ -19,20 +26,14 @@ import 'package:gestion_school_app/core/permissions/module_permissions.dart';
 import 'package:gestion_school_app/features/dashboard/domain/dashboard_stats.dart';
 import 'package:gestion_school_app/features/dashboard/presentation/dashboard_controller.dart';
 import 'package:gestion_school_app/features/dashboard/presentation/dashboard_page.dart';
-import 'package:gestion_school_app/features/payments/domain/payment.dart';
-import 'package:gestion_school_app/features/payments/domain/student_fee.dart';
-import 'package:gestion_school_app/features/payments/presentation/payments_controller.dart';
 
 class _Transport implements HttpClientAdapter {
-  final List<String> chemins = [];
-
   @override
   Future<ResponseBody> fetch(
     RequestOptions options,
     Stream<List<int>>? requestStream,
     Future<void>? cancelFuture,
   ) async {
-    chemins.add(options.path);
     return ResponseBody.fromString(
       jsonEncode(const {'count': 0, 'results': []}),
       200,
@@ -46,54 +47,98 @@ class _Transport implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+/// Les chiffres réels d'IFP-OBK sur son année active.
+///
+/// Volontairement ceux de la base: 450 élèves et non 611, 15 classes et non
+/// 30, un recouvrement de 93,0 % et 5 040 000 FCFA restants.
 const _chiffres = DashboardStats(
-  students: 128,
-  monthlyRevenue: 450000,
-  monthlyExpenses: 120000,
-  monthlyProfit: 330000,
-  monthlyAbsences: 7,
-  classrooms: 9,
-  teachers: 14,
-  activeEtablissementId: 1,
+  students: 450,
+  monthlyRevenue: 66965000,
+  monthlyExpenses: 0,
+  monthlyExpensesPending: 90000,
+  monthlyProfit: 66965000,
+  monthlyAbsences: 363,
+  classrooms: 15,
+  teachers: 58,
+  activeEtablissementId: 3,
   activeEtablissementName: 'IFP-OBK',
+  academicYearName: '2025-2026',
+  academicYearStart: '2025-09-01',
+  academicYearEnd: '2026-07-31',
+  feesDue: 72000000,
+  feesCollected: 66960000,
+  feesOutstanding: 5040000,
+  collectionRate: 93,
+  studentsUnpaid: 112,
+  yearExpensesPending: 4124000,
+  yearExpensesPendingCount: 36,
+  generalAverage: 13.3,
+  gradesCount: 26730,
+  bulletinsDelivered: 276,
+  bulletinsTotal: 455,
+  bulletinsFailed: 92,
+  teacherAbsences: 83,
+  teacherLate: 253,
+  payrollTotal: 29913950,
+  payrollCount: 119,
+  stockBelowThreshold: 1,
+  stockTotal: 5,
 );
 
-const _chiffresAvecDepensesEnAttente = DashboardStats(
-  students: 128,
-  monthlyRevenue: 450000,
-  monthlyExpenses: 120000,
-  monthlyExpensesPending: 45000,
-  monthlyProfit: 330000,
-  monthlyAbsences: 7,
-  classrooms: 9,
-  teachers: 14,
-  activeEtablissementId: 1,
-  activeEtablissementName: 'IFP-OBK',
+const _echeancier = Echeancier(
+  academicYearName: '2025-2026',
+  mois: [
+    MoisDEcheance(
+      libelle: '10/2025',
+      du: 6750000,
+      encaisse: 6750000,
+      manque: 0,
+    ),
+    MoisDEcheance(
+      libelle: '11/2025',
+      du: 6750000,
+      encaisse: 6750000,
+      manque: 0,
+    ),
+    MoisDEcheance(
+      libelle: '04/2026',
+      du: 6750000,
+      encaisse: 5070000,
+      manque: 1680000,
+    ),
+  ],
+  du: 20250000,
+  encaisse: 18570000,
 );
 
-ModulePermissions _droits(Map<String, AccessLevel> niveaux) {
+ModulePermissions _droits() {
   return ModulePermissions(
     role: 'test',
     modules: {
-      for (final entree in niveaux.entries)
-        entree.key: ModulePermission(
-          key: entree.key,
-          label: entree.key,
-          group: 'pilotage',
-          level: entree.value,
-          scoped: false,
-        ),
+      'dashboard': const ModulePermission(
+        key: 'dashboard',
+        label: 'dashboard',
+        group: 'pilotage',
+        level: AccessLevel.read,
+        scoped: false,
+      ),
     },
   );
 }
 
+const _presence = PresenceParRole(
+  fenetreSecondes: 75,
+  totalEnLigne: 7,
+  enLigneParRole: {'director': 1, 'accountant': 1, 'teacher': 5},
+  jamaisConnectesParRole: {'teacher': 74, 'student': 608, 'parent': 159},
+  comptesParRole: {'teacher': 75, 'student': 610, 'parent': 162},
+);
+
 Future<void> _monter(
   WidgetTester tester, {
   AsyncValue<DashboardStats> chiffres = const AsyncValue.data(_chiffres),
-  Map<String, AccessLevel> niveaux = const {},
-  AsyncValue<FinancesAnnuelles> annee = const AsyncValue.data(
-    FinancesAnnuelles(),
-  ),
+  AsyncValue<Echeancier> echeancier = const AsyncValue.data(_echeancier),
+  AsyncValue<PresenceParRole> presence = const AsyncValue.data(_presence),
 }) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = const Size(1700, 2600);
@@ -107,20 +152,20 @@ Future<void> _monter(
     ProviderScope(
       overrides: [
         dioProvider.overrideWithValue(dio),
-        currentPermissionsProvider.overrideWithValue(
-          _droits({'dashboard': AccessLevel.read, ...niveaux}),
-        ),
-        // Ces deux-là gardent leur valeur en cache derrière un minuteur de
-        // trois minutes: en les servant directement, le test n'en crée aucun
-        // et ne se termine pas sur une fuite qui n'existe pas.
-        paymentsProvider.overrideWith((ref) async => const <PaymentItem>[]),
-        feesProvider.overrideWith((ref) async => const <StudentFeeItem>[]),
-        financesAnnuellesProvider.overrideWith((ref) async {
-          return annee.when(
+        currentPermissionsProvider.overrideWithValue(_droits()),
+        presenceProvider.overrideWith((ref) async {
+          return presence.when(
             data: (valeur) => valeur,
             error: (erreur, pile) =>
-                Future<FinancesAnnuelles>.error(erreur, pile),
-            loading: () => Completer<FinancesAnnuelles>().future,
+                Future<PresenceParRole>.error(erreur, pile),
+            loading: () => Completer<PresenceParRole>().future,
+          );
+        }),
+        echeancierProvider.overrideWith((ref) async {
+          return echeancier.when(
+            data: (valeur) => valeur,
+            error: (erreur, pile) => Future<Echeancier>.error(erreur, pile),
+            loading: () => Completer<Echeancier>().future,
           );
         }),
         dashboardStatsProvider.overrideWith((ref) async {
@@ -135,18 +180,11 @@ Future<void> _monter(
     ),
   );
   await tester.pump();
-  // Deux temps d'attente: l'écran d'accueil pose de courts minuteurs
-  // d'animation qu'il faut laisser s'achever, sinon le test se termine
-  // dessus.
   await tester.pump(const Duration(milliseconds: 600));
-  await tester.pump(const Duration(seconds: 2));
 }
 
 void main() {
   testWidgets('l_écran d_accueil se construit sans erreur', (tester) async {
-    // Le détail affiché dépend du tableau de bord propre au rôle connecté;
-    // ce que ce test fixe, c'est que l'écran d'accueil de tous les profils
-    // se monte et n'annonce pas de panne.
     await _monter(tester);
 
     expect(find.textContaining('Erreur'), findsNothing);
@@ -154,34 +192,9 @@ void main() {
   });
 
   testWidgets('pendant le chargement, l_écran le dit', (tester) async {
-    // Une page blanche se lit comme une panne; un indicateur se lit comme
-    // une attente.
     await _monter(tester, chiffres: const AsyncValue.loading());
 
     expect(find.byType(CircularProgressIndicator), findsWidgets);
-  });
-
-  testWidgets('les dépenses restées à valider sont annoncées', (tester) async {
-    // Le bénéfice ne les compte plus -- il les comptait sans le dire, et se
-    // trouvait minoré par des dépenses que personne n'avait actées. Les
-    // passer sous silence serait l'erreur symétrique: l'école doit voir où
-    // sont passées ses dépenses.
-    await _monter(
-      tester,
-      chiffres: const AsyncValue.data(_chiffresAvecDepensesEnAttente),
-      niveaux: {'finance': AccessLevel.read},
-    );
-
-    expect(find.textContaining('Dépenses à valider'), findsWidgets);
-  });
-
-  testWidgets('sans dépense en attente, aucune ligne de plus', (tester) async {
-    await _monter(
-      tester,
-      niveaux: {'finance': AccessLevel.read},
-    );
-
-    expect(find.textContaining('Dépenses à valider'), findsNothing);
   });
 
   testWidgets('une panne se dit au lieu de laisser la page muette', (
@@ -189,72 +202,370 @@ void main() {
   ) async {
     await _monter(
       tester,
-      chiffres: AsyncValue.error(
-        DioException(requestOptions: RequestOptions(path: '/dashboard/')),
-        StackTrace.empty,
-      ),
+      chiffres: AsyncValue.error(Exception('serveur muet'), StackTrace.empty),
     );
 
     expect(find.textContaining('Erreur'), findsWidgets);
+    expect(find.text('Réessayer'), findsOneWidget);
   });
 
-  group('le graphique financier', () {
-    // Il traçait trois points fabriqués en multipliant le montant du mois par
-    // des coefficients écrits en dur, étiquetés « S-3, S-2, S-1 »: la
-    // direction lisait une tendance qui n'existait pas.
+  group('l_année est nommée', () {
+    testWidgets('elle s_affiche en clair, avec ses bornes', (tester) async {
+      await _monter(tester);
 
-    testWidgets('sans série, il ne parle que du mois', (tester) async {
-      await _monter(tester, niveaux: {'finance': AccessLevel.read});
-
-      expect(find.text('Performance financière du mois'), findsOneWidget);
-      expect(find.textContaining('S-1'), findsNothing);
+      // C'est son absence qui a laissé « 611 élèves » passer pour un effectif:
+      // un écran qui ne nomme pas sa période n'invite pas à douter du nombre.
+      expect(find.text('Année 2025-2026'), findsOneWidget);
+      expect(find.textContaining('du 01/09/2025'), findsOneWidget);
     });
 
-    testWidgets('avec une série, l_axe porte les vrais mois', (tester) async {
+    testWidgets('sans année active, la page le dit au lieu de se taire', (
+      tester,
+    ) async {
       await _monter(
         tester,
-        niveaux: {'finance': AccessLevel.read},
-        annee: const AsyncValue.data(
-          FinancesAnnuelles(
-            academicYearName: '2025-2026',
-            mois: [
-              MoisFinancier(
-                mois: '2025-10-01',
-                libelle: '10/2025',
-                recettes: 1200000,
-                depenses: 400000,
-                benefice: 800000,
-              ),
-              MoisFinancier(
-                mois: '2025-11-01',
-                libelle: '11/2025',
-                recettes: 900000,
-                depenses: 500000,
-                benefice: 400000,
-              ),
-            ],
-            totalRecettes: 2100000,
-            totalDepenses: 900000,
-            benefice: 1200000,
+        chiffres: const AsyncValue.data(
+          DashboardStats(
+            students: 0,
+            monthlyRevenue: 0,
+            monthlyExpenses: 0,
+            monthlyProfit: 0,
+            monthlyAbsences: 0,
+            classrooms: 0,
+            teachers: 0,
+            activeEtablissementName: 'IFP-OBK',
           ),
         ),
       );
 
-      expect(find.text('Performance financière de l\'année'), findsOneWidget);
+      expect(find.text('Aucune année active'), findsOneWidget);
+    });
+  });
+
+  group('les deux rangées', () {
+    testWidgets('elles sont nommées, pour qu_on sache où chercher', (
+      tester,
+    ) async {
+      await _monter(tester);
+
+      // Huit chiffres rangés en deux familles nommées se lisent mieux que
+      // quatre qui ne couvrent qu'une seule question.
+      expect(find.text('L\'ARGENT'), findsOneWidget);
+      expect(find.text('L\'ÉCOLE'), findsOneWidget);
+    });
+
+    testWidgets('l_école a enfin des chiffres à elle', (tester) async {
+      await _monter(tester);
+
+      // Le tableau de bord ne parlait que de caisse: 26 730 notes saisies, et
+      // pas un mot à l'accueil.
+      expect(find.text('Moyenne générale'), findsOneWidget);
+      expect(find.text('13,30'), findsOneWidget);
+      expect(find.textContaining('sur 26730 notes saisies'), findsOneWidget);
+      expect(find.text('Bulletins remis'), findsOneWidget);
+      expect(find.text('276'), findsOneWidget);
+      expect(find.text('sur 455'), findsOneWidget);
+    });
+
+    testWidgets('l_assiduité des enseignants est montrée, pas seulement celle des élèves', (
+      tester,
+    ) async {
+      await _monter(tester);
+
+      // On paie à l'heure: savoir si l'enseignant est là compte au moins
+      // autant que l'absence d'un élève.
+      expect(
+        find.textContaining('83 absences et 253 retards côté enseignants'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('la masse salariale apparaît', (tester) async {
+      await _monter(tester);
+
+      expect(find.text('Masse salariale'), findsOneWidget);
+      expect(find.textContaining('119 fiches de paie'), findsOneWidget);
+    });
+
+    testWidgets('l_encaissé du mois est revenu', (tester) async {
+      await _monter(tester);
+
+      // La refonte l'avait perdu: le « Bénéfice net » retiré était faux, mais
+      // ne rien mettre à la place privait la direction du chiffre qu'elle
+      // regarde le matin.
+      expect(find.text('Encaissé ce mois-ci'), findsOneWidget);
+    });
+  });
+
+  group('les quatre chiffres', () {
+    testWidgets('l_effectif est celui de l_année', (tester) async {
+      await _monter(tester);
+
+      expect(find.text('450'), findsOneWidget);
+      expect(find.textContaining('15 classes'), findsOneWidget);
+      expect(find.textContaining('58 enseignants'), findsOneWidget);
+    });
+
+    testWidgets('le recouvrement est montré, avec ce qui reste', (
+      tester,
+    ) async {
+      await _monter(tester);
+
+      // Le chiffre d'une école malienne, absent de l'ancien écran.
+      expect(find.text('Recouvrement'), findsOneWidget);
+      expect(find.text('93,0 %'), findsOneWidget);
+      expect(
+        find.textContaining('5 040 000 FCFA restent à encaisser'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('les dépenses restées à valider sont annoncées', (
+      tester,
+    ) async {
+      await _monter(tester);
+
+      expect(find.text('Dépenses à valider'), findsOneWidget);
+      expect(
+        find.textContaining('36 lignes attendent une signature'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('sans dépense en attente, la carte le dit', (tester) async {
+      await _monter(
+        tester,
+        chiffres: const AsyncValue.data(
+          DashboardStats(
+            students: 450,
+            monthlyRevenue: 0,
+            monthlyExpenses: 0,
+            monthlyProfit: 0,
+            monthlyAbsences: 0,
+            classrooms: 15,
+            teachers: 58,
+            academicYearName: '2025-2026',
+            activeEtablissementName: 'IFP-OBK',
+          ),
+        ),
+      );
+
+      expect(
+        find.text('Aucune charge en attente de signature'),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('l_échéancier', () {
+    testWidgets('l_axe porte de vrais mois', (tester) async {
+      await _monter(tester);
+
+      // L'ancienne courbe étiquetait « S-3, S-2, S-1 » trois points obtenus
+      // en multipliant le montant du mois par des coefficients écrits en dur.
+      expect(find.text('Échéancier et encaissements'), findsOneWidget);
       expect(find.text('10/2025'), findsOneWidget);
       expect(find.text('11/2025'), findsOneWidget);
+      expect(find.textContaining('S-1'), findsNothing);
+    });
+
+    testWidgets('le décrochage est nommé, et son mois avec', (tester) async {
+      await _monter(tester);
+
+      expect(
+        find.textContaining('Le recouvrement décroche depuis 04/2026'),
+        findsWidgets,
+      );
     });
 
     testWidgets('une série indisponible ne casse pas l_écran', (tester) async {
-      // Les compteurs du mois doivent rester lisibles: ils viennent d'un
-      // autre appel.
       await _monter(
         tester,
-        niveaux: {'finance': AccessLevel.read},
-        annee: AsyncValue.error(Exception('panne'), StackTrace.empty),
+        echeancier: AsyncValue.error(
+          Exception('agrégation lente'),
+          StackTrace.empty,
+        ),
       );
 
-      expect(find.text('Performance financière du mois'), findsOneWidget);
+      // Les quatre chiffres restent: une page amputée d'une courbe vaut mieux
+      // qu'une page effacée.
+      expect(find.text('450'), findsOneWidget);
+      expect(find.text('93,0 %'), findsOneWidget);
+      expect(
+        find.textContaining('L\'échéancier n\'a pas pu être lu'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('sans échéance posée, la page explique quoi faire', (
+      tester,
+    ) async {
+      await _monter(
+        tester,
+        echeancier: const AsyncValue.data(
+          Echeancier(
+            academicYearName: '2026-2027',
+            mois: [],
+            du: 0,
+            encaisse: 0,
+          ),
+        ),
+      );
+
+      expect(
+        find.textContaining('appliquez un barème de frais'),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('ce qui demande une décision', () {
+    testWidgets('chaque ligne mène au module qui la règle', (tester) async {
+      await _monter(tester);
+
+      expect(find.text('À traiter'), findsOneWidget);
+      expect(
+        find.textContaining('36 dépenses attendent une validation'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('112 élèves ont un reste à payer'),
+        findsOneWidget,
+      );
+      // 455 préparés, 276 remis: 179 restent, dont 92 en échec d'envoi.
+      expect(
+        find.textContaining('179 bulletins ne sont pas remis'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('1 article est sous leur seuil'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('une école à jour ne s_invente pas de tâches', (tester) async {
+      await _monter(
+        tester,
+        chiffres: const AsyncValue.data(
+          DashboardStats(
+            students: 450,
+            monthlyRevenue: 0,
+            monthlyExpenses: 0,
+            monthlyProfit: 0,
+            monthlyAbsences: 0,
+            classrooms: 15,
+            teachers: 58,
+            academicYearName: '2025-2026',
+            activeEtablissementName: 'IFP-OBK',
+          ),
+        ),
+        echeancier: const AsyncValue.data(
+          Echeancier(
+            academicYearName: '2025-2026',
+            mois: [
+              MoisDEcheance(
+                libelle: '10/2025',
+                du: 6750000,
+                encaisse: 6750000,
+                manque: 0,
+              ),
+            ],
+            du: 6750000,
+            encaisse: 6750000,
+          ),
+        ),
+        // Et personne de dormant: une école « à jour » l'est aussi de ce
+        // côté-là, sinon la ligne des comptes jamais ouverts s'ajoute.
+        presence: const AsyncValue.data(
+          PresenceParRole(fenetreSecondes: 75, totalEnLigne: 4),
+        ),
+      );
+
+      expect(find.text('Rien n\'attend de décision.'), findsOneWidget);
+      expect(find.text('Chaque échéance de l\'année est soldée.'), findsOneWidget);
+    });
+  });
+
+  group('le statut temps réel', () {
+    testWidgets('le bandeau nomme les rôles présents', (tester) async {
+      await _monter(tester);
+
+      expect(find.text('EN LIGNE MAINTENANT'), findsOneWidget);
+      expect(find.text('direction'), findsOneWidget);
+      expect(find.text('comptable'), findsOneWidget);
+      expect(find.text('enseignants'), findsOneWidget);
+      expect(find.text('5'), findsOneWidget);
+    });
+
+    testWidgets('la fenêtre vient du serveur, pas du client', (tester) async {
+      await _monter(tester);
+
+      // Deux définitions de « en ligne » dans la même application finiraient
+      // par se contredire: l'écran affiche celle que le serveur applique.
+      expect(
+        find.textContaining('signe de vie de moins de 75 s'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('personne en ligne se dit, au lieu d_un bandeau vide', (
+      tester,
+    ) async {
+      await _monter(
+        tester,
+        presence: const AsyncValue.data(
+          PresenceParRole(fenetreSecondes: 75, totalEnLigne: 0),
+        ),
+      );
+
+      expect(
+        find.text('Personne n\'est connecté en ce moment.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('un refus efface le bandeau sans crier à la panne', (
+      tester,
+    ) async {
+      // Savoir qui est connecté est une information d'administration: un rôle
+      // sans droit sur `users` reçoit 403, et son absence n'est pas une panne.
+      await _monter(
+        tester,
+        presence: AsyncValue.error(Exception('403'), StackTrace.empty),
+      );
+
+      expect(find.text('EN LIGNE MAINTENANT'), findsNothing);
+      expect(find.textContaining('Erreur'), findsNothing);
+      // Le reste de la page tient.
+      expect(find.text('450'), findsOneWidget);
+    });
+
+    testWidgets('les comptes jamais ouverts passent en tête d_À traiter', (
+      tester,
+    ) async {
+      await _monter(tester);
+
+      // Le fait le plus important d'un déploiement qui commence, et qu'aucun
+      // écran ne disait: les comptes existent et personne ne les ouvre.
+      expect(
+        find.textContaining('608 élèves n’ont jamais ouvert l’application'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('sur 610 comptes créés'), findsOneWidget);
+    });
+
+    testWidgets('sans compte dormant, aucune ligne de plus', (tester) async {
+      await _monter(
+        tester,
+        presence: const AsyncValue.data(
+          PresenceParRole(fenetreSecondes: 75, totalEnLigne: 3),
+        ),
+      );
+
+      expect(
+        find.textContaining('jamais ouvert l’application'),
+        findsNothing,
+      );
     });
   });
 }

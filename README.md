@@ -19,6 +19,24 @@ Application complète de gestion d’établissement scolaire multi-plateforme.
 - `infra/` Docker Compose (db, redis, backend, worker, beat)
 - `docs/` Documentation architecture et API
 
+## Règles du projet
+
+Quatre règles ont coûté assez cher pour mériter d'être écrites. Les lire avant
+de toucher aux affectations d'enseignants, aux listes de l'API, à l'année
+scolaire ou aux établissements fait gagner du temps :
+
+- [Qui enseigne quoi](docs/QUI_ENSEIGNE_QUOI.md) — une matière n'a qu'un
+  titulaire, et on ne pointe que quelqu'un qui enseigne ;
+- [Une liste a un ordre](docs/UNE_LISTE_A_UN_ORDRE.md) — pourquoi « le premier
+  élément » d'une liste sans ordre défini change tout seul, et ce que cela fait
+  à la pagination ;
+- [Ce qui appartient à une année](docs/CE_QUI_APPARTIENT_A_UNE_ANNEE.md) — qui
+  doit porter l'année scolaire, qui doit la traverser, et pourquoi un
+  `academic_year` facultatif rend des lignes invisibles ;
+- [Les quatre écoles](docs/LES_QUATRE_ECOLES.md) — pourquoi trois listes
+  concurrentes ont créé sept établissements pour quatre écoles, et laissé l'une
+  d'elles hors de tout contrôle.
+
 ## Démarrage rapide
 
 ### 0) Bootstrap complet en une commande

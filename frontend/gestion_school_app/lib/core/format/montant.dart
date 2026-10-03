@@ -20,3 +20,25 @@ String montantEnFrancs(num valeur) {
   final signe = entier < 0 ? '-' : '';
   return '$signe$groupes FCFA';
 }
+
+/// « 5,0 M » — pour un axe de graphique, où le chiffre exact gênerait.
+///
+/// Les montants d'une école se comptent en millions: un axe qui écrit
+/// « 6 750 000 FCFA » sur chaque graduation ne laisse plus de place aux
+/// barres. La valeur exacte reste lisible ailleurs — l'infobulle de la barre
+/// et le tableau sous le graphique la donnent en entier.
+String montantAbrege(num valeur) {
+  final absolu = valeur.abs();
+  final signe = valeur < 0 ? '-' : '';
+  if (absolu >= 1000000) {
+    final millions = absolu / 1000000;
+    final texte = millions >= 10
+        ? millions.round().toString()
+        : millions.toStringAsFixed(1).replaceAll('.', ',');
+    return '$signe$texte M';
+  }
+  if (absolu >= 1000) {
+    return '$signe${(absolu / 1000).round()} k';
+  }
+  return '$signe${absolu.round()}';
+}

@@ -24,17 +24,22 @@ def current_month_start():
     return timezone.now().date().replace(day=1)
 
 
-def stats_cache_key(etablissement_id, month_start) -> str:
-    """Cle des compteurs d'un etablissement pour un mois donne.
+def stats_cache_key(etablissement_id, month_start, annee_id=None) -> str:
+    """Cle des compteurs d'un etablissement, pour une annee et un mois donnes.
 
     Volontairement sans identifiant d'utilisateur: les chiffres ne dependent
     que de la portee, et une cle par compte rendrait le cache inutile des le
     deuxieme utilisateur connecte. La portee est resolue avant toute lecture,
     donc un compte ne peut pas atteindre les totaux d'un etablissement qui
     n'est pas le sien.
+
+    L'annee, elle, est indispensable depuis que les compteurs la respectent:
+    sans elle, basculer sur l'annee suivante rendait les chiffres de l'annee
+    precedente pendant une minute -- et rien a l'ecran ne l'aurait dit.
     """
     scope = etablissement_id if etablissement_id is not None else "global"
-    return f"dashboard:stats:{scope}:{month_start.isoformat()}"
+    annee = annee_id if annee_id is not None else "sans-annee"
+    return f"dashboard:stats:{scope}:{annee}:{month_start.isoformat()}"
 
 
 def invalidate_stats(etablissement_id) -> None:
@@ -48,7 +53,26 @@ def invalidate_stats(etablissement_id) -> None:
     chiffres du mois affiche par defaut.
     """
     month_start = current_month_start()
-    keys = [stats_cache_key(None, month_start)]
+
+    # Toutes les annees de l'etablissement, et non la seule active: un
+    # caissier qui travaille sur l'annee suivante doit voir son encaissement
+    # aussitot, comme les autres. L'ensemble est borne -- une ecole en compte
+    # une ou deux -- donc l'enumerer coute moins qu'un cache qui ment.
+    from apps.school.models import AcademicYear
+
+    annees = [None]
     if etablissement_id is not None:
-        keys.append(stats_cache_key(etablissement_id, month_start))
+        annees += list(
+            AcademicYear.objects.filter(
+                etablissement_id=etablissement_id
+            ).values_list("id", flat=True)
+        )
+    else:
+        annees += list(AcademicYear.objects.values_list("id", flat=True))
+
+    keys = []
+    for annee_id in annees:
+        keys.append(stats_cache_key(None, month_start, annee_id))
+        if etablissement_id is not None:
+            keys.append(stats_cache_key(etablissement_id, month_start, annee_id))
     cache.delete_many(keys)

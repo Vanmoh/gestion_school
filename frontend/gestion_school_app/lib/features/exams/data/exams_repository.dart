@@ -185,6 +185,10 @@ class ExamsRepository {
       return OptionItem(
         id: map['id'] as int,
         label: map['name']?.toString() ?? '',
+        // Sans ce drapeau, l'onglet des campagnes retombait sur « la première
+        // année » — le raccourci qui a fait ouvrir « Notes & Bulletins » sur
+        // l'année suivante, vide de notes.
+        estCourante: map['is_active'] == true,
       );
     }).toList();
   }

@@ -18,6 +18,8 @@ import 'bulletin_whatsapp_page.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../../core/network/chargement_tolerant.dart';
 import '../../../core/widgets/indicateur.dart';
+import '../../../core/academics/annee_a_retenir.dart';
+import '../../../core/roles/perimetre_enseignant.dart';
 
 part 'grades_bulletin_window.dart';
 part 'grades_exam_dialog.dart';
@@ -87,24 +89,31 @@ class _GradesPageState extends ConsumerState<GradesPage> {
 
     try {
       final dio = ref.read(dioProvider);
+      final authUser = ref.read(authControllerProvider).value;
+      final isTeacherUser = authUser?.role == 'teacher';
+
+      // Le module « teachers » est ferme a l'enseignant: voir
+      // `core/roles/perimetre_enseignant.dart`, qui dit quelles routes
+      // appeler pour lui.
+      final routeFiche = routeDeLaFicheEnseignant(authUser?.role);
+      final routeAffectations = routeDesAffectations(authUser?.role);
+
       // Seuls les eleves et leurs notes sont indispensables ici. Le reste
-      // nomme des colonnes et remplit des menus: l'enseignant n'a pas droit au
-      // personnel, la famille pas au referentiel, et l'ecran entier tombait
-      // pour eux sur une donnee d'appoint.
+      // nomme des colonnes et remplit des menus: la famille n'a pas droit au
+      // referentiel, et l'ecran entier tombait pour elle sur une donnee
+      // d'appoint.
       final results = await Future.wait([
         dio.get('/students/'),
         reponseTolerante(dio.get('/subjects/')),
-        reponseTolerante(dio.get('/teachers/')),
-        reponseTolerante(dio.get('/teacher-assignments/')),
+        reponseTolerante(dio.get(routeFiche)),
+        reponseTolerante(dio.get(routeAffectations)),
         reponseTolerante(dio.get('/classrooms/')),
         reponseTolerante(dio.get('/academic-years/')),
       ]);
 
       if (!mounted) return;
 
-      final authUser = ref.read(authControllerProvider).value;
-      final isTeacherUser = authUser?.role == 'teacher';
-      final teachers = _extractRows(results[2].data);
+      final teachers = lignesDeLaFiche(results[2].data);
       final assignments = _extractRows(results[3].data);
       final classrooms = _extractRows(results[4].data);
       final years = _extractRows(results[5].data);
@@ -152,9 +161,11 @@ class _GradesPageState extends ConsumerState<GradesPage> {
               : null;
         }
 
-        _selectedAcademicYear ??= _years.isNotEmpty
-            ? _asInt(_years.first['id'])
-            : null;
+        // L'annee active, et non la premiere servie par l'API: aucun ordre
+        // n'etait defini, et le jour ou le hasard a mis l'annee suivante en
+        // tete, cet ecran a repondu « Aucune note enregistree » sur une base qui
+        // en comptait soixante-huit mille.
+        _selectedAcademicYear ??= anneeARetenir(_years);
 
         final classStudents = _studentsForClassroom(_selectedClassroom);
         final classSubjects = _subjectsForClassroom(_selectedClassroom);

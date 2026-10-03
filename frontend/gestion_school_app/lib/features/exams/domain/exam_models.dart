@@ -159,7 +159,21 @@ class OptionItem {
   final String label;
   final int? classroomId;
 
-  const OptionItem({required this.id, required this.label, this.classroomId});
+  /// Vrai pour l'année scolaire en cours de l'établissement.
+  ///
+  /// Les autres listes qui passent par `OptionItem` — classes, matières —
+  /// n'ont pas de notion d'élément « courant » et laissent le défaut. Sans ce
+  /// drapeau, l'onglet des campagnes retenait la première année servie, et le
+  /// même raccourci a fait ouvrir « Notes & Bulletins » sur une année sans
+  /// aucune note.
+  final bool estCourante;
+
+  const OptionItem({
+    required this.id,
+    required this.label,
+    this.classroomId,
+    this.estCourante = false,
+  });
 }
 
 /// Ce que la suppression d'une campagne emporterait.

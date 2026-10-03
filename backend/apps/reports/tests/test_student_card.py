@@ -303,13 +303,18 @@ class VerificationCarteTests(APITestCase):
 
     @classmethod
     def setUpTestData(cls):
+        cls.etablissement = Etablissement.objects.create(name="LTOB")
+        # L'annee appartient a l'ecole, comme les cinq de la base reelle: aucune
+        # n'y est orpheline. Le montage la creait sans etablissement, et la
+        # carte ne la trouvait que parce que la resolution du libelle ignorait
+        # l'ecole -- le defaut meme que `_active_academic_year_label` corrige.
         cls.year = AcademicYear.objects.create(
             name="2025-2026",
             start_date=date(2025, 9, 1),
             end_date=date(2026, 7, 31),
+            etablissement=cls.etablissement,
             is_active=True,
         )
-        cls.etablissement = Etablissement.objects.create(name="LTOB")
         user = User.objects.create_user(
             username="eleve_verif",
             password="Pass1234!",
