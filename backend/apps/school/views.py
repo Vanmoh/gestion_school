@@ -31,7 +31,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from fpdf import FPDF
+from fpdf import FPDF, FontFace
 from openpyxl import Workbook, load_workbook
 try:
     from openpyxl.drawing.image import Image as XLImage
@@ -3037,8 +3037,83 @@ class TeacherScheduleSlotViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
 
         return sorted(matrix.keys(), key=key_func)
 
+    # --- La grille imprimee -------------------------------------------------
+    #
+    # A4 paysage moins les marges: 277 mm a repartir. L'horaire tient en 25 mm
+    # (« 08:00-09:00 » en mesure 15), le reste va aux six jours, qui portent
+    # des noms de matiere et d'enseignant.
+    PDF_COL_WIDTHS = (25, 42, 42, 42, 42, 42, 42)
+    PDF_HEADERS = ("Horaire", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi")
+    PDF_FONT_SIZE = 9
+    # (haut, droite, bas, gauche), comme fpdf les attend.
+    PDF_CELL_PADDING = (1.2, 1.6, 1.2, 1.6)
+
     @classmethod
-    def _build_class_matrix(cls, slots):
+    def hauteur_de_ligne(cls, hauteur_restante, nombre_de_creneaux):
+        """De quelle hauteur ecrire chaque ligne de texte dans la grille.
+
+        Une grille de six creneaux tenait dans le tiers haut d'une A4
+        paysage, le reste blanc. Un emploi du temps s'affiche au mur: autant
+        qu'il remplisse sa feuille.
+
+        On agit sur la hauteur d'une **ligne de texte**, pas sur celle d'une
+        rangee: fpdf 2.8.2 n'offre `min_row_height` que pour la table
+        entiere, en-tete comprise, qui se serait etiree en un bandeau vide.
+        Une case porte deux lignes — matiere, enseignant — quand l'en-tete
+        n'en porte qu'une: elle grandit donc deux fois plus vite, ce qui est
+        exactement le rapport voulu.
+
+        Le calcul partage ce qui reste de la page, puis borne. Le plancher
+        garde un interligne lisible quand une classe a beaucoup de creneaux;
+        le plafond evite le texte flottant d'un planning clairseme.
+        """
+        if nombre_de_creneaux <= 0:
+            return 4.5
+        _, _, bas, _ = cls.PDF_CELL_PADDING
+        haut = cls.PDF_CELL_PADDING[0]
+        lignes_de_texte = 1 + 2 * nombre_de_creneaux
+        marges = (nombre_de_creneaux + 1) * (haut + bas)
+        part = (hauteur_restante - marges) / lignes_de_texte
+        return max(4.5, min(7.0, part))
+
+    @classmethod
+    def largeur_utile_du_jour(cls):
+        """Ce qui reste a l'interieur d'une colonne de jour, marges deduites."""
+        _, droite, _, gauche = cls.PDF_CELL_PADDING
+        return cls.PDF_COL_WIDTHS[1] - droite - gauche
+
+    @classmethod
+    def _slot_pdf_lines(cls, slot):
+        """La meme seance, mais sur plusieurs lignes au lieu d'une seule.
+
+        « DESSINTE (Mahamadou CAMARA) » mesure 45 mm a Helvetica 8, pour une
+        colonne qui en fait 42. Ecrite d'un trait elle debordait sur le jour
+        suivant. Matiere, enseignant et salle sur trois lignes tiennent, et se
+        lisent mieux: l'oeil cherche la matiere, pas la parenthese.
+        """
+        assignment = slot.assignment
+        subject = assignment.subject if assignment else None
+        teacher = assignment.teacher if assignment else None
+
+        lignes = [subject.code if subject else "MAT"]
+        enseignant = cls._teacher_name(teacher) or (
+            teacher.employee_code if teacher else "ENS"
+        )
+        if enseignant:
+            lignes.append(enseignant)
+        salle = (slot.room or "").strip()
+        if salle:
+            lignes.append(f"Salle {salle}")
+        return "\n".join(lignes)
+
+    @staticmethod
+    def _pdf_cell_text(entries):
+        """Plusieurs seances dans la meme case: une ligne vide les separe."""
+        return "\n\n".join(entries)
+
+    @classmethod
+    def _build_class_matrix(cls, slots, libelle=None):
+        libelle = libelle or cls._slot_short_label
         matrix = {}
         for slot in slots:
             range_label = cls._slot_range_label(slot)
@@ -3046,7 +3121,7 @@ class TeacherScheduleSlotViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
                 range_label,
                 {day: [] for day in cls.DAY_ORDER},
             )
-            day_map[slot.day_of_week].append(cls._slot_short_label(slot))
+            day_map[slot.day_of_week].append(libelle(slot))
 
         for day_map in matrix.values():
             for entries in day_map.values():
@@ -4010,23 +4085,12 @@ class TeacherScheduleSlotViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
         pdf = FPDF(orientation="L", unit="mm", format="A4")
         pdf.set_auto_page_break(auto=True, margin=12)
 
-        col_widths = [28, 41, 41, 41, 41, 41, 41]
-
-        def draw_headers():
-            pdf.set_font("Helvetica", "B", 9)
-            for header, width in zip(
-                ["Horaire", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"],
-                col_widths,
-            ):
-                pdf.cell(width, 8, self._pdf_text(header), border=1, align="C")
-            pdf.ln(8)
-
         for classroom in classrooms:
             class_slots = list(
                 self._class_slots_queryset(classroom)
                 .order_by("day_of_week", "start_time", "end_time", "id")
             )
-            matrix = self._build_class_matrix(class_slots)
+            matrix = self._build_class_matrix(class_slots, self._slot_pdf_lines)
             ranges = self._sorted_ranges(matrix)
             etab_meta = self._etablissement_meta_lines(classroom)
 
@@ -4069,36 +4133,39 @@ class TeacherScheduleSlotViewSet(AnneeScolaireScopeMixin, BaseModelViewSet):
             )
             pdf.ln(2)
 
-            draw_headers()
-
             if not ranges:
                 pdf.set_font("Helvetica", "", 10)
                 pdf.cell(0, 8, self._pdf_text("Aucun horaire planifié"), ln=1)
                 continue
 
-            for range_label in ranges:
-                if pdf.get_y() > 185:
-                    pdf.add_page()
-                    draw_headers()
+            # `table()` renvoie a la ligne dans la cellule, repete l'en-tete
+            # d'une page a l'autre et calcule lui-meme la hauteur des lignes.
+            # L'ancien `cell()` ne faisait rien de tout cela: une seance
+            # s'ecrivait par-dessus la colonne du lendemain.
+            pdf.set_font("Helvetica", "", self.PDF_FONT_SIZE)
+            interligne = self.hauteur_de_ligne(
+                pdf.h - pdf.get_y() - pdf.b_margin, len(ranges)
+            )
+            with pdf.table(
+                col_widths=self.PDF_COL_WIDTHS,
+                text_align=("CENTER",) + ("LEFT",) * 6,
+                v_align="TOP",
+                headings_style=FontFace(emphasis="BOLD", fill_color=(224, 231, 243)),
+                cell_fill_color=(246, 248, 252),
+                cell_fill_mode="ROWS",
+                line_height=interligne,
+                padding=self.PDF_CELL_PADDING,
+            ) as table:
+                ligne_titre = table.row()
+                for header in self.PDF_HEADERS:
+                    ligne_titre.cell(self._pdf_text(header))
 
-                day_map = matrix[range_label]
-                values = [
-                    range_label,
-                    " | ".join(day_map["MON"]),
-                    " | ".join(day_map["TUE"]),
-                    " | ".join(day_map["WED"]),
-                    " | ".join(day_map["THU"]),
-                    " | ".join(day_map["FRI"]),
-                    " | ".join(day_map["SAT"]),
-                ]
-
-                pdf.set_font("Helvetica", "", 8)
-                for value, width in zip(values, col_widths):
-                    text = self._pdf_text(value)
-                    if len(text) > 65:
-                        text = f"{text[:62]}..."
-                    pdf.cell(width, 8, text, border=1)
-                pdf.ln(8)
+                for range_label in ranges:
+                    day_map = matrix[range_label]
+                    ligne = table.row()
+                    ligne.cell(self._pdf_text(range_label))
+                    for day in ("MON", "TUE", "WED", "THU", "FRI", "SAT"):
+                        ligne.cell(self._pdf_text(self._pdf_cell_text(day_map[day])))
 
         response = HttpResponse(bytes(pdf.output()), content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
