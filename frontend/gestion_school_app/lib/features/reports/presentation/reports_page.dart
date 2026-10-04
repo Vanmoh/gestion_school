@@ -158,6 +158,7 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
 
   Widget _enTete(ContexteDesRapports? contexte) {
     final textTheme = Theme.of(context).textTheme;
+    final portee = contexte?.portee ?? '';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -209,16 +210,23 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
               valeur: contexte == null
                   ? '—'
                   : '${contexte.nombreDEncaissements}',
+              // Les trois chiffres portaient sur les quatre établissements et
+              // toutes leurs années, sous un bandeau qui en nommait un seul.
+              // Ils sont désormais restreints — et ils le disent, pour qu'on
+              // ne les confonde plus avec un total général.
+              precision: portee.isEmpty ? null : portee,
             ),
             Indicateur(
               libelle: 'Montant encaissé',
               valeur: contexte == null
                   ? '—'
                   : montantEnFrancs(contexte.totalEncaisse),
+              precision: portee.isEmpty ? null : portee,
             ),
             Indicateur(
-              libelle: 'Élèves au dossier',
+              libelle: 'Élèves inscrits',
               valeur: contexte == null ? '—' : '${contexte.eleves.length}',
+              precision: portee.isEmpty ? null : portee,
             ),
           ],
         ),
@@ -274,10 +282,14 @@ class _ReportsPageState extends ConsumerState<ReportsPage> {
 
     return _Encart(
       titre: 'Reçu de paiement (PDF)',
+      // « 11 662 encaissements — page 1 sur 584 » n'invitait pas à feuilleter:
+      // on ne retrouve pas un reçu en tournant cinq cents pages. La recherche
+      // part au serveur et porte sur tout, c'est elle qu'il faut annoncer.
       description: recus.total == 0
           ? null
-          : '${recus.total} encaissement(s) — page ${recus.page} sur '
-                '${recus.pages}.',
+          : '${recus.total} encaissement${recus.total > 1 ? 's' : ''}, '
+                'les plus récents en tête. Cherchez par élève, matricule, '
+                'référence ou montant — page ${recus.page} sur ${recus.pages}.',
       enfant: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

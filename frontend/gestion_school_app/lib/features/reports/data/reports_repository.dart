@@ -47,6 +47,8 @@ class ReportsRepository {
       annees: _anneesDe(donnees['academic_years']),
       nombreDEncaissements: (donnees['payments_count'] as num?)?.toInt() ?? 0,
       totalEncaisse: _versDouble(donnees['payments_total']),
+      anneeNommee: donnees['academic_year_name']?.toString() ?? '',
+      etablissementNomme: donnees['etablissement_name']?.toString() ?? '',
     );
   }
 
@@ -68,20 +70,19 @@ class ReportsRepository {
     return _extractRows(donnees)
         .map((row) => (row as Map<String, dynamic>))
         .map((row) {
-          final compte = row['user'];
-          final nomComplet = row['student_full_name']?.toString() ??
-              (compte is Map<String, dynamic>
-                  ? [
-                      compte['first_name']?.toString() ?? '',
-                      compte['last_name']?.toString() ?? '',
-                    ].where((part) => part.trim().isNotEmpty).join(' ').trim()
-                  : '');
+          // `StudentSerializer` nomme ce champ `user_full_name`. On lisait
+          // `student_full_name`, qui n'existe que sur les reçus: le nom était
+          // donc toujours vide, et `user` est une clé entière, jamais la
+          // structure que le repli attendait. D'où une liste d'élèves où
+          // chaque ligne répétait son matricule.
+          final nomComplet = (row['user_full_name'] ?? row['student_full_name'])
+                  ?.toString()
+                  .trim() ??
+              '';
           final classe = row['classroom_name']?.toString() ?? '';
           return OptionEleve(
             id: (row['id'] as num?)?.toInt() ?? 0,
-            nom: nomComplet.isEmpty
-                ? (row['matricule']?.toString() ?? 'Élève')
-                : nomComplet,
+            nom: nomComplet,
             matricule: row['matricule']?.toString() ?? '',
             classe: classe,
             classeId: (row['classroom'] as num?)?.toInt(),

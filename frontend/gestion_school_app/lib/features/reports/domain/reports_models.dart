@@ -55,11 +55,22 @@ class ContexteDesRapports {
   final int nombreDEncaissements;
   final double totalEncaisse;
 
+  /// L'année et l'école que ces chiffres couvrent, nommées par le serveur.
+  ///
+  /// Sans elles, l'écran affichait « Montant encaissé 187 520 000 FCFA » sous
+  /// un bandeau disant « IFP-OBK · 2025-2026 » — et c'étaient les quatre
+  /// établissements de toutes leurs années. Un chiffre qui ne dit pas ce
+  /// qu'il couvre se lit comme couvrant ce que la page annonce.
+  final String anneeNommee;
+  final String etablissementNomme;
+
   const ContexteDesRapports({
     required this.eleves,
     required this.annees,
     required this.nombreDEncaissements,
     required this.totalEncaisse,
+    this.anneeNommee = '',
+    this.etablissementNomme = '',
   });
 
   static const vide = ContexteDesRapports(
@@ -68,6 +79,15 @@ class ContexteDesRapports {
     nombreDEncaissements: 0,
     totalEncaisse: 0,
   );
+
+  /// « 2025-2026 · IFP-OBK », ou ce qui s'en approche le plus.
+  String get portee {
+    final morceaux = [
+      anneeNommee.trim(),
+      etablissementNomme.trim(),
+    ].where((part) => part.isNotEmpty);
+    return morceaux.join(' · ');
+  }
 }
 
 class OptionEleve {
@@ -85,7 +105,20 @@ class OptionEleve {
     this.classeId,
   });
 
-  String get libelle => matricule.isEmpty ? nom : '$nom — $matricule';
+  /// « Awa Coulibaly — IO1EM125E0001F », et jamais le matricule deux fois.
+  ///
+  /// Le dépôt lisait le nom sous une clé que le serveur n'envoie pas: il
+  /// était donc toujours vide, et un repli le remplaçait par le matricule.
+  /// La liste affichait « IO2TC26E0001M — IO2TC26E0001M », où l'on ne
+  /// reconnaît aucun élève.
+  String get libelle {
+    final nomNet = nom.trim();
+    final matriculeNet = matricule.trim();
+    if (nomNet.isEmpty || nomNet == matriculeNet) {
+      return matriculeNet.isEmpty ? 'Élève' : matriculeNet;
+    }
+    return matriculeNet.isEmpty ? nomNet : '$nomNet — $matriculeNet';
+  }
 }
 
 class OptionAnnee {

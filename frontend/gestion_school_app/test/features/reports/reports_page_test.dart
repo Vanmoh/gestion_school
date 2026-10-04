@@ -69,15 +69,25 @@ class _Transport implements HttpClientAdapter {
           {
             'id': 30,
             'matricule': 'M-001',
-            'student_full_name': 'Awa Traoré',
+            // `StudentSerializer` nomme ce champ ainsi. Le décor disait
+            // `student_full_name`, qui n'existe que sur les reçus: le test
+            // passait donc sur un écran dont la liste d'élèves n'affichait
+            // que des matricules.
+            'user_full_name': 'Awa Traoré',
             'classroom_name': '6ème A',
           },
         ],
-        'academic_years': [],
+        'academic_years': [
+          {'id': 4, 'name': '2025-2026'},
+        ],
         // La route ne serialise plus les encaissements: elle n'en rend que le
         // compte et le total, et les recus se demandent page par page.
         'payments_count': 1,
         'payments_total': 5000,
+        // La portée que ces chiffres couvrent: sans elle, l'écran les
+        // affichait comme s'ils couvraient ce que le bandeau annonce.
+        'academic_year_name': '2025-2026',
+        'etablissement_name': 'IFP-OBK',
       });
     }
     if (options.path.contains('/reports/receipts')) {
@@ -108,7 +118,11 @@ class _Transport implements HttpClientAdapter {
           {
             'id': 30,
             'matricule': 'M-001',
-            'student_full_name': 'Awa Traoré',
+            // `StudentSerializer` nomme ce champ ainsi. Le décor disait
+            // `student_full_name`, qui n'existe que sur les reçus: le test
+            // passait donc sur un écran dont la liste d'élèves n'affichait
+            // que des matricules.
+            'user_full_name': 'Awa Traoré',
             'classroom_name': '6ème A',
           },
         ],

@@ -1636,6 +1636,44 @@ def _classrooms_de_l_enseignant(user):
     )
 
 
+def _annee_de_travail(request, etablissement=None):
+    """L'annee que l'ecran affiche dans son bandeau.
+
+    Le client pose `X-Academic-Year-Id` sur chaque requete depuis la bascule
+    d'annee, et le module rapports ne l'avait jamais lu: l'ecran comptait
+    toutes les annees de l'ecole sous un bandeau qui en nommait une. Pour
+    IFP-OBK, 611 eleves au lieu des 450 de 2025-2026.
+
+    L'annee demandee doit appartenir a l'ecole visee, sinon un en-tete
+    traine d'une autre ecole viderait l'ecran sans rien dire.
+
+    Sans ecole, pas d'annee: un super-admin qui n'en a choisi aucune regarde
+    les quatre a la fois, et `AcademicYear.courante(None)` lui rendrait
+    l'annee active d'une seule d'entre elles -- par quoi l'ecran se
+    restreindrait a cette ecole-la sans l'avoir dit.
+    """
+    if etablissement is None:
+        return None
+
+    brut = request.headers.get("X-Academic-Year-Id") or request.query_params.get(
+        "academic_year"
+    )
+    if brut not in (None, ""):
+        try:
+            demandee = int(brut)
+        except (TypeError, ValueError):
+            demandee = None
+        if demandee and demandee > 0:
+            annees = AcademicYear.objects.filter(id=demandee)
+            if etablissement is not None:
+                annees = annees.filter(etablissement=etablissement)
+            trouvee = annees.first()
+            if trouvee is not None:
+                return trouvee
+
+    return _active_academic_year(etablissement)
+
+
 def _allowed_students_queryset(request):
     user = request.user
     queryset = Student.objects.select_related(
@@ -1686,9 +1724,6 @@ def _allowed_payments_queryset(request):
     if role == UserRole.PARENT:
         return queryset.filter(fee__student__parent__user_id=user.id)
 
-    if role == UserRole.SUPER_ADMIN:
-        return queryset
-
     target_etablissement_id = _effective_etablissement_id(request)
     if target_etablissement_id:
         return queryset.filter(
@@ -1698,6 +1733,16 @@ def _allowed_payments_queryset(request):
                 fee__student__classroom__etablissement_id=target_etablissement_id,
             )
         )
+
+    # Un super-admin qui n'a choisi aucune ecole les voit toutes. Ce retour
+    # etait place **avant** la resolution de l'ecole: celle qu'il avait
+    # choisie dans l'en-tete etait donc ignoree, et l'ecran Rapports annoncait
+    # « 11 662 recus, 187 520 000 FCFA » -- les quatre etablissements reunis --
+    # sous un bandeau qui disait « IFP-OBK ». Pour cette ecole seule: 4 165
+    # recus et 66 965 000 FCFA, le chiffre meme du tableau de bord.
+    if role == UserRole.SUPER_ADMIN:
+        return queryset
+
     return queryset.none()
 
 
@@ -2242,18 +2287,34 @@ class ReportsContextView(APIView):
     permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
-        students = _allowed_students_queryset(request).order_by(
+        etablissement = _requested_etablissement(request) or getattr(
+            request.user, "etablissement", None
+        )
+        annee = _annee_de_travail(request, etablissement)
+
+        students = _allowed_students_queryset(request)
+        if annee is not None:
+            students = students.filter(classroom__academic_year=annee)
+        students = students.order_by(
             "user__last_name",
             "user__first_name",
             "matricule",
         )
-        years = AcademicYear.objects.all().order_by("-start_date", "-id")
+
+        # Les annees de **cette** ecole. La liste les servait toutes, les
+        # quatre etablissements confondus, et elles s'appellent toutes
+        # « 2025-2026 »: on n'y distinguait pas la sienne de celle du voisin.
+        years = AcademicYear.objects.all()
+        if etablissement is not None:
+            years = years.filter(etablissement=etablissement)
+        years = years.order_by("-start_date", "-id")
 
         # Agrege en base: l'ecran sommait les montants ligne par ligne apres
         # avoir tout recu, ce qui etait la raison meme de tout recevoir.
-        encaissements = _allowed_payments_queryset(request).aggregate(
-            nombre=Count("id"), total=Sum("amount")
-        )
+        paiements = _allowed_payments_queryset(request)
+        if annee is not None:
+            paiements = paiements.filter(fee__academic_year=annee)
+        encaissements = paiements.aggregate(nombre=Count("id"), total=Sum("amount"))
 
         return Response(
             {
@@ -2261,6 +2322,10 @@ class ReportsContextView(APIView):
                 "academic_years": AcademicYearSerializer(years, many=True).data,
                 "payments_count": encaissements["nombre"] or 0,
                 "payments_total": float(encaissements["total"] or 0),
+                # L'ecran annonce ce qu'il compte, au lieu de laisser croire
+                # qu'il compte tout.
+                "academic_year_name": annee.name if annee else "",
+                "etablissement_name": getattr(etablissement, "name", "") or "",
             }
         )
 
@@ -2307,8 +2372,20 @@ class ReceiptsPageView(APIView):
     permission_classes = [IsAuthenticated, HasModuleAccess]
 
     def get(self, request):
+        # Les reçus de l'annee affichee, comme le compteur qui les annonce:
+        # « 11 662 encaissements, page 1 sur 584 » melangeait les quatre
+        # ecoles et toutes leurs annees.
+        paiements = _allowed_payments_queryset(request)
+        annee = _annee_de_travail(
+            request,
+            _requested_etablissement(request)
+            or getattr(request.user, "etablissement", None),
+        )
+        if annee is not None:
+            paiements = paiements.filter(fee__academic_year=annee)
+
         queryset = _filtrer_les_recus(
-            _allowed_payments_queryset(request).order_by("-created_at", "-id"),
+            paiements.order_by("-created_at", "-id"),
             request,
         )
 
